@@ -1,0 +1,20 @@
+:root {
+  --bg: #000008;
+  --grid: #1e6fc4;
+  --grid-bright: #3a8fe0;
+  --label: #5ec8ff;
+  --label-dim: #2d7ab8;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--label);
+  font-family: 'Share Tech Mono', monospace;
+}
+
+body { cursor: grab; }
+body.grabbing { cursor: grabbing; }
