@@ -1,10 +1,14 @@
 import { Camera, Scene, Sprite, SpriteMaterial, Vector3 } from 'three';
-import { STARS } from '../data/stars';
+import { STARS, STAR_CLUSTERS, clusterIndexFor } from '../data/stars';
 import { makeLabelTexture } from '../data/pixel-font';
 
-interface StarLabel {
+// One label sprite per star cluster, anchored at the cluster's primary star.
+// Coincident binaries (Sirius A/B) and loose multi-star systems (Alpha Cen +
+// Proxima) collapse to a single visible label; hovering any member shows a
+// multi-line tooltip listing every star in the cluster.
+interface ClusterLabel {
   sprite: Sprite;
-  starIdx: number;
+  primaryStarIdx: number;
   w: number;
   h: number;
   isSun: boolean;
@@ -24,7 +28,7 @@ const labelMat = (tex: ReturnType<typeof makeLabelTexture>['tex']) => new Sprite
 // throughout — sprite world-positions are snapped onto the integer pixel grid
 // each frame so 1 font pixel = 1 screen pixel.
 export class Labels {
-  private readonly starLabels: StarLabel[] = [];
+  private readonly clusterLabels: ClusterLabel[] = [];
   private readonly axisLabels: AxisLabel[] = [];
   private readonly gcSprite: Sprite;
   private readonly gcSize: { w: number; h: number };
@@ -33,8 +37,8 @@ export class Labels {
   private tipSize: { w: number; h: number } = { w: 0, h: 0 };
 
   private showLabels = true;
-  private hovered = -1;
-  private lastHovered = -1;
+  private hoveredCluster = -1;
+  private lastHoveredCluster = -1;
 
   // Reusable per-frame scratch so the tick loop doesn't allocate.
   private readonly _camRight = new Vector3();
@@ -43,17 +47,26 @@ export class Labels {
   private readonly _projTmp  = new Vector3();
 
   constructor(scene: Scene) {
-    // Star labels — Sun's label is warm-white rather than yellow so it stays
-    // readable when its sprite overlaps the equally-yellow Sun dot.
-    STARS.forEach((s, idx) => {
-      const isSun = s.name === 'Sun';
-      const color = isSun ? '#ffffcc' : '#5ec8ff';
-      const { tex, w, h } = makeLabelTexture(s.name, color);
+    // One label per cluster, displayed at the primary's position. Sun's label
+    // is warm-white rather than yellow so it stays readable when its sprite
+    // overlaps the equally-yellow Sun dot.
+    //
+    // Multi-star clusters get a " +N" suffix in the dim accent color to
+    // indicate hidden members (hover the cluster to see them all).
+    STAR_CLUSTERS.forEach(cluster => {
+      const primary = STARS[cluster.primary];
+      const isSun = primary.name === 'Sun';
+      const nameColor = isSun ? '#ffffcc' : '#5ec8ff';
+      const extras = cluster.members.length - 1;
+      const segments = extras > 0
+        ? [{ text: primary.name, color: nameColor }, { text: ` +${extras}`, color: '#2d7ab8' }]
+        : [{ text: primary.name, color: nameColor }];
+      const { tex, w, h } = makeLabelTexture(segments);
       const sp = new Sprite(labelMat(tex));
       sp.renderOrder = 10;
-      sp.position.set(s.x, s.y, s.z);
+      sp.position.set(primary.x, primary.y, primary.z);
       scene.add(sp);
-      this.starLabels.push({ sprite: sp, starIdx: idx, w, h, isSun });
+      this.clusterLabels.push({ sprite: sp, primaryStarIdx: cluster.primary, w, h, isSun });
     });
 
     // Galactic-centre pointer label.
@@ -96,8 +109,8 @@ export class Labels {
     for (const a of this.axisLabels) a.sprite.visible = show;
   }
 
-  setHovered(idx: number): void {
-    this.hovered = idx;
+  setHovered(starIdx: number): void {
+    this.hoveredCluster = starIdx >= 0 ? clusterIndexFor(starIdx) : -1;
   }
 
   // Snap a sprite so its top-left quad corner lands on an integer buffer
@@ -120,34 +133,40 @@ export class Labels {
   }
 
   update(camera: Camera, viewDistance: number, viewportW: number, viewportH: number): void {
-    // Hover tooltip: rebuild texture only when hovered star changes.
-    if (this.hovered >= 0) {
-      if (this.lastHovered !== this.hovered) {
-        const s = STARS[this.hovered];
+    // Hover tooltip: rebuild texture only when hovered cluster changes. One
+    // line per cluster member so binaries/triples list every star (Sirius A
+    // and B; Alpha Cen A, Cen B, and Proxima; etc.).
+    if (this.hoveredCluster >= 0) {
+      if (this.lastHoveredCluster !== this.hoveredCluster) {
+        const cluster = STAR_CLUSTERS[this.hoveredCluster];
         if (this.tipMat.map) this.tipMat.map.dispose();
-        const { tex, w, h } = makeLabelTexture([
-          { text: s.name,                color: '#ffe98a' },
-          { text: '  · ' + s.cls + ' · ', color: '#2d7ab8' },
-          { text: s.distLy.toFixed(2) + ' ly', color: '#aee4ff' },
-        ], { box: true });
+        const lines = cluster.members.map(memIdx => {
+          const s = STARS[memIdx];
+          return [
+            { text: s.name,                       color: '#ffe98a' },
+            { text: '  ' + s.cls + '  ',          color: '#2d7ab8' },
+            { text: s.distLy.toFixed(2) + ' ly',  color: '#aee4ff' },
+          ];
+        });
+        const { tex, w, h } = makeLabelTexture(lines, { box: true });
         this.tipMat.map = tex;
         this.tipMat.needsUpdate = true;
         this.tipSize = { w, h };
-        this.lastHovered = this.hovered;
+        this.lastHoveredCluster = this.hoveredCluster;
       }
       this.tipSprite.visible = true;
     } else {
       this.tipSprite.visible = false;
-      this.lastHovered = -1;
+      this.lastHoveredCluster = -1;
     }
 
     // 1 font pixel maps to 1 screen pixel via the wpp factor.
     const wpp = viewDistance / viewportH;
     camera.matrixWorld.extractBasis(this._camRight, this._camUp, this._camFwd);
 
-    for (const L of this.starLabels) {
+    for (const L of this.clusterLabels) {
       if (!this.showLabels) { L.sprite.visible = false; continue; }
-      const s = STARS[L.starIdx];
+      const s = STARS[L.primaryStarIdx];
       L.sprite.visible = true;
       L.sprite.scale.set(L.w * wpp, L.h * wpp, 1);
       // Sun's dot is bigger and shares its label color, so needs more clearance.
@@ -163,8 +182,10 @@ export class Labels {
       a.sprite.scale.set(a.w * wpp, a.h * wpp, 1);
     }
 
-    if (this.tipSprite.visible && this.hovered >= 0) {
-      const s = STARS[this.hovered];
+    // Tooltip anchored at the cluster's primary so it doesn't shift as you
+    // hover different members of the same multi-star system.
+    if (this.tipSprite.visible && this.hoveredCluster >= 0) {
+      const s = STARS[STAR_CLUSTERS[this.hoveredCluster].primary];
       this.tipSprite.scale.set(this.tipSize.w * wpp, this.tipSize.h * wpp, 1);
       const offsetPx = Math.round(this.tipSize.h * 0.5) + 18;
       this.tipSprite.position.set(s.x, s.y, s.z).addScaledVector(this._camUp, offsetPx * wpp);

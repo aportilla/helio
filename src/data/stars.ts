@@ -151,3 +151,70 @@ const CLASS_RADIUS: Record<SpectralClass, number> = {
 export const CLASS_SIZE: Record<SpectralClass, number> = Object.fromEntries(
   Object.entries(CLASS_RADIUS).map(([cls, r]) => [cls, 4.4 + Math.log10(r) * 1.6]),
 ) as Record<SpectralClass, number>;
+
+// Stars whose pairwise distance is within this threshold (light years) get
+// grouped into a single visible label, with a hover tooltip listing every
+// member. Captures known binaries/triples at exact-coincident positions plus
+// loose systems like Alpha Cen + Proxima at ~0.05 ly apart. Larger values
+// risk over-clustering unrelated stars; smaller miss real systems.
+const CLUSTER_THRESHOLD_LY = 0.2;
+
+export interface StarCluster {
+  // Index into STARS of the largest (highest CLASS_RADIUS) member.
+  readonly primary: number;
+  // All member star indices, primary first.
+  readonly members: readonly number[];
+}
+
+function buildClusters(): readonly StarCluster[] {
+  const n = STARS.length;
+  // Union-find so transitive closure handles chains (A near B, B near C → all one cluster).
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x: number): number => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
+  };
+  const t2 = CLUSTER_THRESHOLD_LY * CLUSTER_THRESHOLD_LY;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const dx = STARS[i].x - STARS[j].x;
+      const dy = STARS[i].y - STARS[j].y;
+      const dz = STARS[i].z - STARS[j].z;
+      if (dx * dx + dy * dy + dz * dz <= t2) {
+        const ri = find(i), rj = find(j);
+        if (ri !== rj) parent[ri] = rj;
+      }
+    }
+  }
+  const groups = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    let g = groups.get(r);
+    if (!g) { g = []; groups.set(r, g); }
+    g.push(i);
+  }
+  return Array.from(groups.values()).map(members => {
+    const primary = members.reduce(
+      (best, m) => CLASS_RADIUS[STARS[m].cls] > CLASS_RADIUS[STARS[best].cls] ? m : best,
+      members[0],
+    );
+    return { primary, members: [primary, ...members.filter(m => m !== primary)] };
+  });
+}
+
+export const STAR_CLUSTERS: readonly StarCluster[] = buildClusters();
+
+const STAR_TO_CLUSTER = (() => {
+  const m = new Int32Array(STARS.length);
+  STAR_CLUSTERS.forEach((cluster, idx) => {
+    for (const member of cluster.members) m[member] = idx;
+  });
+  return m;
+})();
+
+export function clusterIndexFor(starIdx: number): number {
+  return STAR_TO_CLUSTER[starIdx];
+}
