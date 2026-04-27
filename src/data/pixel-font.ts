@@ -180,27 +180,36 @@ export interface LabelTextureOptions {
 
 export function makeLabelTexture(text: string, color: string, opts?: LabelTextureOptions): LabelTextureResult;
 export function makeLabelTexture(segments: TextSegment[], opts?: LabelTextureOptions): LabelTextureResult;
+export function makeLabelTexture(lines: TextSegment[][], opts?: LabelTextureOptions): LabelTextureResult;
 export function makeLabelTexture(
-  textOrSegments: string | TextSegment[],
-  colorOrOpts?: string | LabelTextureOptions,
-  maybeOpts?: LabelTextureOptions,
+  arg1: string | TextSegment[] | TextSegment[][],
+  arg2?: string | LabelTextureOptions,
+  arg3?: LabelTextureOptions,
 ): LabelTextureResult {
-  let segments: TextSegment[];
+  // Normalize to TextSegment[][] (lines of segments) regardless of overload.
+  let lines: TextSegment[][];
   let opts: LabelTextureOptions | undefined;
-  if (typeof textOrSegments === 'string') {
-    segments = [{ text: textOrSegments, color: colorOrOpts as string }];
-    opts = maybeOpts;
+  if (typeof arg1 === 'string') {
+    lines = [[{ text: arg1, color: arg2 as string }]];
+    opts = arg3;
+  } else if (arg1.length > 0 && Array.isArray(arg1[0])) {
+    lines = arg1 as TextSegment[][];
+    opts = arg2 as LabelTextureOptions | undefined;
   } else {
-    segments = textOrSegments;
-    opts = colorOrOpts as LabelTextureOptions | undefined;
+    lines = [arg1 as TextSegment[]];
+    opts = arg2 as LabelTextureOptions | undefined;
   }
 
   const box = !!opts?.box;
   const pad = box ? 4 : 3;
-  let textW = 0;
-  for (const seg of segments) textW += measurePixelText(seg.text);
-  const w = textW + pad * 2;
-  const h = FONT_LINEH + pad * 2;
+  let maxTextW = 0;
+  for (const line of lines) {
+    let lineW = 0;
+    for (const seg of line) lineW += measurePixelText(seg.text);
+    if (lineW > maxTextW) maxTextW = lineW;
+  }
+  const w = maxTextW + pad * 2;
+  const h = FONT_LINEH * lines.length + pad * 2;
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const g = c.getContext('2d')!;
@@ -213,14 +222,17 @@ export function makeLabelTexture(
     g.fillRect(0, 0, 1, h); g.fillRect(w - 1, 0, 1, h);
   }
 
-  let cursor = pad;
-  for (const seg of segments) {
-    for (let i = 0; i < seg.text.length; i++) {
-      drawPixelGlyph(g, seg.text[i], cursor, pad, seg.color);
-      const glyph = FONT_MAP.get(seg.text.charCodeAt(i));
-      cursor += glyph ? glyph.adv : 6;
+  lines.forEach((line, lineIdx) => {
+    let cursor = pad;
+    const cellY = pad + FONT_LINEH * lineIdx;
+    for (const seg of line) {
+      for (let i = 0; i < seg.text.length; i++) {
+        drawPixelGlyph(g, seg.text[i], cursor, cellY, seg.color);
+        const glyph = FONT_MAP.get(seg.text.charCodeAt(i));
+        cursor += glyph ? glyph.adv : 6;
+      }
     }
-  }
+  });
 
   // Halo only for non-boxed labels — the box bg already provides contrast.
   if (!box) addDarkHalo(g, w, h);
