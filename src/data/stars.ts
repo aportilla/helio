@@ -143,8 +143,8 @@ export const CLASS_COLOR: Record<SpectralClass, Color> = {
 //   O ≈ 10, B ≈ 4, A ≈ 1.7, F ≈ 1.3, G ≈ 1.0, K ≈ 0.7, M ≈ 0.3,
 //   WD ≈ 0.01, BD ≈ 0.1
 
-// Direct visual pixel sizes per class at the reference uPxScale of 300
-// (≈ a 600 px-tall render buffer). The shader scales these by uPxScale/300
+// Direct visual pixel sizes per class at the reference uPxScale of 360
+// (≈ a 720 px-tall render buffer). The shader scales these by uPxScale/360
 // so discs grow/shrink modestly with viewport size, multiplies by the per-
 // frame zoom-scale uniform, and rounds to the nearest even integer for
 // symmetric gl.POINTS rasterization. The previous log-derived sizes

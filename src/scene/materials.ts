@@ -135,12 +135,12 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
         // typically losing a row of pixels on one edge.
         //
         // aSize is the per-class pixel size at the reference resolution
-        // (uPxScale = 300, ≈ a 600-px-tall render buffer); the uPxScale ratio
+        // (uPxScale = 360, ≈ a 720-px-tall render buffer); the uPxScale ratio
         // makes discs scale modestly with viewport size, and uZoomScale
         // shrinks them on zoom-out (capped at 1 by the JS side). Raise the
         // divisor here to make all stars smaller globally without re-tuning
         // each class's CLASS_SIZE entry.
-        float sz = clamp(aSize * (uPxScale / 300.0) * uZoomScale, 2.0, 28.0);
+        float sz = clamp(aSize * (uPxScale / 360.0) * uZoomScale, 2.0, 28.0);
         sz = floor(sz * 0.5 + 0.5) * 2.0;
         gl_PointSize = sz;
         vRadius = sz * 0.5;
