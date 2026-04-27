@@ -28,12 +28,9 @@ npm run typecheck  # tsc --noEmit
 index.html                  Vite entry — mounts <starmap-app>
 src/
   main.ts                   Imports global styles + registers <starmap-app>
-  styles.css                CSS custom props, body reset, font-family
-  components/               Lit web components (HUD chrome only — no scene logic)
+  styles.css                Body reset + boot-splash CSS variables
+  components/               Lit web components (only the canvas host + boot splash now)
     starmap-app.ts          Root component; owns the canvas + StarmapScene instance
-    starmap-title.ts        Top-left "NEARBY STARS" title block
-    starmap-controls.ts     Bottom-right toggle buttons (labels/droplines/spin/reset)
-    starmap-scale.ts        Bottom-left dynamic scale bar
     starmap-boot.ts         Centered "INITIALIZING STELLAR CATALOG" splash
   scene/                    Three.js code — no DOM coupling beyond the canvas
     scene.ts                StarmapScene: camera, input, render loop, owns sub-objects
@@ -42,8 +39,11 @@ src/
     stars.ts                gl.POINTS starfield with per-star size + color
     labels.ts               Bitmap-font Sprites: star names, axis ticks, hover tooltip
     materials.ts            Pixel-snapped line ShaderMaterial + the stars shader
+    hud.ts                  Pixel-art HUD (title, scale bar, toggle buttons)
+                            rendered as a second orthographic pass after the main scene
   data/
-    stars.ts                Star catalog (name, x/y/z in ly, spectral class, distance)
+    stars.ts                Star catalog (name, x/y/z in ly, spectral class, distance);
+                            also computes star clusters and lookup
     pixel-font.ts           Inline Monaco 11px BDF data + canvas-texture text renderer
 ```
 
@@ -51,9 +51,11 @@ src/
 
 ### Component / scene split
 
-`StarmapApp` (the Lit root) owns the canvas and instantiates `StarmapScene`. It bridges UI events from the toggle buttons (`@toggle-labels`, `@toggle-drops`, `@toggle-spin`, `@reset-view`) into method calls on the scene, and receives a `onScale` callback so the scene can push the current scale-bar step/width into the `<starmap-scale>` element each frame.
+`StarmapApp` (the Lit root) is now minimal — it owns the canvas, mounts the boot splash, and instantiates `StarmapScene`. There's no UI plumbing between Lit and the scene: the title, scale bar, and toggle buttons all live inside `Hud` (a second orthographic pass at 1 unit = 1 buffer pixel) and are drawn with `Mesh + PlaneGeometry` so they share the rest of the scene's pixel grid.
 
-The `scene/` modules know **nothing about Lit or the DOM** beyond the `HTMLCanvasElement` they render into and `window` for size/input listeners. Don't add DOM queries in there — route data through the `StarmapSceneOptions` callback or new methods on `StarmapScene`.
+The HUD captures pointer events first (in `StarmapScene.onPointerDown` / `onPointerMove` via `clientToHud()`), so clicking a button never starts a pan/orbit and hovering swaps the cursor to `pointer`. Button state is wired directly to scene internals through `hud.onToggle` and `hud.onAction` — no public API on `StarmapScene` is needed for the controls.
+
+The `scene/` modules know **nothing about Lit or the DOM** beyond the `HTMLCanvasElement` they render into and `window` for size/input listeners. Don't add DOM queries in there — route data through callbacks or new methods on `StarmapScene`.
 
 ### Coordinate system
 

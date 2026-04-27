@@ -11,6 +11,7 @@ import { Droplines } from './droplines';
 import { Labels } from './labels';
 import { StarPoints } from './stars';
 import { setSnappedLineViewport } from './materials';
+import { Hud } from './hud';
 
 const ZOOM_MIN = 8;
 const ZOOM_MAX = 200;
@@ -21,15 +22,6 @@ const DEFAULT_VIEW = { distance: 50, yaw: 0.9, pitch: 0.55 };
 // physical screen pixels via image-rendering: pixelated. Larger = chunkier
 // pixel-art look + fewer GPU pixels (perf bonus, 1/N² fragments).
 const ENV_PX_PER_SCREEN_PX = 3;
-
-export interface ScaleInfo {
-  step: number;
-  widthPx: number;
-}
-
-export interface StarmapSceneOptions {
-  onScale?: (info: ScaleInfo) => void;
-}
 
 interface ViewState {
   target: Vector3;
@@ -53,7 +45,7 @@ export class StarmapScene {
   private readonly droplines: Droplines;
   private readonly labels: Labels;
   private readonly starPoints: StarPoints;
-  private readonly opts: StarmapSceneOptions;
+  private readonly hud: Hud;
 
   // Orbit input state.
   private dragging = false;
@@ -83,6 +75,7 @@ export class StarmapScene {
   private readonly _tmp1 = new Vector3();
   private readonly _ndc  = new Vector2();
   private readonly _buf  = new Vector2();
+  private readonly _hudPt = { x: 0, y: 0 };
 
   // Cached drawing-buffer dimensions, populated by resize(). All pixel-aware
   // shader work (snap shader, star size, label sizing) uses these — NOT
@@ -91,9 +84,8 @@ export class StarmapScene {
   private bufferW = 0;
   private bufferH = 0;
 
-  constructor(canvas: HTMLCanvasElement, opts: StarmapSceneOptions = {}) {
+  constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
-    this.opts = opts;
     this.view = {
       target: new Vector3(0, 0, 0),
       ...DEFAULT_VIEW,
@@ -124,6 +116,21 @@ export class StarmapScene {
     this.scene.add(this.droplines.group);
 
     this.labels = new Labels(this.scene);
+
+    this.hud = new Hud();
+    this.hud.onToggle = (id, on) => {
+      if (id === 'labels') this.labels.setShowLabels(on);
+      else if (id === 'drops') this.droplines.group.visible = on;
+      else if (id === 'spin') this.view.spin = on;
+    };
+    this.hud.onAction = (id) => {
+      if (id === 'reset') {
+        this.view.target.set(0, 0, 0);
+        this.view.distance = DEFAULT_VIEW.distance;
+        this.view.yaw = DEFAULT_VIEW.yaw;
+        this.view.pitch = DEFAULT_VIEW.pitch;
+      }
+    };
   }
 
   // -- public API --------------------------------------------------------
@@ -141,25 +148,6 @@ export class StarmapScene {
     this.running = false;
     cancelAnimationFrame(this.rafId);
     this.detachListeners();
-  }
-
-  setShowLabels(show: boolean): void {
-    this.labels.setShowLabels(show);
-  }
-
-  setShowDroplines(show: boolean): void {
-    this.droplines.group.visible = show;
-  }
-
-  setSpin(spin: boolean): void {
-    this.view.spin = spin;
-  }
-
-  reset(): void {
-    this.view.target.set(0, 0, 0);
-    this.view.distance = DEFAULT_VIEW.distance;
-    this.view.yaw      = DEFAULT_VIEW.yaw;
-    this.view.pitch    = DEFAULT_VIEW.pitch;
   }
 
   // -- listeners ---------------------------------------------------------
@@ -190,7 +178,20 @@ export class StarmapScene {
     window.removeEventListener('resize',  this._onResize);
   }
 
+  // Map a CSS-pixel client coord into HUD buffer coords (Y-up, origin at
+  // bottom-left). bufferW/H are in render-buffer pixels; the canvas's CSS
+  // box still spans the full viewport, so we scale by the pixelRatio implied
+  // by buffer / viewport.
+  private clientToHud(clientX: number, clientY: number, out: { x: number; y: number }): void {
+    out.x = clientX * (this.bufferW / window.innerWidth);
+    out.y = (window.innerHeight - clientY) * (this.bufferH / window.innerHeight);
+  }
+
   private onPointerDown(e: PointerEvent): void {
+    // HUD click intercepts pan/orbit so dragging-on-button doesn't move the camera.
+    this.clientToHud(e.clientX, e.clientY, this._hudPt);
+    if (this.hud.handleClick(this._hudPt.x, this._hudPt.y)) return;
+
     this.dragging = true;
     this.panning = e.shiftKey || e.button === 2;
     this.lastX = e.clientX; this.lastY = e.clientY;
@@ -205,6 +206,13 @@ export class StarmapScene {
 
   private onPointerMove(e: PointerEvent): void {
     this.pointer.x = e.clientX; this.pointer.y = e.clientY; this.pointer.has = true;
+    // Update HUD hover state. While actively dragging the camera we skip the
+    // HUD hover update so the cursor doesn't lose its grabbing affordance.
+    if (!this.dragging) {
+      this.clientToHud(e.clientX, e.clientY, this._hudPt);
+      const onButton = this.hud.handlePointerMove(this._hudPt.x, this._hudPt.y);
+      this.canvas.style.cursor = onButton ? 'pointer' : '';
+    }
     if (!this.dragging) return;
     const dx = e.clientX - this.lastX, dy = e.clientY - this.lastY;
     this.lastX = e.clientX; this.lastY = e.clientY;
@@ -293,18 +301,18 @@ export class StarmapScene {
     this.bufferH = this._buf.y;
     this.starPoints.setPxScale(this.bufferH / 2);
     setSnappedLineViewport(this.bufferW, this.bufferH);
+    this.hud.resize(this.bufferW, this.bufferH);
   }
 
   // Walk the nice-step list from largest down; pick the first that fits
-  // under ~150 px on screen. Guarantees a readable bar at any zoom.
+  // under ~150 buffer pixels on screen. Guarantees a readable bar at any zoom.
   private emitScale(): void {
-    if (!this.opts.onScale) return;
-    const pxPerLy = window.innerHeight / this.view.distance;
+    const pxPerLy = this.bufferH / this.view.distance;
     let chosen = NICE_STEPS[NICE_STEPS.length - 1];
     for (const step of NICE_STEPS) {
       if (step * pxPerLy <= 150) { chosen = step; break; }
     }
-    this.opts.onScale({ step: chosen, widthPx: Math.round(chosen * pxPerLy) });
+    this.hud.setScale(chosen, Math.round(chosen * pxPerLy));
   }
 
   // -- main loop ---------------------------------------------------------
@@ -354,6 +362,11 @@ export class StarmapScene {
     this.labels.update(this.camera, this.view.distance, this.bufferW, this.bufferH);
 
     this.renderer.render(this.scene, this.camera);
+    // HUD pass — disable autoClear so the second render doesn't wipe the
+    // first. HUD geometry uses depthTest: false so it always overlays.
+    this.renderer.autoClear = false;
+    this.renderer.render(this.hud.scene, this.hud.camera);
+    this.renderer.autoClear = true;
     this.rafId = requestAnimationFrame(this.tick);
   };
 }

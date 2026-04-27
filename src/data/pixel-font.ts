@@ -123,6 +123,18 @@ export function measurePixelText(text: string): number {
   return w;
 }
 
+// Draw text into an arbitrary canvas at (x, y) — exported so callers (e.g.
+// the HUD) can compose text into their own canvases alongside borders, fills,
+// and other primitives without going through makeLabelTexture.
+export function drawPixelText(g2d: CanvasRenderingContext2D, text: string, x: number, y: number, color: string): void {
+  let cursor = x;
+  for (let i = 0; i < text.length; i++) {
+    drawPixelGlyph(g2d, text[i], cursor, y, color);
+    const glyph = FONT_MAP.get(text.charCodeAt(i));
+    cursor += glyph ? glyph.adv : 6;
+  }
+}
+
 // Glyph bitmap position derives from BDF metrics (bbxX as left bearing, bbxY
 // as descent). All glyphs are ≤6px wide, so one byte per row suffices.
 function drawPixelGlyph(g2d: CanvasRenderingContext2D, ch: string, cellX: number, cellY: number, color: string): void {

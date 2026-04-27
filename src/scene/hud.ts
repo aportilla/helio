@@ -1,0 +1,387 @@
+import {
+  CanvasTexture,
+  ClampToEdgeWrapping,
+  Mesh,
+  MeshBasicMaterial,
+  NearestFilter,
+  OrthographicCamera,
+  PlaneGeometry,
+  Scene,
+} from 'three';
+import { FONT_LINEH, drawPixelText, measurePixelText } from '../data/pixel-font';
+
+// HUD chrome (title, scale bar, toggle buttons) rendered as native pixel-art
+// in a second orthographic pass after the main scene. The HUD camera is set
+// up so 1 world unit = 1 buffer pixel, with origin at bottom-left, Y-up. All
+// HUD geometry uses Mesh + PlaneGeometry so positions and sizes are integer
+// pixel counts that map 1:1 to the buffer pixel grid.
+
+const PADDING = 8;          // distance from screen edges
+const BTN_GAP = 4;          // horizontal gap between buttons
+// All HUD sizes are in *env pixels* — 1 env pixel = ENV_PX_PER_SCREEN_PX
+// (currently 3) physical screen pixels after the browser's nearest-neighbor
+// upscale. So a value of 3 here renders as a 9-physical-pixel-tall tick:
+// 1 env (3 physical) above the bar, 1 env (3 physical) for the bar itself,
+// 1 env (3 physical) below.
+const SCALE_TICK_H = 3;
+const SCALE_LABEL_GAP = 2;  // gap between the bar and its label below
+
+const COLOR_TITLE_BRIGHT = '#5ec8ff';
+const COLOR_TITLE_DIM    = '#2d7ab8';
+const COLOR_ACCENT       = '#3a8fe0';  // bright grid color (left border, on-state border)
+const COLOR_BORDER       = '#1e6fc4';  // dim grid color (off-state border)
+const COLOR_BG_ON        = '#10325d';  // dim blue fill behind on-state buttons
+const COLOR_BTN_OFF_TEXT = '#5ec8ff';
+const COLOR_BTN_ON_TEXT  = '#ffffff';
+const COLOR_BTN_HOVER_TEXT = '#cfeeff';
+const COLOR_SCALE        = 0xe8f6ff;   // near-white for the scale bar + ticks
+
+export type ToggleId = 'labels' | 'drops' | 'spin';
+export type ActionId = 'reset';
+type ButtonId = ToggleId | ActionId;
+
+interface HudButton {
+  id: ButtonId;
+  toggle: boolean;
+  on: boolean;
+  hover: boolean;
+  W: number;
+  H: number;
+  textures: { off: CanvasTexture; offHover: CanvasTexture; on: CanvasTexture; onHover: CanvasTexture };
+  mesh: Mesh;
+  mat: MeshBasicMaterial;
+  // Top-left of the button bounding box in HUD coords (Y-up).
+  bx: number;
+  by: number;
+}
+
+function nearestFilteredTexture(canvas: HTMLCanvasElement): CanvasTexture {
+  const t = new CanvasTexture(canvas);
+  t.minFilter = NearestFilter;
+  t.magFilter = NearestFilter;
+  t.wrapS = ClampToEdgeWrapping;
+  t.wrapT = ClampToEdgeWrapping;
+  t.generateMipmaps = false;
+  // colorSpace left at default — the renderer is in NoColorSpace mode so
+  // canvas pixels pass through untouched.
+  return t;
+}
+
+function buildTitleTexture(): { tex: CanvasTexture; w: number; h: number } {
+  const line1 = 'NEARBY STARS';
+  const line2 = '< 20 LIGHT YEARS  SOLAR NEIGHBOURHOOD';
+  const accentW = 2;
+  const gapL = 4;
+  const padR = 4;
+  const padTopBot = 3;
+  const w1 = measurePixelText(line1);
+  const w2 = measurePixelText(line2);
+  const W = accentW + gapL + Math.max(w1, w2) + padR;
+  const H = FONT_LINEH * 2 + padTopBot * 2;
+
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d')!;
+
+  // Left accent bar in bright cyan, mirroring the original CSS border-left.
+  g.fillStyle = COLOR_ACCENT;
+  g.fillRect(0, 0, accentW, H);
+
+  drawPixelText(g, line1, accentW + gapL, padTopBot, COLOR_TITLE_BRIGHT);
+  drawPixelText(g, line2, accentW + gapL, padTopBot + FONT_LINEH, COLOR_TITLE_DIM);
+
+  return { tex: nearestFilteredTexture(c), w: W, h: H };
+}
+
+type ButtonState = 'off' | 'offHover' | 'on' | 'onHover';
+
+function buildButtonTexture(text: string, state: ButtonState, toggle: boolean): { tex: CanvasTexture; w: number; h: number } {
+  const textW = measurePixelText(text);
+  const padX = 6;
+  const padY = 3;
+  const W = textW + padX * 2;
+  const H = FONT_LINEH + padY * 2;
+
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d')!;
+
+  const isOn = state === 'on' || state === 'onHover';
+  const isHover = state === 'offHover' || state === 'onHover';
+  const borderColor = isOn || isHover ? COLOR_ACCENT : COLOR_BORDER;
+  const textColor = isOn
+    ? COLOR_BTN_ON_TEXT
+    : isHover
+      ? COLOR_BTN_HOVER_TEXT
+      : COLOR_BTN_OFF_TEXT;
+
+  if (isOn) {
+    g.fillStyle = COLOR_BG_ON;
+    g.fillRect(0, 0, W, H);
+  }
+  // 1px border
+  g.fillStyle = borderColor;
+  g.fillRect(0, 0, W, 1);
+  g.fillRect(0, H - 1, W, 1);
+  g.fillRect(0, 0, 1, H);
+  g.fillRect(W - 1, 0, 1, H);
+
+  // Center the text horizontally; vertical baseline matches the label sprites.
+  const textX = Math.round((W - textW) / 2);
+  drawPixelText(g, text, textX, padY, textColor);
+
+  // Non-toggle buttons (e.g. "reset view") never reach the on/onHover states
+  // but we still need a texture for them — `toggle` is just here to make
+  // skipping the on-state textures explicit at the call site.
+  void toggle;
+
+  return { tex: nearestFilteredTexture(c), w: W, h: H };
+}
+
+function buildScaleLabelTexture(text: string): { tex: CanvasTexture; w: number; h: number } {
+  const padX = 1;
+  const padY = 1;
+  const tw = measurePixelText(text);
+  const W = tw + padX * 2;
+  const H = FONT_LINEH + padY * 2;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d')!;
+  drawPixelText(g, text, padX, padY, '#e8f6ff');
+  return { tex: nearestFilteredTexture(c), w: W, h: H };
+}
+
+export class Hud {
+  readonly scene = new Scene();
+  readonly camera = new OrthographicCamera(0, 1, 1, 0, -1, 1);
+
+  private bufferW = 1;
+  private bufferH = 1;
+
+  private readonly titleMesh: Mesh;
+  private readonly titleW: number;
+  private readonly titleH: number;
+
+  private readonly buttons: HudButton[] = [];
+
+  // Scale bar parts. Bar + ticks share a single material (same color); label
+  // gets its own material because its texture changes when the step changes.
+  private readonly scaleBarMesh: Mesh;
+  private readonly scaleLeftTickMesh: Mesh;
+  private readonly scaleRightTickMesh: Mesh;
+  private readonly scaleLabelMesh: Mesh;
+  private readonly scaleLabelMat: MeshBasicMaterial;
+  private scaleStep = -1;
+  private scaleWidthPx = 0;
+  private scaleLabelH = 0;
+
+  // Public callbacks. The scene wires these to its own toggle methods.
+  onToggle: (id: ToggleId, on: boolean) => void = () => {};
+  onAction: (id: ActionId) => void = () => {};
+
+  constructor() {
+    // ---- title -----------------------------------------------------------
+    const title = buildTitleTexture();
+    this.titleW = title.w;
+    this.titleH = title.h;
+    const titleMat = new MeshBasicMaterial({ map: title.tex, transparent: true, depthTest: false, depthWrite: false });
+    this.titleMesh = new Mesh(new PlaneGeometry(title.w, title.h), titleMat);
+    this.titleMesh.renderOrder = 100;
+    this.scene.add(this.titleMesh);
+
+    // ---- buttons ---------------------------------------------------------
+    const specs: Array<{ id: ButtonId; text: string; toggle: boolean; on: boolean }> = [
+      { id: 'labels', text: 'labels',    toggle: true,  on: true  },
+      { id: 'drops',  text: 'droplines', toggle: true,  on: true  },
+      { id: 'spin',   text: 'autospin',  toggle: true,  on: false },
+      { id: 'reset',  text: 'reset view', toggle: false, on: false },
+    ];
+    for (const spec of specs) {
+      const off      = buildButtonTexture(spec.text, 'off',      spec.toggle);
+      const offHover = buildButtonTexture(spec.text, 'offHover', spec.toggle);
+      const on       = spec.toggle ? buildButtonTexture(spec.text, 'on',      spec.toggle) : off;
+      const onHover  = spec.toggle ? buildButtonTexture(spec.text, 'onHover', spec.toggle) : offHover;
+      const initialTex = spec.on ? on.tex : off.tex;
+      const mat = new MeshBasicMaterial({ map: initialTex, transparent: true, depthTest: false, depthWrite: false });
+      const mesh = new Mesh(new PlaneGeometry(off.w, off.h), mat);
+      mesh.renderOrder = 100;
+      this.scene.add(mesh);
+      this.buttons.push({
+        id: spec.id, toggle: spec.toggle, on: spec.on, hover: false,
+        W: off.w, H: off.h,
+        textures: { off: off.tex, offHover: offHover.tex, on: on.tex, onHover: onHover.tex },
+        mesh, mat, bx: 0, by: 0,
+      });
+    }
+
+    // ---- scale bar -------------------------------------------------------
+    const barMat = new MeshBasicMaterial({ color: COLOR_SCALE, transparent: false, depthTest: false, depthWrite: false });
+    this.scaleBarMesh = new Mesh(new PlaneGeometry(1, 1), barMat);
+    this.scaleLeftTickMesh = new Mesh(new PlaneGeometry(1, SCALE_TICK_H), barMat);
+    this.scaleRightTickMesh = new Mesh(new PlaneGeometry(1, SCALE_TICK_H), barMat);
+    this.scaleBarMesh.renderOrder = 100;
+    this.scaleLeftTickMesh.renderOrder = 100;
+    this.scaleRightTickMesh.renderOrder = 100;
+    this.scaleBarMesh.visible = false;
+    this.scaleLeftTickMesh.visible = false;
+    this.scaleRightTickMesh.visible = false;
+    this.scene.add(this.scaleBarMesh);
+    this.scene.add(this.scaleLeftTickMesh);
+    this.scene.add(this.scaleRightTickMesh);
+
+    this.scaleLabelMat = new MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false });
+    this.scaleLabelMesh = new Mesh(new PlaneGeometry(1, 1), this.scaleLabelMat);
+    this.scaleLabelMesh.renderOrder = 100;
+    this.scaleLabelMesh.visible = false;
+    this.scene.add(this.scaleLabelMesh);
+  }
+
+  resize(bufferW: number, bufferH: number): void {
+    this.bufferW = bufferW;
+    this.bufferH = bufferH;
+    this.camera.left = 0; this.camera.right = bufferW;
+    this.camera.bottom = 0; this.camera.top = bufferH;
+    this.camera.updateProjectionMatrix();
+    this.layout();
+  }
+
+  setScale(step: number, widthPx: number): void {
+    if (this.scaleStep === step && this.scaleWidthPx === widthPx) return;
+
+    if (this.scaleStep !== step) {
+      // Step change: rebuild label texture.
+      const text = step === 1 ? '1 Light Year' : `${step} Light Years`;
+      if (this.scaleLabelMat.map) this.scaleLabelMat.map.dispose();
+      const lab = buildScaleLabelTexture(text);
+      this.scaleLabelMat.map = lab.tex;
+      this.scaleLabelMat.needsUpdate = true;
+      this.scaleLabelH = lab.h;
+      this.scaleLabelMesh.geometry.dispose();
+      this.scaleLabelMesh.geometry = new PlaneGeometry(lab.w, lab.h);
+    }
+    this.scaleStep = step;
+    this.scaleWidthPx = widthPx;
+
+    this.scaleBarMesh.visible = true;
+    this.scaleLeftTickMesh.visible = true;
+    this.scaleRightTickMesh.visible = true;
+    this.scaleLabelMesh.visible = true;
+    this.layoutScale();
+  }
+
+  // External state sync — called when the scene toggles state from elsewhere
+  // (e.g. keyboard shortcut) or when reset re-arms autospin off, etc.
+  setToggleState(id: ToggleId, on: boolean): void {
+    const b = this.buttons.find(b => b.id === id);
+    if (!b || b.on === on) return;
+    b.on = on;
+    this.applyButtonTexture(b);
+  }
+
+  // Returns true if the click hit a button (and the action was fired).
+  handleClick(bufX: number, bufY: number): boolean {
+    const hit = this.findButton(bufX, bufY);
+    if (!hit) return false;
+    if (hit.toggle) {
+      hit.on = !hit.on;
+      this.applyButtonTexture(hit);
+      this.onToggle(hit.id as ToggleId, hit.on);
+    } else {
+      this.onAction(hit.id as ActionId);
+    }
+    return true;
+  }
+
+  // Returns true if the cursor is over any button (caller can change cursor).
+  handlePointerMove(bufX: number, bufY: number): boolean {
+    const hit = this.findButton(bufX, bufY);
+    let changed = false;
+    for (const b of this.buttons) {
+      const wantHover = b === hit;
+      if (b.hover !== wantHover) {
+        b.hover = wantHover;
+        this.applyButtonTexture(b);
+        changed = true;
+      }
+    }
+    void changed;
+    return hit !== null;
+  }
+
+  clearHover(): void {
+    for (const b of this.buttons) {
+      if (b.hover) {
+        b.hover = false;
+        this.applyButtonTexture(b);
+      }
+    }
+  }
+
+  private applyButtonTexture(b: HudButton): void {
+    const tex = b.on
+      ? (b.hover ? b.textures.onHover : b.textures.on)
+      : (b.hover ? b.textures.offHover : b.textures.off);
+    b.mat.map = tex;
+    b.mat.needsUpdate = true;
+  }
+
+  private findButton(bufX: number, bufY: number): HudButton | null {
+    for (const b of this.buttons) {
+      if (bufX >= b.bx && bufX < b.bx + b.W && bufY >= b.by && bufY < b.by + b.H) return b;
+    }
+    return null;
+  }
+
+  // -- layout ------------------------------------------------------------
+
+  private layout(): void {
+    // Title at top-left.
+    this.titleMesh.position.set(PADDING + this.titleW / 2, this.bufferH - PADDING - this.titleH / 2, 0);
+
+    // Buttons at bottom-right, horizontal row, right-aligned.
+    let cursor = this.bufferW - PADDING;
+    for (let i = this.buttons.length - 1; i >= 0; i--) {
+      const b = this.buttons[i];
+      const right = cursor;
+      const left = right - b.W;
+      b.bx = left;
+      b.by = PADDING;
+      b.mesh.position.set(left + b.W / 2, PADDING + b.H / 2, 0);
+      cursor = left - BTN_GAP;
+    }
+
+    this.layoutScale();
+  }
+
+  private layoutScale(): void {
+    if (this.scaleWidthPx <= 0) return;
+    // Layout from bottom up: label, gap, then the tick block with the bar
+    // running through its vertical center (so each tick extends equally
+    // above and below the bar — proper end-cap measurement marks).
+    const labelCY = PADDING + this.scaleLabelH / 2;
+    const tickBottom = labelCY + this.scaleLabelH / 2 + SCALE_LABEL_GAP;
+    const barCY = tickBottom + SCALE_TICK_H / 2;  // bar AND tick share this center
+    const tickCY = barCY;
+
+    const barLeft = PADDING;
+    const barRight = barLeft + this.scaleWidthPx;
+
+    this.scaleBarMesh.scale.set(this.scaleWidthPx, 1, 1);
+    this.scaleBarMesh.position.set(barLeft + this.scaleWidthPx / 2, barCY, 0);
+
+    // Ticks are 1px-wide vertical bars at each end, aligned to the integer
+    // pixel column (offset by 0.5 because mesh center sits at pixel center).
+    this.scaleLeftTickMesh.scale.set(1, SCALE_TICK_H, 1);
+    this.scaleLeftTickMesh.position.set(barLeft + 0.5, tickCY, 0);
+    this.scaleRightTickMesh.scale.set(1, SCALE_TICK_H, 1);
+    this.scaleRightTickMesh.position.set(barRight - 0.5, tickCY, 0);
+
+    // Label centered horizontally under the bar. The label width is always
+    // even (font advance is 6 × char count + even padding), so center X must
+    // be an integer for the quad's edges to land on pixel boundaries; round
+    // the natural center because it's half-integer whenever the bar width
+    // is odd. Without this, the rasterizer skips a column of edge texels
+    // and the text rendering looks fuzzy/off-grid.
+    this.scaleLabelMesh.position.set(Math.round(barLeft + this.scaleWidthPx / 2), labelCY, 0);
+  }
+}
