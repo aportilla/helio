@@ -55,9 +55,8 @@ export class Grid {
   constructor() {
     // Concentric rings on the galactic plane, split into 4 arcs per ring.
     for (const r of RING_RADII) {
-      const baseColor = (r === 20) ? 0x3a8fe0 : 0x1e6fc4;
       for (let q = 0; q < 4; q++) {
-        const mat = snappedLineMat({ color: baseColor, opacity: RING_OPACITY_BASE });
+        const mat = snappedLineMat({ color: 0x1e6fc4, opacity: RING_OPACITY_BASE });
         const [a0, a1] = QUAD_ANGLES[q];
         this.group.add(arc(r, a0, a1, 32, mat));
         this.ringQuads[q].push({ mat });
