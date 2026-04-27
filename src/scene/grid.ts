@@ -1,9 +1,9 @@
 import { BufferGeometry, Group, Line, LineSegments, ShaderMaterial, Vector3 } from 'three';
 import { snappedLineMat } from './materials';
 
-const ARROW_OPACITY_BASE = 0.9;
+const ARROW_OPACITY_BASE = 1;
 const ARROW_OPACITY_DIM  = 0.45;
-const RING_OPACITY_BASE  = 0.75;
+const RING_OPACITY_BASE  = 1;
 const RING_OPACITY_DIM   = 0.45;
 const AXIS_OPACITY_BASE  = RING_OPACITY_BASE;
 const AXIS_OPACITY_DIM   = RING_OPACITY_DIM;
