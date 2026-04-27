@@ -100,17 +100,23 @@ export class Labels {
     this.hovered = idx;
   }
 
-  // Snap a sprite's world position so it projects onto the integer pixel grid.
-  // Uses Math.floor (not Math.round): when a sprite projects to an exact
-  // half-pixel (e.g. the Sun at world origin → screen center), tiny FP jitter
-  // around 0.5 would flip rounding between frames and cause 1px twitch. floor
-  // always rounds the same direction so positions stay stable frame-to-frame.
-  private snapToPixelGrid(out: Vector3, wpp: number, camera: Camera, viewportW: number, viewportH: number): void {
+  // Snap a sprite so its top-left quad corner lands on an integer buffer
+  // pixel. We snap the *corner*, not the *center*, so all four corners are
+  // integer-aligned regardless of sprite dimension parity. Snapping only the
+  // center leaves odd-dimension sprites with half-integer corners — and the
+  // GPU's rasterization rule then covers (size − 1) pixels instead of (size),
+  // skipping one row/column of texels at the edge. The artifact is most
+  // visible on small labels at the screen center (e.g. "Sun" when the camera
+  // target is the Sun) where the projection lands on an exact pixel boundary.
+  private snapToPixelGrid(out: Vector3, wpp: number, camera: Camera, viewportW: number, viewportH: number, spriteW: number, spriteH: number): void {
     this._projTmp.copy(out).project(camera);
     const sx = (this._projTmp.x * 0.5 + 0.5) * viewportW;
     const sy = (this._projTmp.y * 0.5 + 0.5) * viewportH;
-    out.addScaledVector(this._camRight, (Math.floor(sx) - sx) * wpp);
-    out.addScaledVector(this._camUp,   -(Math.floor(sy) - sy) * wpp);
+    // Top-left corner in screen-up coords (Y grows up): (sx − w/2, sy + h/2).
+    const cornerX = sx - spriteW * 0.5;
+    const cornerY = sy + spriteH * 0.5;
+    out.addScaledVector(this._camRight, (Math.floor(cornerX + 0.5) - cornerX) * wpp);
+    out.addScaledVector(this._camUp,    (Math.floor(cornerY + 0.5) - cornerY) * wpp);
   }
 
   update(camera: Camera, viewDistance: number, viewportW: number, viewportH: number): void {
@@ -147,7 +153,7 @@ export class Labels {
       // Sun's dot is bigger and shares its label color, so needs more clearance.
       const offsetPx = Math.round(L.h * 0.5) + (L.isSun ? 22 : 6);
       L.sprite.position.set(s.x, s.y, s.z).addScaledVector(this._camUp, offsetPx * wpp);
-      this.snapToPixelGrid(L.sprite.position, wpp, camera, viewportW, viewportH);
+      this.snapToPixelGrid(L.sprite.position, wpp, camera, viewportW, viewportH, L.w, L.h);
     }
 
     this.gcSprite.scale.set(this.gcSize.w * wpp, this.gcSize.h * wpp, 1);
@@ -162,7 +168,7 @@ export class Labels {
       this.tipSprite.scale.set(this.tipSize.w * wpp, this.tipSize.h * wpp, 1);
       const offsetPx = Math.round(this.tipSize.h * 0.5) + 18;
       this.tipSprite.position.set(s.x, s.y, s.z).addScaledVector(this._camUp, offsetPx * wpp);
-      this.snapToPixelGrid(this.tipSprite.position, wpp, camera, viewportW, viewportH);
+      this.snapToPixelGrid(this.tipSprite.position, wpp, camera, viewportW, viewportH, this.tipSize.w, this.tipSize.h);
     }
   }
 }
