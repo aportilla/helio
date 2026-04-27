@@ -1,4 +1,6 @@
 import {
+  ColorManagement,
+  LinearSRGBColorSpace,
   OrthographicCamera,
   Raycaster,
   Scene,
@@ -6,6 +8,15 @@ import {
   Vector3,
   WebGLRenderer,
 } from 'three';
+
+// Opt out of Three.js color management. Without this, hex values in shader
+// uniforms (new Color(0x1e6fc4)) and hex strings in canvas fillStyle
+// ('#1e6fc4') end up rendering at *different* on-screen colors because the
+// two paths get different sRGB↔linear conversions. The whole project's
+// palette is hand-picked sRGB values intended to render literally, so we
+// turn off both color-management transforms (input and output) and let the
+// renderer just write raw sRGB to the framebuffer.
+ColorManagement.enabled = false;
 import { Grid } from './grid';
 import { Droplines } from './droplines';
 import { Labels } from './labels';
@@ -99,6 +110,12 @@ export class StarmapScene {
     // the on-screen pixel size is independent of the user's actual DPR.
     this.renderer.setPixelRatio(window.devicePixelRatio / ENV_PX_PER_SCREEN_PX);
     this.renderer.setClearColor(0x000008, 1);
+    // Match the disabled ColorManagement at the top of this file.
+    // LinearSRGBColorSpace = "no conversion at output" — fragment values are
+    // written to the framebuffer as-is, and the canvas then displays them as
+    // sRGB bytes, so a shader writing (30/255, 111/255, 196/255) renders as
+    // the literal #1e6fc4. (NoColorSpace is not a valid outputColorSpace.)
+    this.renderer.outputColorSpace = LinearSRGBColorSpace;
 
     // Orthographic keeps drop-lines truly parallel (critical for the
     // "pin to plane" geometry) and matches the reference illustration's feel.

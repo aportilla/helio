@@ -255,5 +255,9 @@ export function makeLabelTexture(
   tex.wrapS = ClampToEdgeWrapping;
   tex.wrapT = ClampToEdgeWrapping;
   tex.generateMipmaps = false;
+  // colorSpace intentionally left at default. With ColorManagement disabled
+  // and outputColorSpace = LinearSRGBColorSpace (set in scene.ts), the whole
+  // pipeline is raw sRGB end-to-end, so we want the sampler to return the
+  // canvas pixels untouched.
   return { tex, w, h };
 }

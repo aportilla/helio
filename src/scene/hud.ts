@@ -62,8 +62,8 @@ function nearestFilteredTexture(canvas: HTMLCanvasElement): CanvasTexture {
   t.wrapS = ClampToEdgeWrapping;
   t.wrapT = ClampToEdgeWrapping;
   t.generateMipmaps = false;
-  // colorSpace left at default — the renderer is in NoColorSpace mode so
-  // canvas pixels pass through untouched.
+  // colorSpace left at default — ColorManagement is disabled (see scene.ts)
+  // so canvas pixels pass through to the framebuffer untouched.
   return t;
 }
 
