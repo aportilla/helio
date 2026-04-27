@@ -17,6 +17,11 @@ const ZOOM_MAX = 200;
 const NICE_STEPS = [20, 10, 5, 2.5, 1, 0.5, 0.2, 0.1];
 const DEFAULT_VIEW = { distance: 50, yaw: 0.9, pitch: 0.55 };
 
+// Each render-buffer ("env") pixel is upscaled by the browser into this many
+// physical screen pixels via image-rendering: pixelated. Larger = chunkier
+// pixel-art look + fewer GPU pixels (perf bonus, 1/N² fragments).
+const ENV_PX_PER_SCREEN_PX = 3;
+
 export interface ScaleInfo {
   step: number;
   widthPx: number;
@@ -77,6 +82,14 @@ export class StarmapScene {
   // Reusable per-frame scratch.
   private readonly _tmp1 = new Vector3();
   private readonly _ndc  = new Vector2();
+  private readonly _buf  = new Vector2();
+
+  // Cached drawing-buffer dimensions, populated by resize(). All pixel-aware
+  // shader work (snap shader, star size, label sizing) uses these — NOT
+  // window.innerWidth/Height — because the buffer is smaller than CSS px once
+  // pixelRatio drops below 1.
+  private bufferW = 0;
+  private bufferH = 0;
 
   constructor(canvas: HTMLCanvasElement, opts: StarmapSceneOptions = {}) {
     this.canvas = canvas;
@@ -88,12 +101,11 @@ export class StarmapScene {
     };
 
     this.renderer = new WebGLRenderer({ canvas, antialias: false, alpha: false });
-    // Pin render buffer to 1 CSS pixel per drawn pixel. On hi-DPI displays
-    // the default 2x/3x ratio makes gl.LINES render at 1 *physical* pixel
-    // (= 0.5 or 0.33 CSS px), causing sub-pixel shimmer. Forcing 1:1 gives
-    // true 1-CSS-pixel lines at the cost of slightly chunkier stars/grid —
-    // which actually suits the pixel-art aesthetic.
-    this.renderer.setPixelRatio(1);
+    // Render buffer = (CSS px) × (devicePixelRatio / N). The browser then
+    // nearest-neighbor upscales the canvas back to its CSS box, so 1 render
+    // pixel becomes N×N physical pixels. Picking the ratio this way means
+    // the on-screen pixel size is independent of the user's actual DPR.
+    this.renderer.setPixelRatio(window.devicePixelRatio / ENV_PX_PER_SCREEN_PX);
     this.renderer.setClearColor(0x000008, 1);
 
     // Orthographic keeps drop-lines truly parallel (critical for the
@@ -276,8 +288,11 @@ export class StarmapScene {
     this.camera.left = -halfW; this.camera.right = halfW;
     this.camera.top = halfH;   this.camera.bottom = -halfH;
     this.camera.updateProjectionMatrix();
-    this.starPoints.setPxScale(h / 2);
-    setSnappedLineViewport(w, h);
+    this.renderer.getDrawingBufferSize(this._buf);
+    this.bufferW = this._buf.x;
+    this.bufferH = this._buf.y;
+    this.starPoints.setPxScale(this.bufferH / 2);
+    setSnappedLineViewport(this.bufferW, this.bufferH);
   }
 
   // Walk the nice-step list from largest down; pick the first that fits
@@ -336,7 +351,7 @@ export class StarmapScene {
       }
     }
     this.labels.setHovered(hovered);
-    this.labels.update(this.camera, this.view.distance, window.innerWidth, window.innerHeight);
+    this.labels.update(this.camera, this.view.distance, this.bufferW, this.bufferH);
 
     this.renderer.render(this.scene, this.camera);
     this.rafId = requestAnimationFrame(this.tick);
