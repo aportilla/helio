@@ -30,6 +30,7 @@ export function snappedLineMat(opts: SnappedLineOptions): ShaderMaterial {
       uniform vec2 uViewport;
       #ifdef USE_DASH
       varying vec2 vScreenPx;
+      varying float vAnchorScreenY;
       #endif
       void main() {
         vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
@@ -39,6 +40,12 @@ export function snappedLineMat(opts: SnappedLineOptions): ShaderMaterial {
         gl_Position = vec4(ndc * clip.w, clip.z, clip.w);
         #ifdef USE_DASH
         vScreenPx = px;
+        // Project the line's anchor (z=0 of this segment) so the dash phase
+        // is relative to each line's own pin point on the galactic plane.
+        // Both vertices of a dropline share x/y, so this evaluates the same
+        // for both endpoints — interpolates as a constant along the line.
+        vec4 aClip = projectionMatrix * modelViewMatrix * vec4(position.x, position.y, 0.0, 1.0);
+        vAnchorScreenY = floor((aClip.y / aClip.w * 0.5 + 0.5) * uViewport.y + 0.5);
         #endif
       }
     `,
@@ -49,10 +56,12 @@ export function snappedLineMat(opts: SnappedLineOptions): ShaderMaterial {
       uniform float uDashPx;
       uniform float uGapPx;
       varying vec2 vScreenPx;
+      varying float vAnchorScreenY;
       void main() {
-        // Drop-lines project ~vertical on screen, so Y-pixel is a reliable
-        // monotonic parameter along the line.
-        if (mod(vScreenPx.y, uDashPx + uGapPx) > uDashPx) discard;
+        // Dash pattern phased from each line's anchor on the galactic plane,
+        // not a global screen Y — otherwise all droplines share the same
+        // horizontal dash rows and create faint banding across the field.
+        if (mod(vScreenPx.y - vAnchorScreenY, uDashPx + uGapPx) > uDashPx) discard;
         gl_FragColor = vec4(uColor, uOpacity);
       }
       #else
