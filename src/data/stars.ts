@@ -137,20 +137,31 @@ export const CLASS_COLOR: Record<SpectralClass, Color> = {
   BD: new Color(0xa64633),
 };
 
-// Reference radii in solar radii (R☉). Real stellar radii span ~6 orders of
-// magnitude (WD ≈ 0.01, supergiant > 1000), so the shader uses log10 to map
-// them into a readable visual range.
-const CLASS_RADIUS: Record<SpectralClass, number> = {
-  O: 10.0, B: 4.0, A: 1.7, F: 1.3, G: 1.0,
-  K: 0.7,  M: 0.3, WD: 0.01, BD: 0.1,
-};
+// Reference radii in solar radii (R☉). Kept for documentation only — visual
+// sizes (CLASS_SIZE below) are picked directly to give clear differentiation
+// across the catalog rather than mapping radii through log10.
+//   O ≈ 10, B ≈ 4, A ≈ 1.7, F ≈ 1.3, G ≈ 1.0, K ≈ 0.7, M ≈ 0.3,
+//   WD ≈ 0.01, BD ≈ 0.1
 
-// Visual size attribute for the stars shader. Shifted+scaled so the Sun
-// (R=1) lands at ~4.4 shader units (matching the original Sun size); the
-// shader then clamps the final pixel size to [2, 28].
-export const CLASS_SIZE: Record<SpectralClass, number> = Object.fromEntries(
-  Object.entries(CLASS_RADIUS).map(([cls, r]) => [cls, 4.4 + Math.log10(r) * 1.6]),
-) as Record<SpectralClass, number>;
+// Direct visual pixel sizes per class at the reference uPxScale of 300
+// (≈ a 600 px-tall render buffer). The shader scales these by uPxScale/300
+// so discs grow/shrink modestly with viewport size, multiplies by the per-
+// frame zoom-scale uniform, and rounds to the nearest even integer for
+// symmetric gl.POINTS rasterization. The previous log-derived sizes
+// compressed K through B all into the 8–12 px band, making most stars
+// look interchangeable; these are spaced wider so the brightest classes
+// are visibly larger than the dimmest.
+export const CLASS_SIZE: Record<SpectralClass, number> = {
+  O:  28,
+  B:  22,
+  A:  18,
+  F:  14,
+  G:  12,  // Sun
+  K:  10,
+  M:   8,
+  BD:  6,
+  WD:  3,
+};
 
 // Stars whose pairwise distance is within this threshold (light years) get
 // grouped into a single visible label, with a hover tooltip listing every
@@ -197,8 +208,10 @@ function buildClusters(): readonly StarCluster[] {
     g.push(i);
   }
   return Array.from(groups.values()).map(members => {
+    // Primary = largest visual size, which is monotonic with radius across
+    // the catalog's spectral classes (O > B > A > F > G > K > M > BD > WD).
     const primary = members.reduce(
-      (best, m) => CLASS_RADIUS[STARS[m].cls] > CLASS_RADIUS[STARS[best].cls] ? m : best,
+      (best, m) => CLASS_SIZE[STARS[m].cls] > CLASS_SIZE[STARS[best].cls] ? m : best,
       members[0],
     );
     return { primary, members: [primary, ...members.filter(m => m !== primary)] };

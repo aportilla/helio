@@ -129,8 +129,18 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
         gl_Position = vec4(ndc * clip.w, clip.z, clip.w);
         // Round size to the nearest EVEN integer pixel count. An even-sized
         // sprite has the same number of pixel-rows above and below center,
-        // guaranteeing the disc is symmetrical. Odd sizes lean by 1px.
-        float sz = clamp(aSize * (uPxScale / 280.0) * 2.2 * uZoomScale, 2.0, 28.0);
+        // guaranteeing the disc is symmetrical in both axes. Odd sizes are
+        // tempting (they'd give finer visual transitions) but in practice
+        // GPUs and drivers handle gl.POINTS at odd sizes inconsistently —
+        // typically losing a row of pixels on one edge.
+        //
+        // aSize is the per-class pixel size at the reference resolution
+        // (uPxScale = 300, ≈ a 600-px-tall render buffer); the uPxScale ratio
+        // makes discs scale modestly with viewport size, and uZoomScale
+        // shrinks them on zoom-out (capped at 1 by the JS side). Raise the
+        // divisor here to make all stars smaller globally without re-tuning
+        // each class's CLASS_SIZE entry.
+        float sz = clamp(aSize * (uPxScale / 300.0) * uZoomScale, 2.0, 28.0);
         sz = floor(sz * 0.5 + 0.5) * 2.0;
         gl_PointSize = sz;
         vRadius = sz * 0.5;
