@@ -137,7 +137,12 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
         // Pixel offset from sprite center, snapped to integer centers so
         // the disc has hard stair-stepped edges (no AA fringe).
         vec2 px = floor((gl_PointCoord - 0.5) * (vRadius * 2.0)) + 0.5;
-        if (length(px) > vRadius - 0.5) discard;
+        // Skip the disc clip for size-2 sprites (vRadius = 1): every
+        // fragment center sits at distance √0.5 ≈ 0.707 from origin, but
+        // the (vRadius − 0.5) = 0.5 threshold would discard all four —
+        // making white dwarfs (the smallest class) invisible. Render
+        // them as a solid 2×2 dot instead.
+        if (vRadius > 1.0 && length(px) > vRadius - 0.5) discard;
         gl_FragColor = vec4(vColor, 1.0);
       }
     `,
