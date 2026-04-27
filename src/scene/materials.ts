@@ -98,6 +98,11 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
   const m = new ShaderMaterial({
     uniforms: {
       uPxScale: { value: initialPxScale },
+      // 1.0 at default zoom, drops linearly as the camera zooms out so stars
+      // shrink with the widening world view. Capped at 1 in JS so zooming in
+      // past the default doesn't blow stars up — the current default size is
+      // the visual maximum.
+      uZoomScale: { value: 1.0 },
       uViewport: { value: new Vector2(window.innerWidth, window.innerHeight) },
     },
     vertexShader: `
@@ -105,6 +110,7 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
       varying vec3 vColor;
       varying float vRadius;
       uniform float uPxScale;
+      uniform float uZoomScale;
       uniform vec2 uViewport;
       void main() {
         vColor = color;
@@ -124,7 +130,7 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
         // Round size to the nearest EVEN integer pixel count. An even-sized
         // sprite has the same number of pixel-rows above and below center,
         // guaranteeing the disc is symmetrical. Odd sizes lean by 1px.
-        float sz = clamp(aSize * (uPxScale / 280.0) * 2.2, 2.0, 28.0);
+        float sz = clamp(aSize * (uPxScale / 280.0) * 2.2 * uZoomScale, 2.0, 28.0);
         sz = floor(sz * 0.5 + 0.5) * 2.0;
         gl_PointSize = sz;
         vRadius = sz * 0.5;

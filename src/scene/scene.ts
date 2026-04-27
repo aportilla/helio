@@ -355,6 +355,10 @@ export class StarmapScene {
     this.updateCamera();
     this.emitScale();
 
+    // Zoom-relative star size: stars shrink as the camera zooms out, capped
+    // at 1.0 so zoom-in past the default doesn't blow them up.
+    this.starPoints.setZoomScale(Math.min(1, DEFAULT_VIEW.distance / this.view.distance));
+
     this.grid.update(this.camera.position.x, this.camera.position.y, this.view.target.x, this.view.target.y);
     this.droplines.update(this.camera, this.view.target);
 
