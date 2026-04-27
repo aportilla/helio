@@ -1,14 +1,14 @@
 # Starmap
 
-A 3D pixel-art visualization of the stars within ~20 light years of the Sun. Orthographic camera, log-scaled stellar discs colored by spectral class, drop-lines pinning each star to the galactic plane, all rendered in a deliberately chunky retro CRT aesthetic.
+A 3D pixel-art visualization of the stars within ~20 light years of the Sun. Orthographic camera, stellar discs sized by spectral class, drop-lines pinning each star to the galactic plane, all rendered in a deliberately chunky retro CRT aesthetic.
 
-Think 1980s starbase HUD: VT323 / Share Tech Mono fonts, cyan-on-near-black palette, scanline overlay, hand-drawn-looking concentric range rings.
+Think 1980s starbase HUD: inline bitmap-font labels, cyan-on-near-black palette, scanline overlay, hand-drawn-looking concentric range rings. The HUD chrome (title, scale bar, toggle buttons) renders as native pixel art inside the WebGL scene rather than as DOM elements.
 
 ## Stack
 
 - **Vite 5** — dev server + build (`vite.config.ts` opens the browser on `npm run dev`)
 - **TypeScript 5** — strict mode, `noUnusedLocals`/`noUnusedParameters`, `noEmit` (Vite handles emit)
-- **Lit 3** — web components for the HUD chrome (title, controls, scale bar, boot splash)
+- **Lit 3** — only used for the canvas host element and the one-shot boot splash
 - **Three.js r170** — WebGL renderer, scene graph, shaders
 
 No CSS framework, no state library, no testing framework yet.
@@ -60,7 +60,7 @@ The `scene/` modules know **nothing about Lit or the DOM** beyond the `HTMLCanva
 ### Coordinate system
 
 Galactic cartesian, units in light years:
-- **+X** points toward the galactic centre (where the cyan `► GALACTIC CENTRE` arrow points)
+- **+X** points toward the galactic centre (where the `GALACTIC CENTRE` arrow points)
 - **+Z** points toward the north galactic pole (the camera's up vector is fixed to `(0, 0, 1)`)
 - The Sun sits at the origin
 
@@ -78,19 +78,36 @@ The orbit-camera state lives in `view = { target, distance, yaw, pitch, spin }`.
 
 The whole "pixel art" look depends on a stack of choices that all have to stay consistent:
 
-1. **`renderer.setPixelRatio(devicePixelRatio / N)`** with `N = ENV_PX_PER_SCREEN_PX = 3` — the render buffer is sized so each render ("env") pixel becomes N×N physical pixels after the browser's `image-rendering: pixelated` nearest-neighbor upscale. The DPR-relative formula means the on-screen pixel size is consistent across retina (DPR=2) and non-retina (DPR=1) displays. Increasing N makes the look chunkier and reduces fragment work by 1/N². Critically, **all pixel-aware shader work must use `renderer.getDrawingBufferSize()` — NOT `window.innerWidth/Height`** — because the buffer is now smaller than the CSS viewport. `scene.ts` caches these as `bufferW`/`bufferH` in `resize()` and threads them into `setSnappedLineViewport`, `StarPoints.setPxScale`, and `Labels.update`.
-2. **Pixel-snapped line shader** (`snappedLineMat` in `materials.ts`) — the vertex shader rounds each projected vertex to the nearest integer screen pixel before rasterization. The dashed variant patterns dashes in screen-pixel space (using snapped Y) so dashes stay aligned with the pixel grid. Used for grid arcs, axes, the galactic-centre arrow, and droplines.
-3. **Stars shader** (`makeStarsMaterial`) — `gl.POINTS` with a procedural circle in the fragment shader (no texture sampling, no AA fringe). Sprite size is rounded to the nearest **even** integer so the disc has equal pixel-rows above/below center; an odd size leans 1px and looks asymmetric. The fragment uses `floor((gl_PointCoord - 0.5) * radius * 2) + 0.5` for hard stair-stepped edges.
-4. **Label sprites** — bitmap-font glyphs drawn into a canvas at integer pixel coordinates, then uploaded as a texture with `NearestFilter` (both min + mag) and `generateMipmaps = false`. Each frame the sprite's world position is **snapped to the integer pixel grid** via `snapToPixelGrid` so 1 font pixel always lands on 1 screen pixel.
-5. **Pixel snap uses `Math.floor`, not `Math.round`** — when a sprite projects to an exact half-pixel (e.g. the Sun at world origin → screen center), tiny FP jitter around 0.5 would flip rounding between frames and cause 1px twitch. Floor always rounds the same direction, keeping positions stable frame-to-frame.
+1. **`renderer.setPixelRatio(devicePixelRatio / N)`** with `N = ENV_PX_PER_SCREEN_PX = 3` — the render buffer is sized so each render ("env") pixel becomes N×N physical pixels after the browser's `image-rendering: pixelated` nearest-neighbor upscale. The DPR-relative formula means the on-screen pixel size is consistent across retina (DPR=2) and non-retina (DPR=1) displays. Increasing N makes the look chunkier and reduces fragment work by 1/N². Critically, **all pixel-aware shader work must use `renderer.getDrawingBufferSize()` — NOT `window.innerWidth/Height`** — because the buffer is now smaller than the CSS viewport. `scene.ts` caches these as `bufferW`/`bufferH` in `resize()` and threads them into `setSnappedLineViewport`, `StarPoints.setPxScale`, `Labels.update`, and `Hud.resize`.
+2. **Pixel-snapped line shader** (`snappedLineMat` in `materials.ts`) — the vertex shader rounds each projected vertex to the nearest integer screen pixel before rasterization. The dashed variant patterns dashes in screen-pixel space (using snapped Y, anchored to each line's plane-pin point) so dashes stay aligned with the pixel grid. Used for grid arcs, axes, the galactic-centre arrow, and droplines.
+3. **Stars shader** (`makeStarsMaterial`) — `gl.POINTS` with a procedural circle in the fragment shader (no texture sampling, no AA fringe). The vertex shader snaps the projected center to the integer pixel grid (so the Sun at world origin doesn't get asymmetric coverage when the camera target is also the Sun) and rounds size to the nearest **even** integer for symmetric rasterization — odd sizes look tempting for finer transitions but GPUs/drivers handle odd `gl.POINTS` inconsistently and tend to lose a row of pixels on one edge. The fragment uses `floor((gl_PointCoord - 0.5) * radius * 2) + 0.5` for hard stair-stepped edges, with a guard skipping the disc clip at size 2 so white dwarfs don't disappear.
+4. **Label sprites** — bitmap-font glyphs drawn into a canvas at integer pixel coordinates, then uploaded as a texture with `NearestFilter` (both min + mag) and `generateMipmaps = false`. Each frame the sprite's world position is **snapped so its top-left corner lands on an integer buffer pixel** via `snapToPixelGrid` (passing the sprite's pixel dimensions in). Snapping the corner — not the center — ensures all four quad corners land on the pixel grid regardless of the sprite's parity, so every texel renders. Snapping just the center silently drops one row/column at the edge for odd-dimension sprites; most visible on small labels at exact screen-center positions like "Sun".
+5. **HUD** (`Hud` in `hud.ts`) — second orthographic pass at 1 unit = 1 buffer pixel, rendered after the main scene with `autoClear` toggled off. Geometry is `Mesh + PlaneGeometry + MeshBasicMaterial` so positions and sizes are integer pixel counts that match the rest of the scene's grid. Buttons are pre-built canvas textures (off / off-hover / on / on-hover) hot-swapped on state change.
 
 If you add new scene geometry, route it through `snappedLineMat` for lines and the existing point-shader pattern for sprites — don't introduce vanilla `LineBasicMaterial` or `PointsMaterial`, they'll shimmer.
 
+### Color management is OFF
+
+`scene.ts` runs `ColorManagement.enabled = false` at module load and sets `renderer.outputColorSpace = LinearSRGBColorSpace` in the constructor. This is intentional and load-bearing.
+
+The whole project's palette is hand-picked sRGB hex values (`0x1e6fc4`, `#5ec8ff`, etc.) intended to render at *exactly* those values on screen. With Three.js's default color management, two parallel paths (shader uniforms via `new Color(0x...)` vs canvas-texture pixels via `fillStyle = '#...'`) get different sRGB↔linear conversions and end up rendering at *different* on-screen colors — most visible where a `GALACTIC CENTRE` text label sits next to a grid ring drawn at the same hex. With management off, every hex value is the displayed value end-to-end, and there's no lighting math to break.
+
+Don't re-enable color management without auditing every call site that mixes `new Color()` (in shaders) with canvas-rendered text textures.
+
 ### Bitmap font
 
-`src/data/pixel-font.ts` ships an inline subset of **Monaco 11px** as BDF data (encoding, advance, bbox metrics, hex rows). Coverage: ASCII 32–126 + `°` (degree), `·` (middle dot), `—` (em-dash), `►` (custom right-pointer for the GC arrow label).
+`src/data/pixel-font.ts` ships an inline subset of **Monaco 11px** as BDF data (encoding, advance, bbox metrics, hex rows). Coverage: ASCII 32–126 (with no `[`, `]`, `\`, `^`, `_`, `` ` ``) plus `°` (degree), `·` (middle dot), `—` (em-dash), and `►` (custom right-pointer).
 
-`makeLabelTexture(text, color, opts?)` (or with a `TextSegment[]` for multi-color labels) renders into a canvas, optionally adds a 1px dark halo so labels read against any background, and returns a `CanvasTexture` plus its `w/h` in pixels. The `box: true` option draws a bordered tooltip frame instead (used for the hover tooltip).
+`makeLabelTexture(...)` is overloaded three ways:
+- `(text, color, opts?)` — single line, single color
+- `(segments, opts?)` — single line with per-segment colors (`TextSegment[]`)
+- `(lines, opts?)` — multi-line, used by the cluster hover tooltip (`TextSegment[][]`)
+
+Options:
+- `box: true` — draws a bordered tooltip frame (used for the hover tooltip)
+- `noHalo: true` — skip the dark halo normally painted around glyph edges. The halo helps text read against busy backgrounds but darkens a label's perceptual brightness; opt out when you want a label to color-match a nearby grid line (the `GALACTIC CENTRE` label uses this).
+
+Also exports `drawPixelText(g2d, text, x, y, color)` so the HUD can compose text into its own canvases alongside borders/fills without going through `makeLabelTexture`.
 
 If you need glyphs outside the current set, add a row to `FONT_GLYPHS` keyed by Unicode codepoint.
 
@@ -98,9 +115,26 @@ If you need glyphs outside the current set, add a row to `FONT_GLYPHS` keyed by 
 
 Two lookup tables in `src/data/stars.ts`:
 - **`CLASS_COLOR`** — approximate blackbody color per spectral class (Mitchell Charity table). O/B/A trend blue, F/G white, K/M orange-red, WD pale blue, BD deep red.
-- **`CLASS_SIZE`** — derived from `CLASS_RADIUS` (reference radii in solar radii) via `4.4 + log10(R) * 1.6`. The log mapping turns the ~6-orders-of-magnitude range of real stellar radii into a readable visual spread; the shader then clamps the final pixel size to `[2, 28]`.
+- **`CLASS_SIZE`** — direct visual pixel size per class at the reference resolution (uPxScale = 360, ≈ 720 px-tall buffer): `O 28, B 22, A 18, F 14, G 12, K 10, M 8, BD 6, WD 3`. The shader scales by `uPxScale / 360`, multiplies by the per-frame `uZoomScale`, clamps to `[2, 28]`, and rounds to the nearest even integer. To shrink/grow all stars uniformly, bump the divisor in `materials.ts` rather than re-tuning each class.
 
-The Sun's `CLASS_SIZE` works out so its visual size matches the original prototype. Rebalance carefully if you add a new class.
+A previous version derived `CLASS_SIZE` from `CLASS_RADIUS` via `log10(R) * 1.6`, but the log-compression made K through B all render in the 8–12 px band — most stars looked interchangeable. Direct sizes give clean separation across the catalog.
+
+### Zoom-relative star sizing
+
+Each frame, `StarmapScene.tick()` sets the stars material's `uZoomScale` uniform to `min(1, DEFAULT_VIEW.distance / view.distance)`:
+- At default zoom (50 ly frustum height): `uZoomScale = 1`, sizes from the table above apply.
+- Zoom out: scales linearly with `view.distance` so stars shrink with the widening world view (twice the world width = half the screen size).
+- Zoom in past the default: capped at 1, so the table sizes are also the *visual maximum* and stars never get super large.
+
+Smallest stars (white dwarfs) hit the size-2 floor first when zooming out, so they stay visible all the way to `ZOOM_MAX`.
+
+### Star clusters
+
+Stars within `CLUSTER_THRESHOLD_LY = 0.2` of each other (`buildClusters` in `src/data/stars.ts`) are grouped via union-find. Captures both exact-coincident binaries (Sirius A/B at the same coords) and loose multi-star systems (Alpha Cen A/B + Proxima at ~0.05 ly apart). Each cluster has a **primary** (the largest member by `CLASS_SIZE`) and an ordered `members` list with the primary first.
+
+`Labels` (in `src/scene/labels.ts`) renders one visible label per cluster — anchored at the primary's position, suffixed with ` +N` (in dim cyan) when the cluster has additional members. Hovering any star in a cluster surfaces a multi-line tooltip listing every member with its class and distance, anchored at the primary's screen position so it doesn't twitch as you move between coincident dots.
+
+Lookup helpers exported alongside the catalog: `STAR_CLUSTERS: readonly StarCluster[]` and `clusterIndexFor(starIdx) => number`.
 
 ### Grid half-plane dimming
 
@@ -112,9 +146,9 @@ It's a subtle orientation cue that makes the depth of the 3D scene readable with
 
 Each star (except the Sun) gets a vertical line to the galactic plane. Two lines actually exist per star, sharing one geometry: a **solid** and a **dashed** version. Each frame `Droplines.update()` picks **solid** if the star is on the same side of the plane as the camera, **dashed** if on the far side.
 
-Materials are **opaque** (`opaque: true` on `snappedLineMat`), not alpha-blended. The catalog has many binary and triple-star systems (Alpha Cen A/B, Sirius A/B, 40 Eridani A/B/C, Gliese 570 A/B/C, …) whose components share identical x/y/z coordinates. Their droplines therefore share identical geometry and rasterize to identical pixels. Under alpha blending those overlapping lines would stack — two coincident lines at opacity 0.85 render as ~0.978, three as ~0.997 — making binary/triple droplines visibly brighter than singles. Opaque rendering means each pixel is exactly `uColor` regardless of how many lines overlap.
+Materials are **opaque** (`opaque: true` on `snappedLineMat`), not alpha-blended. The catalog has many binary and triple-star systems (Alpha Cen A/B, Sirius A/B, 40 Eridani A/B/C, Gliese 570 A/B/C, …) whose components share identical x/y/z coordinates. Their droplines therefore share identical geometry and rasterize to identical pixels. Under alpha blending those overlapping lines would stack — two coincident lines at opacity 0.85 render as ~0.978, three as ~0.997 — making binary/triple droplines visibly brighter than singles. Opaque rendering means each pixel is exactly `uColor` regardless of how many lines overlap. The dashed shader's `discard` for gap pixels still works fine without transparency.
 
-The dashed shader's `discard` for gap pixels still works fine without transparency — `discard` just skips the pixel entirely, no blending involved.
+Stars themselves are also rendered opaque (`transparent: false, depthWrite: true`) so closer stars correctly occlude further ones — without `depthWrite`, stars in a single `Points` geometry would render in attribute (catalog) order, ignoring camera-relative distance.
 
 Anchoring the dash phase: each dropline's dash pattern is phased from its own anchor's screen-Y (computed by re-projecting `(position.x, position.y, 0)` in the vertex shader and passing the result as a varying). If you used a global screen-Y instead, all droplines would share the same horizontal dash rows and create faint horizontal banding across the field.
 
@@ -133,7 +167,8 @@ All input lives in `StarmapScene`:
 - The scene code uses **scratch `Vector3`/`Vector2` instances on `this`** to avoid per-frame allocations in the tick loop. When you add new per-frame math, reuse an existing scratch or add a new private one — don't `new Vector3()` inside `tick()`.
 - Comments explain **why** (the load-bearing constraint, the surprising trade-off, the bug it works around). They don't restate what the code does. Match this style — a wall of comments above obvious code is noise; a one-line "uses floor not round because FP jitter at exact half-pixels would twitch" earns its keep.
 - Each Lit component is a single file, owns its own styles, and exports its tag name through `HTMLElementTagNameMap` so consumers get autocomplete.
-- No emojis in source unless explicitly part of the visual design (the `►` glyph in the GC arrow label is the only current case, and it lives in the bitmap font).
+- HUD sizes are in **env pixels** (1 env pixel = `ENV_PX_PER_SCREEN_PX = 3` physical pixels). When tweaking visual sizes, divide your physical-pixel target by 3 — e.g. a "9-physical-pixel-tall scale-bar tick" is `SCALE_TICK_H = 3`.
+- No emojis in source unless explicitly part of the visual design.
 
 ## Things that are deliberately not here
 
