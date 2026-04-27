@@ -95,18 +95,32 @@ export function setSnappedLineViewport(w: number, h: number): void {
 // fringe. Per-star color from spectral class via vertex color; per-star
 // size via aSize attribute so brighter classes are bigger than dwarfs.
 export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
-  return new ShaderMaterial({
+  const m = new ShaderMaterial({
     uniforms: {
       uPxScale: { value: initialPxScale },
+      uViewport: { value: new Vector2(window.innerWidth, window.innerHeight) },
     },
     vertexShader: `
       attribute float aSize;
       varying vec3 vColor;
       varying float vRadius;
       uniform float uPxScale;
+      uniform vec2 uViewport;
       void main() {
         vColor = color;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        // Snap the projected center to the integer pixel grid before setting
+        // gl_Position. Without this, points whose projected center lands at
+        // an exact pixel boundary (notably the Sun at world origin when the
+        // camera target is also the Sun) get asymmetric coverage from the
+        // GPU's gl.POINTS rasterization rule, producing a jagged half-disc
+        // instead of a symmetric circle. Snapping forces every star into the
+        // same alignment with the pixel grid, so the even-size disc rule
+        // (below) reliably gives a symmetric shape.
+        vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        vec2 ndc = clip.xy / clip.w;
+        vec2 px  = floor((ndc * 0.5 + 0.5) * uViewport + 0.5);
+        ndc = (px / uViewport) * 2.0 - 1.0;
+        gl_Position = vec4(ndc * clip.w, clip.z, clip.w);
         // Round size to the nearest EVEN integer pixel count. An even-sized
         // sprite has the same number of pixel-rows above and below center,
         // guaranteeing the disc is symmetrical. Odd sizes lean by 1px.
@@ -135,4 +149,8 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
     transparent: false,
     depthWrite: true,
   });
+  // Track in the same list as the line materials so resize() updates both
+  // viewport uniforms in one call.
+  snappedMaterials.push(m);
+  return m;
 }
