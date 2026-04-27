@@ -8,6 +8,10 @@ export interface SnappedLineOptions {
   opacity?: number;
   dashPx?: number;
   gapPx?: number;
+  // Render with blending disabled. Coincident lines (e.g. binary star
+  // droplines) then render at exactly uColor instead of stacking alpha and
+  // appearing brighter than singles. Default false (transparent).
+  opaque?: boolean;
 }
 
 // Pixel-snapped line material: rounds each vertex's projected position to the
@@ -17,8 +21,12 @@ export interface SnappedLineOptions {
 // stay aligned with the pixel grid.
 export function snappedLineMat(opts: SnappedLineOptions): ShaderMaterial {
   const isDashed = (opts.dashPx ?? 0) > 0;
+  const isOpaque = opts.opaque === true;
+  const defines: Record<string, string> = {};
+  if (isDashed) defines.USE_DASH = '';
+  if (isOpaque) defines.OPAQUE = '';
   const m = new ShaderMaterial({
-    defines: isDashed ? { USE_DASH: '' } : {},
+    defines,
     uniforms: {
       uColor:    { value: new Color(opts.color) },
       uOpacity:  { value: opts.opacity ?? 1.0 },
@@ -57,18 +65,22 @@ export function snappedLineMat(opts: SnappedLineOptions): ShaderMaterial {
       uniform float uGapPx;
       varying vec2 vScreenPx;
       varying float vAnchorScreenY;
+      #endif
       void main() {
+        #ifdef USE_DASH
         // Dash pattern phased from each line's anchor on the galactic plane,
         // not a global screen Y — otherwise all droplines share the same
         // horizontal dash rows and create faint banding across the field.
         if (mod(vScreenPx.y - vAnchorScreenY, uDashPx + uGapPx) > uDashPx) discard;
+        #endif
+        #ifdef OPAQUE
+        gl_FragColor = vec4(uColor, 1.0);
+        #else
         gl_FragColor = vec4(uColor, uOpacity);
+        #endif
       }
-      #else
-      void main() { gl_FragColor = vec4(uColor, uOpacity); }
-      #endif
     `,
-    transparent: true,
+    transparent: !isOpaque,
     depthWrite: false,
   });
   snappedMaterials.push(m);
