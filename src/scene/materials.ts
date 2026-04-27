@@ -128,7 +128,11 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
       }
     `,
     vertexColors: true,
-    transparent: true,
-    depthWrite: false,
+    // Opaque + depthWrite so closer stars properly occlude further ones.
+    // Without depthWrite, stars in a single Points geometry would render in
+    // attribute (catalog) order, ignoring camera-relative distance. The disc
+    // shader writes alpha=1 inside and discards outside, so opaque is correct.
+    transparent: false,
+    depthWrite: true,
   });
 }
