@@ -70,7 +70,9 @@ export class Labels {
     });
 
     // Galactic-centre pointer label.
-    const gc = makeLabelTexture('► GALACTIC CENTRE', '#3a8fe0');
+    // noHalo: we want this label's color to read as the literal grid hex,
+    // not subtly darkened by a halo around each glyph.
+    const gc = makeLabelTexture('GALACTIC CENTRE', '#1e6fc4', { noHalo: true });
     this.gcSprite = new Sprite(labelMat(gc.tex));
     this.gcSprite.renderOrder = 10;
     this.gcSprite.position.set(27, 0, 0);
