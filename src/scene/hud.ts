@@ -8,7 +8,7 @@ import {
   PlaneGeometry,
   Scene,
 } from 'three';
-import { FONT_LINEH, drawPixelText, measurePixelText } from '../data/pixel-font';
+import { FONTS, drawPixelText, getFont, measurePixelText } from '../data/pixel-font';
 
 // HUD chrome (title, scale bar, toggle buttons) rendered as native pixel-art
 // in a second orthographic pass after the main scene. The HUD camera is set
@@ -74,10 +74,15 @@ function buildTitleTexture(): { tex: CanvasTexture; w: number; h: number } {
   const gapL = 4;
   const padR = 4;
   const padTopBot = 3;
-  const w1 = measurePixelText(line1);
-  const w2 = measurePixelText(line2);
+  // const titleFont = FONTS.Geneva[22];
+  const titleFont = FONTS.EspySans[20];
+  const subtitleFont = FONTS.Monaco[11];
+  const w1 = measurePixelText(line1, titleFont);
+  const w2 = measurePixelText(line2, subtitleFont);
+  const lineH1 = getFont(titleFont).lineHeight;
+  const lineH2 = getFont(subtitleFont).lineHeight;
   const W = accentW + gapL + Math.max(w1, w2) + padR;
-  const H = FONT_LINEH * 2 + padTopBot * 2;
+  const H = lineH1 + lineH2 + padTopBot * 2;
 
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -87,8 +92,8 @@ function buildTitleTexture(): { tex: CanvasTexture; w: number; h: number } {
   g.fillStyle = COLOR_ACCENT;
   g.fillRect(0, 0, accentW, H);
 
-  drawPixelText(g, line1, accentW + gapL, padTopBot, COLOR_TITLE_BRIGHT);
-  drawPixelText(g, line2, accentW + gapL, padTopBot + FONT_LINEH, COLOR_TITLE_DIM);
+  drawPixelText(g, line1, accentW + gapL, padTopBot, COLOR_TITLE_BRIGHT, titleFont);
+  drawPixelText(g, line2, accentW + gapL, padTopBot + lineH1, COLOR_TITLE_DIM, subtitleFont);
 
   return { tex: nearestFilteredTexture(c), w: W, h: H };
 }
@@ -100,7 +105,7 @@ function buildButtonTexture(text: string, state: ButtonState, toggle: boolean): 
   const padX = 6;
   const padY = 3;
   const W = textW + padX * 2;
-  const H = FONT_LINEH + padY * 2;
+  const H = getFont().lineHeight + padY * 2;
 
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -143,7 +148,7 @@ function buildScaleLabelTexture(text: string): { tex: CanvasTexture; w: number; 
   const padY = 1;
   const tw = measurePixelText(text);
   const W = tw + padX * 2;
-  const H = FONT_LINEH + padY * 2;
+  const H = getFont().lineHeight + padY * 2;
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   const g = c.getContext('2d')!;
