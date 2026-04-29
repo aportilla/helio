@@ -21,15 +21,6 @@ export class StarmapApp extends LitElement {
       image-rendering: pixelated;
       image-rendering: crisp-edges;
     }
-
-    .overlay {
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      background:
-        radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.55) 100%),
-        repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.012) 0 1px, transparent 1px 3px);
-    }
   `;
 
   @query('canvas') private canvasEl!: HTMLCanvasElement;
@@ -59,7 +50,6 @@ export class StarmapApp extends LitElement {
   render() {
     return html`
       <canvas></canvas>
-      <div class="overlay"></div>
       ${this.bootRemoved ? nothing : html`<starmap-boot ?fading=${this.bootFading}></starmap-boot>`}
     `;
   }

@@ -1,8 +1,8 @@
 # Starmap
 
-A 3D pixel-art visualization of the stars within ~20 light years of the Sun. Orthographic camera, stellar discs sized by spectral class, drop-lines pinning each star to the galactic plane, all rendered in a deliberately chunky retro CRT aesthetic.
+A 3D pixel-art visualization of the stars within ~20 light years of the Sun. Orthographic camera, stellar discs sized by spectral class, drop-lines pinning each star to the galactic plane, all rendered in a deliberately chunky retro aesthetic.
 
-Think 1980s starbase HUD: inline bitmap-font labels, cyan-on-near-black palette, scanline overlay, hand-drawn-looking concentric range rings. The HUD chrome (title, scale bar, toggle buttons) renders as native pixel art inside the WebGL scene rather than as DOM elements.
+Think 1980s starbase HUD: inline bitmap-font labels, cyan-on-near-black palette, hand-drawn-looking concentric range rings. The HUD chrome (title, scale bar, toggle buttons) renders as native pixel art inside the WebGL scene rather than as DOM elements.
 
 ## Stack
 
