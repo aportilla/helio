@@ -21,7 +21,7 @@ import { Grid } from './grid';
 import { Droplines } from './droplines';
 import { Labels } from './labels';
 import { StarPoints } from './stars';
-import { setSnappedLineViewport } from './materials';
+import { setSnappedLineViewport, setDashPatternScale } from './materials';
 import { Hud } from './hud';
 
 const ZOOM_MIN = 8;
@@ -358,6 +358,13 @@ export class StarmapScene {
     // Zoom-relative star size: stars shrink as the camera zooms out, capped
     // at 1.0 so zoom-in past the default doesn't blow them up.
     this.starPoints.setZoomScale(Math.min(1, DEFAULT_VIEW.distance / this.view.distance));
+
+    // Dropline dash gap scales with zoom so each dropline shows a roughly
+    // constant number of dashes regardless of how much screen length the
+    // line covers — at zoom-in the line is longer in screen pixels, so the
+    // gap (in screen pixels) grows to match. Uncapped on the zoom-in side;
+    // floored at 1.0 on zoom-out so the pattern never collapses to solid.
+    setDashPatternScale(Math.max(1, DEFAULT_VIEW.distance / this.view.distance));
 
     this.grid.update(this.camera.position.x, this.camera.position.y, this.view.target.x, this.view.target.y);
     this.droplines.update(this.camera, this.view.target);

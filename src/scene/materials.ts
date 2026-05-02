@@ -2,6 +2,9 @@ import { Color, ShaderMaterial, Vector2 } from 'three';
 
 // Tracked so resize() can push new viewport size into all snapped-line mats.
 const snappedMaterials: ShaderMaterial[] = [];
+// Dashed subset — separate list so the scene can drive a per-frame pattern
+// scale for them without touching solid lines or the stars material.
+const dashedMaterials: ShaderMaterial[] = [];
 
 export interface SnappedLineOptions {
   color: number;
@@ -28,11 +31,15 @@ export function snappedLineMat(opts: SnappedLineOptions): ShaderMaterial {
   const m = new ShaderMaterial({
     defines,
     uniforms: {
-      uColor:    { value: new Color(opts.color) },
-      uOpacity:  { value: opts.opacity ?? 1.0 },
-      uViewport: { value: new Vector2(window.innerWidth, window.innerHeight) },
-      uDashPx:   { value: opts.dashPx ?? 1.0 },
-      uGapPx:    { value: opts.gapPx ?? 4.0 },
+      uColor:        { value: new Color(opts.color) },
+      uOpacity:      { value: opts.opacity ?? 1.0 },
+      uViewport:     { value: new Vector2(window.innerWidth, window.innerHeight) },
+      uDashPx:       { value: opts.dashPx ?? 1.0 },
+      uGapPx:        { value: opts.gapPx ?? 4.0 },
+      // Multiplier on uGapPx, driven from the scene tick. >1 when zoomed in
+      // so the gap grows in screen pixels — keeping the count of dashes
+      // along a dropline roughly constant as the line lengthens on screen.
+      uPatternScale: { value: 1.0 },
     },
     vertexShader: `
       uniform vec2 uViewport;
@@ -63,6 +70,7 @@ export function snappedLineMat(opts: SnappedLineOptions): ShaderMaterial {
       #ifdef USE_DASH
       uniform float uDashPx;
       uniform float uGapPx;
+      uniform float uPatternScale;
       varying vec2 vScreenPx;
       varying float vAnchorScreenY;
       #endif
@@ -71,7 +79,10 @@ export function snappedLineMat(opts: SnappedLineOptions): ShaderMaterial {
         // Dash pattern phased from each line's anchor on the galactic plane,
         // not a global screen Y — otherwise all droplines share the same
         // horizontal dash rows and create faint banding across the field.
-        if (mod(vScreenPx.y - vAnchorScreenY, uDashPx + uGapPx) > uDashPx) discard;
+        // Gap is scaled by uPatternScale (driven by zoom in scene.tick) so
+        // that the count of dashes along a dropline stays roughly constant
+        // regardless of how much screen space the line covers.
+        if (mod(vScreenPx.y - vAnchorScreenY, uDashPx + uGapPx * uPatternScale) > uDashPx) discard;
         #endif
         #ifdef OPAQUE
         gl_FragColor = vec4(uColor, 1.0);
@@ -84,11 +95,16 @@ export function snappedLineMat(opts: SnappedLineOptions): ShaderMaterial {
     depthWrite: false,
   });
   snappedMaterials.push(m);
+  if (isDashed) dashedMaterials.push(m);
   return m;
 }
 
 export function setSnappedLineViewport(w: number, h: number): void {
   for (const m of snappedMaterials) m.uniforms.uViewport.value.set(w, h);
+}
+
+export function setDashPatternScale(scale: number): void {
+  for (const m of dashedMaterials) m.uniforms.uPatternScale.value = scale;
 }
 
 // Procedural circle in the fragment shader — no texture sampling, no AA
