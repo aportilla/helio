@@ -171,8 +171,7 @@ export class Labels {
       const s = STARS[L.primaryStarIdx];
       L.sprite.visible = true;
       L.sprite.scale.set(L.w * wpp, L.h * wpp, 1);
-      // Sun's dot is bigger and shares its label color, so needs more clearance.
-      const offsetPx = Math.round(L.h * 0.5) + (L.isSun ? 22 : 6);
+      const offsetPx = Math.round(L.h * 0.5) + 6;
       L.sprite.position.set(s.x, s.y, s.z).addScaledVector(this._camUp, offsetPx * wpp);
       this.snapToPixelGrid(L.sprite.position, wpp, camera, viewportW, viewportH, L.w, L.h);
     }

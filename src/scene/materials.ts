@@ -114,51 +114,60 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
       uniform vec2 uViewport;
       void main() {
         vColor = color;
-        // Snap the projected center to the integer pixel grid before setting
-        // gl_Position. Without this, points whose projected center lands at
-        // an exact pixel boundary (notably the Sun at world origin when the
-        // camera target is also the Sun) get asymmetric coverage from the
-        // GPU's gl.POINTS rasterization rule, producing a jagged half-disc
-        // instead of a symmetric circle. Snapping forces every star into the
-        // same alignment with the pixel grid, so the even-size disc rule
-        // (below) reliably gives a symmetric shape.
-        vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        vec2 ndc = clip.xy / clip.w;
-        vec2 px  = floor((ndc * 0.5 + 0.5) * uViewport + 0.5);
-        ndc = (px / uViewport) * 2.0 - 1.0;
-        gl_Position = vec4(ndc * clip.w, clip.z, clip.w);
-        // Round size to the nearest EVEN integer pixel count. An even-sized
-        // sprite has the same number of pixel-rows above and below center,
-        // guaranteeing the disc is symmetrical in both axes. Odd sizes are
-        // tempting (they'd give finer visual transitions) but in practice
-        // GPUs and drivers handle gl.POINTS at odd sizes inconsistently —
-        // typically losing a row of pixels on one edge.
-        //
-        // aSize is the per-class pixel size at the reference resolution
-        // (uPxScale = 360, ≈ a 720-px-tall render buffer); the uPxScale ratio
-        // makes discs scale modestly with viewport size, and uZoomScale
-        // shrinks them on zoom-out (capped at 1 by the JS side). Raise the
-        // divisor here to make all stars smaller globally without re-tuning
-        // each class's CLASS_SIZE entry.
-        float sz = clamp(aSize * (uPxScale / 360.0) * uZoomScale, 2.0, 28.0);
-        sz = floor(sz * 0.5 + 0.5) * 2.0;
+        // Round size to the nearest INTEGER pixel count so zoom transitions
+        // step 2→3→4→5… instead of 2→4→6 (the previous even-only rounding
+        // skipped every other size). aSize is the per-class pixel size at
+        // the reference resolution (uPxScale = 600, ≈ a 1200-px-tall render
+        // buffer); uPxScale ratio scales discs modestly with viewport size,
+        // and uZoomScale shrinks them on zoom-out (capped at 1 in JS).
+        // Raise the divisor to shrink all stars globally.
+        float sz = clamp(aSize * (uPxScale / 600.0) * uZoomScale, 2.0, 28.0);
+        sz = floor(sz + 0.5);
         gl_PointSize = sz;
         vRadius = sz * 0.5;
+
+        // Snap the projected center to the pixel grid. Even-sized sprites
+        // must center on a pixel BOUNDARY (integer screen coord) so the N/2
+        // rows on each side cover symmetric pixels; odd-sized sprites must
+        // center on a pixel CENTER (half-integer screen coord) so the
+        // (N-1)/2 rows on each side plus the central row are symmetric.
+        // Mismatching parity-to-snap is the failure mode the previous
+        // even-only rule worked around — gl.POINTS rasterizers handle the
+        // ambiguous case inconsistently and drop a row of pixels on one
+        // edge. Without snapping at all, points whose projected center
+        // lands at the wrong sub-pixel offset (notably the Sun at world
+        // origin when the camera target is also the Sun) get asymmetric
+        // coverage and read as half-discs.
+        float oddOff = mod(sz, 2.0) * 0.5;
+        vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        vec2 ndc = clip.xy / clip.w;
+        vec2 fp = (ndc * 0.5 + 0.5) * uViewport;
+        vec2 px = floor(fp - oddOff + 0.5) + oddOff;
+        ndc = (px / uViewport) * 2.0 - 1.0;
+        gl_Position = vec4(ndc * clip.w, clip.z, clip.w);
       }
     `,
     fragmentShader: `
       varying vec3 vColor;
       varying float vRadius;
       void main() {
-        // Pixel offset from sprite center, snapped to integer centers so
-        // the disc has hard stair-stepped edges (no AA fringe).
-        vec2 px = floor((gl_PointCoord - 0.5) * (vRadius * 2.0)) + 0.5;
-        // Skip the disc clip for size-2 sprites (vRadius = 1): every
-        // fragment center sits at distance √0.5 ≈ 0.707 from origin, but
-        // the (vRadius − 0.5) = 0.5 threshold would discard all four —
-        // making white dwarfs (the smallest class) invisible. Render
-        // them as a solid 2×2 dot instead.
-        if (vRadius > 1.0 && length(px) > vRadius - 0.5) discard;
+        // Pixel-center offset from sprite center, in pixel units. For even
+        // sizes pixel centers sit at half-integer offsets (±0.5, ±1.5, …);
+        // for odd sizes at integer offsets (0, ±1, ±2, …). Snap to whichever
+        // grid this sprite uses so the discard test compares pixel centers
+        // to the radius — gives hard stair-stepped edges with no AA fringe.
+        float odd = mod(vRadius * 2.0, 2.0);
+        vec2 d = (gl_PointCoord - 0.5) * (vRadius * 2.0);
+        vec2 px = mix(floor(d) + 0.5, floor(d + 0.5), odd);
+        // True Euclidean disc test: keep pixels whose center is within
+        // vRadius of the sprite center. This gives the natural pixel-art
+        // progression — sizes 1/2/3 stay full squares (every corner sits
+        // inside the circle's bounding radius), size 4 starts cutting
+        // corners (12 px), 5 → 21 px, and on up. Don't subtract a fudge
+        // factor: the previous (vRadius - 0.5) rule chewed extra pixels off
+        // small sizes, collapsing size 4 to a 2x2 inner block and size 3
+        // to a 5-px plus.
+        if (length(px) > vRadius) discard;
         gl_FragColor = vec4(vColor, 1.0);
       }
     `,
