@@ -429,7 +429,7 @@ export class StarmapScene {
     // Hover detection — pick the star whose ray-distance is smallest.
     const hovered = this.pointer.has ? this.pickStar(this.pointer.x, this.pointer.y) : -1;
     this.labels.setHovered(hovered);
-    this.labels.update(this.camera);
+    this.labels.update(this.camera, this.view.target);
 
     this.renderer.render(this.scene, this.camera);
     // Overlay passes — disable autoClear so the second/third renders don't

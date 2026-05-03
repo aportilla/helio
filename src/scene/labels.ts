@@ -66,6 +66,10 @@ export class Labels {
   private readonly _world = new Vector3();
   private readonly _screen = { x: 0, y: 0 };
 
+  // Set per-frame from scene.ts so projectToBuffer can short-circuit the
+  // focused star to exact buffer-center coords (see projectToBuffer).
+  private viewTarget: Vector3 | null = null;
+
   constructor() {
     // One label per cluster, displayed at the primary's projected position.
     // Sun's label is warm-white rather than yellow so it stays readable when
@@ -142,7 +146,20 @@ export class Labels {
   // Project a world position into buffer-pixel coords (Y-up, origin at
   // bottom-left). Returns false if the point sits behind the near plane or
   // beyond the far plane — caller should hide the mesh in that case.
+  //
+  // Special-cases the camera's orbit target: by construction it projects to
+  // NDC (0,0), but the matrix math doesn't cancel exactly under FP and the
+  // result oscillates by ~1e-7 NDC as yaw/pitch rotate. That sub-pixel noise
+  // crosses the integer/half-integer threshold in placeAt() and produces a
+  // 1px x/y twitch on the focused star's label every orbit frame. Other
+  // labels see the same noise but it's swamped by their legitimate per-frame
+  // motion, so we only short-circuit the equality case.
   private projectToBuffer(world: Vector3, camera: Camera): boolean {
+    if (this.viewTarget && world.equals(this.viewTarget)) {
+      this._screen.x = this.bufferW * 0.5;
+      this._screen.y = this.bufferH * 0.5;
+      return true;
+    }
     this._proj.copy(world).project(camera);
     if (this._proj.z < -1 || this._proj.z > 1) return false;
     this._screen.x = (this._proj.x * 0.5 + 0.5) * this.bufferW;
@@ -160,7 +177,8 @@ export class Labels {
     mesh.position.set(cornerX + w * 0.5, cornerY + h * 0.5, 0);
   }
 
-  update(camera: Camera): void {
+  update(camera: Camera, viewTarget: Vector3): void {
+    this.viewTarget = viewTarget;
     // Refresh the tooltip texture on hover transitions only — texture build
     // is heavy (multi-line bitmap composition) and we don't want it per-frame.
     if (this.hoveredCluster >= 0 && this.lastHoveredCluster !== this.hoveredCluster) {
