@@ -111,6 +111,11 @@ export class StarmapScene {
   // buffer is smaller than CSS px once pixelRatio drops below 1.
   private bufferW = 0;
   private bufferH = 0;
+  // Cached canvas CSS dimensions. May be slightly less than the window
+  // (up to N-1 physical px lost to integer-multiple rounding in resize());
+  // pointer math uses these so hovers register correctly across the canvas.
+  private cssW = 0;
+  private cssH = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -122,11 +127,12 @@ export class StarmapScene {
     };
 
     this.renderer = new WebGLRenderer({ canvas, antialias: false, alpha: false });
-    // Render buffer = (CSS px) × (devicePixelRatio / N). The browser then
-    // nearest-neighbor upscales the canvas back to its CSS box, so 1 render
-    // pixel becomes N×N physical pixels. Picking the ratio this way means
-    // the on-screen pixel size is independent of the user's actual DPR.
-    this.renderer.setPixelRatio(window.devicePixelRatio / ENV_PX_PER_SCREEN_PX);
+    // Pixel ratio is set in resize() so a DPR change (e.g. browser zoom) gets
+    // re-applied. Render buffer = (CSS px) × (DPR / N); the browser then
+    // nearest-neighbor upscales the canvas back to its CSS box, so 1 buffer
+    // pixel becomes N×N physical pixels — but only when CSS × DPR is divisible
+    // by N. resize() rounds the target physical-pixel count down to a multiple
+    // of N to guarantee an exact N:1 upscale. See resize() for the why.
     this.renderer.setClearColor(0x000008, 1);
     // Match the disabled ColorManagement at the top of this file.
     this.renderer.outputColorSpace = LinearSRGBColorSpace;
@@ -210,10 +216,11 @@ export class StarmapScene {
   }
 
   // Map a CSS-pixel client coord into HUD buffer coords (Y-up, origin at
-  // bottom-left).
+  // bottom-left). Uses cached cssW/cssH (the actual canvas size after the
+  // multiple-of-N rounding in resize), not window.innerWidth/Height.
   private clientToHud(clientX: number, clientY: number, out: { x: number; y: number }): void {
-    out.x = clientX * (this.bufferW / window.innerWidth);
-    out.y = (window.innerHeight - clientY) * (this.bufferH / window.innerHeight);
+    out.x = clientX * (this.bufferW / this.cssW);
+    out.y = (this.cssH - clientY) * (this.bufferH / this.cssH);
   }
 
   private onPointerDown(e: PointerEvent): void {
@@ -285,8 +292,8 @@ export class StarmapScene {
 
   private pickStar(clientX: number, clientY: number): number {
     this._ndc.set(
-      (clientX / window.innerWidth) * 2 - 1,
-      -(clientY / window.innerHeight) * 2 + 1,
+      (clientX / this.cssW) * 2 - 1,
+      -(clientY / this.cssH) * 2 + 1,
     );
     this.raycaster.setFromCamera(this._ndc, this.camera);
     const hits = this.raycaster.intersectObject(this.starPoints.points);
@@ -328,9 +335,30 @@ export class StarmapScene {
   }
 
   private resize(): void {
-    const w = window.innerWidth, h = window.innerHeight;
-    this.renderer.setSize(w, h);
-    this.camera.aspect = w / h;
+    // The browser's image-rendering: pixelated upscale is only exactly N:1
+    // when (CSS_px × DPR) is divisible by N — i.e. the target physical-pixel
+    // dimension is a multiple of N. If it isn't, the browser distributes the
+    // remainder by making one buffer-pixel-wide column every (~CSS_px) actual
+    // columns span (N-1) physical pixels instead of N. Labels rendered on
+    // top of those compressed columns get visibly mangled (one bitmap column
+    // squashed into 2 physical px instead of 3). The artifact appears to
+    // "follow" labels as the camera rotates because the labels move across
+    // the buffer and cross those fixed compressed columns at different
+    // points within the bitmap.
+    //
+    // Fix: round target physical pixels DOWN to a multiple of N, then derive
+    // CSS and buffer from that. Up to (N-1) physical pixels of black bezel
+    // can show on the right/bottom — invisible against the dark scene.
+    const dpr = window.devicePixelRatio;
+    const physW = Math.floor(window.innerWidth  * dpr / ENV_PX_PER_SCREEN_PX) * ENV_PX_PER_SCREEN_PX;
+    const physH = Math.floor(window.innerHeight * dpr / ENV_PX_PER_SCREEN_PX) * ENV_PX_PER_SCREEN_PX;
+    const cssW = physW / dpr;
+    const cssH = physH / dpr;
+    this.renderer.setPixelRatio(dpr / ENV_PX_PER_SCREEN_PX);
+    this.renderer.setSize(cssW, cssH);
+    this.cssW = cssW;
+    this.cssH = cssH;
+    this.camera.aspect = cssW / cssH;
     this.camera.updateProjectionMatrix();
     this.renderer.getDrawingBufferSize(this._buf);
     this.bufferW = this._buf.x;
