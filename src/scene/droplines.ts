@@ -43,8 +43,12 @@ export class Droplines {
     }
   }
 
-  update(camera: Camera, target: Vector3): void {
-    const camAbove = camera.position.z >= target.z;
+  // Solid if the star is on the same side of the galactic *plane* (z=0) as
+  // the camera, dashed if on the far side. Comparing against z=0 (not the
+  // target's z) means orbiting a high-z star from below — while still above
+  // the plane — keeps every above-plane star's dropline solid.
+  update(camera: Camera): void {
+    const camAbove = camera.position.z >= 0;
     for (const d of this.drops) {
       const sameSide = (d.z >= 0) === camAbove;
       d.solid.visible  =  sameSide;

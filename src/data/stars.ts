@@ -8,117 +8,240 @@ export interface Star {
   readonly y: number;
   readonly z: number;
   readonly cls: SpectralClass;
+  // Catalog-stated distance from Sun in ly. Used as a label/reference; may
+  // differ slightly from sqrt(x²+y²+z²) after curation/post-processing —
+  // we treat distLy as authoritative for display, position as approximate.
   readonly distLy: number;
+  // Solar masses. Used for primary determination within a cluster
+  // (heaviest member becomes the label anchor) and for mass-weighted
+  // barycenters in the post-processor. Approximate (catalog quality).
+  readonly mass: number;
 }
 
-type StarTuple = readonly [string, number, number, number, SpectralClass, number];
+type StarTuple = readonly [string, number, number, number, SpectralClass, number, number];
 
-// Positions in galactic cartesian coords (ly): x toward galactic centre,
-// z toward north galactic pole. Approximated from known distances / RA-Dec
-// for the solar neighbourhood (< ~0.5 ly accuracy — fine for visualization).
+// =============================================================================
+// RAW_STARS — catalog tuple [name, x, y, z, class, distLy, mass]
+// =============================================================================
+//
+// Coordinate system: galactic Cartesian (ly). +X toward galactic centre,
+// +Z toward north galactic pole. Positions accurate to ~0.5 ly — fine for
+// visualization, not navigation.
+//
+// MULTI-STAR SYSTEMS — curation philosophy
+// ----------------------------------------
+// Most binary/triple systems in source catalogs share identical Cartesian
+// coordinates because the inter-member separation (10-1000 AU = 0.0002-0.02
+// ly) is far below our 0.01-ly precision. Two layered mechanisms make those
+// systems read correctly at zoom-in:
+//
+// 1. AUTOMATIC ring distribution. The post-processor (`expandCoincidentSets`
+//    below) detects any 2+ stars at effectively-identical positions and
+//    distributes them on a small circle in the XY plane (radius MIN_VIS_LY).
+//    Heaviest member at angle 0, others sorted by mass desc on equally-
+//    spaced angles. Visually merged at zoom-out, separated at zoom-in.
+//    No data edit required — just add the members at the same coordinates.
+//
+// 2. MANUAL hierarchy. For systems with known internal hierarchy (a primary
+//    plus a wider companion or sub-pair), member positions in this table
+//    are nudged to encode that hierarchy. Marked with `// CURATED:` notes.
+//    The post-processor still rings any remaining coincident members within
+//    those systems, so e.g. 40 Eri's BC sub-pair stays a tight pair while
+//    A sits clearly apart.
+//
+// FUTURE CURATION — guidance
+// --------------------------
+// Adding stars: append to the tuple list with [name, x, y, z, class, distLy,
+// mass]. Mass values are approximate; ±20% is fine. If two members share
+// coordinates, that's expected — the post-processor handles it.
+//
+// Encoding hierarchy: if a known multi-system has a primary plus a wider
+// companion (or a tight sub-pair), give the wider member a position offset
+// from the primary by ~0.08-0.20 ly along any direction. Magnitude reflects
+// rough visual hierarchy (tight pair = ~0.08, wider companion = ~0.15-0.20),
+// not the literal real-world separation (which is sub-resolution anyway).
+// Document the choice with a `// CURATED:` comment so future editors know
+// it's a deliberate visualization choice, not a measured position.
+//
+// Cluster grouping: stars within CLUSTER_THRESHOLD_LY (0.25) are grouped
+// into one labelled cluster. If you curate a wide companion at distance > the
+// threshold, it'll appear as a separate cluster — adjust the offset down or
+// the threshold up to keep them grouped.
+
 const RAW_STARS: readonly StarTuple[] = [
-  ['Sun',                 0.00,  0.00,   0.00, 'G',   0.00],
-  ['Proxima Centauri',   -1.68, -1.37,  -3.83, 'M',   4.24],
-  ['Alpha Cen A',        -1.71, -1.40,  -3.83, 'G',   4.37],
-  ['Alpha Cen B',        -1.71, -1.40,  -3.83, 'K',   4.37],
-  ["Barnard's Star",      5.07,  2.19,   2.60, 'M',   5.96],
-  ['Luhman 16',          -5.36, -3.35,  -1.27, 'BD',  6.50],
-  ['Wolf 359',           -1.87,  7.21,  -1.54, 'M',   7.86],
-  ['Lalande 21185',      -6.47,  1.14,   4.81, 'M',   8.29],
-  ['Sirius A',            1.93,  8.07,  -2.47, 'A',   8.60],
-  ['Sirius B',            1.93,  8.07,  -2.47, 'WD',  8.60],
-  ['Luyten 726-8 A',      6.25, -4.83,  -5.46, 'M',   8.73],
-  ['Luyten 726-8 B',      6.25, -4.83,  -5.46, 'M',   8.73],
-  ['Ross 154',            8.52,  0.64,  -2.70, 'M',   9.69],
-  ['Ross 248',            7.40, -0.34,   6.52, 'M',  10.30],
-  ['Epsilon Eridani',     3.28, -8.13,  -5.35, 'K',  10.50],
-  ['Lacaille 9352',       8.51, -2.60,  -6.45, 'M',  10.74],
-  ['Ross 128',           -5.43,  6.40,   6.60, 'M',  11.03],
-  ['EZ Aquarii',          9.40, -2.84,  -5.95, 'M',  11.27],
-  ['Procyon A',          -4.76,  9.88,   1.39, 'F',  11.40],
-  ['Procyon B',          -4.76,  9.88,   1.39, 'WD', 11.40],
-  ['61 Cygni A',          6.47,  3.03,   9.00, 'K',  11.40],
-  ['61 Cygni B',          6.47,  3.03,   9.00, 'K',  11.40],
-  ['Struve 2398 A',       3.31,  4.01,  10.73, 'M',  11.53],
-  ['Struve 2398 B',       3.31,  4.01,  10.73, 'M',  11.53],
-  ['Groombridge 34 A',    1.22, -0.54,  11.70, 'M',  11.62],
-  ['Groombridge 34 B',    1.22, -0.54,  11.70, 'M',  11.62],
-  ['DX Cancri',          -4.29,  9.90,   4.85, 'M',  11.68],
-  ['Epsilon Indi',        8.80, -5.54,  -5.56, 'K',  11.82],
-  ['Tau Ceti',            3.53, -9.61,  -5.45, 'G',  11.91],
-  ['GJ 1061',            -2.55, -1.52, -11.68, 'M',  12.04],
-  ['YZ Ceti',             6.08, -6.45,  -8.06, 'M',  12.13],
-  ["Luyten's Star",      -6.44,  9.98,   1.22, 'M',  12.36],
-  ["Teegarden's Star",    9.06,  5.82,  -5.05, 'M',  12.50],
-  ['SCR 1845-6357',       8.68, -2.80,  -8.79, 'M',  12.57],
-  ["Kapteyn's Star",      6.49, -2.62, -10.81, 'M',  12.76],
-  ['Lacaille 8760',       9.38, -3.95,  -7.54, 'M',  12.87],
-  ['Kruger 60 A',         4.89,  1.37,  11.96, 'M',  13.15],
-  ['Kruger 60 B',         4.89,  1.37,  11.96, 'M',  13.15],
-  ['DENIS 1048-39',      -9.76,  5.76,  -5.30, 'M',  13.20],
-  ['Ross 614 A',         -5.68,  8.02,  -9.21, 'M',  13.40],
-  ['Ross 614 B',         -5.68,  8.02,  -9.21, 'M',  13.40],
-  ['Wolf 1061',           4.73,  2.72,  12.87, 'M',  14.05],
-  ["van Maanen's Star",   5.23, -6.49, -11.01, 'WD', 14.07],
-  ['Gliese 1',            4.14, -5.37, -12.30, 'M',  14.22],
-  ['Wolf 424 A',         -4.58, 11.80,   6.94, 'M',  14.31],
-  ['Wolf 424 B',         -4.58, 11.80,   6.94, 'M',  14.31],
-  ['TZ Arietis',         -2.12,  9.99, -10.47, 'M',  14.60],
-  ['Gliese 687',          6.09,  4.94,  12.26, 'M',  14.79],
-  ['LHS 292',            -7.27,  7.05,  -9.95, 'M',  14.80],
-  ['Gliese 674',          7.50,  3.98, -11.70, 'M',  14.80],
-  ['Gliese 440 (WD)',    -9.56,  5.81,  -8.87, 'WD', 15.10],
-  ['GJ 1245 A',           4.68,  4.27,  13.70, 'M',  15.20],
-  ['GJ 1245 B',           4.68,  4.27,  13.70, 'M',  15.20],
-  ['Gliese 876',          5.63, -7.58, -11.42, 'M',  15.30],
-  ['LHS 288',            -4.52,  1.24, -14.55, 'M',  15.60],
-  ['Gliese 412 A',      -11.48,  7.65,   7.38, 'M',  15.83],
-  ['Gliese 412 B',      -11.48,  7.65,   7.38, 'M',  15.83],
-  ['Groombridge 1618',   -9.15,  6.58,  11.03, 'K',  15.89],
-  ['AD Leonis',          -8.24, 12.42,   4.43, 'M',  16.19],
-  ['Gliese 832',          9.42, -4.30, -12.33, 'M',  16.20],
-  ['DEN 0255-4700',       6.41, -9.87, -10.82, 'BD', 16.20],
-  ['GJ 1116 A',          -9.38, 12.60,   3.12, 'M',  16.30],
-  ['GJ 1116 B',          -9.38, 12.60,   3.12, 'M',  16.30],
-  ['Gliese 581',          6.54,  5.71, -13.81, 'M',  16.30],
-  ['40 Eridani A',       -2.22, -4.21, -15.59, 'K',  16.30],
-  ['40 Eridani B',       -2.22, -4.21, -15.59, 'WD', 16.30],
-  ['40 Eridani C',       -2.22, -4.21, -15.59, 'M',  16.30],
-  ['EV Lacertae',         7.28,  3.15,  14.49, 'M',  16.47],
-  ['70 Ophiuchi A',      10.78, -2.05,  12.48, 'K',  16.60],
-  ['70 Ophiuchi B',      10.78, -2.05,  12.48, 'K',  16.60],
-  ['Altair',             12.95,  2.56,   9.93, 'A',  16.73],
-  ['Gliese 1002',        -6.72,-11.17, -11.04, 'M',  16.00],
-  ['EI Cancri',         -10.96, 12.82,   3.46, 'M',  17.10],
-  ['Gliese 570 A',       12.52,  1.97, -11.65, 'K',  17.20],
-  ['Gliese 570 B',       12.52,  1.97, -11.65, 'M',  17.20],
-  ['Gliese 570 C',       12.52,  1.97, -11.65, 'M',  17.20],
-  ['Gliese 169.1 A',    -10.47,  6.90,  11.95, 'M',  17.52],
-  ['Gliese 783 A',       10.16, -1.09, -14.57, 'K',  17.62],
-  ['Gliese 783 B',       10.16, -1.09, -14.57, 'M',  17.62],
-  ['Gliese 892',          3.90,  4.08,  16.94, 'K',  17.72],
-  ['Eta Cassiopeiae A',   0.15,  6.10,  16.97, 'G',  19.42],
-  ['Eta Cassiopeiae B',   0.15,  6.10,  16.97, 'K',  19.42],
-  ['36 Ophiuchi A',      14.04, -2.20,  11.96, 'K',  19.48],
-  ['36 Ophiuchi B',      14.04, -2.20,  11.96, 'K',  19.48],
-  ['36 Ophiuchi C',      14.04, -2.20,  11.96, 'K',  19.48],
-  ['HR 7703 A',          13.85, -3.22, -11.72, 'K',  19.62],
-  ['HR 7703 B',          13.85, -3.22, -11.72, 'M',  19.62],
-  ['82 Eridani',         -3.85, -9.38, -16.38, 'G',  19.71],
-  ['Delta Pavonis',       8.24, -5.19, -17.25, 'G',  19.92],
-  ['Sigma Draconis',      3.27,  0.72,  18.58, 'K',  18.77],
-  ['Gliese 33',           3.06, -8.14, -13.83, 'K',  17.42],
-  ['Gliese 205',         -9.21, 11.86,  -7.18, 'M',  18.50],
-  ['Gliese 250 A',       -8.74, 13.90,  -6.72, 'K',  18.70],
-  ['Gliese 250 B',       -8.74, 13.90,  -6.72, 'M',  18.70],
-  ['Gliese 229 A',       -5.50, 11.79, -12.47, 'M',  18.79],
-  ['Gliese 229 B',       -5.50, 11.79, -12.47, 'BD', 18.79],
-  ['Gliese 693',          8.50,  4.12, -15.42, 'M',  19.03],
+  ['Sun',                  0.000,  0.000,   0.000, 'G',   0.00, 1.00],
+  // CURATED: Proxima moved out from the AB pair to ~0.20 ly distance.
+  // Source data placed it at 0.045 ly from AB; the true astronomical value
+  // is ~0.21 ly. Direction follows the original AB→Proxima vector.
+  ['Proxima Centauri',    -1.569, -1.259,  -3.830, 'M',   4.24, 0.122],
+  ['Alpha Cen A',         -1.710, -1.400,  -3.830, 'G',   4.37, 1.10],
+  ['Alpha Cen B',         -1.710, -1.400,  -3.830, 'K',   4.37, 0.91],
+  ["Barnard's Star",       5.070,  2.190,   2.600, 'M',   5.96, 0.144],
+  ['Luhman 16',           -5.360, -3.350,  -1.270, 'BD',  6.50, 0.034],
+  ['Wolf 359',            -1.870,  7.210,  -1.540, 'M',   7.86, 0.090],
+  ['Lalande 21185',       -6.470,  1.140,   4.810, 'M',   8.29, 0.39],
+  ['Sirius A',             1.930,  8.070,  -2.470, 'A',   8.60, 2.06],
+  ['Sirius B',             1.930,  8.070,  -2.470, 'WD',  8.60, 1.02],
+  ['Luyten 726-8 A',       6.250, -4.830,  -5.460, 'M',   8.73, 0.10],
+  ['Luyten 726-8 B',       6.250, -4.830,  -5.460, 'M',   8.73, 0.10],
+  ['Ross 154',             8.520,  0.640,  -2.700, 'M',   9.69, 0.17],
+  ['Ross 248',             7.400, -0.340,   6.520, 'M',  10.30, 0.136],
+  ['Epsilon Eridani',      3.280, -8.130,  -5.350, 'K',  10.50, 0.82],
+  ['Lacaille 9352',        8.510, -2.600,  -6.450, 'M',  10.74, 0.50],
+  ['Ross 128',            -5.430,  6.400,   6.600, 'M',  11.03, 0.17],
+  ['EZ Aquarii',           9.400, -2.840,  -5.950, 'M',  11.27, 0.10],
+  ['Procyon A',           -4.760,  9.880,   1.390, 'F',  11.40, 1.50],
+  ['Procyon B',           -4.760,  9.880,   1.390, 'WD', 11.40, 0.60],
+  ['61 Cygni A',           6.470,  3.030,   9.000, 'K',  11.40, 0.70],
+  ['61 Cygni B',           6.470,  3.030,   9.000, 'K',  11.40, 0.63],
+  ['Struve 2398 A',        3.310,  4.010,  10.730, 'M',  11.53, 0.39],
+  ['Struve 2398 B',        3.310,  4.010,  10.730, 'M',  11.53, 0.32],
+  ['Groombridge 34 A',     1.220, -0.540,  11.700, 'M',  11.62, 0.41],
+  ['Groombridge 34 B',     1.220, -0.540,  11.700, 'M',  11.62, 0.16],
+  ['DX Cancri',           -4.290,  9.900,   4.850, 'M',  11.68, 0.087],
+  ['Epsilon Indi',         8.800, -5.540,  -5.560, 'K',  11.82, 0.76],
+  ['Tau Ceti',             3.530, -9.610,  -5.450, 'G',  11.91, 0.78],
+  ['GJ 1061',             -2.550, -1.520, -11.680, 'M',  12.04, 0.12],
+  ['YZ Ceti',              6.080, -6.450,  -8.060, 'M',  12.13, 0.13],
+  ["Luyten's Star",       -6.440,  9.980,   1.220, 'M',  12.36, 0.26],
+  ["Teegarden's Star",     9.060,  5.820,  -5.050, 'M',  12.50, 0.090],
+  ['SCR 1845-6357',        8.680, -2.800,  -8.790, 'M',  12.57, 0.075],
+  ["Kapteyn's Star",       6.490, -2.620, -10.810, 'M',  12.76, 0.281],
+  ['Lacaille 8760',        9.380, -3.950,  -7.540, 'M',  12.87, 0.60],
+  ['Kruger 60 A',          4.890,  1.370,  11.960, 'M',  13.15, 0.27],
+  ['Kruger 60 B',          4.890,  1.370,  11.960, 'M',  13.15, 0.18],
+  ['DENIS 1048-39',       -9.760,  5.760,  -5.300, 'M',  13.20, 0.080],
+  ['Ross 614 A',          -5.680,  8.020,  -9.210, 'M',  13.40, 0.22],
+  ['Ross 614 B',          -5.680,  8.020,  -9.210, 'M',  13.40, 0.11],
+  ['Wolf 1061',            4.730,  2.720,  12.870, 'M',  14.05, 0.30],
+  ["van Maanen's Star",    5.230, -6.490, -11.010, 'WD', 14.07, 0.68],
+  ['Gliese 1',             4.140, -5.370, -12.300, 'M',  14.22, 0.45],
+  ['Wolf 424 A',          -4.580, 11.800,   6.940, 'M',  14.31, 0.143],
+  ['Wolf 424 B',          -4.580, 11.800,   6.940, 'M',  14.31, 0.131],
+  ['TZ Arietis',          -2.120,  9.990, -10.470, 'M',  14.60, 0.13],
+  ['Gliese 687',           6.090,  4.940,  12.260, 'M',  14.79, 0.40],
+  ['LHS 292',             -7.270,  7.050,  -9.950, 'M',  14.80, 0.080],
+  ['Gliese 674',           7.500,  3.980, -11.700, 'M',  14.80, 0.35],
+  ['Gliese 440 (WD)',     -9.560,  5.810,  -8.870, 'WD', 15.10, 0.62],
+  ['GJ 1245 A',            4.680,  4.270,  13.700, 'M',  15.20, 0.12],
+  ['GJ 1245 B',            4.680,  4.270,  13.700, 'M',  15.20, 0.12],
+  ['Gliese 876',           5.630, -7.580, -11.420, 'M',  15.30, 0.37],
+  ['LHS 288',             -4.520,  1.240, -14.550, 'M',  15.60, 0.10],
+  ['Gliese 412 A',       -11.480,  7.650,   7.380, 'M',  15.83, 0.48],
+  ['Gliese 412 B',       -11.480,  7.650,   7.380, 'M',  15.83, 0.10],
+  ['Groombridge 1618',    -9.150,  6.580,  11.030, 'K',  15.89, 0.66],
+  ['AD Leonis',           -8.240, 12.420,   4.430, 'M',  16.19, 0.42],
+  ['Gliese 832',           9.420, -4.300, -12.330, 'M',  16.20, 0.45],
+  ['DEN 0255-4700',        6.410, -9.870, -10.820, 'BD', 16.20, 0.025],
+  ['GJ 1116 A',           -9.380, 12.600,   3.120, 'M',  16.30, 0.10],
+  ['GJ 1116 B',           -9.380, 12.600,   3.120, 'M',  16.30, 0.10],
+  ['Gliese 581',           6.540,  5.710, -13.810, 'M',  16.30, 0.31],
+  // CURATED: 40 Eridani is a hierarchical triple — A is the K-type primary,
+  // BC is a tight WD+M sub-pair (~400 AU). Source had ABC all coincident;
+  // BC pair offset by 0.08 ly in +y so the A-vs-BC hierarchy reads at zoom-in.
+  ['40 Eridani A',        -2.220, -4.210, -15.590, 'K',  16.30, 0.84],
+  ['40 Eridani B',        -2.220, -4.130, -15.590, 'WD', 16.30, 0.57],
+  ['40 Eridani C',        -2.220, -4.130, -15.590, 'M',  16.30, 0.20],
+  ['EV Lacertae',          7.280,  3.150,  14.490, 'M',  16.47, 0.32],
+  ['70 Ophiuchi A',       10.780, -2.050,  12.480, 'K',  16.60, 0.89],
+  ['70 Ophiuchi B',       10.780, -2.050,  12.480, 'K',  16.60, 0.71],
+  ['Altair',              12.950,  2.560,   9.930, 'A',  16.73, 1.79],
+  ['Gliese 1002',         -6.720,-11.170, -11.040, 'M',  16.00, 0.12],
+  ['EI Cancri',          -10.960, 12.820,   3.460, 'M',  17.10, 0.17],
+  // CURATED: Gliese 570 — A is the K primary, BC is a tight M+M sub-pair.
+  // Source had ABC coincident; BC offset by 0.08 ly in +y for hierarchy.
+  ['Gliese 570 A',        12.520,  1.970, -11.650, 'K',  17.20, 0.80],
+  ['Gliese 570 B',        12.520,  2.050, -11.650, 'M',  17.20, 0.55],
+  ['Gliese 570 C',        12.520,  2.050, -11.650, 'M',  17.20, 0.16],
+  ['Gliese 169.1 A',     -10.470,  6.900,  11.950, 'M',  17.52, 0.39],
+  ['Gliese 783 A',        10.160, -1.090, -14.570, 'K',  17.62, 0.79],
+  ['Gliese 783 B',        10.160, -1.090, -14.570, 'M',  17.62, 0.14],
+  ['Gliese 892',           3.900,  4.080,  16.940, 'K',  17.72, 0.79],
+  ['Eta Cassiopeiae A',    0.150,  6.100,  16.970, 'G',  19.42, 0.97],
+  ['Eta Cassiopeiae B',    0.150,  6.100,  16.970, 'K',  19.42, 0.57],
+  // CURATED: 36 Ophiuchi — AB is the tight K+K binary, C is a wider K
+  // companion. Source had ABC coincident; C offset by 0.10 ly in +y so the
+  // AB-vs-C hierarchy reads at zoom-in. AB stay coincident (post-processor
+  // rings them).
+  ['36 Ophiuchi A',       14.040, -2.200,  11.960, 'K',  19.48, 0.85],
+  ['36 Ophiuchi B',       14.040, -2.200,  11.960, 'K',  19.48, 0.83],
+  ['36 Ophiuchi C',       14.040, -2.100,  11.960, 'K',  19.48, 0.69],
+  ['HR 7703 A',           13.850, -3.220, -11.720, 'K',  19.62, 0.79],
+  ['HR 7703 B',           13.850, -3.220, -11.720, 'M',  19.62, 0.20],
+  ['82 Eridani',          -3.850, -9.380, -16.380, 'G',  19.71, 0.93],
+  ['Delta Pavonis',        8.240, -5.190, -17.250, 'G',  19.92, 0.99],
+  ['Sigma Draconis',       3.270,  0.720,  18.580, 'K',  18.77, 0.81],
+  ['Gliese 33',            3.060, -8.140, -13.830, 'K',  17.42, 0.78],
+  ['Gliese 205',          -9.210, 11.860,  -7.180, 'M',  18.50, 0.63],
+  ['Gliese 250 A',        -8.740, 13.900,  -6.720, 'K',  18.70, 0.55],
+  ['Gliese 250 B',        -8.740, 13.900,  -6.720, 'M',  18.70, 0.18],
+  ['Gliese 229 A',        -5.500, 11.790, -12.470, 'M',  18.79, 0.50],
+  ['Gliese 229 B',        -5.500, 11.790, -12.470, 'BD', 18.79, 0.05],
+  ['Gliese 693',           8.500,  4.120, -15.420, 'M',  19.03, 0.27],
 ];
 
-export const STARS: readonly Star[] = RAW_STARS.map(([name, x, y, z, cls, distLy]) => ({
-  name, x, y, z, cls, distLy,
+// =============================================================================
+// Post-processor: ring out coincident sets so binary partners are visible
+// =============================================================================
+//
+// Minimum visible separation (ly) for coincident-coordinate members. Picked
+// so that at default zoom (orbit 50 ly) the displacement is ~1.5 px (visually
+// merged with the primary) and at close zoom (orbit 5 ly) it's ~10 px (clear
+// pair). Increase if binary partners feel too clumped at zoom-in; decrease
+// if they feel too separated at default zoom.
+const MIN_VIS_LY = 0.04;
+// Two stars within this distance (ly) are treated as coincident — i.e. the
+// catalog says "same place" within rounding. Has to be smaller than the
+// smallest curated hierarchical offset (0.08 ly) so curated layouts aren't
+// collapsed into the ring.
+const COINCIDENT_EPS_LY = 0.001;
+
+function expandCoincidentSets(stars: readonly Star[]): Star[] {
+  const out: Star[] = stars.map(s => ({ ...s }));
+  const visited = new Set<number>();
+  const eps2 = COINCIDENT_EPS_LY * COINCIDENT_EPS_LY;
+  for (let i = 0; i < stars.length; i++) {
+    if (visited.has(i)) continue;
+    const set: number[] = [i];
+    visited.add(i);
+    for (let j = i + 1; j < stars.length; j++) {
+      if (visited.has(j)) continue;
+      const dx = stars[i].x - stars[j].x;
+      const dy = stars[i].y - stars[j].y;
+      const dz = stars[i].z - stars[j].z;
+      if (dx * dx + dy * dy + dz * dz < eps2) {
+        set.push(j);
+        visited.add(j);
+      }
+    }
+    if (set.length < 2) continue;
+    // Heaviest first → angle 0 in the ring (deterministic and easy to reason
+    // about when curating: the primary is "to the right" of the cluster).
+    set.sort((a, b) => stars[b].mass - stars[a].mass);
+    const cx = stars[set[0]].x, cy = stars[set[0]].y, cz = stars[set[0]].z;
+    const n = set.length;
+    set.forEach((idx, k) => {
+      const angle = (k / n) * Math.PI * 2;
+      out[idx] = {
+        ...stars[idx],
+        x: cx + Math.cos(angle) * MIN_VIS_LY,
+        y: cy + Math.sin(angle) * MIN_VIS_LY,
+        z: cz,
+      };
+    });
+  }
+  return out;
+}
+
+const RAW_STAR_OBJECTS: Star[] = RAW_STARS.map(([name, x, y, z, cls, distLy, mass]) => ({
+  name, x, y, z, cls, distLy, mass,
 }));
+
+export const STARS: readonly Star[] = expandCoincidentSets(RAW_STAR_OBJECTS);
+
+// =============================================================================
+// Visual properties
+// =============================================================================
 
 // Stellar colors approximated from blackbody spectra at each spectral class's
 // typical surface temperature (Mitchell Charity table).
@@ -145,9 +268,7 @@ export const CLASS_COLOR: Record<SpectralClass, Color> = {
 
 // Direct visual pixel sizes per class at the reference uPxScale of 360
 // (≈ a 720 px-tall render buffer). The shader scales these by uPxScale/360
-// so discs grow/shrink modestly with viewport size, multiplies by the per-
-// frame zoom-scale uniform, and rounds to the nearest even integer for
-// symmetric gl.POINTS rasterization. The previous log-derived sizes
+// and applies the depth-attenuation factor; the previous log-derived sizes
 // compressed K through B all into the 8–12 px band, making most stars
 // look interchangeable; these are spaced wider so the brightest classes
 // are visibly larger than the dimmest.
@@ -163,15 +284,20 @@ export const CLASS_SIZE: Record<SpectralClass, number> = {
   WD:  3,
 };
 
-// Stars whose pairwise distance is within this threshold (light years) get
-// grouped into a single visible label, with a hover tooltip listing every
-// member. Captures known binaries/triples at exact-coincident positions plus
-// loose systems like Alpha Cen + Proxima at ~0.05 ly apart. Larger values
-// risk over-clustering unrelated stars; smaller miss real systems.
-const CLUSTER_THRESHOLD_LY = 0.2;
+// =============================================================================
+// Cluster detection
+// =============================================================================
+
+// Stars within this pairwise distance (ly) get grouped into a cluster, sharing
+// one visible label and a multi-line hover tooltip listing every member. Bumped
+// from 0.20 to 0.25 to comfortably contain Alpha Cen + Proxima after curation
+// (Proxima now sits ~0.20 ly from AB instead of the source data's ~0.05 ly).
+// Larger values risk over-clustering unrelated stars; smaller miss real
+// hierarchical systems.
+const CLUSTER_THRESHOLD_LY = 0.25;
 
 export interface StarCluster {
-  // Index into STARS of the largest (highest CLASS_RADIUS) member.
+  // Index into STARS of the heaviest member (the cluster's "primary").
   readonly primary: number;
   // All member star indices, primary first.
   readonly members: readonly number[];
@@ -208,10 +334,16 @@ function buildClusters(): readonly StarCluster[] {
     g.push(i);
   }
   return Array.from(groups.values()).map(members => {
-    // Primary = largest visual size, which is monotonic with radius across
-    // the catalog's spectral classes (O > B > A > F > G > K > M > BD > WD).
+    // Primary = highest mass. Falls back to visual size as a tie-breaker
+    // (degenerate if two members have identical mass, which is rare and
+    // visually-indistinguishable anyway).
     const primary = members.reduce(
-      (best, m) => CLASS_SIZE[STARS[m].cls] > CLASS_SIZE[STARS[best].cls] ? m : best,
+      (best, m) => {
+        const mm = STARS[m].mass, mb = STARS[best].mass;
+        if (mm > mb) return m;
+        if (mm < mb) return best;
+        return CLASS_SIZE[STARS[m].cls] > CLASS_SIZE[STARS[best].cls] ? m : best;
+      },
       members[0],
     );
     return { primary, members: [primary, ...members.filter(m => m !== primary)] };

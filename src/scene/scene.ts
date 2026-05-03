@@ -380,7 +380,7 @@ export class StarmapScene {
     setDashPatternScale(Math.max(1, DEFAULT_VIEW.distance / this.view.distance));
 
     this.grid.update(this.camera.position.x, this.camera.position.y, this.view.target.x, this.view.target.y);
-    this.droplines.update(this.camera, this.view.target);
+    this.droplines.update(this.camera);
 
     // Hover detection — pick the star whose ray-distance is smallest.
     const hovered = this.pointer.has ? this.pickStar(this.pointer.x, this.pointer.y) : -1;

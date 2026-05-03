@@ -125,6 +125,7 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
       attribute float aSize;
       varying vec3 vColor;
       varying float vRadius;
+      varying vec2 vCenter;
       uniform float uPxScale;
       uniform vec2 uViewport;
       const float REF_DIST = 50.0;
@@ -136,31 +137,57 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
         // so a star sitting on top of the camera doesn't blow up to inf.
         vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
         float dist = max(-mvPos.z, 0.5);
-        float depthScale = REF_DIST / dist;
+        // Linear growth on the close-up side (rawScale > 1) feels too eager
+        // — at orbit 5 ly a focused class-G star ends up 10x its table size
+        // and dominates the screen. Cube-root-compress the close-up side
+        // only: the per-class ratio stays intact (any monotonic function
+        // preserves ordering, and pow with a positive exponent preserves
+        // the ratio shape) but absolute growth tames sharply — at orbit 5
+        // a focused star is ~2.15x table size, at orbit 4 it's ~2.32x. The
+        // exponent (1/3) is the tuning knob: smaller = flatter close-up,
+        // larger = more growth. The zoom-out branch stays linear so distant
+        // fields shrink at the natural rate.
+        float rawScale = REF_DIST / dist;
+        float depthScale = rawScale > 1.0 ? pow(rawScale, 1.0 / 3.0) : rawScale;
         // Round to integer pixel count so zoom transitions step 2→3→4→5…
-        // Raise the divisor to shrink all stars globally.
-        float sz = clamp(aSize * (uPxScale / 600.0) * depthScale, 2.0, 28.0);
+        // Raise the divisor to shrink all stars globally. Lower-bounded at
+        // 2 px so stars never disappear at extreme zoom-out, but otherwise
+        // unclamped on the upper end — the previous 28-px cap collapsed the
+        // relative-size ratios between class O/B/A/F/G/K/M/BD/WD into a
+        // single flat blob whenever the camera got close enough to push the
+        // largest class past the cap. Without an upper bound, the ratio
+        // (28:22:18:14:12:10:8:6:3) survives all the way to the closest
+        // possible zoom and you can see Alpha Cen A, B, and Proxima as
+        // visibly different-sized discs at a 5-ly orbit.
+        float sz = max(aSize * (uPxScale / 600.0) * depthScale, 2.0);
         sz = floor(sz + 0.5);
-        gl_PointSize = sz;
+        // Render a slightly larger square than the actual disc and let the
+        // fragment shader's discard test determine the real shape. Without
+        // this padding, the rasterizer's fill rule at the bounding-box
+        // edges can drop a row or column on the bottom/left side (visible
+        // as asymmetric clipping). Adding +2 (preserving parity) keeps every
+        // fragment we care about safely inside the rasterized square so the
+        // rasterizer never has to make a tie-breaking call. Cost is a few
+        // extra discarded fragments per disc.
+        gl_PointSize = sz + 2.0;
         vRadius = sz * 0.5;
 
-        // Snap the projected center to the pixel grid. Even-sized sprites
-        // must center on a pixel BOUNDARY (integer screen coord) so the N/2
-        // rows on each side cover symmetric pixels; odd-sized sprites must
-        // center on a pixel CENTER (half-integer screen coord) so the
-        // (N-1)/2 rows on each side plus the central row are symmetric.
-        // Mismatching parity-to-snap is the failure mode the previous
-        // even-only rule worked around — gl.POINTS rasterizers handle the
-        // ambiguous case inconsistently and drop a row of pixels on one
-        // edge. Without snapping at all, points whose projected center
-        // lands at the wrong sub-pixel offset (notably the Sun at world
-        // origin when the camera target is also the Sun) get asymmetric
-        // coverage and read as half-discs.
+        // Parity-aware snap of the projected center to the pixel grid.
+        // - even sz: pixel BOUNDARY (integer window coord) so the sz/2 rows
+        //   on each side cover symmetric pixels.
+        // - odd sz:  pixel CENTER (half-integer) so (sz-1)/2 rows on each
+        //   side plus the central row are symmetric.
+        // The snapped center is also passed to the fragment shader as
+        // vCenter so it can compute exact pixel-grid offsets without
+        // touching gl_PointCoord (whose sub-pixel precision is
+        // implementation-defined and produces visible asymmetry on some
+        // drivers when the point center sits at sub-pixel positions).
         float oddOff = mod(sz, 2.0) * 0.5;
         vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         vec2 ndc = clip.xy / clip.w;
         vec2 fp = (ndc * 0.5 + 0.5) * uViewport;
         vec2 px = floor(fp - oddOff + 0.5) + oddOff;
+        vCenter = px;
         ndc = (px / uViewport) * 2.0 - 1.0;
         gl_Position = vec4(ndc * clip.w, clip.z, clip.w);
       }
@@ -168,24 +195,19 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
     fragmentShader: `
       varying vec3 vColor;
       varying float vRadius;
+      varying vec2 vCenter;
       void main() {
-        // Pixel-center offset from sprite center, in pixel units. For even
-        // sizes pixel centers sit at half-integer offsets (±0.5, ±1.5, …);
-        // for odd sizes at integer offsets (0, ±1, ±2, …). Snap to whichever
-        // grid this sprite uses so the discard test compares pixel centers
-        // to the radius — gives hard stair-stepped edges with no AA fringe.
-        float odd = mod(vRadius * 2.0, 2.0);
-        vec2 d = (gl_PointCoord - 0.5) * (vRadius * 2.0);
-        vec2 px = mix(floor(d) + 0.5, floor(d + 0.5), odd);
-        // True Euclidean disc test: keep pixels whose center is within
-        // vRadius of the sprite center. This gives the natural pixel-art
-        // progression — sizes 1/2/3 stay full squares (every corner sits
-        // inside the circle's bounding radius), size 4 starts cutting
-        // corners (12 px), 5 → 21 px, and on up. Don't subtract a fudge
-        // factor: the previous (vRadius - 0.5) rule chewed extra pixels off
-        // small sizes, collapsing size 4 to a 2x2 inner block and size 3
-        // to a 5-px plus.
-        if (length(px) > vRadius) discard;
+        // Pixel-center offset from sprite center, in window-pixel units.
+        // gl_FragCoord.xy is at integer + 0.5 (each pixel's center);
+        // vCenter is integer (even sz) or half-integer (odd sz), so d
+        // lands at clean half-integer or integer offsets — exactly the
+        // pixel-grid spacing, symmetric about both axes by construction.
+        // No gl_PointCoord, no parity branch. The length test then yields
+        // the natural pixel-disc progression: sizes 1/2/3 stay full squares
+        // (every corner is inside the bounding radius), 4 starts cutting
+        // corners (12 px), 5 → 21 px, and on up.
+        vec2 d = gl_FragCoord.xy - vCenter;
+        if (length(d) > vRadius) discard;
         gl_FragColor = vec4(vColor, 1.0);
       }
     `,
