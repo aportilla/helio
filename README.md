@@ -1,6 +1,6 @@
 # Starmap
 
-A 3D pixel-art visualization of the stars within ~20 light years of the Sun. Orthographic camera, stellar discs sized by spectral class, drop-lines pinning each star to the galactic plane, all rendered in a deliberately chunky retro aesthetic.
+A 3D pixel-art visualization of the stars within ~20 light years of the Sun. Perspective camera orbiting a focused star, stellar discs sized by spectral class and depth-attenuated, drop-lines pinning each star to the galactic plane, all rendered in a deliberately chunky retro aesthetic.
 
 Think 1980s starbase HUD: inline bitmap-font labels, cyan-on-near-black palette, hand-drawn-looking concentric range rings. The HUD chrome (title, scale bar, toggle buttons) renders as native pixel art inside the WebGL scene rather than as DOM elements.
 
@@ -37,7 +37,7 @@ src/
     grid.ts                 Concentric range rings + cross axes + galactic-centre arrow
     droplines.ts            Vertical pin from each star to the galactic plane
     stars.ts                gl.POINTS starfield with per-star size + color
-    labels.ts               Bitmap-font Sprites: star names, axis ticks, hover tooltip
+    labels.ts               Bitmap-font overlay pass: star names, axis ticks, hover tooltip
     materials.ts            Pixel-snapped line ShaderMaterial + the stars shader
     hud.ts                  Pixel-art HUD (title, scale bar, toggle buttons)
                             rendered as a second orthographic pass after the main scene
@@ -68,11 +68,11 @@ Star positions are approximated to ~0.5 ly from known distances + RA/Dec. That's
 
 ### Camera
 
-`OrthographicCamera`, not perspective. This is intentional and load-bearing:
-- Drop-lines must project as truly parallel vertical lines (the "pin to plane" geometry stops reading correctly under perspective).
-- Matches the reference illustration's flat, technical-diagram feel.
+`PerspectiveCamera`, FOV 45°. The camera always orbits a focused star — the user can never look at empty space. Right-click on any star (no drag) to pivot the orbit onto it; `view.target` lerps to the new star over ~400 ms (ease-in-out cubic) while yaw/pitch/distance stay frozen, so the camera glides over rather than swinging.
 
-The orbit-camera state lives in `view = { target, distance, yaw, pitch, spin }`. `distance` is the **frustum height in light years** — i.e. the zoom level. The camera position itself orbits a fixed sphere of radius 200 around `target`; zoom is handled entirely by widening or narrowing the ortho frustum bounds. Zoom is clamped to `[8, 200]` ly.
+The orbit state lives in `view = { target, distance, yaw, pitch, spin }`. `distance` is the **camera-to-target orbit radius in light years** — closer = zoomed in. Wheel/pinch dolly the orbit in/out; bounds are `[4, 150]` ly. Initial focus = the Sun; the HUD's "reset view" snaps focus, distance, yaw, and pitch back to their defaults instantly (a snap, not a glide — animating four axes at once looks jolty).
+
+Drop-lines now converge toward a vanishing point; under perspective, that's the honest depth cue and we lean into it. The half-plane dimming and the focused-star pivot do most of the orientation work that the parallel pins used to.
 
 ### Pixel-perfect rendering — the load-bearing constraints
 
@@ -80,9 +80,9 @@ The whole "pixel art" look depends on a stack of choices that all have to stay c
 
 1. **`renderer.setPixelRatio(devicePixelRatio / N)`** with `N = ENV_PX_PER_SCREEN_PX = 3` — the render buffer is sized so each render ("env") pixel becomes N×N physical pixels after the browser's `image-rendering: pixelated` nearest-neighbor upscale. The DPR-relative formula means the on-screen pixel size is consistent across retina (DPR=2) and non-retina (DPR=1) displays. Increasing N makes the look chunkier and reduces fragment work by 1/N². Critically, **all pixel-aware shader work must use `renderer.getDrawingBufferSize()` — NOT `window.innerWidth/Height`** — because the buffer is now smaller than the CSS viewport. `scene.ts` caches these as `bufferW`/`bufferH` in `resize()` and threads them into `setSnappedLineViewport`, `StarPoints.setPxScale`, `Labels.update`, and `Hud.resize`.
 2. **Pixel-snapped line shader** (`snappedLineMat` in `materials.ts`) — the vertex shader rounds each projected vertex to the nearest integer screen pixel before rasterization. The dashed variant patterns dashes in screen-pixel space (using snapped Y, anchored to each line's plane-pin point) so dashes stay aligned with the pixel grid. Used for grid arcs, axes, the galactic-centre arrow, and droplines.
-3. **Stars shader** (`makeStarsMaterial`) — `gl.POINTS` with a procedural circle in the fragment shader (no texture sampling, no AA fringe). The vertex shader rounds size to the nearest integer pixel count (so zoom transitions step 2→3→4→5…) and snaps the projected center to the pixel grid using a **parity-aware** snap: even sizes snap to a pixel boundary (integer screen coord), odd sizes to a pixel center (half-integer screen coord). Mismatching parity-to-snap is the failure mode that the previous even-only rule used to dodge — `gl.POINTS` rasterizers handle the ambiguous case inconsistently and drop a row of pixels on one edge. The fragment shader's pixel-center offset uses the same parity rule (`floor(d) + 0.5` for even, `floor(d + 0.5)` for odd) so the discard test compares true pixel centers to the radius, giving hard stair-stepped edges. The discard threshold is the true Euclidean radius (`length(px) > vRadius`) so sizes 1/2/3 render as full squares and size 4 onward starts dropping corners — the natural pixel-disc progression.
-4. **Label sprites** — bitmap-font glyphs drawn into a canvas at integer pixel coordinates, then uploaded as a texture with `NearestFilter` (both min + mag) and `generateMipmaps = false`. Each frame the sprite's world position is **snapped so its top-left corner lands on an integer buffer pixel** via `snapToPixelGrid` (passing the sprite's pixel dimensions in). Snapping the corner — not the center — ensures all four quad corners land on the pixel grid regardless of the sprite's parity, so every texel renders. Snapping just the center silently drops one row/column at the edge for odd-dimension sprites; most visible on small labels at exact screen-center positions like "Sun".
-5. **HUD** (`Hud` in `hud.ts`) — second orthographic pass at 1 unit = 1 buffer pixel, rendered after the main scene with `autoClear` toggled off. Geometry is `Mesh + PlaneGeometry + MeshBasicMaterial` so positions and sizes are integer pixel counts that match the rest of the scene's grid. Buttons are pre-built canvas textures (off / off-hover / on / on-hover) hot-swapped on state change.
+3. **Stars shader** (`makeStarsMaterial`) — `gl.POINTS` with a procedural circle in the fragment shader (no texture sampling, no AA fringe). The vertex shader rounds size to the nearest integer pixel count (so zoom transitions step 2→3→4→5…) and snaps the projected center to the pixel grid using a **parity-aware** snap: even sizes snap to a pixel boundary (integer screen coord), odd sizes to a pixel center (half-integer screen coord). Mismatching parity-to-snap is the failure mode that the previous even-only rule used to dodge — `gl.POINTS` rasterizers handle the ambiguous case inconsistently and drop a row of pixels on one edge. The fragment shader's pixel-center offset uses the same parity rule (`floor(d) + 0.5` for even, `floor(d + 0.5)` for odd) so the discard test compares true pixel centers to the radius, giving hard stair-stepped edges. The discard threshold is the true Euclidean radius (`length(px) > vRadius`) so sizes 1/2/3 render as full squares and size 4 onward starts dropping corners — the natural pixel-disc progression. The pixel-snap math runs **after** the perspective divide (`clip.xy / clip.w`) so it works identically under ortho and perspective projection.
+4. **Label overlay pass** (`Labels` in `labels.ts`) — labels are rendered in a second ortho pass at 1 unit = 1 buffer pixel, the same scheme as the HUD, rather than as 3D Sprites in the main scene. Each frame the cluster primary's world position is projected by the **main** camera; the result drives a `Mesh + PlaneGeometry` placement in the overlay scene, with the top-left corner snapped to an integer buffer pixel so every texel renders. Constant on-screen size keeps typography stable while the depth-attenuated stars do the depth-cueing work — depth-scaling labels on top of depth-scaling stars would just make distant labels illegible.
+5. **HUD** (`Hud` in `hud.ts`) — third ortho pass at 1 unit = 1 buffer pixel, rendered after the main scene and label overlay with `autoClear` toggled off. Geometry is `Mesh + PlaneGeometry + MeshBasicMaterial` so positions and sizes are integer pixel counts that match the rest of the scene's grid. Buttons are pre-built canvas textures (off / off-hover / on / on-hover) hot-swapped on state change.
 
 If you add new scene geometry, route it through `snappedLineMat` for lines and the existing point-shader pattern for sprites — don't introduce vanilla `LineBasicMaterial` or `PointsMaterial`, they'll shimmer.
 
@@ -119,14 +119,14 @@ Two lookup tables in `src/data/stars.ts`:
 
 A previous version derived `CLASS_SIZE` from `CLASS_RADIUS` via `log10(R) * 1.6`, but the log-compression made K through B all render in the 8–12 px band — most stars looked interchangeable. Direct sizes give clean separation across the catalog.
 
-### Zoom-relative star sizing
+### Depth-attenuated star sizing
 
-Each frame, `StarmapScene.tick()` sets the stars material's `uZoomScale` uniform to `min(1, DEFAULT_VIEW.distance / view.distance)`:
-- At default zoom (50 ly frustum height): `uZoomScale = 1`, sizes from the table above apply.
-- Zoom out: scales linearly with `view.distance` so stars shrink with the widening world view (twice the world width = half the screen size).
-- Zoom in past the default: capped at 1, so the table sizes are also the *visual maximum* and stars never get super large.
+Under perspective, the stars vertex shader scales each disc by `REF_DIST / view-space-depth` (with `REF_DIST = 50`, matching `DEFAULT_VIEW.distance`):
+- A star sitting at `REF_DIST` ly from the camera renders at its table size.
+- Closer stars enlarge proportionally; farther stars shrink. The clamp `[2, 28]` caps both extremes so very-close zoom doesn't blow stars up unboundedly and the smallest dwarfs stay visible at the far end.
+- This is computed per-vertex from `modelViewMatrix * position`, so it picks up both camera-to-target distance and each star's offset from the focus naturally.
 
-Smallest stars (white dwarfs) hit the size-2 floor first when zooming out, so they stay visible all the way to `ZOOM_MAX`.
+Smallest stars (white dwarfs, table size 3) hit the size-2 floor first as their depth crosses ~1.5 × `REF_DIST`.
 
 ### Star clusters
 
@@ -154,12 +154,13 @@ Anchoring the dash phase: each dropline's dash pattern is phased from its own an
 
 ### Input
 
-All input lives in `StarmapScene`:
-- **Pointer drag** = orbit (yaw/pitch). **Shift+drag or right-drag** = pan the target.
-- **Wheel** = zoom (frustum height).
-- **Two-finger pinch** = zoom on touch.
-- **WASD** = pan target along screen axes; **Q/E** = yaw left/right.
-- **Hover** uses a `Raycaster` against the `gl.POINTS` star object with `params.Points.threshold = 0.6` — the hovered star drives the boxed tooltip sprite in `Labels`.
+All input lives in `StarmapScene`. The model is deliberately minimal — the camera is always orbiting a focused star, so panning and free-flying are not exposed.
+- **Pointer drag** (any button) = orbit (yaw/pitch).
+- **Wheel** = zoom (orbit radius). **Two-finger pinch** = zoom on touch.
+- **Right-click on a star** (no/minimal drag, < 4 px movement) = animate the orbit pivot to that star. Same `Raycaster` against `gl.POINTS` (threshold 0.6 ly) as hover.
+- **Hover** uses the same raycast — the hovered star drives the boxed tooltip in the label overlay.
+
+There are no keyboard bindings. The HUD "reset view" button snaps focus back to the Sun + default yaw/pitch/distance.
 
 ## Coding conventions
 
@@ -173,6 +174,7 @@ All input lives in `StarmapScene`:
 ## Things that are deliberately not here
 
 - **No physically-accurate star positions or motions.** Catalog is for visualization, not navigation.
-- **No animation other than autospin and the boot splash fade.** Keep it that way unless adding it intentionally.
-- **No perspective camera.** Don't add one without first deciding what to do about drop-lines.
+- **No panning or free-fly camera.** The view is always orbiting a star; the only way to look elsewhere is to right-click another star and let the focus glide over.
+- **No keyboard navigation.** Removed alongside pan — drag/wheel/right-click is the whole input vocabulary.
+- **Animation is restricted to autospin, the boot splash fade, and the focus-pivot lerp.** Don't add others without intent.
 - **No texture-based stars or labels.** Everything is procedural / canvas-rasterized so the pixel-perfect look survives any zoom level.

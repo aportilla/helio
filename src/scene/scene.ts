@@ -1,7 +1,7 @@
 import {
   ColorManagement,
   LinearSRGBColorSpace,
-  OrthographicCamera,
+  PerspectiveCamera,
   Raycaster,
   Scene,
   Vector2,
@@ -23,9 +23,16 @@ import { Labels } from './labels';
 import { StarPoints } from './stars';
 import { setSnappedLineViewport, setDashPatternScale } from './materials';
 import { Hud } from './hud';
+import { STARS } from '../data/stars';
 
-const ZOOM_MIN = 8;
-const ZOOM_MAX = 200;
+// Orbit radius bounds (camera-to-target ly). Replaces the old ortho frustum
+// height; under perspective, distance directly drives apparent size of
+// objects at the focus.
+const ZOOM_MIN = 4;
+const ZOOM_MAX = 150;
+const FOV_DEG = 45;
+const NEAR = 0.1;
+const FAR = 1000;
 const NICE_STEPS = [20, 10, 5, 2.5, 1, 0.5, 0.2, 0.1];
 const DEFAULT_VIEW = { distance: 50, yaw: 0.9, pitch: 0.55 };
 
@@ -34,21 +41,26 @@ const DEFAULT_VIEW = { distance: 50, yaw: 0.9, pitch: 0.55 };
 // pixel-art look + fewer GPU pixels (perf bonus, 1/N² fragments).
 const ENV_PX_PER_SCREEN_PX = 3;
 
+// Right-click without dragging more than this many CSS pixels is treated as
+// a focus gesture. Forgiving enough to absorb hand jitter on a press.
+const CLICK_DRAG_PX = 4;
+
+// Focus animation: only view.target lerps; yaw/pitch/distance stay frozen so
+// the camera glides over to the new orbital pivot rather than swinging.
+const FOCUS_ANIM_MS = 400;
+
 interface ViewState {
   target: Vector3;
-  distance: number;  // ortho frustum HEIGHT in ly (zoom)
+  distance: number;  // orbit radius (camera-to-target ly)
   yaw: number;
   pitch: number;
   spin: boolean;
 }
 
-const KEYS = ['w', 'a', 's', 'd', 'q', 'e'] as const;
-type KeyName = typeof KEYS[number];
-
 export class StarmapScene {
   private readonly canvas: HTMLCanvasElement;
   private readonly renderer: WebGLRenderer;
-  private readonly camera: OrthographicCamera;
+  private readonly camera: PerspectiveCamera;
   private readonly scene = new Scene();
   private readonly view: ViewState;
   private readonly raycaster = new Raycaster();
@@ -58,47 +70,53 @@ export class StarmapScene {
   private readonly starPoints: StarPoints;
   private readonly hud: Hud;
 
-  // Orbit input state.
+  // Drag state. Any pointer drag = orbit (yaw/pitch); pan was removed because
+  // the camera always orbits a star, never an arbitrary world point.
   private dragging = false;
-  private panning = false;
+  private dragButton = 0;
   private lastX = 0;
   private lastY = 0;
+  private downX = 0;
+  private downY = 0;
   private pinchDist = 0;
   private readonly pointer = { x: 0, y: 0, has: false };
-  private readonly keys: Record<KeyName, boolean> = { w: false, a: false, s: false, d: false, q: false, e: false };
+
+  // Focus animation: view.target lerps from focusFrom → focusTo over
+  // FOCUS_ANIM_MS. The camera sphere slides with it; nothing else animates.
+  private readonly focusFrom = new Vector3();
+  private readonly focusTo = new Vector3();
+  private focusAnimStart = 0;
+  private focusAnimating = false;
 
   private rafId = 0;
   private running = false;
 
   // Bound listeners stored so removeEventListener works in stop().
   private readonly _onPointerDown = (e: PointerEvent) => this.onPointerDown(e);
-  private readonly _onPointerUp   = () => this.onPointerUp();
+  private readonly _onPointerUp   = (e: PointerEvent) => this.onPointerUp(e);
   private readonly _onPointerMove = (e: PointerEvent) => this.onPointerMove(e);
   private readonly _onWheel       = (e: WheelEvent) => this.onWheel(e);
   private readonly _onContextMenu = (e: Event) => e.preventDefault();
   private readonly _onTouchMove   = (e: TouchEvent) => this.onTouchMove(e);
   private readonly _onTouchEnd    = () => { this.pinchDist = 0; };
-  private readonly _onKeyDown     = (e: KeyboardEvent) => this.onKeyDown(e);
-  private readonly _onKeyUp       = (e: KeyboardEvent) => this.onKeyUp(e);
   private readonly _onResize      = () => this.resize();
 
   // Reusable per-frame scratch.
-  private readonly _tmp1 = new Vector3();
   private readonly _ndc  = new Vector2();
   private readonly _buf  = new Vector2();
   private readonly _hudPt = { x: 0, y: 0 };
 
   // Cached drawing-buffer dimensions, populated by resize(). All pixel-aware
-  // shader work (snap shader, star size, label sizing) uses these — NOT
-  // window.innerWidth/Height — because the buffer is smaller than CSS px once
-  // pixelRatio drops below 1.
+  // shader work uses these — NOT window.innerWidth/Height — because the
+  // buffer is smaller than CSS px once pixelRatio drops below 1.
   private bufferW = 0;
   private bufferH = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
+    const sun = STARS.find(s => s.name === 'Sun')!;
     this.view = {
-      target: new Vector3(0, 0, 0),
+      target: new Vector3(sun.x, sun.y, sun.z),
       ...DEFAULT_VIEW,
       spin: false,
     };
@@ -111,15 +129,12 @@ export class StarmapScene {
     this.renderer.setPixelRatio(window.devicePixelRatio / ENV_PX_PER_SCREEN_PX);
     this.renderer.setClearColor(0x000008, 1);
     // Match the disabled ColorManagement at the top of this file.
-    // LinearSRGBColorSpace = "no conversion at output" — fragment values are
-    // written to the framebuffer as-is, and the canvas then displays them as
-    // sRGB bytes, so a shader writing (30/255, 111/255, 196/255) renders as
-    // the literal #1e6fc4. (NoColorSpace is not a valid outputColorSpace.)
     this.renderer.outputColorSpace = LinearSRGBColorSpace;
 
-    // Orthographic keeps drop-lines truly parallel (critical for the
-    // "pin to plane" geometry) and matches the reference illustration's feel.
-    this.camera = new OrthographicCamera(-1, 1, 1, -1, -500, 500);
+    // PerspectiveCamera. Drop-lines now converge toward a vanishing point —
+    // an intentional break with the old ortho "parallel pin" geometry, in
+    // exchange for honest 3D depth cueing.
+    this.camera = new PerspectiveCamera(FOV_DEG, 1, NEAR, FAR);
 
     this.raycaster.params.Points = { threshold: 0.6 };
 
@@ -132,7 +147,7 @@ export class StarmapScene {
     this.droplines = new Droplines();
     this.scene.add(this.droplines.group);
 
-    this.labels = new Labels(this.scene);
+    this.labels = new Labels();
 
     this.hud = new Hud();
     this.hud.onToggle = (id, on) => {
@@ -142,10 +157,13 @@ export class StarmapScene {
     };
     this.hud.onAction = (id) => {
       if (id === 'reset') {
-        this.view.target.set(0, 0, 0);
+        // Snap reset: animating target while distance/yaw/pitch jump would
+        // jolt the camera. Keep reset feeling like a hard cut.
+        this.view.target.set(sun.x, sun.y, sun.z);
         this.view.distance = DEFAULT_VIEW.distance;
         this.view.yaw = DEFAULT_VIEW.yaw;
         this.view.pitch = DEFAULT_VIEW.pitch;
+        this.focusAnimating = false;
       }
     };
   }
@@ -177,8 +195,6 @@ export class StarmapScene {
     this.canvas.addEventListener('contextmenu', this._onContextMenu);
     this.canvas.addEventListener('touchmove',   this._onTouchMove, { passive: false });
     this.canvas.addEventListener('touchend',    this._onTouchEnd);
-    window.addEventListener('keydown', this._onKeyDown);
-    window.addEventListener('keyup',   this._onKeyUp);
     window.addEventListener('resize',  this._onResize);
   }
 
@@ -190,35 +206,43 @@ export class StarmapScene {
     this.canvas.removeEventListener('contextmenu', this._onContextMenu);
     this.canvas.removeEventListener('touchmove',   this._onTouchMove);
     this.canvas.removeEventListener('touchend',    this._onTouchEnd);
-    window.removeEventListener('keydown', this._onKeyDown);
-    window.removeEventListener('keyup',   this._onKeyUp);
     window.removeEventListener('resize',  this._onResize);
   }
 
   // Map a CSS-pixel client coord into HUD buffer coords (Y-up, origin at
-  // bottom-left). bufferW/H are in render-buffer pixels; the canvas's CSS
-  // box still spans the full viewport, so we scale by the pixelRatio implied
-  // by buffer / viewport.
+  // bottom-left).
   private clientToHud(clientX: number, clientY: number, out: { x: number; y: number }): void {
     out.x = clientX * (this.bufferW / window.innerWidth);
     out.y = (window.innerHeight - clientY) * (this.bufferH / window.innerHeight);
   }
 
   private onPointerDown(e: PointerEvent): void {
-    // HUD click intercepts pan/orbit so dragging-on-button doesn't move the camera.
+    // HUD click intercepts orbit so dragging-on-button doesn't move the camera.
     this.clientToHud(e.clientX, e.clientY, this._hudPt);
     if (this.hud.handleClick(this._hudPt.x, this._hudPt.y)) return;
 
     this.dragging = true;
-    this.panning = e.shiftKey || e.button === 2;
+    this.dragButton = e.button;
     this.lastX = e.clientX; this.lastY = e.clientY;
+    this.downX = e.clientX; this.downY = e.clientY;
     document.body.classList.add('grabbing');
     this.canvas.setPointerCapture(e.pointerId);
   }
 
-  private onPointerUp(): void {
-    this.dragging = false; this.panning = false;
+  private onPointerUp(e: PointerEvent): void {
+    if (!this.dragging) return;
+    const moved = Math.hypot(e.clientX - this.downX, e.clientY - this.downY);
+    const wasRightClick = this.dragButton === 2 && moved < CLICK_DRAG_PX;
+    this.dragging = false;
     document.body.classList.remove('grabbing');
+
+    if (wasRightClick) {
+      const hit = this.pickStar(e.clientX, e.clientY);
+      if (hit >= 0) {
+        const s = STARS[hit];
+        this.animateFocusTo(s.x, s.y, s.z);
+      }
+    }
   }
 
   private onPointerMove(e: PointerEvent): void {
@@ -229,21 +253,13 @@ export class StarmapScene {
       this.clientToHud(e.clientX, e.clientY, this._hudPt);
       const onButton = this.hud.handlePointerMove(this._hudPt.x, this._hudPt.y);
       this.canvas.style.cursor = onButton ? 'pointer' : '';
+      return;
     }
-    if (!this.dragging) return;
     const dx = e.clientX - this.lastX, dy = e.clientY - this.lastY;
     this.lastX = e.clientX; this.lastY = e.clientY;
-    if (this.panning) {
-      const s = this.view.distance * 0.0015;
-      const right = new Vector3(), up = new Vector3();
-      this.camera.matrixWorld.extractBasis(right, up, this._tmp1);
-      this.view.target.addScaledVector(right, -dx * s);
-      this.view.target.addScaledVector(up,     dy * s);
-    } else {
-      this.view.yaw   -= dx * 0.005;
-      this.view.pitch -= dy * 0.005;
-      this.view.pitch = Math.max(0.05, Math.min(Math.PI - 0.05, this.view.pitch));
-    }
+    this.view.yaw   -= dx * 0.005;
+    this.view.pitch -= dy * 0.005;
+    this.view.pitch = Math.max(0.05, Math.min(Math.PI - 0.05, this.view.pitch));
   }
 
   private onWheel(e: WheelEvent): void {
@@ -261,30 +277,44 @@ export class StarmapScene {
     }
   }
 
-  private onKeyDown(e: KeyboardEvent): void {
-    const tgt = e.target as HTMLElement | null;
-    if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA')) return;
-    const k = e.key.toLowerCase() as KeyName;
-    if (k in this.keys) { this.keys[k] = true; e.preventDefault(); }
-  }
-
-  private onKeyUp(e: KeyboardEvent): void {
-    const k = e.key.toLowerCase() as KeyName;
-    if (k in this.keys) this.keys[k] = false;
-  }
-
   // -- camera + zoom -----------------------------------------------------
 
   private setZoom(d: number): void {
     this.view.distance = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, d));
   }
 
-  // Camera POSITION orbits the target on a sphere of fixed radius; the ortho
-  // frustum bounds handle zoom independently of camera position.
+  private pickStar(clientX: number, clientY: number): number {
+    this._ndc.set(
+      (clientX / window.innerWidth) * 2 - 1,
+      -(clientY / window.innerHeight) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(this._ndc, this.camera);
+    const hits = this.raycaster.intersectObject(this.starPoints.points);
+    let bestD = Infinity;
+    let bestIdx = -1;
+    for (const h of hits) {
+      if (h.distanceToRay !== undefined && h.distanceToRay < bestD) {
+        bestD = h.distanceToRay;
+        bestIdx = h.index ?? -1;
+      }
+    }
+    return bestIdx;
+  }
+
+  private animateFocusTo(x: number, y: number, z: number): void {
+    this.focusFrom.copy(this.view.target);
+    this.focusTo.set(x, y, z);
+    this.focusAnimStart = performance.now();
+    this.focusAnimating = true;
+  }
+
+  // Camera orbits target on a sphere of radius = view.distance. Under
+  // perspective, that distance directly drives apparent size — no separate
+  // frustum bookkeeping like the old ortho path needed.
   private updateCamera(): void {
-    const R = 200;
     const sp = Math.sin(this.view.pitch), cp = Math.cos(this.view.pitch);
     const sy = Math.sin(this.view.yaw),   cy = Math.cos(this.view.yaw);
+    const R = this.view.distance;
     this.camera.position.set(
       this.view.target.x + R * sp * cy,
       this.view.target.y + R * sp * sy,
@@ -292,26 +322,15 @@ export class StarmapScene {
     );
     this.camera.up.set(0, 0, 1);
     this.camera.lookAt(this.view.target);
-    // Force matrixWorldInverse refresh now so label projections and sprite
-    // billboarding this frame see the same transform the renderer will.
+    // Force matrixWorldInverse refresh now so label projections this frame
+    // see the same transform the renderer will.
     this.camera.updateMatrixWorld(true);
-
-    const aspect = window.innerWidth / window.innerHeight;
-    const halfH = this.view.distance * 0.5;
-    const halfW = halfH * aspect;
-    this.camera.left = -halfW; this.camera.right = halfW;
-    this.camera.top = halfH;   this.camera.bottom = -halfH;
-    this.camera.updateProjectionMatrix();
   }
 
   private resize(): void {
     const w = window.innerWidth, h = window.innerHeight;
     this.renderer.setSize(w, h);
-    const aspect = w / h;
-    const halfH = this.view.distance * 0.5;
-    const halfW = halfH * aspect;
-    this.camera.left = -halfW; this.camera.right = halfW;
-    this.camera.top = halfH;   this.camera.bottom = -halfH;
+    this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.getDrawingBufferSize(this._buf);
     this.bufferW = this._buf.x;
@@ -319,12 +338,14 @@ export class StarmapScene {
     this.starPoints.setPxScale(this.bufferH / 2);
     setSnappedLineViewport(this.bufferW, this.bufferH);
     this.hud.resize(this.bufferW, this.bufferH);
+    this.labels.resize(this.bufferW, this.bufferH);
   }
 
-  // Walk the nice-step list from largest down; pick the first that fits
-  // under ~150 buffer pixels on screen. Guarantees a readable bar at any zoom.
+  // Scale bar measures size at the focused-star plane (camera-to-target
+  // distance). Px-per-ly there = bufferH / (2 · tan(fov/2) · distance).
   private emitScale(): void {
-    const pxPerLy = this.bufferH / this.view.distance;
+    const halfFovTan = Math.tan((FOV_DEG * Math.PI / 180) * 0.5);
+    const pxPerLy = this.bufferH / (2 * halfFovTan * this.view.distance);
     let chosen = NICE_STEPS[NICE_STEPS.length - 1];
     for (const step of NICE_STEPS) {
       if (step * pxPerLy <= 150) { chosen = step; break; }
@@ -339,60 +360,38 @@ export class StarmapScene {
 
     if (this.view.spin) this.view.yaw += 0.0015;
 
-    // WASD pans target along camera screen axes (zoom-scaled). Q/E rotate yaw.
-    if (this.keys.w || this.keys.a || this.keys.s || this.keys.d) {
-      const right = new Vector3(), up = new Vector3();
-      this.camera.matrixWorld.extractBasis(right, up, this._tmp1);
-      const speed = this.view.distance * 0.012;
-      if (this.keys.w) this.view.target.addScaledVector(up,     speed);
-      if (this.keys.s) this.view.target.addScaledVector(up,    -speed);
-      if (this.keys.d) this.view.target.addScaledVector(right,  speed);
-      if (this.keys.a) this.view.target.addScaledVector(right, -speed);
+    if (this.focusAnimating) {
+      const t = Math.min(1, (performance.now() - this.focusAnimStart) / FOCUS_ANIM_MS);
+      // Ease-in-out cubic: smooth at both ends, no overshoot.
+      const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      this.view.target.lerpVectors(this.focusFrom, this.focusTo, e);
+      if (t >= 1) {
+        this.view.target.copy(this.focusTo);
+        this.focusAnimating = false;
+      }
     }
-    if (this.keys.q) this.view.yaw += 0.02;
-    if (this.keys.e) this.view.yaw -= 0.02;
 
     this.updateCamera();
     this.emitScale();
 
-    // Zoom-relative star size: stars shrink as the camera zooms out, capped
-    // at 1.0 so zoom-in past the default doesn't blow them up.
-    this.starPoints.setZoomScale(Math.min(1, DEFAULT_VIEW.distance / this.view.distance));
-
-    // Dropline dash gap scales with zoom so each dropline shows a roughly
-    // constant number of dashes regardless of how much screen length the
-    // line covers — at zoom-in the line is longer in screen pixels, so the
-    // gap (in screen pixels) grows to match. Uncapped on the zoom-in side;
-    // floored at 1.0 on zoom-out so the pattern never collapses to solid.
+    // Dropline dash gap scales with orbit radius so the count of dashes per
+    // line stays roughly constant across zoom levels. Floored at 1.0 so the
+    // pattern never collapses to solid when zoomed far out.
     setDashPatternScale(Math.max(1, DEFAULT_VIEW.distance / this.view.distance));
 
     this.grid.update(this.camera.position.x, this.camera.position.y, this.view.target.x, this.view.target.y);
     this.droplines.update(this.camera, this.view.target);
 
     // Hover detection — pick the star whose ray-distance is smallest.
-    let hovered = -1;
-    if (this.pointer.has) {
-      this._ndc.set(
-        (this.pointer.x / window.innerWidth) * 2 - 1,
-        -(this.pointer.y / window.innerHeight) * 2 + 1,
-      );
-      this.raycaster.setFromCamera(this._ndc, this.camera);
-      const hits = this.raycaster.intersectObject(this.starPoints.points);
-      let bestD = Infinity;
-      for (const h of hits) {
-        if (h.distanceToRay !== undefined && h.distanceToRay < bestD) {
-          bestD = h.distanceToRay;
-          hovered = h.index ?? -1;
-        }
-      }
-    }
+    const hovered = this.pointer.has ? this.pickStar(this.pointer.x, this.pointer.y) : -1;
     this.labels.setHovered(hovered);
-    this.labels.update(this.camera, this.view.distance, this.bufferW, this.bufferH);
+    this.labels.update(this.camera);
 
     this.renderer.render(this.scene, this.camera);
-    // HUD pass — disable autoClear so the second render doesn't wipe the
-    // first. HUD geometry uses depthTest: false so it always overlays.
+    // Overlay passes — disable autoClear so the second/third renders don't
+    // wipe the first. Both overlays use depthTest: false to always overlay.
     this.renderer.autoClear = false;
+    this.renderer.render(this.labels.scene, this.labels.camera);
     this.renderer.render(this.hud.scene, this.hud.camera);
     this.renderer.autoClear = true;
     this.rafId = requestAnimationFrame(this.tick);

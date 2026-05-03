@@ -110,15 +110,15 @@ export function setDashPatternScale(scale: number): void {
 // Procedural circle in the fragment shader — no texture sampling, no AA
 // fringe. Per-star color from spectral class via vertex color; per-star
 // size via aSize attribute so brighter classes are bigger than dwarfs.
+//
+// Under perspective, size is depth-attenuated: a star at REF_DIST renders at
+// its table size; closer stars enlarge proportionally, farther stars shrink.
+// REF_DIST = DEFAULT_VIEW.distance (50) so when focused on a star at the
+// orbit center, that star renders at exactly its table size.
 export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
   const m = new ShaderMaterial({
     uniforms: {
       uPxScale: { value: initialPxScale },
-      // 1.0 at default zoom, drops linearly as the camera zooms out so stars
-      // shrink with the widening world view. Capped at 1 in JS so zooming in
-      // past the default doesn't blow stars up — the current default size is
-      // the visual maximum.
-      uZoomScale: { value: 1.0 },
       uViewport: { value: new Vector2(window.innerWidth, window.innerHeight) },
     },
     vertexShader: `
@@ -126,18 +126,20 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
       varying vec3 vColor;
       varying float vRadius;
       uniform float uPxScale;
-      uniform float uZoomScale;
       uniform vec2 uViewport;
+      const float REF_DIST = 50.0;
       void main() {
         vColor = color;
-        // Round size to the nearest INTEGER pixel count so zoom transitions
-        // step 2→3→4→5… instead of 2→4→6 (the previous even-only rounding
-        // skipped every other size). aSize is the per-class pixel size at
-        // the reference resolution (uPxScale = 600, ≈ a 1200-px-tall render
-        // buffer); uPxScale ratio scales discs modestly with viewport size,
-        // and uZoomScale shrinks them on zoom-out (capped at 1 in JS).
+        // Depth-attenuate by view-space distance so closer stars render
+        // larger and farther stars smaller — the depth cue that perspective
+        // earns us. View-space z is negative looking down -Z; flip and floor
+        // so a star sitting on top of the camera doesn't blow up to inf.
+        vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+        float dist = max(-mvPos.z, 0.5);
+        float depthScale = REF_DIST / dist;
+        // Round to integer pixel count so zoom transitions step 2→3→4→5…
         // Raise the divisor to shrink all stars globally.
-        float sz = clamp(aSize * (uPxScale / 600.0) * uZoomScale, 2.0, 28.0);
+        float sz = clamp(aSize * (uPxScale / 600.0) * depthScale, 2.0, 28.0);
         sz = floor(sz + 0.5);
         gl_PointSize = sz;
         vRadius = sz * 0.5;

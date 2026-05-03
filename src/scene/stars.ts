@@ -37,11 +37,4 @@ export class StarPoints {
   setPxScale(s: number): void {
     this.material.uniforms.uPxScale.value = s;
   }
-
-  // Per-frame zoom-relative size multiplier. 1.0 = current default size;
-  // values < 1 shrink stars (zoom-out). Capped at 1 by the caller so zoom-in
-  // past the default doesn't enlarge stars.
-  setZoomScale(s: number): void {
-    this.material.uniforms.uZoomScale.value = s;
-  }
 }
