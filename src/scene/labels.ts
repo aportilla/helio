@@ -1,7 +1,10 @@
 import {
   Camera,
+  CanvasTexture,
+  ClampToEdgeWrapping,
   Mesh,
   MeshBasicMaterial,
+  NearestFilter,
   OrthographicCamera,
   PlaneGeometry,
   Scene,
@@ -38,6 +41,43 @@ interface AnchoredLabel {
 const LABEL_OFFSET_PX = 6;
 const TIP_OFFSET_PX = 18;
 
+// Yellow corner-bracket reticle around the selected star. Fixed screen size
+// so it reads consistently whether the star's disc is huge (focused class-O
+// up close) or tiny (distant white dwarf). Color matches the hover-tooltip
+// star-name color so "selected" feels visually related to "highlighted".
+const RETICLE_SIZE_PX = 25;
+const RETICLE_ARM_PX = 5;
+const RETICLE_COLOR  = '#ffe98a';
+
+function buildReticleTexture(): CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = RETICLE_SIZE_PX; c.height = RETICLE_SIZE_PX;
+  const g = c.getContext('2d')!;
+  g.fillStyle = RETICLE_COLOR;
+  const S = RETICLE_SIZE_PX;
+  const A = RETICLE_ARM_PX;
+  // Each corner = two 1px arms forming an L pointing outward into that
+  // corner. Canvas Y is top-down here; the texture maps onto a quad whose
+  // own coords are flipped, so visually all four corners are symmetric.
+  // Top-left
+  g.fillRect(0, 0, A, 1);
+  g.fillRect(0, 0, 1, A);
+  // Top-right
+  g.fillRect(S - A, 0, A, 1);
+  g.fillRect(S - 1, 0, 1, A);
+  // Bottom-left
+  g.fillRect(0, S - 1, A, 1);
+  g.fillRect(0, S - A, 1, A);
+  // Bottom-right
+  g.fillRect(S - A, S - 1, A, 1);
+  g.fillRect(S - 1, S - A, 1, A);
+  const t = new CanvasTexture(c);
+  t.minFilter = NearestFilter; t.magFilter = NearestFilter;
+  t.wrapS = ClampToEdgeWrapping; t.wrapT = ClampToEdgeWrapping;
+  t.generateMipmaps = false;
+  return t;
+}
+
 function labelMat(tex: ReturnType<typeof makeLabelTexture>['tex']): MeshBasicMaterial {
   return new MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false });
 }
@@ -60,6 +100,9 @@ export class Labels {
   private showLabels = true;
   private hoveredCluster = -1;
   private lastHoveredCluster = -1;
+  private selectedStar = -1;
+
+  private readonly reticleMesh: Mesh;
 
   // Reusable per-frame scratch.
   private readonly _proj = new Vector3();
@@ -121,6 +164,15 @@ export class Labels {
     this.tipMesh.renderOrder = 2;
     this.tipMesh.visible = false;
     this.scene.add(this.tipMesh);
+
+    // Selection reticle — single static texture, repositioned each frame.
+    const reticleMat = new MeshBasicMaterial({
+      map: buildReticleTexture(), transparent: true, depthTest: false, depthWrite: false,
+    });
+    this.reticleMesh = new Mesh(new PlaneGeometry(RETICLE_SIZE_PX, RETICLE_SIZE_PX), reticleMat);
+    this.reticleMesh.renderOrder = 3;
+    this.reticleMesh.visible = false;
+    this.scene.add(this.reticleMesh);
   }
 
   resize(bufferW: number, bufferH: number): void {
@@ -141,6 +193,10 @@ export class Labels {
 
   setHovered(starIdx: number): void {
     this.hoveredCluster = starIdx >= 0 ? clusterIndexFor(starIdx) : -1;
+  }
+
+  setSelected(starIdx: number): void {
+    this.selectedStar = starIdx;
   }
 
   // Project a world position into buffer-pixel coords (Y-up, origin at
@@ -227,6 +283,24 @@ export class Labels {
       if (!this.showLabels || !this.projectToBuffer(a.worldPos, camera)) { a.mesh.visible = false; continue; }
       a.mesh.visible = true;
       this.placeAt(a.mesh, this._screen.x, this._screen.y, a.w, a.h);
+    }
+
+    // Selection reticle — anchored at the actual selected star (not the
+    // cluster primary), since the user can click any cluster member and
+    // expect the reticle to land on the dot they hit. projectToBuffer's
+    // focus-target short-circuit kicks in automatically when the selection
+    // also happens to be the camera's orbit target.
+    if (this.selectedStar >= 0) {
+      const s = STARS[this.selectedStar];
+      this._world.set(s.x, s.y, s.z);
+      if (this.projectToBuffer(this._world, camera)) {
+        this.reticleMesh.visible = true;
+        this.placeAt(this.reticleMesh, this._screen.x, this._screen.y, RETICLE_SIZE_PX, RETICLE_SIZE_PX);
+      } else {
+        this.reticleMesh.visible = false;
+      }
+    } else {
+      this.reticleMesh.visible = false;
     }
 
     // Tooltip anchored at the cluster's primary so it doesn't shift between

@@ -21,7 +21,7 @@ import { Grid } from './grid';
 import { Droplines } from './droplines';
 import { Labels } from './labels';
 import { StarPoints } from './stars';
-import { setSnappedLineViewport, setDashPatternScale } from './materials';
+import { setSnappedLineViewport } from './materials';
 import { Hud } from './hud';
 import { STARS } from '../data/stars';
 
@@ -41,8 +41,9 @@ const DEFAULT_VIEW = { distance: 50, yaw: 0.9, pitch: 0.55 };
 // pixel-art look + fewer GPU pixels (perf bonus, 1/N² fragments).
 const ENV_PX_PER_SCREEN_PX = 3;
 
-// Right-click without dragging more than this many CSS pixels is treated as
-// a focus gesture. Forgiving enough to absorb hand jitter on a press.
+// A pointer release that moved less than this many CSS pixels from its
+// pressdown counts as a click (vs the start of an orbit drag). Forgiving
+// enough to absorb hand jitter on a press.
 const CLICK_DRAG_PX = 4;
 
 // Focus animation: only view.target lerps; yaw/pitch/distance stay frozen so
@@ -80,6 +81,8 @@ export class StarmapScene {
   private downY = 0;
   private pinchDist = 0;
   private readonly pointer = { x: 0, y: 0, has: false };
+  // Selection state lives in Labels (reticle) and Hud (info card) — Scene
+  // routes click events to both but doesn't hold a copy itself.
 
   // Focus animation: view.target lerps from focusFrom → focusTo over
   // FOCUS_ANIM_MS. The camera sphere slides with it; nothing else animates.
@@ -97,7 +100,6 @@ export class StarmapScene {
   private readonly _onPointerMove = (e: PointerEvent) => this.onPointerMove(e);
   private readonly _onWheel       = (e: WheelEvent) => this.onWheel(e);
   private readonly _onContextMenu = (e: Event) => e.preventDefault();
-  private readonly _onDblClick    = (e: MouseEvent) => this.onDblClick(e);
   private readonly _onTouchMove   = (e: TouchEvent) => this.onTouchMove(e);
   private readonly _onTouchEnd    = () => { this.pinchDist = 0; };
   private readonly _onResize      = () => this.resize();
@@ -173,6 +175,10 @@ export class StarmapScene {
         this.focusAnimating = false;
       }
     };
+    this.hud.onDeselect = () => {
+      this.labels.setSelected(-1);
+      this.hud.setSelectedStar(-1);
+    };
   }
 
   // -- public API --------------------------------------------------------
@@ -200,7 +206,6 @@ export class StarmapScene {
     this.canvas.addEventListener('pointermove', this._onPointerMove);
     this.canvas.addEventListener('wheel',       this._onWheel, { passive: false });
     this.canvas.addEventListener('contextmenu', this._onContextMenu);
-    this.canvas.addEventListener('dblclick',    this._onDblClick);
     this.canvas.addEventListener('touchmove',   this._onTouchMove, { passive: false });
     this.canvas.addEventListener('touchend',    this._onTouchEnd);
     window.addEventListener('resize',  this._onResize);
@@ -212,7 +217,6 @@ export class StarmapScene {
     this.canvas.removeEventListener('pointermove', this._onPointerMove);
     this.canvas.removeEventListener('wheel',       this._onWheel);
     this.canvas.removeEventListener('contextmenu', this._onContextMenu);
-    this.canvas.removeEventListener('dblclick',    this._onDblClick);
     this.canvas.removeEventListener('touchmove',   this._onTouchMove);
     this.canvas.removeEventListener('touchend',    this._onTouchEnd);
     window.removeEventListener('resize',  this._onResize);
@@ -242,17 +246,24 @@ export class StarmapScene {
   private onPointerUp(e: PointerEvent): void {
     if (!this.dragging) return;
     const moved = Math.hypot(e.clientX - this.downX, e.clientY - this.downY);
-    const wasRightClick = this.dragButton === 2 && moved < CLICK_DRAG_PX;
+    const isClick = moved < CLICK_DRAG_PX;
+    const wasLeftClick  = this.dragButton === 0 && isClick;
+    const wasRightClick = this.dragButton === 2 && isClick;
     this.dragging = false;
     document.body.classList.remove('grabbing');
 
-    if (wasRightClick) {
-      const hit = this.pickStar(e.clientX, e.clientY);
-      if (hit >= 0) {
-        const s = STARS[hit];
-        this.animateFocusTo(s.x, s.y, s.z);
-      }
+    if (!isClick) return;
+    const hit = this.pickStar(e.clientX, e.clientY);
+    if (hit < 0) return;
+    // Left-click: select AND focus. Right-click: select only. Empty-space
+    // clicks leave selection unchanged (no accidental deselect on a near-miss).
+    this.labels.setSelected(hit);
+    this.hud.setSelectedStar(hit);
+    if (wasLeftClick) {
+      const s = STARS[hit];
+      this.animateFocusTo(s.x, s.y, s.z);
     }
+    void wasRightClick;
   }
 
   private onPointerMove(e: PointerEvent): void {
@@ -284,19 +295,6 @@ export class StarmapScene {
       if (this.pinchDist > 0) this.setZoom(this.view.distance * (this.pinchDist / d));
       this.pinchDist = d;
       e.preventDefault();
-    }
-  }
-
-  // Double-click on a star → focus on it. Mirrors right-click focus, just
-  // a more discoverable gesture for users coming from typical 3D viewers.
-  // Native dblclick fires on left button only, so right-double-click still
-  // routes through the right-click path (each click focuses, second one is
-  // a no-op against the same target).
-  private onDblClick(e: MouseEvent): void {
-    const hit = this.pickStar(e.clientX, e.clientY);
-    if (hit >= 0) {
-      const s = STARS[hit];
-      this.animateFocusTo(s.x, s.y, s.z);
     }
   }
 
@@ -418,13 +416,9 @@ export class StarmapScene {
     this.updateCamera();
     this.emitScale();
 
-    // Dropline dash gap scales with orbit radius so the count of dashes per
-    // line stays roughly constant across zoom levels. Floored at 1.0 so the
-    // pattern never collapses to solid when zoomed far out.
-    setDashPatternScale(Math.max(1, DEFAULT_VIEW.distance / this.view.distance));
-
     this.grid.update(this.camera.position.x, this.camera.position.y, this.view.target.x, this.view.target.y);
     this.droplines.update(this.camera);
+    this.starPoints.setFocus(this.view.target);
 
     // Hover detection — pick the star whose ray-distance is smallest.
     const hovered = this.pointer.has ? this.pickStar(this.pointer.x, this.pointer.y) : -1;

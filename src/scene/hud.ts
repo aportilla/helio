@@ -8,7 +8,8 @@ import {
   PlaneGeometry,
   Scene,
 } from 'three';
-import { FONTS, drawPixelText, getFont, measurePixelText } from '../data/pixel-font';
+import { STARS } from '../data/stars';
+import { FONTS, drawPixelText, getFont, makeLabelTexture, measurePixelText } from '../data/pixel-font';
 
 // HUD chrome (title, scale bar, toggle buttons) rendered as native pixel-art
 // in a second orthographic pass after the main scene. The HUD camera is set
@@ -35,6 +36,16 @@ const COLOR_BTN_OFF_TEXT = '#5ec8ff';
 const COLOR_BTN_ON_TEXT  = '#ffffff';
 const COLOR_BTN_HOVER_TEXT = '#cfeeff';
 const COLOR_SCALE        = 0xe8f6ff;   // near-white for the scale bar + ticks
+
+// Close-X dismisses the info card. Single texture per state (off / hover);
+// 9x9 px so the diagonal lands on a clean center pixel. Hit pad is added
+// around the visual size so the click target is forgiving even at small
+// pixel sizes.
+const CLOSE_X_SIZE = 9;
+const CLOSE_X_INSET = 3;
+const CLOSE_X_HIT_PAD = 2;
+const COLOR_CLOSE_X       = '#2d7ab8';
+const COLOR_CLOSE_X_HOVER = '#5ec8ff';
 
 export type ToggleId = 'labels' | 'drops' | 'spin';
 export type ActionId = 'reset';
@@ -143,6 +154,19 @@ function buildButtonTexture(text: string, state: ButtonState, toggle: boolean): 
   return { tex: nearestFilteredTexture(c), w: W, h: H };
 }
 
+function buildCloseXTexture(color: string): CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = CLOSE_X_SIZE; c.height = CLOSE_X_SIZE;
+  const g = c.getContext('2d')!;
+  g.fillStyle = color;
+  // Two diagonal lines, one pixel wide, intersecting at the center pixel.
+  for (let i = 0; i < CLOSE_X_SIZE; i++) {
+    g.fillRect(i, i, 1, 1);
+    g.fillRect(i, CLOSE_X_SIZE - 1 - i, 1, 1);
+  }
+  return nearestFilteredTexture(c);
+}
+
 function buildScaleLabelTexture(text: string): { tex: CanvasTexture; w: number; h: number } {
   const padX = 1;
   const padY = 1;
@@ -180,9 +204,25 @@ export class Hud {
   private scaleWidthPx = 0;
   private scaleLabelH = 0;
 
+  // Selection info card (top-right). Texture rebuilt on selection change.
+  private readonly infoCardMesh: Mesh;
+  private readonly infoCardMat: MeshBasicMaterial;
+  private infoCardW = 0;
+  private infoCardH = 0;
+  private selectedStar = -1;
+
+  // Close-X on the card. Two pre-built textures (off/hover) swapped on hover.
+  private readonly closeXMesh: Mesh;
+  private readonly closeXMat: MeshBasicMaterial;
+  private readonly closeXTexOff: CanvasTexture;
+  private readonly closeXTexHover: CanvasTexture;
+  private closeXBounds = { x: 0, y: 0, w: 0, h: 0 };
+  private closeXHover = false;
+
   // Public callbacks. The scene wires these to its own toggle methods.
   onToggle: (id: ToggleId, on: boolean) => void = () => {};
   onAction: (id: ActionId) => void = () => {};
+  onDeselect: () => void = () => {};
 
   constructor() {
     // ---- title -----------------------------------------------------------
@@ -239,6 +279,25 @@ export class Hud {
     this.scaleLabelMesh.renderOrder = 100;
     this.scaleLabelMesh.visible = false;
     this.scene.add(this.scaleLabelMesh);
+
+    // ---- info card -------------------------------------------------------
+    // Texture is rebuilt on selection change via setSelectedStar(); the mesh
+    // exists hidden until then. Boxed-label style matches the hover tooltip
+    // so "selected" and "hovered" UIs feel like the same family.
+    this.infoCardMat = new MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false });
+    this.infoCardMesh = new Mesh(new PlaneGeometry(1, 1), this.infoCardMat);
+    this.infoCardMesh.renderOrder = 100;
+    this.infoCardMesh.visible = false;
+    this.scene.add(this.infoCardMesh);
+
+    // ---- close X on card -------------------------------------------------
+    this.closeXTexOff   = buildCloseXTexture(COLOR_CLOSE_X);
+    this.closeXTexHover = buildCloseXTexture(COLOR_CLOSE_X_HOVER);
+    this.closeXMat = new MeshBasicMaterial({ map: this.closeXTexOff, transparent: true, depthTest: false, depthWrite: false });
+    this.closeXMesh = new Mesh(new PlaneGeometry(CLOSE_X_SIZE, CLOSE_X_SIZE), this.closeXMat);
+    this.closeXMesh.renderOrder = 101;  // above the card
+    this.closeXMesh.visible = false;
+    this.scene.add(this.closeXMesh);
   }
 
   resize(bufferW: number, bufferH: number): void {
@@ -274,6 +333,59 @@ export class Hud {
     this.layoutScale();
   }
 
+  // Selection card. Pass -1 to clear. Rebuilds the boxed label texture only
+  // when the selection actually changes; safe to call every frame, but the
+  // scene only calls on click.
+  setSelectedStar(starIdx: number): void {
+    if (this.selectedStar === starIdx) return;
+    this.selectedStar = starIdx;
+    if (starIdx < 0) {
+      this.infoCardMesh.visible = false;
+      this.closeXMesh.visible = false;
+      // Reset hover state so the next time the card appears, the X starts in
+      // its off color regardless of where the cursor was last.
+      if (this.closeXHover) {
+        this.closeXHover = false;
+        this.closeXMat.map = this.closeXTexOff;
+        this.closeXMat.needsUpdate = true;
+      }
+      return;
+    }
+    const s = STARS[starIdx];
+    // Each line is one row of the boxed card. Yellow for the name, dim cyan
+    // for keys, light cyan for values — same palette family as the tooltip.
+    const lines = [
+      [{ text: s.name, color: '#ffe98a' }],
+      [
+        { text: 'class    ', color: '#2d7ab8' },
+        { text: s.cls,        color: '#aee4ff' },
+      ],
+      [
+        { text: 'distance ', color: '#2d7ab8' },
+        { text: `${s.distLy.toFixed(2)} ly`, color: '#aee4ff' },
+      ],
+      [
+        { text: 'mass     ', color: '#2d7ab8' },
+        { text: `${s.mass.toFixed(2)} Msun`, color: '#aee4ff' },
+      ],
+      [
+        { text: 'position ', color: '#2d7ab8' },
+        { text: `${s.x.toFixed(2)}, ${s.y.toFixed(2)}, ${s.z.toFixed(2)}`, color: '#aee4ff' },
+      ],
+    ];
+    if (this.infoCardMat.map) this.infoCardMat.map.dispose();
+    const { tex, w, h } = makeLabelTexture(lines, { box: true });
+    this.infoCardMat.map = tex;
+    this.infoCardMat.needsUpdate = true;
+    this.infoCardW = w;
+    this.infoCardH = h;
+    this.infoCardMesh.geometry.dispose();
+    this.infoCardMesh.geometry = new PlaneGeometry(w, h);
+    this.infoCardMesh.visible = true;
+    this.closeXMesh.visible = true;
+    this.layoutInfoCard();
+  }
+
   // External state sync — called when the scene toggles state from elsewhere
   // (e.g. keyboard shortcut) or when reset re-arms autospin off, etc.
   setToggleState(id: ToggleId, on: boolean): void {
@@ -283,8 +395,13 @@ export class Hud {
     this.applyButtonTexture(b);
   }
 
-  // Returns true if the click hit a button (and the action was fired).
+  // Returns true if the click hit any HUD interactive element (button or
+  // info-card close X) and the action was fired.
   handleClick(bufX: number, bufY: number): boolean {
+    if (this.isOverCloseX(bufX, bufY)) {
+      this.onDeselect();
+      return true;
+    }
     const hit = this.findButton(bufX, bufY);
     if (!hit) return false;
     if (hit.toggle) {
@@ -297,8 +414,15 @@ export class Hud {
     return true;
   }
 
-  // Returns true if the cursor is over any button (caller can change cursor).
+  // Returns true if the cursor is over any HUD interactive element (caller
+  // changes cursor to pointer in that case).
   handlePointerMove(bufX: number, bufY: number): boolean {
+    const onCloseX = this.isOverCloseX(bufX, bufY);
+    if (onCloseX !== this.closeXHover) {
+      this.closeXHover = onCloseX;
+      this.closeXMat.map = onCloseX ? this.closeXTexHover : this.closeXTexOff;
+      this.closeXMat.needsUpdate = true;
+    }
     const hit = this.findButton(bufX, bufY);
     let changed = false;
     for (const b of this.buttons) {
@@ -310,7 +434,7 @@ export class Hud {
       }
     }
     void changed;
-    return hit !== null;
+    return hit !== null || onCloseX;
   }
 
   clearHover(): void {
@@ -356,6 +480,39 @@ export class Hud {
     }
 
     this.layoutScale();
+    this.layoutInfoCard();
+  }
+
+  private layoutInfoCard(): void {
+    if (!this.infoCardMesh.visible) return;
+    // Top-right corner with the same PADDING offset as title/buttons. Mesh
+    // origin is at center, so position = (right edge - half width, top edge
+    // - half height). All values are integer pixel counts so the texture
+    // texels land 1:1 on buffer pixels.
+    const cx = this.bufferW - PADDING - this.infoCardW / 2;
+    const cy = this.bufferH - PADDING - this.infoCardH / 2;
+    this.infoCardMesh.position.set(cx, cy, 0);
+
+    // Close X just inside the card's top-right corner. Position is
+    // half-integer because CLOSE_X_SIZE is odd; the 9 px texture maps onto
+    // the 9 pixels (cardRight - INSET - 9) .. (cardRight - INSET - 1).
+    const cardRight = this.bufferW - PADDING;
+    const cardTop   = this.bufferH - PADDING;
+    const closeCX = cardRight - CLOSE_X_INSET - CLOSE_X_SIZE / 2;
+    const closeCY = cardTop   - CLOSE_X_INSET - CLOSE_X_SIZE / 2;
+    this.closeXMesh.position.set(closeCX, closeCY, 0);
+    this.closeXBounds = {
+      x: cardRight - CLOSE_X_INSET - CLOSE_X_SIZE - CLOSE_X_HIT_PAD,
+      y: cardTop   - CLOSE_X_INSET - CLOSE_X_SIZE - CLOSE_X_HIT_PAD,
+      w: CLOSE_X_SIZE + 2 * CLOSE_X_HIT_PAD,
+      h: CLOSE_X_SIZE + 2 * CLOSE_X_HIT_PAD,
+    };
+  }
+
+  private isOverCloseX(bufX: number, bufY: number): boolean {
+    if (!this.closeXMesh.visible) return false;
+    const b = this.closeXBounds;
+    return bufX >= b.x && bufX < b.x + b.w && bufY >= b.y && bufY < b.y + b.h;
   }
 
   private layoutScale(): void {

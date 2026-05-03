@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry, Points, ShaderMaterial } from 'three';
+import { BufferAttribute, BufferGeometry, Points, ShaderMaterial, Vector3 } from 'three';
 import { CLASS_COLOR, CLASS_SIZE, STARS } from '../data/stars';
 import { makeStarsMaterial } from './materials';
 
@@ -36,5 +36,13 @@ export class StarPoints {
 
   setPxScale(s: number): void {
     this.material.uniforms.uPxScale.value = s;
+  }
+
+  // Drives the focus-target short-circuit in the vertex shader. The vertex
+  // whose attribute position matches this world coord exactly bypasses the
+  // noisy matrix projection and snaps to buffer center — kills the 1 px disc
+  // twitch on the focused star while the camera orbits around it.
+  setFocus(world: Vector3): void {
+    this.material.uniforms.uFocusWorld.value.copy(world);
   }
 }

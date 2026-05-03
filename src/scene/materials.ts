@@ -1,16 +1,11 @@
-import { Color, ShaderMaterial, Vector2 } from 'three';
+import { Color, ShaderMaterial, Vector2, Vector3 } from 'three';
 
 // Tracked so resize() can push new viewport size into all snapped-line mats.
 const snappedMaterials: ShaderMaterial[] = [];
-// Dashed subset — separate list so the scene can drive a per-frame pattern
-// scale for them without touching solid lines or the stars material.
-const dashedMaterials: ShaderMaterial[] = [];
 
 export interface SnappedLineOptions {
   color: number;
   opacity?: number;
-  dashPx?: number;
-  gapPx?: number;
   // Render with blending disabled. Coincident lines (e.g. binary star
   // droplines) then render at exactly uColor instead of stacking alpha and
   // appearing brighter than singles. Default false (transparent).
@@ -20,70 +15,34 @@ export interface SnappedLineOptions {
 // Pixel-snapped line material: rounds each vertex's projected position to the
 // nearest integer screen pixel before rasterization. Eliminates sub-pixel
 // shimmer on thin lines that would otherwise fight the depth-based opacity
-// cue. The dashed variant patterns in pixel space using snapped Y, so dashes
-// stay aligned with the pixel grid.
+// cue. Dropline dashes are baked into geometry as separate short segments
+// (see droplines.ts), so this material has no dash-specific path — every
+// segment renders as a snapped solid line.
 export function snappedLineMat(opts: SnappedLineOptions): ShaderMaterial {
-  const isDashed = (opts.dashPx ?? 0) > 0;
   const isOpaque = opts.opaque === true;
   const defines: Record<string, string> = {};
-  if (isDashed) defines.USE_DASH = '';
   if (isOpaque) defines.OPAQUE = '';
   const m = new ShaderMaterial({
     defines,
     uniforms: {
-      uColor:        { value: new Color(opts.color) },
-      uOpacity:      { value: opts.opacity ?? 1.0 },
-      uViewport:     { value: new Vector2(window.innerWidth, window.innerHeight) },
-      uDashPx:       { value: opts.dashPx ?? 1.0 },
-      uGapPx:        { value: opts.gapPx ?? 4.0 },
-      // Multiplier on uGapPx, driven from the scene tick. >1 when zoomed in
-      // so the gap grows in screen pixels — keeping the count of dashes
-      // along a dropline roughly constant as the line lengthens on screen.
-      uPatternScale: { value: 1.0 },
+      uColor:    { value: new Color(opts.color) },
+      uOpacity:  { value: opts.opacity ?? 1.0 },
+      uViewport: { value: new Vector2(window.innerWidth, window.innerHeight) },
     },
     vertexShader: `
       uniform vec2 uViewport;
-      #ifdef USE_DASH
-      varying vec2 vScreenPx;
-      varying float vAnchorScreenY;
-      #endif
       void main() {
         vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         vec2 ndc = clip.xy / clip.w;
         vec2 px  = floor((ndc * 0.5 + 0.5) * uViewport + 0.5);
         ndc = (px / uViewport) * 2.0 - 1.0;
         gl_Position = vec4(ndc * clip.w, clip.z, clip.w);
-        #ifdef USE_DASH
-        vScreenPx = px;
-        // Project the line's anchor (z=0 of this segment) so the dash phase
-        // is relative to each line's own pin point on the galactic plane.
-        // Both vertices of a dropline share x/y, so this evaluates the same
-        // for both endpoints — interpolates as a constant along the line.
-        vec4 aClip = projectionMatrix * modelViewMatrix * vec4(position.x, position.y, 0.0, 1.0);
-        vAnchorScreenY = floor((aClip.y / aClip.w * 0.5 + 0.5) * uViewport.y + 0.5);
-        #endif
       }
     `,
     fragmentShader: `
       uniform vec3 uColor;
       uniform float uOpacity;
-      #ifdef USE_DASH
-      uniform float uDashPx;
-      uniform float uGapPx;
-      uniform float uPatternScale;
-      varying vec2 vScreenPx;
-      varying float vAnchorScreenY;
-      #endif
       void main() {
-        #ifdef USE_DASH
-        // Dash pattern phased from each line's anchor on the galactic plane,
-        // not a global screen Y — otherwise all droplines share the same
-        // horizontal dash rows and create faint banding across the field.
-        // Gap is scaled by uPatternScale (driven by zoom in scene.tick) so
-        // that the count of dashes along a dropline stays roughly constant
-        // regardless of how much screen space the line covers.
-        if (mod(vScreenPx.y - vAnchorScreenY, uDashPx + uGapPx * uPatternScale) > uDashPx) discard;
-        #endif
         #ifdef OPAQUE
         gl_FragColor = vec4(uColor, 1.0);
         #else
@@ -95,7 +54,6 @@ export function snappedLineMat(opts: SnappedLineOptions): ShaderMaterial {
     depthWrite: false,
   });
   snappedMaterials.push(m);
-  if (isDashed) dashedMaterials.push(m);
   return m;
 }
 
@@ -103,8 +61,44 @@ export function setSnappedLineViewport(w: number, h: number): void {
   for (const m of snappedMaterials) m.uniforms.uViewport.value.set(w, h);
 }
 
-export function setDashPatternScale(scale: number): void {
-  for (const m of dashedMaterials) m.uniforms.uPatternScale.value = scale;
+// 1-pixel pixel-snapped points. Each vertex renders as exactly one buffer
+// pixel by snapping the projected center to an integer + 0.5 (pixel center)
+// and setting gl_PointSize = 1. Used by droplines for the dotted (far-side
+// of the galactic plane) variant — far simpler than baking dash segments
+// into LineSegments geometry, since each dot is a single vertex.
+export function snappedDotsMat(opts: { color: number }): ShaderMaterial {
+  const m = new ShaderMaterial({
+    uniforms: {
+      uColor:    { value: new Color(opts.color) },
+      uViewport: { value: new Vector2(window.innerWidth, window.innerHeight) },
+    },
+    vertexShader: `
+      uniform vec2 uViewport;
+      void main() {
+        vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        vec2 ndc = clip.xy / clip.w;
+        vec2 fp  = (ndc * 0.5 + 0.5) * uViewport;
+        // Snap to pixel center (integer + 0.5) so a size-1 point covers
+        // exactly one buffer pixel rather than straddling two.
+        vec2 px  = floor(fp) + 0.5;
+        ndc = (px / uViewport) * 2.0 - 1.0;
+        gl_Position = vec4(ndc * clip.w, clip.z, clip.w);
+        gl_PointSize = 1.0;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      void main() {
+        gl_FragColor = vec4(uColor, 1.0);
+      }
+    `,
+    transparent: false,
+    depthWrite: false,
+  });
+  // Reuse the snapped-line registry so resize() pushes the new viewport into
+  // dot materials too — same uViewport uniform name.
+  snappedMaterials.push(m);
+  return m;
 }
 
 // Procedural circle in the fragment shader — no texture sampling, no AA
@@ -120,6 +114,13 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
     uniforms: {
       uPxScale: { value: initialPxScale },
       uViewport: { value: new Vector2(window.innerWidth, window.innerHeight) },
+      // World position of the camera's orbit target. The vertex with this
+      // exact position projects to NDC (0,0) by construction; bypassing the
+      // matrix math for that one vertex kills the 1px disc twitch caused by
+      // FP noise crossing the pixel-snap threshold. Set per-frame from
+      // StarPoints.setFocus(). Defaults far outside the catalog so no real
+      // star matches before the first frame's setFocus() runs.
+      uFocusWorld: { value: new Vector3(1e9, 1e9, 1e9) },
     },
     vertexShader: `
       attribute float aSize;
@@ -128,6 +129,7 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
       varying vec2 vCenter;
       uniform float uPxScale;
       uniform vec2 uViewport;
+      uniform vec3 uFocusWorld;
       const float REF_DIST = 50.0;
       void main() {
         vColor = color;
@@ -184,7 +186,12 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
         // drivers when the point center sits at sub-pixel positions).
         float oddOff = mod(sz, 2.0) * 0.5;
         vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        vec2 ndc = clip.xy / clip.w;
+        // Focus-target short-circuit: the camera always lookAt's uFocusWorld,
+        // so the matching vertex's true NDC is mathematically (0,0). The
+        // matrix product produces (~1e-7, ~1e-7) instead, which is enough
+        // noise to flip the parity-aware snap below by 1 pixel each frame
+        // as yaw/pitch rotate. Substitute exact (0,0) for that vertex only.
+        vec2 ndc = all(equal(position, uFocusWorld)) ? vec2(0.0) : (clip.xy / clip.w);
         vec2 fp = (ndc * 0.5 + 0.5) * uViewport;
         vec2 px = floor(fp - oddOff + 0.5) + oddOff;
         vCenter = px;
