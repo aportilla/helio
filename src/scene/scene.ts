@@ -97,6 +97,7 @@ export class StarmapScene {
   private readonly _onPointerMove = (e: PointerEvent) => this.onPointerMove(e);
   private readonly _onWheel       = (e: WheelEvent) => this.onWheel(e);
   private readonly _onContextMenu = (e: Event) => e.preventDefault();
+  private readonly _onDblClick    = (e: MouseEvent) => this.onDblClick(e);
   private readonly _onTouchMove   = (e: TouchEvent) => this.onTouchMove(e);
   private readonly _onTouchEnd    = () => { this.pinchDist = 0; };
   private readonly _onResize      = () => this.resize();
@@ -199,6 +200,7 @@ export class StarmapScene {
     this.canvas.addEventListener('pointermove', this._onPointerMove);
     this.canvas.addEventListener('wheel',       this._onWheel, { passive: false });
     this.canvas.addEventListener('contextmenu', this._onContextMenu);
+    this.canvas.addEventListener('dblclick',    this._onDblClick);
     this.canvas.addEventListener('touchmove',   this._onTouchMove, { passive: false });
     this.canvas.addEventListener('touchend',    this._onTouchEnd);
     window.addEventListener('resize',  this._onResize);
@@ -210,6 +212,7 @@ export class StarmapScene {
     this.canvas.removeEventListener('pointermove', this._onPointerMove);
     this.canvas.removeEventListener('wheel',       this._onWheel);
     this.canvas.removeEventListener('contextmenu', this._onContextMenu);
+    this.canvas.removeEventListener('dblclick',    this._onDblClick);
     this.canvas.removeEventListener('touchmove',   this._onTouchMove);
     this.canvas.removeEventListener('touchend',    this._onTouchEnd);
     window.removeEventListener('resize',  this._onResize);
@@ -281,6 +284,19 @@ export class StarmapScene {
       if (this.pinchDist > 0) this.setZoom(this.view.distance * (this.pinchDist / d));
       this.pinchDist = d;
       e.preventDefault();
+    }
+  }
+
+  // Double-click on a star → focus on it. Mirrors right-click focus, just
+  // a more discoverable gesture for users coming from typical 3D viewers.
+  // Native dblclick fires on left button only, so right-double-click still
+  // routes through the right-click path (each click focuses, second one is
+  // a no-op against the same target).
+  private onDblClick(e: MouseEvent): void {
+    const hit = this.pickStar(e.clientX, e.clientY);
+    if (hit >= 0) {
+      const s = STARS[hit];
+      this.animateFocusTo(s.x, s.y, s.z);
     }
   }
 

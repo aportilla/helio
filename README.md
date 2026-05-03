@@ -169,6 +169,7 @@ All input lives in `StarmapScene`. The model is deliberately minimal — the cam
 - **Pointer drag** (any button) = orbit (yaw/pitch).
 - **Wheel** = zoom (orbit radius). **Two-finger pinch** = zoom on touch.
 - **Right-click on a star** (no/minimal drag, < 4 px movement) = animate the orbit pivot to that star. Same `Raycaster` against `gl.POINTS` (threshold 0.6 ly) as hover.
+- **Double-click on a star** (left button) = same focus action as right-click, just a more discoverable gesture for users coming from typical 3D viewers.
 - **Hover** uses the same raycast — the hovered star drives the boxed tooltip in the label overlay.
 
 There are no keyboard bindings. The HUD "reset view" button snaps focus back to the Sun + default yaw/pitch/distance.
