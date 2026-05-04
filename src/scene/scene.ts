@@ -116,6 +116,7 @@ export class StarmapScene {
   private readonly _onPointerCancel = (e: PointerEvent) => this.onPointerCancel(e);
   private readonly _onWheel         = (e: WheelEvent) => this.onWheel(e);
   private readonly _onContextMenu   = (e: Event) => e.preventDefault();
+  private readonly _onKeyDown       = (e: KeyboardEvent) => this.onKeyDown(e);
   private readonly _onResize        = () => this.resize();
 
   // Reusable per-frame scratch.
@@ -189,10 +190,7 @@ export class StarmapScene {
         this.focusAnimating = false;
       }
     };
-    this.hud.onDeselect = () => {
-      this.labels.setSelected(-1);
-      this.hud.setSelectedStar(-1);
-    };
+    this.hud.onDeselect = () => this.deselect();
   }
 
   // -- public API --------------------------------------------------------
@@ -221,6 +219,7 @@ export class StarmapScene {
     this.canvas.addEventListener('pointercancel', this._onPointerCancel);
     this.canvas.addEventListener('wheel',         this._onWheel, { passive: false });
     this.canvas.addEventListener('contextmenu',   this._onContextMenu);
+    window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('resize',  this._onResize);
   }
 
@@ -231,6 +230,7 @@ export class StarmapScene {
     this.canvas.removeEventListener('pointercancel', this._onPointerCancel);
     this.canvas.removeEventListener('wheel',         this._onWheel);
     this.canvas.removeEventListener('contextmenu',   this._onContextMenu);
+    window.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('resize',  this._onResize);
   }
 
@@ -364,6 +364,18 @@ export class StarmapScene {
     const a = it.next().value!;
     const b = it.next().value!;
     return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
+  // ESC dismisses the current selection (info card + reticle), mirroring
+  // the close-X button. Listening on window so it fires regardless of
+  // focus, since the canvas itself isn't focusable.
+  private onKeyDown(e: KeyboardEvent): void {
+    if (e.key === 'Escape') this.deselect();
+  }
+
+  private deselect(): void {
+    this.labels.setSelected(-1);
+    this.hud.setSelectedStar(-1);
   }
 
   private onWheel(e: WheelEvent): void {

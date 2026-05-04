@@ -176,7 +176,7 @@ Touch input is unified through Pointer Events, not a separate `touchmove` path. 
 - **Hover** uses the same `Raycaster` against `gl.POINTS` (threshold 0.6 ly) as the click handlers — the hovered star drives the transient boxed tooltip in the label overlay.
 - The info card's close-X (top-right corner) clears the selection.
 
-There are no keyboard bindings. The HUD "reset view" button snaps focus back to the Sun + default yaw/pitch/distance.
+**ESC** dismisses the current selection (info card + reticle), the same as clicking the card's close-X. That's the only keyboard binding. The HUD "reset view" button snaps focus back to the Sun + default yaw/pitch/distance.
 
 ## Coding conventions
 
