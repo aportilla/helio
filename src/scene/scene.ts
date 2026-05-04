@@ -503,24 +503,28 @@ export class StarmapScene {
     this.pinchStartBx = b.x; this.pinchStartBy = b.y;
   }
 
-  // Two-finger pan: midpoint translation drives view.target along the same
-  // plane-parallel forward/right basis as WASD (yaw-derived, pitch ignored).
-  // Direction is "world tracks the fingers": drag fingers right → world
-  // shifts right under the fingers (target moves left); drag fingers down
-  // (dy>0) → world shifts down (target moves backward). Pixel delta is
-  // converted to world units via the focus-plane scale, so a finger moving
-  // N CSS px shifts the world by exactly N px at the focus distance — the
-  // point under the finger stays under the finger.
+  // Two-finger pan: midpoint translation drives view.target along the
+  // camera's screen-aligned right/up axes (NOT the galactic-plane basis
+  // WASD uses). Camera has zero roll, so screen-right stays in the plane
+  // and is independent of pitch; screen-up tilts with pitch, so a
+  // vertical drag while pitched lifts the target along the camera's
+  // actual up vector instead of plunging it forward across the plane.
+  // Direction is "world tracks the fingers": drag right → world shifts
+  // right under the finger; drag down → world shifts down. Pixel delta
+  // is converted to world units via the focus-plane scale, so a finger
+  // moving N CSS px shifts the world by exactly N px at the focus
+  // distance — the point under the finger stays under the finger.
   private applyTouchPan(dxPx: number, dyPx: number): void {
     const halfFovTan = Math.tan((FOV_DEG * Math.PI / 180) * 0.5);
     const lyPerPx = (2 * halfFovTan * this.view.distance) / this.cssH;
     const sy = Math.sin(this.view.yaw);
     const cy = Math.cos(this.view.yaw);
-    this._forward.set(-cy, -sy, 0);
-    this._right.crossVectors(this._forward, StarmapScene.WORLD_UP).normalize();
-    this._step.copy(this._right).multiplyScalar(-dxPx * lyPerPx);
-    this._step.addScaledVector(this._forward, dyPx * lyPerPx);
-    this.view.target.add(this._step);
+    const sp = Math.sin(this.view.pitch);
+    const cp = Math.cos(this.view.pitch);
+    this._right.set(-sy, cy, 0);
+    this._step.set(-cp * cy, -cp * sy, sp);  // screen_up in world
+    this.view.target.addScaledVector(this._right, -dxPx * lyPerPx);
+    this.view.target.addScaledVector(this._step, dyPx * lyPerPx);
   }
 
   // Keyboard: ESC dismisses selection; WASD pans the orbit pivot parallel
