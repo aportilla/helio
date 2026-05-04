@@ -46,6 +46,13 @@ const ENV_PX_PER_SCREEN_PX = 3;
 // enough to absorb hand jitter on a press.
 const CLICK_DRAG_PX = 4;
 
+// Two-finger gesture classifier threshold (CSS px). On the first move that
+// crosses this in either separation OR midpoint translation, the gesture
+// commits to zoom or pan and locks in for the rest of the gesture. Bigger
+// = harder to commit (more sampling, less twitchy); smaller = snappier
+// commit but more chance of misclassification on noise.
+const GESTURE_COMMIT_PX = 6;
+
 // Focus animation: only view.target lerps; yaw/pitch/distance stay frozen so
 // the camera glides over to the new orbital pivot rather than swinging.
 const FOCUS_ANIM_MS = 400;
@@ -99,7 +106,20 @@ export class StarmapScene {
   // unwanted orbit jolt).
   private readonly pointers = new Map<number, { x: number; y: number }>();
   private pinching = false;
+  // Two-finger gesture commits to either zoom or pan on the first
+  // significant movement; once committed it stays in that mode for the
+  // rest of the gesture so a slight separation drift mid-pan can't yank
+  // the zoom (and vice versa). 'undecided' is the sampling window.
+  private pinchMode: 'undecided' | 'zoom' | 'pan' = 'undecided';
   private pinchDist = 0;
+  // Midpoint of the active two-pointer pair, in CSS pixels.
+  private pinchMidX = 0;
+  private pinchMidY = 0;
+  // Snapshot of dist + mid at gesture start, used by the undecided-mode
+  // classifier: whichever delta crosses GESTURE_COMMIT_PX first wins.
+  private pinchStartDist = 0;
+  private pinchStartMidX = 0;
+  private pinchStartMidY = 0;
   private readonly pointer = { x: 0, y: 0, has: false };
   // Selection state lives in Labels (reticle) and Hud (info card) — Scene
   // routes click events to both but doesn't hold a copy itself.
@@ -286,7 +306,12 @@ export class StarmapScene {
       this.dragging = false;
       document.body.classList.remove('grabbing');
       this.pinching = true;
+      this.pinchMode = 'undecided';
       this.pinchDist = this.measurePinch();
+      this.pinchStartDist = this.pinchDist;
+      this.capturePinchMid();
+      this.pinchStartMidX = this.pinchMidX;
+      this.pinchStartMidY = this.pinchMidY;
       return;
     }
 
@@ -308,6 +333,7 @@ export class StarmapScene {
       if (this.pointers.size === 0) {
         this.pinching = false;
         this.pinchDist = 0;
+        this.pinchMode = 'undecided';
       }
       return;
     }
@@ -343,6 +369,7 @@ export class StarmapScene {
     if (this.pointers.size < 2) this.pinchDist = 0;
     if (this.pointers.size === 0) {
       this.pinching = false;
+      this.pinchMode = 'undecided';
       this.dragging = false;
       document.body.classList.remove('grabbing');
     }
@@ -361,12 +388,36 @@ export class StarmapScene {
     }
 
     if (this.pinching) {
-      // Pinch zoom: scale orbit radius by the ratio of last/current finger
-      // separation. Only the active two-pointer pair drives zoom — extra
-      // pointers (rare, e.g. third finger) are ignored.
+      // Two-finger gesture commits to zoom or pan on first significant
+      // move and stays locked for the rest of the gesture — they don't
+      // overlap. Whichever delta crosses GESTURE_COMMIT_PX first wins:
+      // separation → zoom; midpoint translation → pan.
       if (this.pointers.size >= 2) {
         const d = this.measurePinch();
-        if (d > 0 && this.pinchDist > 0) this.setZoom(this.view.distance * (this.pinchDist / d));
+        const oldMidX = this.pinchMidX;
+        const oldMidY = this.pinchMidY;
+        this.capturePinchMid();
+
+        if (this.pinchMode === 'undecided') {
+          const sepDelta = Math.abs(d - this.pinchStartDist);
+          const midDelta = Math.hypot(
+            this.pinchMidX - this.pinchStartMidX,
+            this.pinchMidY - this.pinchStartMidY,
+          );
+          if (Math.max(sepDelta, midDelta) >= GESTURE_COMMIT_PX) {
+            this.pinchMode = sepDelta > midDelta ? 'zoom' : 'pan';
+          }
+        }
+
+        if (this.pinchMode === 'zoom') {
+          if (d > 0 && this.pinchDist > 0) this.setZoom(this.view.distance * (this.pinchDist / d));
+          this.focusAnimating = false;
+        } else if (this.pinchMode === 'pan') {
+          const ddx = this.pinchMidX - oldMidX;
+          const ddy = this.pinchMidY - oldMidY;
+          if (ddx !== 0 || ddy !== 0) this.applyTouchPan(ddx, ddy);
+          this.focusAnimating = false;
+        }
         this.pinchDist = d;
       }
       return;
@@ -392,6 +443,33 @@ export class StarmapScene {
     const a = it.next().value!;
     const b = it.next().value!;
     return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
+  private capturePinchMid(): void {
+    const it = this.pointers.values();
+    const a = it.next().value!;
+    const b = it.next().value!;
+    this.pinchMidX = (a.x + b.x) * 0.5;
+    this.pinchMidY = (a.y + b.y) * 0.5;
+  }
+
+  // Two-finger pan: midpoint translation drives view.target along the same
+  // plane-parallel forward/right basis as WASD (yaw-derived, pitch ignored).
+  // Direction matches WASD's "fly the camera" convention: drag fingers
+  // right → strafe right (D); drag fingers up (dy<0) → forward (W). Pixel
+  // delta is converted to world units via the focus-plane scale, so a
+  // finger moving N CSS px shifts the target by exactly N px worth of world
+  // at the focus distance — the world tracks the fingers 1:1.
+  private applyTouchPan(dxPx: number, dyPx: number): void {
+    const halfFovTan = Math.tan((FOV_DEG * Math.PI / 180) * 0.5);
+    const lyPerPx = (2 * halfFovTan * this.view.distance) / this.cssH;
+    const sy = Math.sin(this.view.yaw);
+    const cy = Math.cos(this.view.yaw);
+    this._forward.set(-cy, -sy, 0);
+    this._right.crossVectors(this._forward, StarmapScene.WORLD_UP).normalize();
+    this._step.copy(this._right).multiplyScalar(dxPx * lyPerPx);
+    this._step.addScaledVector(this._forward, -dyPx * lyPerPx);
+    this.view.target.add(this._step);
   }
 
   // Keyboard: ESC dismisses selection; WASD pans the orbit pivot parallel
