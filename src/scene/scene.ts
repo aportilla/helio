@@ -120,6 +120,17 @@ export class StarmapScene {
   private pinchStartDist = 0;
   private pinchStartMidX = 0;
   private pinchStartMidY = 0;
+  // Per-finger start positions, in the same iteration order as
+  // measurePinch/capturePinchMid. Used by the classifier to project each
+  // finger's motion onto the separation axis: a real pinch has the two
+  // projections in OPPOSITE directions; an asymmetric pan along that axis
+  // has them in the SAME direction. Without this gate, finger asymmetry
+  // along the line between fingers fakes a sepDelta that can outrun the
+  // midpoint delta and mis-commit a pan to zoom.
+  private pinchStartAx = 0;
+  private pinchStartAy = 0;
+  private pinchStartBx = 0;
+  private pinchStartBy = 0;
   private readonly pointer = { x: 0, y: 0, has: false };
   // Selection state lives in Labels (reticle) and Hud (info card) — Scene
   // routes click events to both but doesn't hold a copy itself.
@@ -312,6 +323,7 @@ export class StarmapScene {
       this.capturePinchMid();
       this.pinchStartMidX = this.pinchMidX;
       this.pinchStartMidY = this.pinchMidY;
+      this.capturePinchStart();
       return;
     }
 
@@ -399,7 +411,22 @@ export class StarmapScene {
         this.capturePinchMid();
 
         if (this.pinchMode === 'undecided') {
-          const sepDelta = Math.abs(d - this.pinchStartDist);
+          // Project each finger's from-start displacement onto the start
+          // separation axis u. A real pinch needs opposite-sign projections
+          // (fingers moving apart or together along u); same-sign means an
+          // asymmetric pan along u, not a zoom — gate sepDelta to zero in
+          // that case so it can't outrun midDelta and steal the commit.
+          const it = this.pointers.values();
+          const a = it.next().value!;
+          const b = it.next().value!;
+          let sepDelta = 0;
+          if (this.pinchStartDist > 0) {
+            const ux = (this.pinchStartBx - this.pinchStartAx) / this.pinchStartDist;
+            const uy = (this.pinchStartBy - this.pinchStartAy) / this.pinchStartDist;
+            const projA = (a.x - this.pinchStartAx) * ux + (a.y - this.pinchStartAy) * uy;
+            const projB = (b.x - this.pinchStartBx) * ux + (b.y - this.pinchStartBy) * uy;
+            if (projA * projB < 0) sepDelta = Math.abs(projB - projA);
+          }
           const midDelta = Math.hypot(
             this.pinchMidX - this.pinchStartMidX,
             this.pinchMidY - this.pinchStartMidY,
@@ -453,13 +480,22 @@ export class StarmapScene {
     this.pinchMidY = (a.y + b.y) * 0.5;
   }
 
+  private capturePinchStart(): void {
+    const it = this.pointers.values();
+    const a = it.next().value!;
+    const b = it.next().value!;
+    this.pinchStartAx = a.x; this.pinchStartAy = a.y;
+    this.pinchStartBx = b.x; this.pinchStartBy = b.y;
+  }
+
   // Two-finger pan: midpoint translation drives view.target along the same
   // plane-parallel forward/right basis as WASD (yaw-derived, pitch ignored).
-  // Direction matches WASD's "fly the camera" convention: drag fingers
-  // right → strafe right (D); drag fingers up (dy<0) → forward (W). Pixel
-  // delta is converted to world units via the focus-plane scale, so a
-  // finger moving N CSS px shifts the target by exactly N px worth of world
-  // at the focus distance — the world tracks the fingers 1:1.
+  // Direction is "world tracks the fingers": drag fingers right → world
+  // shifts right under the fingers (target moves left); drag fingers down
+  // (dy>0) → world shifts down (target moves backward). Pixel delta is
+  // converted to world units via the focus-plane scale, so a finger moving
+  // N CSS px shifts the world by exactly N px at the focus distance — the
+  // point under the finger stays under the finger.
   private applyTouchPan(dxPx: number, dyPx: number): void {
     const halfFovTan = Math.tan((FOV_DEG * Math.PI / 180) * 0.5);
     const lyPerPx = (2 * halfFovTan * this.view.distance) / this.cssH;
@@ -467,8 +503,8 @@ export class StarmapScene {
     const cy = Math.cos(this.view.yaw);
     this._forward.set(-cy, -sy, 0);
     this._right.crossVectors(this._forward, StarmapScene.WORLD_UP).normalize();
-    this._step.copy(this._right).multiplyScalar(dxPx * lyPerPx);
-    this._step.addScaledVector(this._forward, -dyPx * lyPerPx);
+    this._step.copy(this._right).multiplyScalar(-dxPx * lyPerPx);
+    this._step.addScaledVector(this._forward, dyPx * lyPerPx);
     this.view.target.add(this._step);
   }
 
