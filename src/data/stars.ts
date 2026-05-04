@@ -37,10 +37,11 @@ type StarTuple = readonly [string, number, number, number, SpectralClass, number
 //
 // 1. AUTOMATIC ring distribution. The post-processor (`expandCoincidentSets`
 //    below) detects any 2+ stars at effectively-identical positions and
-//    distributes them on a small circle in the XY plane (radius MIN_VIS_LY).
-//    Heaviest member at angle 0, others sorted by mass desc on equally-
-//    spaced angles. Visually merged at zoom-out, separated at zoom-in.
-//    No data edit required — just add the members at the same coordinates.
+//    distributes them on a small 3D circle of radius MIN_VIS_LY. The ring
+//    plane and starting phase are seeded from the primary's name, so each
+//    system gets its own orientation in space (no two binaries read as
+//    matching horizontal sausages from a top-down view) but every system
+//    is stable across reloads. Mass-sorted member ordering is preserved.
 //
 // 2. MANUAL hierarchy. For systems with known internal hierarchy (a primary
 //    plus a wider companion or sub-pair), member positions in this table
@@ -202,6 +203,33 @@ const MIN_VIS_LY = 0.04;
 // collapsed into the ring.
 const COINCIDENT_EPS_LY = 0.001;
 
+// FNV-1a 32-bit string hash. Used to seed mulberry32 so each multi-star
+// system gets its own deterministic ring orientation. Cheap, stable across
+// runs and platforms — we don't need cryptographic quality, just consistent
+// bucketing of strings → 32-bit ints.
+function hash32(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
+  }
+  return h >>> 0;
+}
+
+// Mulberry32 PRNG. Tiny, fast, and good enough for picking ring orientation
+// once per system at module load. Seeded from the primary's name hash so
+// every reload puts the binary in the same place — no frame-to-frame jitter,
+// no Heisenberg-style "looks different every time you load the page".
+function mulberry32(seed: number): () => number {
+  let t = seed >>> 0;
+  return () => {
+    t = (t + 0x6D2B79F5) >>> 0;
+    let r = t;
+    r = Math.imul(r ^ (r >>> 15), r | 1);
+    r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function expandCoincidentSets(stars: readonly Star[]): Star[] {
   const out: Star[] = stars.map(s => ({ ...s }));
   const visited = new Set<number>();
@@ -221,18 +249,54 @@ function expandCoincidentSets(stars: readonly Star[]): Star[] {
       }
     }
     if (set.length < 2) continue;
-    // Heaviest first → angle 0 in the ring (deterministic and easy to reason
-    // about when curating: the primary is "to the right" of the cluster).
+    // Mass-sort the set so the heaviest member becomes the cluster primary
+    // downstream — labels and droplines anchor on it. The angle assignment
+    // below is randomized per system (not "primary at angle 0"), so the
+    // primary's screen position is no longer a stable reference direction.
     set.sort((a, b) => stars[b].mass - stars[a].mass);
     const cx = stars[set[0]].x, cy = stars[set[0]].y, cz = stars[set[0]].z;
+
+    // Per-system ring orientation. Without this, every coincident pair sat
+    // along +X in the galactic plane, so a top-down view showed every
+    // binary as an identical horizontal "= =" pair. Picking a random unit
+    // normal seeded by the primary's name gives each system its own
+    // tilt+phase, stable across reloads.
+    const rng = mulberry32(hash32(stars[set[0]].name));
+    // Uniform random unit vector on the sphere — the ring lies in the
+    // plane perpendicular to this. Standard inverse-CDF method: theta is
+    // the azimuth, cosPhi is the latitude (uniform in cos to avoid pole
+    // bunching that comes from picking phi uniform in [0,π]).
+    const theta = rng() * Math.PI * 2;
+    const cosPhi = 2 * rng() - 1;
+    const sinPhi = Math.sqrt(Math.max(0, 1 - cosPhi * cosPhi));
+    const nx = sinPhi * Math.cos(theta);
+    const ny = sinPhi * Math.sin(theta);
+    const nz = cosPhi;
+    // Build an orthonormal basis (u, v) in the plane ⊥ n. Cross n with the
+    // world axis least parallel to it (avoids the degenerate near-zero
+    // cross when the normal happens to align with our reference axis), then
+    // v = n × u rounds out the basis.
+    let rx = 1, ry = 0, rz = 0;
+    if (Math.abs(nx) > 0.9) { rx = 0; ry = 1; }
+    let ux = ry * nz - rz * ny;
+    let uy = rz * nx - rx * nz;
+    let uz = rx * ny - ry * nx;
+    const ulen = Math.hypot(ux, uy, uz);
+    ux /= ulen; uy /= ulen; uz /= ulen;
+    const vx = ny * uz - nz * uy;
+    const vy = nz * ux - nx * uz;
+    const vz = nx * uy - ny * ux;
+    const startAngle = rng() * Math.PI * 2;
+
     const n = set.length;
     set.forEach((idx, k) => {
-      const angle = (k / n) * Math.PI * 2;
+      const angle = startAngle + (k / n) * Math.PI * 2;
+      const c = Math.cos(angle), s = Math.sin(angle);
       out[idx] = {
         ...stars[idx],
-        x: cx + Math.cos(angle) * MIN_VIS_LY,
-        y: cy + Math.sin(angle) * MIN_VIS_LY,
-        z: cz,
+        x: cx + (c * ux + s * vx) * MIN_VIS_LY,
+        y: cy + (c * uy + s * vy) * MIN_VIS_LY,
+        z: cz + (c * uz + s * vz) * MIN_VIS_LY,
       };
     });
   }
