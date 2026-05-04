@@ -20,6 +20,9 @@ interface Drop {
   solid: Line;
   dots: Points;
   z: number;
+  // Star index of this drop's cluster primary. Used to keep the selected
+  // star's pin visible when the master toggle is off.
+  primary: number;
 }
 
 // A vertical pin from each cluster's primary star to the galactic plane. One
@@ -37,6 +40,13 @@ interface Drop {
 export class Droplines {
   readonly group = new Group();
   private readonly drops: Drop[] = [];
+  // Master toggle (HUD button) and current selection. The selected cluster's
+  // pin always renders, even when the master toggle is off — so the user
+  // doesn't lose the depth context for the star whose info card they have
+  // open. Visibility is applied per-drop in update() rather than via
+  // group.visible so the selection-override can punch through.
+  private masterVisible = true;
+  private selectedPrimary = -1;
 
   constructor() {
     // Materials are shared across all droplines — one solid, one dots —
@@ -77,17 +87,38 @@ export class Droplines {
 
       this.group.add(solid);
       this.group.add(dots);
-      this.drops.push({ solid, dots, z: s.z });
+      this.drops.push({ solid, dots, z: s.z, primary: i });
     }
   }
 
-  // Solid if the star is on the same side of the galactic *plane* (z=0) as
-  // the camera, dotted if on the far side. Comparing against z=0 (not the
-  // target's z) means orbiting a high-z star from below — while still above
-  // the plane — keeps every above-plane star's dropline solid.
+  setMasterVisible(visible: boolean): void {
+    this.masterVisible = visible;
+  }
+
+  // Pass any star index — we resolve to its cluster's primary, which is the
+  // star that owns the dropline. -1 to clear. Selecting a star whose cluster
+  // has no drop (the Sun) is a no-op.
+  setSelected(starIdx: number): void {
+    this.selectedPrimary = starIdx >= 0
+      ? STAR_CLUSTERS[clusterIndexFor(starIdx)].primary
+      : -1;
+  }
+
+  // Per-drop visibility: render if master toggle on OR this is the selected
+  // cluster's pin. Within a rendered drop, choose solid/dots by side of
+  // plane — solid when the star is on the same side as the camera, dotted
+  // on the far side. Comparing against z=0 (not the target's z) means
+  // orbiting a high-z star from below — while still above the plane —
+  // keeps every above-plane star's dropline solid.
   update(camera: Camera): void {
     const camAbove = camera.position.z >= 0;
     for (const d of this.drops) {
+      const shouldRender = this.masterVisible || d.primary === this.selectedPrimary;
+      if (!shouldRender) {
+        d.solid.visible = false;
+        d.dots.visible = false;
+        continue;
+      }
       const sameSide = (d.z >= 0) === camAbove;
       d.solid.visible = sameSide;
       d.dots.visible  = !sameSide;

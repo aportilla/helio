@@ -198,7 +198,7 @@ export class StarmapScene {
     this.hud = new Hud();
     this.hud.onToggle = (id, on) => {
       if (id === 'labels') this.labels.setShowLabels(on);
-      else if (id === 'drops') this.droplines.group.visible = on;
+      else if (id === 'drops') this.droplines.setMasterVisible(on);
       else if (id === 'spin') this.view.spin = on;
     };
     this.hud.onAction = (id) => {
@@ -327,6 +327,7 @@ export class StarmapScene {
     // clicks leave selection unchanged (no accidental deselect on a near-miss).
     this.labels.setSelected(hit);
     this.hud.setSelectedStar(hit);
+    this.droplines.setSelected(hit);
     if (wasLeftClick) {
       const s = STARS[hit];
       this.animateFocusTo(s.x, s.y, s.z);
@@ -448,6 +449,7 @@ export class StarmapScene {
   private deselect(): void {
     this.labels.setSelected(-1);
     this.hud.setSelectedStar(-1);
+    this.droplines.setSelected(-1);
   }
 
   private onWheel(e: WheelEvent): void {
