@@ -20,6 +20,10 @@ export class StarmapApp extends LitElement {
          pixel-art look. */
       image-rendering: pixelated;
       image-rendering: crisp-edges;
+      /* Mobile Safari otherwise hijacks two-finger pinch as page zoom and
+         single-finger drag as page pan, swallowing the events the scene
+         needs to drive orbit/pinch-zoom itself. */
+      touch-action: none;
     }
   `;
 

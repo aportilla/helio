@@ -170,6 +170,8 @@ Stars themselves are also rendered opaque (`transparent: false, depthWrite: true
 All input lives in `StarmapScene`. The model is deliberately minimal — the camera is always orbiting a focused star, so panning and free-flying are not exposed.
 - **Pointer drag** (any button) = orbit (yaw/pitch).
 - **Wheel** = zoom (orbit radius). **Two-finger pinch** = zoom on touch.
+
+Touch input is unified through Pointer Events, not a separate `touchmove` path. `pointers` (a `Map<pointerId, {x,y}>`) tracks every active pointer; while exactly one is down, drag = orbit; the moment a second pointer lands, orbit drag is abandoned and the gesture switches to pinch-zoom driven by the two-finger separation. Without this hand-off (the previous code ran `pointermove` orbit and `touchmove` pinch concurrently) iPad Safari pinches always came with an unwanted yaw/pitch jolt from the first finger's `pointermove` events. The canvas also sets `touch-action: none` so iOS doesn't claim the gesture for page pan/zoom before our handlers see it. `pointercancel` resets gesture state when the OS steals a pointer (palm rejection, etc).
 - **Left-click on a star** (no/minimal drag, < 4 px movement) = select that star (info card + reticle) AND animate the orbit pivot to it.
 - **Right-click on a star** (no/minimal drag) = select only — info card + reticle update, but the camera stays where it is. Useful for inspecting a star without losing your current vantage on another.
 - **Hover** uses the same `Raycaster` against `gl.POINTS` (threshold 0.6 ly) as the click handlers — the hovered star drives the transient boxed tooltip in the label overlay.

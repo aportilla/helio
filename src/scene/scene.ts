@@ -79,6 +79,16 @@ export class StarmapScene {
   private lastY = 0;
   private downX = 0;
   private downY = 0;
+  // Active pointers, keyed by pointerId. size === 1 → orbit drag;
+  // size >= 2 → pinch zoom (orbit suppressed). Tracking via pointer events
+  // unifies mouse + touch + pen and lets pinch detection run off the same
+  // event stream as the drag, so a second finger landing mid-drag cleanly
+  // hands off to pinch instead of running both gestures simultaneously
+  // (the bug: on iPad Safari, the first finger's pointermove kept yawing
+  // the camera while touchmove was zooming, so every pinch came with an
+  // unwanted orbit jolt).
+  private readonly pointers = new Map<number, { x: number; y: number }>();
+  private pinching = false;
   private pinchDist = 0;
   private readonly pointer = { x: 0, y: 0, has: false };
   // Selection state lives in Labels (reticle) and Hud (info card) — Scene
@@ -95,14 +105,13 @@ export class StarmapScene {
   private running = false;
 
   // Bound listeners stored so removeEventListener works in stop().
-  private readonly _onPointerDown = (e: PointerEvent) => this.onPointerDown(e);
-  private readonly _onPointerUp   = (e: PointerEvent) => this.onPointerUp(e);
-  private readonly _onPointerMove = (e: PointerEvent) => this.onPointerMove(e);
-  private readonly _onWheel       = (e: WheelEvent) => this.onWheel(e);
-  private readonly _onContextMenu = (e: Event) => e.preventDefault();
-  private readonly _onTouchMove   = (e: TouchEvent) => this.onTouchMove(e);
-  private readonly _onTouchEnd    = () => { this.pinchDist = 0; };
-  private readonly _onResize      = () => this.resize();
+  private readonly _onPointerDown   = (e: PointerEvent) => this.onPointerDown(e);
+  private readonly _onPointerUp     = (e: PointerEvent) => this.onPointerUp(e);
+  private readonly _onPointerMove   = (e: PointerEvent) => this.onPointerMove(e);
+  private readonly _onPointerCancel = (e: PointerEvent) => this.onPointerCancel(e);
+  private readonly _onWheel         = (e: WheelEvent) => this.onWheel(e);
+  private readonly _onContextMenu   = (e: Event) => e.preventDefault();
+  private readonly _onResize        = () => this.resize();
 
   // Reusable per-frame scratch.
   private readonly _ndc  = new Vector2();
@@ -201,24 +210,22 @@ export class StarmapScene {
   // -- listeners ---------------------------------------------------------
 
   private attachListeners(): void {
-    this.canvas.addEventListener('pointerdown', this._onPointerDown);
-    this.canvas.addEventListener('pointerup',   this._onPointerUp);
-    this.canvas.addEventListener('pointermove', this._onPointerMove);
-    this.canvas.addEventListener('wheel',       this._onWheel, { passive: false });
-    this.canvas.addEventListener('contextmenu', this._onContextMenu);
-    this.canvas.addEventListener('touchmove',   this._onTouchMove, { passive: false });
-    this.canvas.addEventListener('touchend',    this._onTouchEnd);
+    this.canvas.addEventListener('pointerdown',   this._onPointerDown);
+    this.canvas.addEventListener('pointerup',     this._onPointerUp);
+    this.canvas.addEventListener('pointermove',   this._onPointerMove);
+    this.canvas.addEventListener('pointercancel', this._onPointerCancel);
+    this.canvas.addEventListener('wheel',         this._onWheel, { passive: false });
+    this.canvas.addEventListener('contextmenu',   this._onContextMenu);
     window.addEventListener('resize',  this._onResize);
   }
 
   private detachListeners(): void {
-    this.canvas.removeEventListener('pointerdown', this._onPointerDown);
-    this.canvas.removeEventListener('pointerup',   this._onPointerUp);
-    this.canvas.removeEventListener('pointermove', this._onPointerMove);
-    this.canvas.removeEventListener('wheel',       this._onWheel);
-    this.canvas.removeEventListener('contextmenu', this._onContextMenu);
-    this.canvas.removeEventListener('touchmove',   this._onTouchMove);
-    this.canvas.removeEventListener('touchend',    this._onTouchEnd);
+    this.canvas.removeEventListener('pointerdown',   this._onPointerDown);
+    this.canvas.removeEventListener('pointerup',     this._onPointerUp);
+    this.canvas.removeEventListener('pointermove',   this._onPointerMove);
+    this.canvas.removeEventListener('pointercancel', this._onPointerCancel);
+    this.canvas.removeEventListener('wheel',         this._onWheel);
+    this.canvas.removeEventListener('contextmenu',   this._onContextMenu);
     window.removeEventListener('resize',  this._onResize);
   }
 
@@ -232,18 +239,47 @@ export class StarmapScene {
 
   private onPointerDown(e: PointerEvent): void {
     // HUD click intercepts orbit so dragging-on-button doesn't move the camera.
+    // HUD-claimed taps never enter the pointers map, so a follow-up second
+    // finger won't trigger pinch from a half-tracked first finger.
     this.clientToHud(e.clientX, e.clientY, this._hudPt);
     if (this.hud.handleClick(this._hudPt.x, this._hudPt.y)) return;
+
+    this.canvas.setPointerCapture(e.pointerId);
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (this.pointers.size >= 2) {
+      // Second finger landed mid-drag → enter pinch and abandon the orbit
+      // gesture. Without this hand-off, the first finger's pointermoves would
+      // keep yawing/pitching the camera while the pinch is zooming.
+      this.dragging = false;
+      document.body.classList.remove('grabbing');
+      this.pinching = true;
+      this.pinchDist = this.measurePinch();
+      return;
+    }
 
     this.dragging = true;
     this.dragButton = e.button;
     this.lastX = e.clientX; this.lastY = e.clientY;
     this.downX = e.clientX; this.downY = e.clientY;
     document.body.classList.add('grabbing');
-    this.canvas.setPointerCapture(e.pointerId);
   }
 
   private onPointerUp(e: PointerEvent): void {
+    const wasPinching = this.pinching;
+    this.pointers.delete(e.pointerId);
+
+    if (wasPinching) {
+      // Stay in pinch mode while any pointer remains. Lifting one of two
+      // fingers shouldn't snap straight back to orbit drag — the user is
+      // mid-gesture and the lone finger may still be moving from the pinch.
+      if (this.pointers.size === 0) {
+        this.pinching = false;
+        this.pinchDist = 0;
+      }
+      return;
+    }
+
     if (!this.dragging) return;
     const moved = Math.hypot(e.clientX - this.downX, e.clientY - this.downY);
     const isClick = moved < CLICK_DRAG_PX;
@@ -266,8 +302,37 @@ export class StarmapScene {
     void wasRightClick;
   }
 
+  private onPointerCancel(e: PointerEvent): void {
+    // Pointer cancelled by the OS (palm rejection, gesture stolen, etc).
+    // Drop it from tracking and reset gesture state so the next gesture
+    // starts clean.
+    this.pointers.delete(e.pointerId);
+    if (this.pointers.size < 2) this.pinchDist = 0;
+    if (this.pointers.size === 0) {
+      this.pinching = false;
+      this.dragging = false;
+      document.body.classList.remove('grabbing');
+    }
+  }
+
   private onPointerMove(e: PointerEvent): void {
     this.pointer.x = e.clientX; this.pointer.y = e.clientY; this.pointer.has = true;
+    if (this.pointers.has(e.pointerId)) {
+      this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    if (this.pinching) {
+      // Pinch zoom: scale orbit radius by the ratio of last/current finger
+      // separation. Only the active two-pointer pair drives zoom — extra
+      // pointers (rare, e.g. third finger) are ignored.
+      if (this.pointers.size >= 2) {
+        const d = this.measurePinch();
+        if (d > 0 && this.pinchDist > 0) this.setZoom(this.view.distance * (this.pinchDist / d));
+        this.pinchDist = d;
+      }
+      return;
+    }
+
     // Update HUD hover state. While actively dragging the camera we skip the
     // HUD hover update so the cursor doesn't lose its grabbing affordance.
     if (!this.dragging) {
@@ -283,19 +348,16 @@ export class StarmapScene {
     this.view.pitch = Math.max(0.05, Math.min(Math.PI - 0.05, this.view.pitch));
   }
 
+  private measurePinch(): number {
+    const it = this.pointers.values();
+    const a = it.next().value!;
+    const b = it.next().value!;
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
   private onWheel(e: WheelEvent): void {
     e.preventDefault();
     this.setZoom(this.view.distance * Math.pow(1.0015, e.deltaY));
-  }
-
-  private onTouchMove(e: TouchEvent): void {
-    if (e.touches.length === 2) {
-      const a = e.touches[0], b = e.touches[1];
-      const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-      if (this.pinchDist > 0) this.setZoom(this.view.distance * (this.pinchDist / d));
-      this.pinchDist = d;
-      e.preventDefault();
-    }
   }
 
   // -- camera + zoom -----------------------------------------------------
