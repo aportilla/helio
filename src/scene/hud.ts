@@ -9,7 +9,7 @@ import {
   Scene,
 } from 'three';
 import { STARS } from '../data/stars';
-import { FONTS, drawPixelText, getFont, makeLabelTexture, measurePixelText } from '../data/pixel-font';
+import { FONTS, drawPixelText, getFont, measurePixelText } from '../data/pixel-font';
 
 // HUD chrome (title, scale bar, toggle buttons) rendered as native pixel-art
 // in a second orthographic pass after the main scene. The HUD camera is set
@@ -19,6 +19,16 @@ import { FONTS, drawPixelText, getFont, makeLabelTexture, measurePixelText } fro
 
 const PADDING = 8;          // distance from screen edges
 const BTN_GAP = 4;          // horizontal gap between buttons
+// Info card sits a touch farther from the corner than the title/buttons so
+// the boxed border has visible breathing room around it.
+const INFO_CARD_MARGIN = 14;
+// Inner padding within the info card box (in env pixels). Larger than the
+// generic boxed-label pad because the card is the primary read surface and
+// mixes a tall display font with smaller monospaced body lines.
+const INFO_CARD_PAD_X = 8;
+const INFO_CARD_PAD_Y = 6;
+// Vertical gap between the EspySans name line and the Monaco body lines.
+const INFO_CARD_NAME_GAP = 2;
 // All HUD sizes are in *env pixels* — 1 env pixel = ENV_PX_PER_SCREEN_PX
 // (currently 3) physical screen pixels after the browser's nearest-neighbor
 // upscale. So a value of 3 here renders as a 9-physical-pixel-tall tick:
@@ -37,13 +47,21 @@ const COLOR_BTN_ON_TEXT  = '#ffffff';
 const COLOR_BTN_HOVER_TEXT = '#cfeeff';
 const COLOR_SCALE        = 0xe8f6ff;   // near-white for the scale bar + ticks
 
-// Close-X dismisses the info card. Single texture per state (off / hover);
-// 9x9 px so the diagonal lands on a clean center pixel. Hit pad is added
-// around the visual size so the click target is forgiving even at small
-// pixel sizes.
+// Close-X dismisses the info card. The button is a square sitting flush in
+// the card's top-right corner: its left + bottom edges are drawn into the
+// texture in the dialog border color, while its top + right edges are the
+// card's own border showing through. The X glyph (9x9, odd so the diagonal
+// lands on a clean center pixel) is centered in the 17x17 box with 3 px of
+// breathing room on every side (effective inner area is 15x15 after the 1 px
+// strokes/borders, leaving (15-9)/2 = 3 px per side). (BOX_SIZE - SIZE must
+// be an even, positive integer so the glyph centers cleanly.) Hit pad
+// extends the click target slightly past the box so the target is forgiving
+// at small pixel sizes.
 const CLOSE_X_SIZE = 9;
-const CLOSE_X_INSET = 3;
+const CLOSE_X_BOX_SIZE = 17;
 const CLOSE_X_HIT_PAD = 2;
+// Visual gap between the star name and the close-X box on the name line.
+const NAME_TO_CLOSE_X_GAP = 4;
 const COLOR_CLOSE_X       = '#2d7ab8';
 const COLOR_CLOSE_X_HOVER = '#5ec8ff';
 
@@ -156,15 +174,86 @@ function buildButtonTexture(text: string, state: ButtonState, toggle: boolean): 
 
 function buildCloseXTexture(color: string): CanvasTexture {
   const c = document.createElement('canvas');
-  c.width = CLOSE_X_SIZE; c.height = CLOSE_X_SIZE;
+  c.width = CLOSE_X_BOX_SIZE; c.height = CLOSE_X_BOX_SIZE;
   const g = c.getContext('2d')!;
+
+  // L-shaped border (always the dialog border color, regardless of hover) —
+  // the strokes are structural so they don't change with the X's state.
+  g.fillStyle = COLOR_ACCENT;
+  g.fillRect(0, 0, 1, CLOSE_X_BOX_SIZE);                       // left
+  g.fillRect(0, CLOSE_X_BOX_SIZE - 1, CLOSE_X_BOX_SIZE, 1);    // bottom
+
+  // X glyph centered inside the box. Two diagonal lines one pixel wide
+  // intersecting at the glyph's center pixel.
+  const off = (CLOSE_X_BOX_SIZE - CLOSE_X_SIZE) / 2;
   g.fillStyle = color;
-  // Two diagonal lines, one pixel wide, intersecting at the center pixel.
   for (let i = 0; i < CLOSE_X_SIZE; i++) {
-    g.fillRect(i, i, 1, 1);
-    g.fillRect(i, CLOSE_X_SIZE - 1 - i, 1, 1);
+    g.fillRect(off + i, off + i, 1, 1);
+    g.fillRect(off + i, off + (CLOSE_X_SIZE - 1 - i), 1, 1);
   }
   return nearestFilteredTexture(c);
+}
+
+// Info card: star name in EspySans 15 (display font), body lines in the
+// default Monaco 11 (key/value pairs). Built directly here rather than via
+// makeLabelTexture so the two fonts and the wider internal padding can
+// coexist on one canvas. The close-X is drawn separately as a sibling mesh
+// — we only reserve horizontal space for it on the name line so a long star
+// name doesn't run under it.
+function buildInfoCardTexture(starIdx: number): { tex: CanvasTexture; w: number; h: number } {
+  const s = STARS[starIdx];
+  const NAME_COLOR = '#ffe98a';
+  const KEY_COLOR  = '#2d7ab8';
+  const VAL_COLOR  = '#aee4ff';
+  const BG_COLOR     = 'rgba(0,8,20,0.92)';
+  const BORDER_COLOR = '#3a8fe0';
+
+  const nameFont = FONTS.EspySans[15];
+  const nameLineH = getFont(nameFont).lineHeight;
+  const bodyLineH = getFont().lineHeight;
+
+  const body: Array<{ key: string; val: string }> = [
+    { key: 'class    ', val: s.cls },
+    { key: 'distance ', val: `${s.distLy.toFixed(2)} ly` },
+    { key: 'mass     ', val: `${s.mass.toFixed(2)} Msun` },
+    { key: 'diameter ', val: `${s.radiusSolar.toFixed(2)} Dsun` },
+  ];
+
+  const nameW = measurePixelText(s.name, nameFont);
+  let maxBodyW = 0;
+  for (const b of body) {
+    const w = measurePixelText(b.key) + measurePixelText(b.val);
+    if (w > maxBodyW) maxBodyW = w;
+  }
+  // Close-X sits flush at the top-right corner (drawn as an overlay mesh) —
+  // it consumes the right padding strip on the name line, so the name only
+  // needs to fit up to (W - CLOSE_X_BOX_SIZE - GAP). Body lines still need
+  // symmetric padding on both sides.
+  const W = Math.max(
+    INFO_CARD_PAD_X + nameW + NAME_TO_CLOSE_X_GAP + CLOSE_X_BOX_SIZE,
+    INFO_CARD_PAD_X * 2 + maxBodyW,
+  );
+  const H = INFO_CARD_PAD_Y * 2 + nameLineH + INFO_CARD_NAME_GAP + bodyLineH * body.length;
+
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d')!;
+  g.fillStyle = BG_COLOR;
+  g.fillRect(0, 0, W, H);
+  g.fillStyle = BORDER_COLOR;
+  g.fillRect(0, 0, W, 1); g.fillRect(0, H - 1, W, 1);
+  g.fillRect(0, 0, 1, H); g.fillRect(W - 1, 0, 1, H);
+
+  drawPixelText(g, s.name, INFO_CARD_PAD_X, INFO_CARD_PAD_Y, NAME_COLOR, nameFont);
+
+  let cursorY = INFO_CARD_PAD_Y + nameLineH + INFO_CARD_NAME_GAP;
+  for (const b of body) {
+    drawPixelText(g, b.key, INFO_CARD_PAD_X, cursorY, KEY_COLOR);
+    drawPixelText(g, b.val, INFO_CARD_PAD_X + measurePixelText(b.key), cursorY, VAL_COLOR);
+    cursorY += bodyLineH;
+  }
+
+  return { tex: nearestFilteredTexture(c), w: W, h: H };
 }
 
 function buildScaleLabelTexture(text: string): { tex: CanvasTexture; w: number; h: number } {
@@ -294,7 +383,7 @@ export class Hud {
     this.closeXTexOff   = buildCloseXTexture(COLOR_CLOSE_X);
     this.closeXTexHover = buildCloseXTexture(COLOR_CLOSE_X_HOVER);
     this.closeXMat = new MeshBasicMaterial({ map: this.closeXTexOff, transparent: true, depthTest: false, depthWrite: false });
-    this.closeXMesh = new Mesh(new PlaneGeometry(CLOSE_X_SIZE, CLOSE_X_SIZE), this.closeXMat);
+    this.closeXMesh = new Mesh(new PlaneGeometry(CLOSE_X_BOX_SIZE, CLOSE_X_BOX_SIZE), this.closeXMat);
     this.closeXMesh.renderOrder = 101;  // above the card
     this.closeXMesh.visible = false;
     this.scene.add(this.closeXMesh);
@@ -351,30 +440,8 @@ export class Hud {
       }
       return;
     }
-    const s = STARS[starIdx];
-    // Each line is one row of the boxed card. Yellow for the name, dim cyan
-    // for keys, light cyan for values — same palette family as the tooltip.
-    const lines = [
-      [{ text: s.name, color: '#ffe98a' }],
-      [
-        { text: 'class    ', color: '#2d7ab8' },
-        { text: s.cls,        color: '#aee4ff' },
-      ],
-      [
-        { text: 'distance ', color: '#2d7ab8' },
-        { text: `${s.distLy.toFixed(2)} ly`, color: '#aee4ff' },
-      ],
-      [
-        { text: 'mass     ', color: '#2d7ab8' },
-        { text: `${s.mass.toFixed(2)} Msun`, color: '#aee4ff' },
-      ],
-      [
-        { text: 'position ', color: '#2d7ab8' },
-        { text: `${s.x.toFixed(2)}, ${s.y.toFixed(2)}, ${s.z.toFixed(2)}`, color: '#aee4ff' },
-      ],
-    ];
     if (this.infoCardMat.map) this.infoCardMat.map.dispose();
-    const { tex, w, h } = makeLabelTexture(lines, { box: true });
+    const { tex, w, h } = buildInfoCardTexture(starIdx);
     this.infoCardMat.map = tex;
     this.infoCardMat.needsUpdate = true;
     this.infoCardW = w;
@@ -485,27 +552,28 @@ export class Hud {
 
   private layoutInfoCard(): void {
     if (!this.infoCardMesh.visible) return;
-    // Top-right corner with the same PADDING offset as title/buttons. Mesh
-    // origin is at center, so position = (right edge - half width, top edge
-    // - half height). All values are integer pixel counts so the texture
-    // texels land 1:1 on buffer pixels.
-    const cx = this.bufferW - PADDING - this.infoCardW / 2;
-    const cy = this.bufferH - PADDING - this.infoCardH / 2;
+    // Top-right corner. Uses INFO_CARD_MARGIN (a touch farther in than the
+    // title/buttons' PADDING) so the boxed border has visible breathing
+    // room from the screen edge. Mesh origin is at center, so position =
+    // (right edge - half width, top edge - half height). All values are
+    // integer pixel counts so the texture texels land 1:1 on buffer pixels.
+    const cx = this.bufferW - INFO_CARD_MARGIN - this.infoCardW / 2;
+    const cy = this.bufferH - INFO_CARD_MARGIN - this.infoCardH / 2;
     this.infoCardMesh.position.set(cx, cy, 0);
 
-    // Close X just inside the card's top-right corner. Position is
-    // half-integer because CLOSE_X_SIZE is odd; the 9 px texture maps onto
-    // the 9 pixels (cardRight - INSET - 9) .. (cardRight - INSET - 1).
-    const cardRight = this.bufferW - PADDING;
-    const cardTop   = this.bufferH - PADDING;
-    const closeCX = cardRight - CLOSE_X_INSET - CLOSE_X_SIZE / 2;
-    const closeCY = cardTop   - CLOSE_X_INSET - CLOSE_X_SIZE / 2;
+    // Close-X box flush with the card's top-right corner. Position is
+    // half-integer because CLOSE_X_BOX_SIZE is odd; the 17 px texture maps
+    // onto the 17 pixels (cardRight - 17) .. (cardRight - 1).
+    const cardRight = this.bufferW - INFO_CARD_MARGIN;
+    const cardTop   = this.bufferH - INFO_CARD_MARGIN;
+    const closeCX = cardRight - CLOSE_X_BOX_SIZE / 2;
+    const closeCY = cardTop   - CLOSE_X_BOX_SIZE / 2;
     this.closeXMesh.position.set(closeCX, closeCY, 0);
     this.closeXBounds = {
-      x: cardRight - CLOSE_X_INSET - CLOSE_X_SIZE - CLOSE_X_HIT_PAD,
-      y: cardTop   - CLOSE_X_INSET - CLOSE_X_SIZE - CLOSE_X_HIT_PAD,
-      w: CLOSE_X_SIZE + 2 * CLOSE_X_HIT_PAD,
-      h: CLOSE_X_SIZE + 2 * CLOSE_X_HIT_PAD,
+      x: cardRight - CLOSE_X_BOX_SIZE - CLOSE_X_HIT_PAD,
+      y: cardTop   - CLOSE_X_BOX_SIZE - CLOSE_X_HIT_PAD,
+      w: CLOSE_X_BOX_SIZE + 2 * CLOSE_X_HIT_PAD,
+      h: CLOSE_X_BOX_SIZE + 2 * CLOSE_X_HIT_PAD,
     };
   }
 
