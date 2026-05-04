@@ -405,6 +405,11 @@ export class StarmapScene {
     }
     const k = e.key.toLowerCase();
     if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e') {
+      // Skip when a browser-shortcut modifier is held (Cmd+W close tab,
+      // Ctrl+S save, Alt+D address-bar focus, etc.) — let the browser have
+      // those. Shift stays live so it remains available for future tuning
+      // (e.g. boost) without breaking shortcuts.
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       this.heldKeys.add(k);
       // User taking manual control cancels any in-flight focus glide,
       // otherwise the lerp would fight the WASD translation.
