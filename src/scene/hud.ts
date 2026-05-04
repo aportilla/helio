@@ -254,10 +254,13 @@ function buildInfoCardTexture(starIdx: number): { tex: CanvasTexture; w: number;
 // Settings trigger: a 17×17 bordered button with a three-line "menu"
 // glyph centered inside. Four states pre-built up-front and swapped
 // based on (panel-open?, hover?):
-//   - off       : dim border, transparent bg, dim icon
-//   - offHover  : bright border, transparent bg, brighter icon
+//   - off       : dim border, dark fill, dim icon
+//   - offHover  : bright border, dark fill, brighter icon
 //   - on        : bright border, dim-blue fill, white icon (panel open)
 //   - onHover   : bright border, dim-blue fill, palest-cyan icon
+// Both off-states get a dark fill (matching the info card / settings
+// panel bg) so star content and grid lines don't shine through and
+// muddy the icon's silhouette.
 type SettingsIconState = 'off' | 'offHover' | 'on' | 'onHover';
 
 function buildSettingsIconTexture(state: SettingsIconState): CanvasTexture {
@@ -273,10 +276,11 @@ function buildSettingsIconTexture(state: SettingsIconState): CanvasTexture {
     ? (state === 'onHover' ? COLOR_BTN_HOVER_TEXT : COLOR_BTN_ON_TEXT)
     : (isHover ? COLOR_CLOSE_X_HOVER : COLOR_CLOSE_X);
 
-  if (isOn) {
-    g.fillStyle = COLOR_BG_ON;
-    g.fillRect(0, 0, SIZE, SIZE);
-  }
+  // Background fill: dim-blue when on (selected highlight), dark
+  // semi-transparent navy when off — same color as the info card and
+  // settings panel so the button reads as the same UI family.
+  g.fillStyle = isOn ? COLOR_BG_ON : 'rgba(0,8,20,0.92)';
+  g.fillRect(0, 0, SIZE, SIZE);
 
   // 1 px border on all four sides.
   g.fillStyle = borderColor;
