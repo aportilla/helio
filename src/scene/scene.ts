@@ -378,6 +378,7 @@ export class StarmapScene {
     this.bufferW = this._buf.x;
     this.bufferH = this._buf.y;
     this.starPoints.setPxScale(this.bufferH / 2);
+    this.labels.setPxScale(this.bufferH / 2);
     setSnappedLineViewport(this.bufferW, this.bufferH);
     this.hud.resize(this.bufferW, this.bufferH);
     this.labels.resize(this.bufferW, this.bufferH);

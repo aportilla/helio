@@ -10,7 +10,7 @@ import {
   Scene,
   Vector3,
 } from 'three';
-import { STARS, STAR_CLUSTERS, clusterIndexFor } from '../data/stars';
+import { CLASS_SIZE, STARS, STAR_CLUSTERS, clusterIndexFor } from '../data/stars';
 import { makeLabelTexture } from '../data/pixel-font';
 
 // Labels render in their own ortho overlay pass at 1 unit = 1 buffer pixel,
@@ -41,36 +41,36 @@ interface AnchoredLabel {
 const LABEL_OFFSET_PX = 6;
 const TIP_OFFSET_PX = 18;
 
-// Yellow corner-bracket reticle around the selected star. Fixed screen size
-// so it reads consistently whether the star's disc is huge (focused class-O
-// up close) or tiny (distant white dwarf). Color matches the hover-tooltip
-// star-name color so "selected" feels visually related to "highlighted".
-const RETICLE_SIZE_PX = 25;
-const RETICLE_ARM_PX = 5;
-const RETICLE_COLOR  = '#ffe98a';
+// Yellow corner-bracket reticle around the selected star. Outer size tracks
+// the star's *rendered* disc each frame (see computeRenderedStarSize) so a
+// tiny dwarf gets a tight reticle and a close-up class-O gets a big one —
+// fixed-size looked equally wrong at both extremes. Color matches the hover-
+// tooltip star-name color so "selected" feels visually related to "highlighted".
+const RETICLE_GAP_PX  = 4;   // pixels between disc edge and bracket corner
+const RETICLE_MIN_SIZE = 12; // floor so tiny stars still get a visible reticle
+const RETICLE_COLOR   = '#ffe98a';
 
-function buildReticleTexture(): CanvasTexture {
+// Stars shader constants — kept here so computeRenderedStarSize can mirror
+// the GPU-side size formula. If you change these in materials.ts, change
+// them here too. Sharing a const isn't worth the cross-module coupling for
+// two numbers that haven't moved in this file's history.
+const STAR_REF_DIST = 50;
+const STAR_PX_SCALE_DIVISOR = 600;
+
+function buildReticleTexture(size: number, armLen: number): CanvasTexture {
   const c = document.createElement('canvas');
-  c.width = RETICLE_SIZE_PX; c.height = RETICLE_SIZE_PX;
+  c.width = size; c.height = size;
   const g = c.getContext('2d')!;
   g.fillStyle = RETICLE_COLOR;
-  const S = RETICLE_SIZE_PX;
-  const A = RETICLE_ARM_PX;
+  const S = size;
+  const A = armLen;
   // Each corner = two 1px arms forming an L pointing outward into that
   // corner. Canvas Y is top-down here; the texture maps onto a quad whose
   // own coords are flipped, so visually all four corners are symmetric.
-  // Top-left
-  g.fillRect(0, 0, A, 1);
-  g.fillRect(0, 0, 1, A);
-  // Top-right
-  g.fillRect(S - A, 0, A, 1);
-  g.fillRect(S - 1, 0, 1, A);
-  // Bottom-left
-  g.fillRect(0, S - 1, A, 1);
-  g.fillRect(0, S - A, 1, A);
-  // Bottom-right
-  g.fillRect(S - A, S - 1, A, 1);
-  g.fillRect(S - 1, S - A, 1, A);
+  g.fillRect(0, 0, A, 1);         g.fillRect(0, 0, 1, A);          // TL
+  g.fillRect(S - A, 0, A, 1);     g.fillRect(S - 1, 0, 1, A);      // TR
+  g.fillRect(0, S - 1, A, 1);     g.fillRect(0, S - A, 1, A);      // BL
+  g.fillRect(S - A, S - 1, A, 1); g.fillRect(S - 1, S - A, 1, A);  // BR
   const t = new CanvasTexture(c);
   t.minFilter = NearestFilter; t.magFilter = NearestFilter;
   t.wrapS = ClampToEdgeWrapping; t.wrapT = ClampToEdgeWrapping;
@@ -88,6 +88,9 @@ export class Labels {
 
   private bufferW = 1;
   private bufferH = 1;
+  // Mirrors the stars shader's uPxScale uniform — needed CPU-side to compute
+  // each star's rendered size for the dynamic selection reticle.
+  private pxScale = 1;
 
   private readonly clusterLabels: ClusterLabel[] = [];
   private readonly axisLabels: AnchoredLabel[] = [];
@@ -103,10 +106,12 @@ export class Labels {
   private selectedStar = -1;
 
   private readonly reticleMesh: Mesh;
+  private currentReticleSize = -1;
 
   // Reusable per-frame scratch.
   private readonly _proj = new Vector3();
   private readonly _world = new Vector3();
+  private readonly _view = new Vector3();
   private readonly _screen = { x: 0, y: 0 };
 
   // Set per-frame from scene.ts so projectToBuffer can short-circuit the
@@ -165,11 +170,13 @@ export class Labels {
     this.tipMesh.visible = false;
     this.scene.add(this.tipMesh);
 
-    // Selection reticle — single static texture, repositioned each frame.
+    // Selection reticle — texture and quad rebuilt on size change in
+    // ensureReticleSize(). Start with a 1×1 placeholder; first selection
+    // triggers the real build.
     const reticleMat = new MeshBasicMaterial({
-      map: buildReticleTexture(), transparent: true, depthTest: false, depthWrite: false,
+      transparent: true, depthTest: false, depthWrite: false,
     });
-    this.reticleMesh = new Mesh(new PlaneGeometry(RETICLE_SIZE_PX, RETICLE_SIZE_PX), reticleMat);
+    this.reticleMesh = new Mesh(new PlaneGeometry(1, 1), reticleMat);
     this.reticleMesh.renderOrder = 3;
     this.reticleMesh.visible = false;
     this.scene.add(this.reticleMesh);
@@ -181,6 +188,12 @@ export class Labels {
     this.camera.left = 0; this.camera.right = bufferW;
     this.camera.bottom = 0; this.camera.top = bufferH;
     this.camera.updateProjectionMatrix();
+  }
+
+  // Mirrors StarPoints.setPxScale — call from the same spot in scene.ts so
+  // the reticle's size formula sees the same uPxScale the shader does.
+  setPxScale(s: number): void {
+    this.pxScale = s;
   }
 
   setShowLabels(show: boolean): void {
@@ -223,6 +236,43 @@ export class Labels {
     return true;
   }
 
+  // CPU mirror of the stars shader's depth-attenuated size formula
+  // (materials.ts → makeStarsMaterial). Returns the on-screen disc diameter
+  // in buffer pixels for the given star under the current camera. Lets the
+  // selection reticle's outer size track what the user actually sees rather
+  // than sitting at a fixed 25 px around tiny dwarfs and close-up giants
+  // alike. Keep this in sync with the shader if either drifts — there's
+  // unfortunately no shared source for the formula.
+  private computeRenderedStarSize(starIdx: number, camera: Camera): number {
+    const s = STARS[starIdx];
+    this._view.set(s.x, s.y, s.z).applyMatrix4(camera.matrixWorldInverse);
+    const dist = Math.max(-this._view.z, 0.5);
+    const rawScale = STAR_REF_DIST / dist;
+    const depthScale = rawScale > 1 ? Math.pow(rawScale, 1 / 3) : rawScale;
+    const aSize = CLASS_SIZE[s.cls] ?? CLASS_SIZE.M;
+    const sz = Math.max(aSize * (this.pxScale / STAR_PX_SCALE_DIVISOR) * depthScale, 2);
+    return Math.floor(sz + 0.5);
+  }
+
+  // Rebuild the reticle texture + quad when the target size changes. Cached
+  // by integer size: the shader floors disc size to whole pixels, so during
+  // continuous zoom we only rebuild on each integer step (~tens of times
+  // across a full zoom range). Keeps GPU upload cost negligible.
+  private ensureReticleSize(size: number): void {
+    if (size === this.currentReticleSize) return;
+    // Arms scale with reticle size to preserve the original ~20% ratio (the
+    // old fixed 25/5 pair), clamped so very small reticles still get a
+    // visible bracket and very large ones don't grow ungainly arms.
+    const armLen = Math.max(3, Math.min(8, Math.round(size * 0.2)));
+    const mat = this.reticleMesh.material as MeshBasicMaterial;
+    if (mat.map) mat.map.dispose();
+    mat.map = buildReticleTexture(size, armLen);
+    mat.needsUpdate = true;
+    this.reticleMesh.geometry.dispose();
+    this.reticleMesh.geometry = new PlaneGeometry(size, size);
+    this.currentReticleSize = size;
+  }
+
   // Place a label so its top-left texel lands on an integer buffer pixel —
   // necessary so all four texture corners align with the buffer pixel grid
   // and every texel renders. Snapping just the center silently drops a row
@@ -259,6 +309,16 @@ export class Labels {
     if (this.hoveredCluster < 0) this.lastHoveredCluster = -1;
 
     // Cluster labels — each anchored above its primary star.
+    // Sort by main-camera distance so nearer labels overlap farther ones.
+    // Three.js sorts transparent meshes by renderOrder ascending (then z),
+    // so a higher renderOrder draws later = on top. Setting it to -distance
+    // makes nearer stars (smaller dist) get a value closer to 0 and farther
+    // stars get a more negative one. All values stay <= 0, safely below the
+    // tooltip (renderOrder 2) and reticle (3) so those still render on top.
+    // Without this, all cluster labels share renderOrder 1 and the overlay
+    // mesh z is uniform, so draw order falls back to scene-add order — i.e.
+    // catalog order, not camera distance — and a far label can paint over a
+    // near one.
     for (const L of this.clusterLabels) {
       if (!this.showLabels) { L.mesh.visible = false; continue; }
       const s = STARS[L.primaryStarIdx];
@@ -267,6 +327,7 @@ export class Labels {
       L.mesh.visible = true;
       const cy = this._screen.y + LABEL_OFFSET_PX + L.h * 0.5;
       this.placeAt(L.mesh, this._screen.x, cy, L.w, L.h);
+      L.mesh.renderOrder = -this._world.distanceTo(camera.position);
     }
 
     // Galactic-centre label — anchored to the right of the +X arrow tip.
@@ -294,8 +355,11 @@ export class Labels {
       const s = STARS[this.selectedStar];
       this._world.set(s.x, s.y, s.z);
       if (this.projectToBuffer(this._world, camera)) {
+        const starSize = this.computeRenderedStarSize(this.selectedStar, camera);
+        const reticleSize = Math.max(RETICLE_MIN_SIZE, starSize + 2 * RETICLE_GAP_PX);
+        this.ensureReticleSize(reticleSize);
         this.reticleMesh.visible = true;
-        this.placeAt(this.reticleMesh, this._screen.x, this._screen.y, RETICLE_SIZE_PX, RETICLE_SIZE_PX);
+        this.placeAt(this.reticleMesh, this._screen.x, this._screen.y, reticleSize, reticleSize);
       } else {
         this.reticleMesh.visible = false;
       }

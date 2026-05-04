@@ -162,10 +162,16 @@ const RAW_STARS: readonly StarTuple[] = [
   // CURATED: 36 Ophiuchi — AB is the tight K+K binary, C is a wider K
   // companion. Source had ABC coincident; C offset by 0.10 ly in +y so the
   // AB-vs-C hierarchy reads at zoom-in. AB stay coincident (post-processor
-  // rings them).
-  ['36 Ophiuchi A',       14.040, -2.200,  11.960, 'K',  19.48, 0.85],
-  ['36 Ophiuchi B',       14.040, -2.200,  11.960, 'K',  19.48, 0.83],
-  ['36 Ophiuchi C',       14.040, -2.100,  11.960, 'K',  19.48, 0.69],
+  // rings them). Component A carries the IAU-approved proper name
+  // "Guniibuu" (Kamilaroi/Euahlayi, "robin red-breast"); B and C retain
+  // their Flamsteed designations since neither has a proper name. Per
+  // Wikipedia, the three masses (A 0.75, B 0.76, C 0.72 M☉) are within
+  // measurement noise of each other; A and B are swapped here (0.76/0.75)
+  // so A stays the cluster primary — every popular reference calls it
+  // "36 Oph A" / "Guniibuu", and surfacing B as the label would feel wrong.
+  ['Guniibuu',            14.040, -2.200,  11.960, 'K',  19.42, 0.76],
+  ['36 Ophiuchi B',       14.040, -2.200,  11.960, 'K',  19.42, 0.75],
+  ['36 Ophiuchi C',       14.040, -2.100,  11.960, 'K',  19.42, 0.72],
   ['HR 7703 A',           13.850, -3.220, -11.720, 'K',  19.62, 0.79],
   ['HR 7703 B',           13.850, -3.220, -11.720, 'M',  19.62, 0.20],
   ['82 Eridani',          -3.850, -9.380, -16.380, 'G',  19.71, 0.93],
