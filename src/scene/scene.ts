@@ -53,6 +53,15 @@ const CLICK_DRAG_PX = 4;
 // commit but more chance of misclassification on noise.
 const GESTURE_COMMIT_PX = 6;
 
+// "Actively moving along the separation axis" threshold for the pinch-vs-pan
+// classifier (CSS px). A finger whose displacement projects below this onto
+// the separation axis is treated as anchored — even if the other finger is
+// shooting off in the same signed direction, that's an anchor-style pinch
+// (thumb-fixed, index-splays), not a pan. Only when BOTH fingers project
+// above this *and* share a sign do we conclude the pair is translating
+// together (asymmetric pan along u), and zero out the zoom signal.
+const ACTIVE_PROJ_PX = 2;
+
 // Focus animation: only view.target lerps; yaw/pitch/distance stay frozen so
 // the camera glides over to the new orbital pivot rather than swinging.
 const FOCUS_ANIM_MS = 400;
@@ -412,10 +421,14 @@ export class StarmapScene {
 
         if (this.pinchMode === 'undecided') {
           // Project each finger's from-start displacement onto the start
-          // separation axis u. A real pinch needs opposite-sign projections
-          // (fingers moving apart or together along u); same-sign means an
-          // asymmetric pan along u, not a zoom — gate sepDelta to zero in
-          // that case so it can't outrun midDelta and steal the commit.
+          // separation axis u. Three regimes:
+          //   - opposite signs → symmetric pinch (count sepDelta).
+          //   - one finger below ACTIVE_PROJ_PX → anchor pinch, e.g. thumb
+          //     fixed while index splays; count sepDelta even if signs
+          //     happen to match (the still finger's sign is just noise).
+          //   - both above ACTIVE_PROJ_PX with matching sign → asymmetric
+          //     pan along u; force sepDelta to 0 so it can't outrun
+          //     midDelta and steal the commit.
           const it = this.pointers.values();
           const a = it.next().value!;
           const b = it.next().value!;
@@ -425,7 +438,9 @@ export class StarmapScene {
             const uy = (this.pinchStartBy - this.pinchStartAy) / this.pinchStartDist;
             const projA = (a.x - this.pinchStartAx) * ux + (a.y - this.pinchStartAy) * uy;
             const projB = (b.x - this.pinchStartBx) * ux + (b.y - this.pinchStartBy) * uy;
-            if (projA * projB < 0) sepDelta = Math.abs(projB - projA);
+            const bothActive = Math.abs(projA) > ACTIVE_PROJ_PX && Math.abs(projB) > ACTIVE_PROJ_PX;
+            const sameDirection = bothActive && projA * projB > 0;
+            if (!sameDirection) sepDelta = Math.abs(projB - projA);
           }
           const midDelta = Math.hypot(
             this.pinchMidX - this.pinchStartMidX,
