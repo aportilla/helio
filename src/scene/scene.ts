@@ -46,12 +46,23 @@ const ENV_PX_PER_SCREEN_PX = 3;
 // enough to absorb hand jitter on a press.
 const CLICK_DRAG_PX = 4;
 
-// Two-finger gesture classifier threshold (CSS px). On the first move that
-// crosses this in either separation OR midpoint translation, the gesture
-// commits to zoom or pan and locks in for the rest of the gesture. Bigger
-// = harder to commit (more sampling, less twitchy); smaller = snappier
-// commit but more chance of misclassification on noise.
-const GESTURE_COMMIT_PX = 6;
+// Two-finger classifier thresholds (CSS px). The gesture stays 'undecided'
+// (no zoom, no pan applied) until one of these is exceeded:
+//   - PAN: Euclidean distance the midpoint of the two pointers has
+//     traveled from gesture start.
+//   - ZOOM: scalar change in the distance between the two pointers
+//     (|currentDist - startDist|). Doubled relative to PAN because in a
+//     symmetric pinch BOTH fingers contribute to the separation change,
+//     so 80 px of separation ≈ each finger moving 40 px — comparable
+//     per-finger effort to a 40 px pan. When both signals cross in the
+//     same frame, the larger ratio (signal/threshold) wins. Both metrics
+//     are scalar magnitudes, so the heuristic is orientation-agnostic
+//     (same numbers whether the fingers are stacked, side-by-side, or
+//     diagonal). Sized well above touch-down jitter so contact-stabilization
+//     noise can never cross either threshold on its own — the user has
+//     to actually engage with the gesture before a mode locks.
+const GESTURE_COMMIT_PAN_PX = 40;
+const GESTURE_COMMIT_ZOOM_PX = 80;
 
 // "Actively moving along the separation axis" threshold for the pinch-vs-pan
 // classifier (CSS px). A finger whose displacement projects below this onto
@@ -61,17 +72,6 @@ const GESTURE_COMMIT_PX = 6;
 // above this *and* share a sign do we conclude the pair is translating
 // together (asymmetric pan along u), and zero out the zoom signal.
 const ACTIVE_PROJ_PX = 2;
-
-// Settling window after the second finger touches down (ms). Touchscreens
-// report 5–10 px of apparent drift while the contact area stabilizes from
-// initial press to steady-state — enough to fake a sepDelta or midDelta
-// that crosses GESTURE_COMMIT_PX and locks the wrong mode before the user
-// has actually committed to anything. Within the window we keep moving
-// the start snapshot forward to "now" so that noise doesn't accumulate;
-// after the window expires we lock the snapshot and let the classifier
-// run. ~80 ms ≈ 5 frames @ 60 Hz, which is what iOS/Android pinch
-// recognizers use before they'll recognize a gesture.
-const PINCH_SETTLING_MS = 80;
 
 // Focus animation: only view.target lerps; yaw/pitch/distance stay frozen so
 // the camera glides over to the new orbital pivot rather than swinging.
@@ -135,8 +135,11 @@ export class StarmapScene {
   // Midpoint of the active two-pointer pair, in CSS pixels.
   private pinchMidX = 0;
   private pinchMidY = 0;
-  // Snapshot of dist + mid at gesture start, used by the undecided-mode
-  // classifier: whichever delta crosses GESTURE_COMMIT_PX first wins.
+  // Snapshot of dist + mid at gesture start. The undecided-mode
+  // classifier measures sepDelta and midDelta from these anchors and
+  // commits to whichever signal first overshoots its own threshold
+  // (GESTURE_COMMIT_ZOOM_PX or GESTURE_COMMIT_PAN_PX); on a same-frame
+  // tie, the larger ratio (signal/threshold) wins.
   private pinchStartDist = 0;
   private pinchStartMidX = 0;
   private pinchStartMidY = 0;
@@ -151,9 +154,6 @@ export class StarmapScene {
   private pinchStartAy = 0;
   private pinchStartBx = 0;
   private pinchStartBy = 0;
-  // Timestamp of the second-finger-down that started the current pinch,
-  // used by the settling window in the classifier.
-  private pinchStartTime = 0;
   private readonly pointer = { x: 0, y: 0, has: false };
   // Selection state lives in Labels (reticle) and Hud (info card) — Scene
   // routes click events to both but doesn't hold a copy itself.
@@ -330,8 +330,18 @@ export class StarmapScene {
     this.clientToHud(e.clientX, e.clientY, this._hudPt);
     if (this.hud.handleClick(this._hudPt.x, this._hudPt.y)) return;
 
+    // Snapshot pre-add size so we can tell whether THIS pointerdown is
+    // the 1→2 transition that starts a pinch, vs an extraneous third+
+    // finger landing on top of an already-active pinch.
+    const wasMulti = this.pointers.size >= 2;
     this.canvas.setPointerCapture(e.pointerId);
     this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    // Third (or later) finger landing mid-pinch — palm contact, accidental
+    // tap, etc. Track the pointer so it gets cleaned up on lift, but do
+    // NOT resnapshot or reset pinchMode; the user's locked mode and
+    // gesture-start anchor must survive the brush.
+    if (wasMulti) return;
 
     if (this.pointers.size >= 2) {
       // Second finger landed mid-drag → enter pinch and abandon the orbit
@@ -347,7 +357,6 @@ export class StarmapScene {
       this.pinchStartMidX = this.pinchMidX;
       this.pinchStartMidY = this.pinchMidY;
       this.capturePinchStart();
-      this.pinchStartTime = performance.now();
       return;
     }
 
@@ -424,10 +433,12 @@ export class StarmapScene {
     }
 
     if (this.pinching) {
-      // Two-finger gesture commits to zoom or pan on first significant
-      // move and stays locked for the rest of the gesture — they don't
-      // overlap. Whichever delta crosses GESTURE_COMMIT_PX first wins:
-      // separation → zoom; midpoint translation → pan.
+      // Two-finger gesture stays 'undecided' (nothing applied) until
+      // either sepDelta exceeds GESTURE_COMMIT_ZOOM_PX or midDelta
+      // exceeds GESTURE_COMMIT_PAN_PX. The signal that overshoots its
+      // own threshold by more locks the mode for the rest of the
+      // gesture — they don't overlap, and a slight separation drift
+      // mid-pan can't yank the zoom (and vice versa).
       if (this.pointers.size >= 2) {
         const d = this.measurePinch();
         const oldMidX = this.pinchMidX;
@@ -435,44 +446,43 @@ export class StarmapScene {
         this.capturePinchMid();
 
         if (this.pinchMode === 'undecided') {
-          if (performance.now() - this.pinchStartTime < PINCH_SETTLING_MS) {
-            // Fingers are still settling onto the screen; keep advancing
-            // the anchor to "now" each frame so contact-stabilization
-            // noise doesn't accumulate into a fake sepDelta or midDelta.
-            this.pinchStartDist = d;
-            this.pinchStartMidX = this.pinchMidX;
-            this.pinchStartMidY = this.pinchMidY;
-            this.capturePinchStart();
-          } else {
-            // Project each finger's from-start displacement onto the start
-            // separation axis u. Three regimes:
-            //   - opposite signs → symmetric pinch (count sepDelta).
-            //   - one finger below ACTIVE_PROJ_PX → anchor pinch, e.g. thumb
-            //     fixed while index splays; count sepDelta even if signs
-            //     happen to match (the still finger's sign is just noise).
-            //   - both above ACTIVE_PROJ_PX with matching sign → asymmetric
-            //     pan along u; force sepDelta to 0 so it can't outrun
-            //     midDelta and steal the commit.
+          // Pan signal: Euclidean distance the midpoint has traveled.
+          const midDelta = Math.hypot(
+            this.pinchMidX - this.pinchStartMidX,
+            this.pinchMidY - this.pinchStartMidY,
+          );
+          // Pinch signal: scalar change in finger separation. Gated by
+          // the per-finger projections onto the start separation axis u
+          // so that an asymmetric pan ALONG u (both fingers moving the
+          // same way at different speeds) doesn't fake a separation
+          // change. Three regimes:
+          //   - opposite-sign projections → symmetric pinch, count it.
+          //   - one finger below ACTIVE_PROJ_PX → anchor pinch (thumb
+          //     fixed, index splays); the still finger's sign is just
+          //     noise so count it regardless.
+          //   - both above ACTIVE_PROJ_PX with matching sign → asymmetric
+          //     pan along u, force sepDelta to 0.
+          let sepDelta = 0;
+          if (this.pinchStartDist > 0) {
             const it = this.pointers.values();
             const a = it.next().value!;
             const b = it.next().value!;
-            let sepDelta = 0;
-            if (this.pinchStartDist > 0) {
-              const ux = (this.pinchStartBx - this.pinchStartAx) / this.pinchStartDist;
-              const uy = (this.pinchStartBy - this.pinchStartAy) / this.pinchStartDist;
-              const projA = (a.x - this.pinchStartAx) * ux + (a.y - this.pinchStartAy) * uy;
-              const projB = (b.x - this.pinchStartBx) * ux + (b.y - this.pinchStartBy) * uy;
-              const bothActive = Math.abs(projA) > ACTIVE_PROJ_PX && Math.abs(projB) > ACTIVE_PROJ_PX;
-              const sameDirection = bothActive && projA * projB > 0;
-              if (!sameDirection) sepDelta = Math.abs(projB - projA);
-            }
-            const midDelta = Math.hypot(
-              this.pinchMidX - this.pinchStartMidX,
-              this.pinchMidY - this.pinchStartMidY,
-            );
-            if (Math.max(sepDelta, midDelta) >= GESTURE_COMMIT_PX) {
-              this.pinchMode = sepDelta > midDelta ? 'zoom' : 'pan';
-            }
+            const ux = (this.pinchStartBx - this.pinchStartAx) / this.pinchStartDist;
+            const uy = (this.pinchStartBy - this.pinchStartAy) / this.pinchStartDist;
+            const projA = (a.x - this.pinchStartAx) * ux + (a.y - this.pinchStartAy) * uy;
+            const projB = (b.x - this.pinchStartBx) * ux + (b.y - this.pinchStartBy) * uy;
+            const bothActive = Math.abs(projA) > ACTIVE_PROJ_PX && Math.abs(projB) > ACTIVE_PROJ_PX;
+            const sameDirection = bothActive && projA * projB > 0;
+            if (!sameDirection) sepDelta = Math.abs(d - this.pinchStartDist);
+          }
+          // Independent thresholds (zoom doubled because both fingers
+          // contribute to separation change). Compare ratios so the
+          // signal that overshoots its own threshold by more wins when
+          // both cross in the same frame.
+          const sepRatio = sepDelta / GESTURE_COMMIT_ZOOM_PX;
+          const midRatio = midDelta / GESTURE_COMMIT_PAN_PX;
+          if (Math.max(sepRatio, midRatio) >= 1) {
+            this.pinchMode = sepRatio > midRatio ? 'zoom' : 'pan';
           }
         }
 
