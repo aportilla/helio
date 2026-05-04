@@ -95,9 +95,14 @@ export class StarmapScene {
   // routes click events to both but doesn't hold a copy itself.
 
   // Focus animation: view.target lerps from focusFrom → focusTo over
-  // FOCUS_ANIM_MS. The camera sphere slides with it; nothing else animates.
+  // FOCUS_ANIM_MS. view.distance also lerps from distanceFrom → distanceTo
+  // so re-focusing onto a star already nearer than the orbit radius pulls
+  // in instead of pushing the camera out to that radius. Yaw/pitch stay
+  // frozen so the look direction is preserved through the glide.
   private readonly focusFrom = new Vector3();
   private readonly focusTo = new Vector3();
+  private distanceFrom = 0;
+  private distanceTo = 0;
   private focusAnimStart = 0;
   private focusAnimating = false;
 
@@ -387,6 +392,17 @@ export class StarmapScene {
   private animateFocusTo(x: number, y: number, z: number): void {
     this.focusFrom.copy(this.view.target);
     this.focusTo.set(x, y, z);
+    // Pull the orbit radius in if the new star is already closer to the
+    // camera than the current radius — otherwise the lerp would translate
+    // the camera away from the new target. Never push out (keep current
+    // radius if the new star is farther) and clamp to ZOOM_MIN so a tight
+    // focus doesn't crash through the star.
+    const dx = this.camera.position.x - x;
+    const dy = this.camera.position.y - y;
+    const dz = this.camera.position.z - z;
+    const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    this.distanceFrom = this.view.distance;
+    this.distanceTo = Math.max(ZOOM_MIN, Math.min(this.view.distance, d));
     this.focusAnimStart = performance.now();
     this.focusAnimating = true;
   }
@@ -470,8 +486,10 @@ export class StarmapScene {
       // Ease-in-out cubic: smooth at both ends, no overshoot.
       const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
       this.view.target.lerpVectors(this.focusFrom, this.focusTo, e);
+      this.view.distance = this.distanceFrom + (this.distanceTo - this.distanceFrom) * e;
       if (t >= 1) {
         this.view.target.copy(this.focusTo);
+        this.view.distance = this.distanceTo;
         this.focusAnimating = false;
       }
     }
