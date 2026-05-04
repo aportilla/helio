@@ -125,19 +125,41 @@ export class BdfFont {
       return;
     }
 
-    const w = this.measureText(text);
-    if (w <= 0) return;
+    const advW = this.measureText(text);
+    if (advW <= 0) return;
+    // Some glyphs carry a negative left side bearing (BBX ox < 0) — the
+    // bitmap extends one or more columns LEFT of the cursor (e.g.
+    // EspySans-15 'A' is BBX 9 9 -1 0, so its bottom-leftmost diagonal
+    // pixel sits at cursor-1). The white-text fast path blits straight
+    // to the caller's canvas at (x + drawX, y + drawY) and works as long
+    // as the caller padded enough. This path stages through a temp
+    // canvas first (so we can source-in tint to the requested color) —
+    // without leading padding here, the first glyph's leftmost column
+    // would land at temp-x = drawX (e.g. -1), get clipped, and the
+    // destination drawImage would composite text that's already missing
+    // a column. Symmetric trailing pad covers any right overhang on the
+    // last glyph (bitmap extending past its advance).
+    const firstSlot = this.slots.get(text.charCodeAt(0));
+    const lastSlot  = this.slots.get(text.charCodeAt(text.length - 1));
+    const leadingPad  = firstSlot ? Math.max(0, -firstSlot.drawX) : 0;
+    const trailingPad = lastSlot
+      ? Math.max(0, lastSlot.w + lastSlot.drawX - lastSlot.adv)
+      : 0;
+    const w = advW + leadingPad + trailingPad;
     const h = this.lineHeight;
     const tmp = makeCanvas(w, h);
     const tctx = tmp.getContext('2d') as AnyCtx2D;
     tctx.imageSmoothingEnabled = false;
-    this.blitGlyphs(tctx, text, 0, 0);
+    this.blitGlyphs(tctx, text, leadingPad, 0);
     // source-in keeps only pixels that overlap existing alpha — fillRect with
     // the target color tints the glyphs while leaving the background empty.
     tctx.globalCompositeOperation = 'source-in';
     tctx.fillStyle = color;
     tctx.fillRect(0, 0, w, h);
-    g2d.drawImage(tmp as CanvasImageSource, x, y);
+    // Compensate leadingPad on the destination so this path's logical
+    // origin matches the white-text path: the first glyph's
+    // bitmap-col-0 lands at canvas-x = x + drawX (== x - leadingPad).
+    g2d.drawImage(tmp as CanvasImageSource, x - leadingPad, y);
   }
 
   private blitGlyphs(g2d: AnyCtx2D, text: string, x: number, y: number): void {
