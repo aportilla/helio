@@ -2,7 +2,7 @@
 
 A 3D pixel-art visualization of the stars within ~20 light years of the Sun. Perspective camera orbiting a focused star, stellar discs sized by spectral class and depth-attenuated, drop-lines pinning each star to the galactic plane, all rendered in a deliberately chunky retro aesthetic.
 
-Think 1980s starbase HUD: inline bitmap-font labels, cyan-on-near-black palette, hand-drawn-looking concentric range rings. The HUD chrome (title, scale bar, toggle buttons) renders as native pixel art inside the WebGL scene rather than as DOM elements.
+Think 1980s starbase HUD: inline bitmap-font labels, cyan-on-near-black palette, hand-drawn-looking concentric range rings. The HUD chrome (title, scale bar, settings trigger) renders as native pixel art inside the WebGL scene rather than as DOM elements. Display toggles, "Reset view", and a touch-input preference all live in a popover settings panel that opens from the bottom-right trigger.
 
 ## Stack
 
@@ -39,8 +39,12 @@ src/
     stars.ts                gl.POINTS starfield with per-star size + color
     labels.ts               Bitmap-font overlay pass: star names, axis ticks, hover tooltip
     materials.ts            Pixel-snapped line ShaderMaterial + the stars shader
-    hud.ts                  Pixel-art HUD (title, scale bar, toggle buttons)
-                            rendered as a second orthographic pass after the main scene
+    hud.ts                  Pixel-art HUD (title, scale bar, settings trigger +
+                            popover panel) rendered as a second orthographic
+                            pass after the main scene
+  settings.ts               Persisted user preferences (localStorage, versioned
+                            JSON blob, default-merging on read so the schema
+                            can grow without invalidating old saves)
   data/
     stars.ts                Star catalog (name, x/y/z in ly, spectral class, distance);
                             also computes star clusters and lookup
@@ -51,9 +55,9 @@ src/
 
 ### Component / scene split
 
-`StarmapApp` (the Lit root) is now minimal — it owns the canvas, mounts the boot splash, and instantiates `StarmapScene`. There's no UI plumbing between Lit and the scene: the title, scale bar, and toggle buttons all live inside `Hud` (a second orthographic pass at 1 unit = 1 buffer pixel) and are drawn with `Mesh + PlaneGeometry` so they share the rest of the scene's pixel grid.
+`StarmapApp` (the Lit root) is now minimal — it owns the canvas, mounts the boot splash, and instantiates `StarmapScene`. There's no UI plumbing between Lit and the scene: the title, scale bar, settings trigger, and settings panel all live inside `Hud` (a second orthographic pass at 1 unit = 1 buffer pixel) and are drawn with `Mesh + PlaneGeometry` so they share the rest of the scene's pixel grid.
 
-The HUD captures pointer events first (in `StarmapScene.onPointerDown` / `onPointerMove` via `clientToHud()`), so clicking a button never starts a pan/orbit and hovering swaps the cursor to `pointer`. Button state is wired directly to scene internals through `hud.onToggle` and `hud.onAction` — no public API on `StarmapScene` is needed for the controls.
+The HUD captures pointer events first (in `StarmapScene.onPointerDown` / `onPointerMove` via `clientToHud()`), so clicking the trigger or a panel row never starts a pan/orbit and hovering swaps the cursor to `pointer`. Toggle/action rows in the settings panel fire `hud.onToggle` and `hud.onAction` (same callback shape as before); the touch-input row writes through `setSetting` in `src/settings.ts`. The scene reads `getSettings()` at gesture time (pull-on-read), so a flipped preference takes effect on the very next pointer event with no callback plumbing.
 
 The `scene/` modules know **nothing about Lit or the DOM** beyond the `HTMLCanvasElement` they render into and `window` for size/input listeners. Don't add DOM queries in there — route data through callbacks or new methods on `StarmapScene`.
 
@@ -83,7 +87,7 @@ The whole "pixel art" look depends on a stack of choices that all have to stay c
 2. **Pixel-snapped line shader** (`snappedLineMat` in `materials.ts`) — the vertex shader rounds each projected vertex to the nearest integer screen pixel before rasterization. Eliminates sub-pixel shimmer on thin lines. Used for grid arcs, axes, the galactic-centre arrow, and the solid variant of droplines. A sibling `snappedDotsMat` does the same for 1-pixel `Points` (snapping each point's center to a pixel center so `gl_PointSize = 1` covers exactly one pixel) — used by the dotted dropline variant.
 3. **Stars shader** (`makeStarsMaterial`) — `gl.POINTS` with a procedural circle in the fragment shader (no texture sampling, no AA fringe). The vertex shader rounds size to the nearest integer pixel count (so zoom transitions step 2→3→4→5…) and snaps the projected center to the pixel grid using a **parity-aware** snap: even sizes snap to a pixel boundary (integer window coord), odd sizes to a pixel center (half-integer). The snapped center is passed to the fragment shader as a varying `vCenter`. The fragment shader then computes its pixel-grid offset directly from `gl_FragCoord.xy - vCenter` — `gl_FragCoord.xy` is always integer+0.5, and `vCenter` is integer or half-integer, so the difference lands at clean pixel-spacing offsets symmetric about both axes by construction. **Don't use `gl_PointCoord`** for the discard test: its sub-pixel precision is implementation-defined and produces visibly asymmetric discs on some GPUs when the point center sits at sub-pixel positions. The discard threshold is the true Euclidean radius (`length(d) > vRadius`) so sizes 1/2/3 render as full squares and size 4 onward starts dropping corners — the natural pixel-disc progression. The pixel-snap math runs **after** the perspective divide (`clip.xy / clip.w`) so it works identically under ortho and perspective projection.
 4. **Label overlay pass** (`Labels` in `labels.ts`) — labels are rendered in a second ortho pass at 1 unit = 1 buffer pixel, the same scheme as the HUD, rather than as 3D Sprites in the main scene. Each frame the cluster primary's world position is projected by the **main** camera; the result drives a `Mesh + PlaneGeometry` placement in the overlay scene, with the top-left corner snapped to an integer buffer pixel so every texel renders. Constant on-screen size keeps typography stable while the depth-attenuated stars do the depth-cueing work — depth-scaling labels on top of depth-scaling stars would just make distant labels illegible.
-5. **HUD** (`Hud` in `hud.ts`) — third ortho pass at 1 unit = 1 buffer pixel, rendered after the main scene and label overlay with `autoClear` toggled off. Geometry is `Mesh + PlaneGeometry + MeshBasicMaterial` so positions and sizes are integer pixel counts that match the rest of the scene's grid. Buttons are pre-built canvas textures (off / off-hover / on / on-hover) hot-swapped on state change.
+5. **HUD** (`Hud` in `hud.ts`) — third ortho pass at 1 unit = 1 buffer pixel, rendered after the main scene and label overlay with `autoClear` toggled off. Geometry is `Mesh + PlaneGeometry + MeshBasicMaterial` so positions and sizes are integer pixel counts that match the rest of the scene's grid. The settings trigger uses two pre-built textures (off / hover) swapped on hover. The settings panel is a single canvas texture rebuilt on state change (toggle flipped, hovered row changed) — cheaper than maintaining one texture per row state because the panel is small and rebuilds run only on user input, not per frame. The info card follows the same rebuild-on-change pattern.
 
 If you add new scene geometry, route it through `snappedLineMat` for lines and the existing point-shader pattern for sprites — don't introduce vanilla `LineBasicMaterial` or `PointsMaterial`, they'll shimmer.
 
@@ -169,18 +173,24 @@ Stars themselves are also rendered opaque (`transparent: false, depthWrite: true
 ### Input
 
 All input lives in `StarmapScene`.
-- **Pointer drag** (any button) = orbit (yaw/pitch).
+- **Mouse / pen drag** (any button) = orbit (yaw/pitch). Always orbits regardless of the touch-input setting — single-button mice don't have a clean equivalent of two-finger gestures.
+- **Single-finger touch drag** = orbit by default; pans the camera target along the camera's screen-aligned right/up axes when "Pan with single touch" is enabled in the settings panel. The setting is persisted via `localStorage` (see `src/settings.ts`) and read fresh per gesture, so toggling takes effect on the next pointer event.
 - **WASD** = pan the orbit pivot parallel to the galactic plane (z=0). W/S move along the yaw heading (the camera's view direction projected onto the plane), A/D strafe perpendicular to it. Pitch is ignored on purpose: looking down at a star and pressing W glides over it instead of plunging into it. Camera and target translate together so the orbit radius is preserved. Pan rate scales with `view.distance` so the screen-space movement rate is consistent across zooms.
 - **Q / E** = orbit left / right around the current pivot (yaw rate is constant in radians/sec).
-- **Wheel** = zoom (orbit radius). **Two-finger pinch** = zoom on touch.
+- **Wheel** = zoom (orbit radius).
+- **Two-finger touch gesture** = stays `'undecided'` (nothing applied) until either signal crosses its threshold:
+  - **separation change** > 80 CSS px → commits to **pinch-zoom**, locks for the rest of the gesture
+  - **midpoint Euclidean travel** > 40 CSS px → commits to **pan** (or **orbit** if "Pan with single touch" is on, swapping the two-finger and single-touch mappings together) and locks for the rest of the gesture
 
-Touch input is unified through Pointer Events, not a separate `touchmove` path. `pointers` (a `Map<pointerId, {x,y}>`) tracks every active pointer; while exactly one is down, drag = orbit; the moment a second pointer lands, orbit drag is abandoned and the gesture switches to pinch-zoom driven by the two-finger separation. Without this hand-off (the previous code ran `pointermove` orbit and `touchmove` pinch concurrently) iPad Safari pinches always came with an unwanted yaw/pitch jolt from the first finger's `pointermove` events. The canvas also sets `touch-action: none` so iOS doesn't claim the gesture for page pan/zoom before our handlers see it. `pointercancel` resets gesture state when the OS steals a pointer (palm rejection, etc).
+  Both metrics are scalar magnitudes so the heuristic is orientation-agnostic — the same numbers come out whether the fingers are stacked, side-by-side, or diagonal. The zoom threshold is doubled relative to pan because in a symmetric pinch *both* fingers contribute to separation change, so 80 px sep ≈ 40 px per finger ≈ comparable per-finger effort to a 40 px pan. Thresholds are well above touch-down jitter, so contact-stabilization noise can't lock a mode on its own — only deliberate motion crosses. When both signals cross in the same frame, the larger ratio (signal/threshold) wins; for the sepDelta gate specifically, an asymmetric pan along the separation axis (both fingers moving the same direction at different speeds) is filtered out via per-finger projection sign-checks so it can't fake a zoom.
+
+Touch input is unified through Pointer Events, not a separate `touchmove` path. `pointers` (a `Map<pointerId, {x,y}>`) tracks every active pointer; while exactly one is down, drag = orbit-or-pan; the moment a second pointer lands, the single-finger gesture is abandoned and the two-finger gesture takes over (starting in `'undecided'`). Without this hand-off (the previous code ran `pointermove` orbit and `touchmove` pinch concurrently) iPad Safari pinches always came with an unwanted yaw/pitch jolt from the first finger's `pointermove` events. A third-or-later finger landing during an active two-finger gesture is tracked for clean lift-handling but does NOT reset the locked mode — palm contact mid-pinch shouldn't clobber the gesture. The canvas also sets `touch-action: none` so iOS doesn't claim the gesture for page pan/zoom before our handlers see it. `pointercancel` resets gesture state when the OS steals a pointer (palm rejection, etc).
 - **Left-click on a star** (no/minimal drag, < 4 px movement) = select that star (info card + reticle) AND animate the orbit pivot to it.
 - **Right-click on a star** (no/minimal drag) = select only — info card + reticle update, but the camera stays where it is. Useful for inspecting a star without losing your current vantage on another.
 - **Hover** uses the same `Raycaster` against `gl.POINTS` (threshold 0.6 ly) as the click handlers — the hovered star drives the transient boxed tooltip in the label overlay.
-- The info card's close-X (top-right corner) clears the selection.
+- The info card's close-X (top-right corner) clears the selection. The settings panel's close-X (top-right of its own box) closes the panel.
 
-**ESC** dismisses the current selection (info card + reticle), the same as clicking the card's close-X. The HUD "reset view" button snaps focus back to the Sun + default yaw/pitch/distance. Held-key state is cleared on `window.blur` so a key whose keyup got swallowed by alt-tab doesn't leave the camera drifting.
+**ESC** dismisses the current selection (info card + reticle), the same as clicking the card's close-X. "Reset view" in the settings panel snaps focus back to the Sun + default yaw/pitch/distance. Held-key state is cleared on `window.blur` so a key whose keyup got swallowed by alt-tab doesn't leave the camera drifting.
 
 ## Coding conventions
 
@@ -190,10 +200,3 @@ Touch input is unified through Pointer Events, not a separate `touchmove` path. 
 - Each Lit component is a single file, owns its own styles, and exports its tag name through `HTMLElementTagNameMap` so consumers get autocomplete.
 - HUD sizes are in **env pixels** (1 env pixel = `ENV_PX_PER_SCREEN_PX = 3` physical pixels). When tweaking visual sizes, divide your physical-pixel target by 3 — e.g. a "9-physical-pixel-tall scale-bar tick" is `SCALE_TICK_H = 3`.
 - No emojis in source unless explicitly part of the visual design.
-
-## Things that are deliberately not here
-
-- **No physically-accurate star positions or motions.** Catalog is for visualization, not navigation.
-- **No free-fly camera.** The camera is always orbiting `view.target`. WASD translates the pivot but never decouples camera from target — there's no roll, no head-tilt independent of the orbit pivot.
-- **Animation is restricted to autospin, the boot splash fade, and the focus-pivot lerp.** Don't add others without intent.
-- **No texture-based stars or labels.** Everything is procedural / canvas-rasterized so the pixel-perfect look survives any zoom level.
