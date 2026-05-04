@@ -62,6 +62,17 @@ const GESTURE_COMMIT_PX = 6;
 // together (asymmetric pan along u), and zero out the zoom signal.
 const ACTIVE_PROJ_PX = 2;
 
+// Settling window after the second finger touches down (ms). Touchscreens
+// report 5–10 px of apparent drift while the contact area stabilizes from
+// initial press to steady-state — enough to fake a sepDelta or midDelta
+// that crosses GESTURE_COMMIT_PX and locks the wrong mode before the user
+// has actually committed to anything. Within the window we keep moving
+// the start snapshot forward to "now" so that noise doesn't accumulate;
+// after the window expires we lock the snapshot and let the classifier
+// run. ~80 ms ≈ 5 frames @ 60 Hz, which is what iOS/Android pinch
+// recognizers use before they'll recognize a gesture.
+const PINCH_SETTLING_MS = 80;
+
 // Focus animation: only view.target lerps; yaw/pitch/distance stay frozen so
 // the camera glides over to the new orbital pivot rather than swinging.
 const FOCUS_ANIM_MS = 400;
@@ -140,6 +151,9 @@ export class StarmapScene {
   private pinchStartAy = 0;
   private pinchStartBx = 0;
   private pinchStartBy = 0;
+  // Timestamp of the second-finger-down that started the current pinch,
+  // used by the settling window in the classifier.
+  private pinchStartTime = 0;
   private readonly pointer = { x: 0, y: 0, has: false };
   // Selection state lives in Labels (reticle) and Hud (info card) — Scene
   // routes click events to both but doesn't hold a copy itself.
@@ -333,6 +347,7 @@ export class StarmapScene {
       this.pinchStartMidX = this.pinchMidX;
       this.pinchStartMidY = this.pinchMidY;
       this.capturePinchStart();
+      this.pinchStartTime = performance.now();
       return;
     }
 
@@ -420,34 +435,44 @@ export class StarmapScene {
         this.capturePinchMid();
 
         if (this.pinchMode === 'undecided') {
-          // Project each finger's from-start displacement onto the start
-          // separation axis u. Three regimes:
-          //   - opposite signs → symmetric pinch (count sepDelta).
-          //   - one finger below ACTIVE_PROJ_PX → anchor pinch, e.g. thumb
-          //     fixed while index splays; count sepDelta even if signs
-          //     happen to match (the still finger's sign is just noise).
-          //   - both above ACTIVE_PROJ_PX with matching sign → asymmetric
-          //     pan along u; force sepDelta to 0 so it can't outrun
-          //     midDelta and steal the commit.
-          const it = this.pointers.values();
-          const a = it.next().value!;
-          const b = it.next().value!;
-          let sepDelta = 0;
-          if (this.pinchStartDist > 0) {
-            const ux = (this.pinchStartBx - this.pinchStartAx) / this.pinchStartDist;
-            const uy = (this.pinchStartBy - this.pinchStartAy) / this.pinchStartDist;
-            const projA = (a.x - this.pinchStartAx) * ux + (a.y - this.pinchStartAy) * uy;
-            const projB = (b.x - this.pinchStartBx) * ux + (b.y - this.pinchStartBy) * uy;
-            const bothActive = Math.abs(projA) > ACTIVE_PROJ_PX && Math.abs(projB) > ACTIVE_PROJ_PX;
-            const sameDirection = bothActive && projA * projB > 0;
-            if (!sameDirection) sepDelta = Math.abs(projB - projA);
-          }
-          const midDelta = Math.hypot(
-            this.pinchMidX - this.pinchStartMidX,
-            this.pinchMidY - this.pinchStartMidY,
-          );
-          if (Math.max(sepDelta, midDelta) >= GESTURE_COMMIT_PX) {
-            this.pinchMode = sepDelta > midDelta ? 'zoom' : 'pan';
+          if (performance.now() - this.pinchStartTime < PINCH_SETTLING_MS) {
+            // Fingers are still settling onto the screen; keep advancing
+            // the anchor to "now" each frame so contact-stabilization
+            // noise doesn't accumulate into a fake sepDelta or midDelta.
+            this.pinchStartDist = d;
+            this.pinchStartMidX = this.pinchMidX;
+            this.pinchStartMidY = this.pinchMidY;
+            this.capturePinchStart();
+          } else {
+            // Project each finger's from-start displacement onto the start
+            // separation axis u. Three regimes:
+            //   - opposite signs → symmetric pinch (count sepDelta).
+            //   - one finger below ACTIVE_PROJ_PX → anchor pinch, e.g. thumb
+            //     fixed while index splays; count sepDelta even if signs
+            //     happen to match (the still finger's sign is just noise).
+            //   - both above ACTIVE_PROJ_PX with matching sign → asymmetric
+            //     pan along u; force sepDelta to 0 so it can't outrun
+            //     midDelta and steal the commit.
+            const it = this.pointers.values();
+            const a = it.next().value!;
+            const b = it.next().value!;
+            let sepDelta = 0;
+            if (this.pinchStartDist > 0) {
+              const ux = (this.pinchStartBx - this.pinchStartAx) / this.pinchStartDist;
+              const uy = (this.pinchStartBy - this.pinchStartAy) / this.pinchStartDist;
+              const projA = (a.x - this.pinchStartAx) * ux + (a.y - this.pinchStartAy) * uy;
+              const projB = (b.x - this.pinchStartBx) * ux + (b.y - this.pinchStartBy) * uy;
+              const bothActive = Math.abs(projA) > ACTIVE_PROJ_PX && Math.abs(projB) > ACTIVE_PROJ_PX;
+              const sameDirection = bothActive && projA * projB > 0;
+              if (!sameDirection) sepDelta = Math.abs(projB - projA);
+            }
+            const midDelta = Math.hypot(
+              this.pinchMidX - this.pinchStartMidX,
+              this.pinchMidY - this.pinchStartMidY,
+            );
+            if (Math.max(sepDelta, midDelta) >= GESTURE_COMMIT_PX) {
+              this.pinchMode = sepDelta > midDelta ? 'zoom' : 'pan';
+            }
           }
         }
 
