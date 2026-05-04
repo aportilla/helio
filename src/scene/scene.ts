@@ -34,7 +34,7 @@ const FOV_DEG = 45;
 const NEAR = 0.1;
 const FAR = 1000;
 const NICE_STEPS = [20, 10, 5, 2.5, 1, 0.5, 0.2, 0.1];
-const DEFAULT_VIEW = { distance: 50, yaw: 0.9, pitch: 0.55 };
+const DEFAULT_VIEW = { distance: 50, yaw: 1.1, pitch: 1.2 };
 
 // Each render-buffer ("env") pixel is upscaled by the browser into this many
 // physical screen pixels via image-rendering: pixelated. Larger = chunkier
