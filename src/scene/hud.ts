@@ -10,6 +10,7 @@ import {
 } from 'three';
 import { STARS } from '../data/stars';
 import { FONTS, drawPixelText, getFont, measurePixelText } from '../data/pixel-font';
+import { getSettings, setSetting } from '../settings';
 
 // HUD chrome (title, scale bar, toggle buttons) rendered as native pixel-art
 // in a second orthographic pass after the main scene. The HUD camera is set
@@ -18,7 +19,6 @@ import { FONTS, drawPixelText, getFont, measurePixelText } from '../data/pixel-f
 // pixel counts that map 1:1 to the buffer pixel grid.
 
 const PADDING = 8;          // distance from screen edges
-const BTN_GAP = 4;          // horizontal gap between buttons
 // Info card sits a touch farther from the corner than the title/buttons so
 // the boxed border has visible breathing room around it.
 const INFO_CARD_MARGIN = 14;
@@ -41,9 +41,7 @@ const COLOR_TITLE_BRIGHT = '#5ec8ff';
 const COLOR_TITLE_DIM    = '#2d7ab8';
 const COLOR_ACCENT       = '#3a8fe0';  // bright grid color (left border, on-state border)
 const COLOR_BORDER       = '#1e6fc4';  // dim grid color (off-state border)
-const COLOR_BG_ON        = '#10325d';  // dim blue fill behind on-state buttons
 const COLOR_BTN_OFF_TEXT = '#5ec8ff';
-const COLOR_BTN_ON_TEXT  = '#ffffff';
 const COLOR_BTN_HOVER_TEXT = '#cfeeff';
 const COLOR_SCALE        = 0xe8f6ff;   // near-white for the scale bar + ticks
 
@@ -65,24 +63,31 @@ const NAME_TO_CLOSE_X_GAP = 4;
 const COLOR_CLOSE_X       = '#2d7ab8';
 const COLOR_CLOSE_X_HOVER = '#5ec8ff';
 
+// Settings trigger — three horizontal "slider" lines centered in a 17x17
+// box (matching the close-X size for visual consistency). Drawn into a
+// transparent canvas so it lays cleanly over the scene without a
+// background of its own; hover state swaps to a brighter color.
+const SETTINGS_ICON_SIZE = 17;
+const SETTINGS_ICON_HIT_PAD = 2;
+// Settings modal panel — same boxed style as the info card, opens above
+// the trigger at bottom-left. Internal padding matches the info card so
+// the two read surfaces feel like the same family.
+const SETTINGS_PANEL_PAD_X = 8;
+const SETTINGS_PANEL_PAD_Y = 6;
+// Vertical gap between the title line and the body rows.
+const SETTINGS_PANEL_TITLE_GAP = 2;
+// Gap between the trigger icon and the panel that opens above it.
+const SETTINGS_PANEL_TRIGGER_GAP = 6;
+// Checkbox glyph: a 9x9 square with a 1 px border (matches the close-X
+// glyph width so the two pixel-art primitives feel the same scale).
+// Filled state stamps a 3x3 dot in the center; centering is exact
+// because (9 - 3) / 2 = 3.
+const CHECKBOX_SIZE = 9;
+const CHECKBOX_FILL_SIZE = 3;
+const CHECKBOX_LABEL_GAP = 4;
+
 export type ToggleId = 'labels' | 'drops' | 'spin';
 export type ActionId = 'reset';
-type ButtonId = ToggleId | ActionId;
-
-interface HudButton {
-  id: ButtonId;
-  toggle: boolean;
-  on: boolean;
-  hover: boolean;
-  W: number;
-  H: number;
-  textures: { off: CanvasTexture; offHover: CanvasTexture; on: CanvasTexture; onHover: CanvasTexture };
-  mesh: Mesh;
-  mat: MeshBasicMaterial;
-  // Top-left of the button bounding box in HUD coords (Y-up).
-  bx: number;
-  by: number;
-}
 
 function nearestFilteredTexture(canvas: HTMLCanvasElement): CanvasTexture {
   const t = new CanvasTexture(canvas);
@@ -127,49 +132,37 @@ function buildTitleTexture(): { tex: CanvasTexture; w: number; h: number } {
   return { tex: nearestFilteredTexture(c), w: W, h: H };
 }
 
-type ButtonState = 'off' | 'offHover' | 'on' | 'onHover';
-
-function buildButtonTexture(text: string, state: ButtonState, toggle: boolean): { tex: CanvasTexture; w: number; h: number } {
+// Draws a pill-style action button (1 px border, centered text) directly
+// into an existing 2D context at (x, y). Returns the rendered dimensions
+// so the caller can lay out subsequent rows. Used inside the settings
+// panel for the "Reset view" action — visually distinct from the
+// checkbox-toggle rows so it reads as actionable, not stateful.
+function drawPanelActionButton(
+  g: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  text: string,
+  hover: boolean,
+): { w: number; h: number } {
   const textW = measurePixelText(text);
   const padX = 6;
   const padY = 3;
   const W = textW + padX * 2;
   const H = getFont().lineHeight + padY * 2;
 
-  const c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const g = c.getContext('2d')!;
+  const borderColor = hover ? COLOR_ACCENT : COLOR_BORDER;
+  const textColor   = hover ? COLOR_BTN_HOVER_TEXT : COLOR_BTN_OFF_TEXT;
 
-  const isOn = state === 'on' || state === 'onHover';
-  const isHover = state === 'offHover' || state === 'onHover';
-  const borderColor = isOn || isHover ? COLOR_ACCENT : COLOR_BORDER;
-  const textColor = isOn
-    ? COLOR_BTN_ON_TEXT
-    : isHover
-      ? COLOR_BTN_HOVER_TEXT
-      : COLOR_BTN_OFF_TEXT;
-
-  if (isOn) {
-    g.fillStyle = COLOR_BG_ON;
-    g.fillRect(0, 0, W, H);
-  }
-  // 1px border
   g.fillStyle = borderColor;
-  g.fillRect(0, 0, W, 1);
-  g.fillRect(0, H - 1, W, 1);
-  g.fillRect(0, 0, 1, H);
-  g.fillRect(W - 1, 0, 1, H);
+  g.fillRect(x, y, W, 1);
+  g.fillRect(x, y + H - 1, W, 1);
+  g.fillRect(x, y, 1, H);
+  g.fillRect(x + W - 1, y, 1, H);
 
-  // Center the text horizontally; vertical baseline matches the label sprites.
-  const textX = Math.round((W - textW) / 2);
-  drawPixelText(g, text, textX, padY, textColor);
+  const textX = x + Math.round((W - textW) / 2);
+  drawPixelText(g, text, textX, y + padY, textColor);
 
-  // Non-toggle buttons (e.g. "reset view") never reach the on/onHover states
-  // but we still need a texture for them — `toggle` is just here to make
-  // skipping the on-state textures explicit at the call site.
-  void toggle;
-
-  return { tex: nearestFilteredTexture(c), w: W, h: H };
+  return { w: W, h: H };
 }
 
 function buildCloseXTexture(color: string): CanvasTexture {
@@ -256,6 +249,201 @@ function buildInfoCardTexture(starIdx: number): { tex: CanvasTexture; w: number;
   return { tex: nearestFilteredTexture(c), w: W, h: H };
 }
 
+// Three horizontal "slider" lines centered in a SETTINGS_ICON_SIZE × SIZE
+// transparent box. Color is the only difference between off and hover
+// states, so we build both up-front and swap textures on hover (cheaper
+// than rebuilding the canvas mid-frame).
+function buildSettingsIconTexture(color: string): CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = SETTINGS_ICON_SIZE; c.height = SETTINGS_ICON_SIZE;
+  const g = c.getContext('2d')!;
+  // Three 9-px-wide, 1-px-tall lines on rows 5/8/11 — symmetric in a
+  // 17-row box (5 px above, 5 px below, 2 px gaps between lines).
+  g.fillStyle = color;
+  const lineW = 9;
+  const lineX = (SETTINGS_ICON_SIZE - lineW) / 2;  // 4
+  g.fillRect(lineX, 5, lineW, 1);
+  g.fillRect(lineX, 8, lineW, 1);
+  g.fillRect(lineX, 11, lineW, 1);
+  return nearestFilteredTexture(c);
+}
+
+// Settings modal: a title line, then one or more sections. Each section
+// has a small dim header followed by a list of rows. Row kinds:
+//   - toggle : checkbox glyph + label, click flips a boolean (drives a
+//              ToggleId callback or a settings.* preference)
+//   - action : pill-styled action button (drives an ActionId callback)
+// The whole row is clickable, not just the glyph — bigger touch target
+// and easier hover affordance. Section headers are non-interactive.
+//
+// The close-X is a sibling mesh (own texture, own hover state) so its
+// state changes don't force a panel rebuild; everything else lives on
+// the panel's single canvas so hover/toggle-state updates rebuild once.
+
+export type PanelRowId = ToggleId | ActionId | 'singleTouchPan';
+
+interface PanelRowSpec {
+  kind: 'toggle' | 'action';
+  id: PanelRowId;
+  label: string;
+  on?: boolean;  // toggle rows only
+}
+
+interface PanelSectionSpec {
+  header: string;
+  rows: PanelRowSpec[];
+}
+
+interface PanelRowHit {
+  id: PanelRowId;
+  kind: 'toggle' | 'action';
+  // Hit zone in panel-local Y-down coords (origin at panel top-left).
+  // Hit-test code converts to HUD Y-up using the laid-out panel position.
+  y: number;
+  h: number;
+}
+
+interface SettingsPanelLayout {
+  tex: CanvasTexture;
+  w: number;
+  h: number;
+  rowHits: PanelRowHit[];
+}
+
+// Layout constants for the panel's vertical rhythm. Values picked so
+// section headers feel grouped with the rows below them (small gap
+// after) and separated from the section above (larger gap before).
+const PANEL_TITLE_TO_SECTION_GAP = 4;
+const PANEL_SECTION_GAP_BEFORE   = 6;
+const PANEL_SECTION_GAP_AFTER    = 2;
+const PANEL_ROW_PAD_Y            = 2;  // hit-pad above/below each row
+
+function buildSettingsPanelTexture(
+  sections: PanelSectionSpec[],
+  hoveredRowId: PanelRowId | null,
+): SettingsPanelLayout {
+  const TITLE_COLOR    = '#ffe98a';   // matches info card name color
+  const SECTION_COLOR  = '#2d7ab8';   // dim cyan for section headers
+  const LABEL_COLOR    = '#aee4ff';   // body text default
+  const LABEL_HOVER    = '#ffffff';   // brighter on hover
+  const BG_COLOR       = 'rgba(0,8,20,0.92)';
+  const BORDER_COLOR   = '#3a8fe0';
+  const CHECKBOX_BORDER = '#3a8fe0';
+
+  const titleFont = FONTS.EspySans[15];
+  const titleLineH = getFont(titleFont).lineHeight;
+  const bodyLineH  = getFont().lineHeight;
+
+  const title = 'Settings';
+  const titleW = measurePixelText(title, titleFont);
+
+  // Pre-compute action-button widths (we need them for the panel-width
+  // max calc and to position them later). Same rendering logic as the
+  // actual draw — kept in sync via drawPanelActionButton().
+  const actionBtnPadX = 6;
+  const actionBtnW = (label: string) => measurePixelText(label) + actionBtnPadX * 2;
+
+  // ---- width pass ------------------------------------------------------
+  let maxRowContentW = 0;
+  for (const section of sections) {
+    const headerW = measurePixelText(section.header);
+    if (headerW > maxRowContentW) maxRowContentW = headerW;
+    for (const r of section.rows) {
+      let w = 0;
+      if (r.kind === 'toggle') {
+        w = CHECKBOX_SIZE + CHECKBOX_LABEL_GAP + measurePixelText(r.label);
+      } else {
+        w = actionBtnW(r.label);
+      }
+      if (w > maxRowContentW) maxRowContentW = w;
+    }
+  }
+  const W = Math.max(
+    SETTINGS_PANEL_PAD_X + titleW + NAME_TO_CLOSE_X_GAP + CLOSE_X_BOX_SIZE,
+    SETTINGS_PANEL_PAD_X * 2 + maxRowContentW,
+  );
+
+  // ---- height pass -----------------------------------------------------
+  let H = SETTINGS_PANEL_PAD_Y + titleLineH + SETTINGS_PANEL_TITLE_GAP + PANEL_TITLE_TO_SECTION_GAP;
+  for (let si = 0; si < sections.length; si++) {
+    if (si > 0) H += PANEL_SECTION_GAP_BEFORE;
+    H += bodyLineH + PANEL_SECTION_GAP_AFTER;  // header line
+    for (const r of sections[si].rows) {
+      const rowH = r.kind === 'toggle'
+        ? bodyLineH + PANEL_ROW_PAD_Y * 2
+        : (getFont().lineHeight + 3 * 2) + PANEL_ROW_PAD_Y * 2;  // action button pad
+      H += rowH;
+    }
+  }
+  H += SETTINGS_PANEL_PAD_Y;
+
+  // ---- draw ------------------------------------------------------------
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d')!;
+
+  g.fillStyle = BG_COLOR;
+  g.fillRect(0, 0, W, H);
+  g.fillStyle = BORDER_COLOR;
+  g.fillRect(0, 0, W, 1); g.fillRect(0, H - 1, W, 1);
+  g.fillRect(0, 0, 1, H); g.fillRect(W - 1, 0, 1, H);
+
+  drawPixelText(g, title, SETTINGS_PANEL_PAD_X, SETTINGS_PANEL_PAD_Y, TITLE_COLOR, titleFont);
+
+  let cursorY = SETTINGS_PANEL_PAD_Y + titleLineH + SETTINGS_PANEL_TITLE_GAP + PANEL_TITLE_TO_SECTION_GAP;
+  const rowHits: PanelRowHit[] = [];
+
+  for (let si = 0; si < sections.length; si++) {
+    if (si > 0) cursorY += PANEL_SECTION_GAP_BEFORE;
+    drawPixelText(g, sections[si].header, SETTINGS_PANEL_PAD_X, cursorY, SECTION_COLOR);
+    cursorY += bodyLineH + PANEL_SECTION_GAP_AFTER;
+
+    for (const r of sections[si].rows) {
+      const isHover = r.id === hoveredRowId;
+
+      if (r.kind === 'toggle') {
+        const rowTop = cursorY;
+        const rowH = bodyLineH + PANEL_ROW_PAD_Y * 2;
+        const labelY = rowTop + PANEL_ROW_PAD_Y;
+        const checkboxX = SETTINGS_PANEL_PAD_X;
+        const checkboxY = labelY + Math.floor((bodyLineH - CHECKBOX_SIZE) / 2);
+
+        g.fillStyle = CHECKBOX_BORDER;
+        g.fillRect(checkboxX, checkboxY, CHECKBOX_SIZE, 1);
+        g.fillRect(checkboxX, checkboxY + CHECKBOX_SIZE - 1, CHECKBOX_SIZE, 1);
+        g.fillRect(checkboxX, checkboxY, 1, CHECKBOX_SIZE);
+        g.fillRect(checkboxX + CHECKBOX_SIZE - 1, checkboxY, 1, CHECKBOX_SIZE);
+        if (r.on) {
+          const off = (CHECKBOX_SIZE - CHECKBOX_FILL_SIZE) / 2;
+          g.fillRect(checkboxX + off, checkboxY + off, CHECKBOX_FILL_SIZE, CHECKBOX_FILL_SIZE);
+        }
+
+        const labelX = checkboxX + CHECKBOX_SIZE + CHECKBOX_LABEL_GAP;
+        drawPixelText(g, r.label, labelX, labelY, isHover ? LABEL_HOVER : LABEL_COLOR);
+
+        rowHits.push({ id: r.id, kind: 'toggle', y: rowTop, h: rowH });
+        cursorY += rowH;
+      } else {
+        // Action button — same pill style as the old standalone bottom-
+        // right buttons, drawn inline at SETTINGS_PANEL_PAD_X.
+        const rowTop = cursorY;
+        const btn = drawPanelActionButton(
+          g,
+          SETTINGS_PANEL_PAD_X,
+          rowTop + PANEL_ROW_PAD_Y,
+          r.label,
+          isHover,
+        );
+        const rowH = btn.h + PANEL_ROW_PAD_Y * 2;
+        rowHits.push({ id: r.id, kind: 'action', y: rowTop, h: rowH });
+        cursorY += rowH;
+      }
+    }
+  }
+
+  return { tex: nearestFilteredTexture(c), w: W, h: H, rowHits };
+}
+
 function buildScaleLabelTexture(text: string): { tex: CanvasTexture; w: number; h: number } {
   const padX = 1;
   const padY = 1;
@@ -280,7 +468,16 @@ export class Hud {
   private readonly titleW: number;
   private readonly titleH: number;
 
-  private readonly buttons: HudButton[] = [];
+  // Toggle state for the in-panel checkboxes. Held here (not on visible
+  // mesh objects, since the standalone bottom-right buttons are gone)
+  // and serialized into the panel rows on each rebuild. Defaults match
+  // the old standalone-button defaults so existing behavior is
+  // preserved out of the box.
+  private readonly toggleState: { [K in ToggleId]: boolean } = {
+    labels: true,
+    drops:  true,
+    spin:   false,
+  };
 
   // Scale bar parts. Bar + ticks share a single material (same color); label
   // gets its own material because its texture changes when the step changes.
@@ -308,10 +505,44 @@ export class Hud {
   private closeXBounds = { x: 0, y: 0, w: 0, h: 0 };
   private closeXHover = false;
 
+  // Settings trigger (bottom-left, above scale). Two pre-built icon
+  // textures swapped on hover.
+  private readonly settingsIconMesh: Mesh;
+  private readonly settingsIconMat: MeshBasicMaterial;
+  private readonly settingsIconTexOff: CanvasTexture;
+  private readonly settingsIconTexHover: CanvasTexture;
+  private settingsIconBounds = { x: 0, y: 0, w: 0, h: 0 };
+  private settingsIconHover = false;
+
+  // Settings modal (visible only when user has opened it). Built lazily
+  // and rebuilt whenever its state changes (toggle flipped, row hover
+  // moved). Its own close-X is a sibling mesh sharing the closeXTex*
+  // textures so its hover state can update without a panel rebuild.
+  private readonly settingsPanelMesh: Mesh;
+  private readonly settingsPanelMat: MeshBasicMaterial;
+  private readonly settingsPanelCloseMesh: Mesh;
+  private readonly settingsPanelCloseMat: MeshBasicMaterial;
+  private settingsPanelOpen = false;
+  private settingsPanelW = 0;
+  private settingsPanelH = 0;
+  private settingsPanelX = 0;  // panel left, in HUD coords
+  private settingsPanelY = 0;  // panel bottom, in HUD coords
+  // Per-row hit zones in panel-local Y-down coords (origin at panel
+  // top-left, matching the texture). Translated to HUD Y-up at hit-test
+  // time using the laid-out panel position.
+  private settingsRowHits: PanelRowHit[] = [];
+  private settingsPanelCloseBounds = { x: 0, y: 0, w: 0, h: 0 };
+  private settingsPanelCloseHover = false;
+  private settingsHoveredRowId: PanelRowId | null = null;
+
   // Public callbacks. The scene wires these to its own toggle methods.
   onToggle: (id: ToggleId, on: boolean) => void = () => {};
   onAction: (id: ActionId) => void = () => {};
   onDeselect: () => void = () => {};
+  // Fires when a setting changes via the modal — scene reads getSettings()
+  // each gesture so this is informational, but having a hook lets the
+  // scene react immediately if a setting requires recomputed state.
+  onSettingsChanged: () => void = () => {};
 
   constructor() {
     // ---- title -----------------------------------------------------------
@@ -322,31 +553,6 @@ export class Hud {
     this.titleMesh = new Mesh(new PlaneGeometry(title.w, title.h), titleMat);
     this.titleMesh.renderOrder = 100;
     this.scene.add(this.titleMesh);
-
-    // ---- buttons ---------------------------------------------------------
-    const specs: Array<{ id: ButtonId; text: string; toggle: boolean; on: boolean }> = [
-      { id: 'labels', text: 'labels',    toggle: true,  on: true  },
-      { id: 'drops',  text: 'droplines', toggle: true,  on: true  },
-      { id: 'spin',   text: 'autospin',  toggle: true,  on: false },
-      { id: 'reset',  text: 'reset view', toggle: false, on: false },
-    ];
-    for (const spec of specs) {
-      const off      = buildButtonTexture(spec.text, 'off',      spec.toggle);
-      const offHover = buildButtonTexture(spec.text, 'offHover', spec.toggle);
-      const on       = spec.toggle ? buildButtonTexture(spec.text, 'on',      spec.toggle) : off;
-      const onHover  = spec.toggle ? buildButtonTexture(spec.text, 'onHover', spec.toggle) : offHover;
-      const initialTex = spec.on ? on.tex : off.tex;
-      const mat = new MeshBasicMaterial({ map: initialTex, transparent: true, depthTest: false, depthWrite: false });
-      const mesh = new Mesh(new PlaneGeometry(off.w, off.h), mat);
-      mesh.renderOrder = 100;
-      this.scene.add(mesh);
-      this.buttons.push({
-        id: spec.id, toggle: spec.toggle, on: spec.on, hover: false,
-        W: off.w, H: off.h,
-        textures: { off: off.tex, offHover: offHover.tex, on: on.tex, onHover: onHover.tex },
-        mesh, mat, bx: 0, by: 0,
-      });
-    }
 
     // ---- scale bar -------------------------------------------------------
     const barMat = new MeshBasicMaterial({ color: COLOR_SCALE, transparent: false, depthTest: false, depthWrite: false });
@@ -387,6 +593,28 @@ export class Hud {
     this.closeXMesh.renderOrder = 101;  // above the card
     this.closeXMesh.visible = false;
     this.scene.add(this.closeXMesh);
+
+    // ---- settings icon (bottom-left trigger) -----------------------------
+    this.settingsIconTexOff   = buildSettingsIconTexture(COLOR_CLOSE_X);
+    this.settingsIconTexHover = buildSettingsIconTexture(COLOR_CLOSE_X_HOVER);
+    this.settingsIconMat = new MeshBasicMaterial({ map: this.settingsIconTexOff, transparent: true, depthTest: false, depthWrite: false });
+    this.settingsIconMesh = new Mesh(new PlaneGeometry(SETTINGS_ICON_SIZE, SETTINGS_ICON_SIZE), this.settingsIconMat);
+    this.settingsIconMesh.renderOrder = 100;
+    this.scene.add(this.settingsIconMesh);
+
+    // ---- settings panel (modal) ------------------------------------------
+    // Hidden by default; texture lazily built on first open.
+    this.settingsPanelMat = new MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false });
+    this.settingsPanelMesh = new Mesh(new PlaneGeometry(1, 1), this.settingsPanelMat);
+    this.settingsPanelMesh.renderOrder = 100;
+    this.settingsPanelMesh.visible = false;
+    this.scene.add(this.settingsPanelMesh);
+
+    this.settingsPanelCloseMat = new MeshBasicMaterial({ map: this.closeXTexOff, transparent: true, depthTest: false, depthWrite: false });
+    this.settingsPanelCloseMesh = new Mesh(new PlaneGeometry(CLOSE_X_BOX_SIZE, CLOSE_X_BOX_SIZE), this.settingsPanelCloseMat);
+    this.settingsPanelCloseMesh.renderOrder = 101;  // above the panel
+    this.settingsPanelCloseMesh.visible = false;
+    this.scene.add(this.settingsPanelCloseMesh);
   }
 
   resize(bufferW: number, bufferH: number): void {
@@ -420,6 +648,10 @@ export class Hud {
     this.scaleRightTickMesh.visible = true;
     this.scaleLabelMesh.visible = true;
     this.layoutScale();
+    // Settings icon sits above the scale; reposition it now that
+    // scaleLabelH has a real value (it was 0 before the first emit).
+    this.layoutSettingsIcon();
+    if (this.settingsPanelOpen) this.layoutSettingsPanel();
   }
 
   // Selection card. Pass -1 to clear. Rebuilds the boxed label texture only
@@ -454,31 +686,45 @@ export class Hud {
   }
 
   // External state sync — called when the scene toggles state from elsewhere
-  // (e.g. keyboard shortcut) or when reset re-arms autospin off, etc.
+  // (e.g. keyboard shortcut) or when reset re-arms autospin off, etc. If
+  // the settings panel is currently open, rebuild it so the checkbox
+  // glyph reflects the new state immediately.
   setToggleState(id: ToggleId, on: boolean): void {
-    const b = this.buttons.find(b => b.id === id);
-    if (!b || b.on === on) return;
-    b.on = on;
-    this.applyButtonTexture(b);
+    if (this.toggleState[id] === on) return;
+    this.toggleState[id] = on;
+    if (this.settingsPanelOpen) this.rebuildSettingsPanel();
   }
 
-  // Returns true if the click hit any HUD interactive element (button or
-  // info-card close X) and the action was fired.
+  // Returns true if the click hit any HUD interactive element (settings
+  // trigger, info-card close X, or anything in the settings panel) and
+  // the corresponding action was fired.
   handleClick(bufX: number, bufY: number): boolean {
     if (this.isOverCloseX(bufX, bufY)) {
       this.onDeselect();
       return true;
     }
-    const hit = this.findButton(bufX, bufY);
-    if (!hit) return false;
-    if (hit.toggle) {
-      hit.on = !hit.on;
-      this.applyButtonTexture(hit);
-      this.onToggle(hit.id as ToggleId, hit.on);
-    } else {
-      this.onAction(hit.id as ActionId);
+    if (this.isOverSettingsIcon(bufX, bufY)) {
+      // Click trigger when panel is already open → close. Matches the
+      // common popover toggle pattern.
+      if (this.settingsPanelOpen) this.closeSettingsPanel();
+      else this.openSettingsPanel();
+      return true;
     }
-    return true;
+    if (this.settingsPanelOpen) {
+      if (this.isOverSettingsPanelClose(bufX, bufY)) {
+        this.closeSettingsPanel();
+        return true;
+      }
+      const hitRow = this.findPanelRow(bufX, bufY);
+      if (hitRow) {
+        this.dispatchPanelRow(hitRow);
+        return true;
+      }
+      // Tap inside the panel rect but not on an interactive row — absorb
+      // so it doesn't fall through to star picking behind the panel.
+      if (this.isOverSettingsPanel(bufX, bufY)) return true;
+    }
+    return false;
   }
 
   // Returns true if the cursor is over any HUD interactive element (caller
@@ -490,40 +736,63 @@ export class Hud {
       this.closeXMat.map = onCloseX ? this.closeXTexHover : this.closeXTexOff;
       this.closeXMat.needsUpdate = true;
     }
-    const hit = this.findButton(bufX, bufY);
-    let changed = false;
-    for (const b of this.buttons) {
-      const wantHover = b === hit;
-      if (b.hover !== wantHover) {
-        b.hover = wantHover;
-        this.applyButtonTexture(b);
-        changed = true;
+    const onSettingsIcon = this.isOverSettingsIcon(bufX, bufY);
+    if (onSettingsIcon !== this.settingsIconHover) {
+      this.settingsIconHover = onSettingsIcon;
+      this.settingsIconMat.map = onSettingsIcon ? this.settingsIconTexHover : this.settingsIconTexOff;
+      this.settingsIconMat.needsUpdate = true;
+    }
+    let onSettingsPanelClose = false;
+    let hoveredRow: PanelRowHit | null = null;
+    if (this.settingsPanelOpen) {
+      onSettingsPanelClose = this.isOverSettingsPanelClose(bufX, bufY);
+      if (onSettingsPanelClose !== this.settingsPanelCloseHover) {
+        this.settingsPanelCloseHover = onSettingsPanelClose;
+        this.settingsPanelCloseMat.map = onSettingsPanelClose ? this.closeXTexHover : this.closeXTexOff;
+        this.settingsPanelCloseMat.needsUpdate = true;
+      }
+      hoveredRow = this.findPanelRow(bufX, bufY);
+      const newId = hoveredRow ? hoveredRow.id : null;
+      if (newId !== this.settingsHoveredRowId) {
+        this.settingsHoveredRowId = newId;
+        // Row hover changes label/button colors → rebuild the panel.
+        this.rebuildSettingsPanel();
       }
     }
-    void changed;
-    return hit !== null || onCloseX;
+    return onCloseX || onSettingsIcon || onSettingsPanelClose || hoveredRow !== null;
   }
 
-  clearHover(): void {
-    for (const b of this.buttons) {
-      if (b.hover) {
-        b.hover = false;
-        this.applyButtonTexture(b);
-      }
+  private dispatchPanelRow(row: PanelRowHit): void {
+    if (row.kind === 'action') {
+      this.onAction(row.id as ActionId);
+      return;
     }
+    if (row.id === 'singleTouchPan') {
+      const next = getSettings().singleTouchAction === 'pan' ? 'orbit' : 'pan';
+      setSetting('singleTouchAction', next);
+      this.onSettingsChanged();
+      this.rebuildSettingsPanel();
+      return;
+    }
+    // Toggle row backed by a ToggleId — flip internal state, fire the
+    // callback, rebuild so the checkbox glyph updates.
+    const id = row.id as ToggleId;
+    this.toggleState[id] = !this.toggleState[id];
+    this.onToggle(id, this.toggleState[id]);
+    this.rebuildSettingsPanel();
   }
 
-  private applyButtonTexture(b: HudButton): void {
-    const tex = b.on
-      ? (b.hover ? b.textures.onHover : b.textures.on)
-      : (b.hover ? b.textures.offHover : b.textures.off);
-    b.mat.map = tex;
-    b.mat.needsUpdate = true;
-  }
-
-  private findButton(bufX: number, bufY: number): HudButton | null {
-    for (const b of this.buttons) {
-      if (bufX >= b.bx && bufX < b.bx + b.W && bufY >= b.by && bufY < b.by + b.H) return b;
+  // Hit-test panel rows. Row geometry lives in panel-local Y-down coords
+  // (texture origin at top-left); convert each to HUD Y-up using the
+  // current panel position.
+  private findPanelRow(bufX: number, bufY: number): PanelRowHit | null {
+    if (!this.settingsPanelOpen) return null;
+    if (bufX < this.settingsPanelX || bufX >= this.settingsPanelX + this.settingsPanelW) return null;
+    const panelTop = this.settingsPanelY + this.settingsPanelH;
+    for (const r of this.settingsRowHits) {
+      const rowTopHud    = panelTop - r.y;
+      const rowBottomHud = rowTopHud - r.h;
+      if (bufY >= rowBottomHud && bufY < rowTopHud) return r;
     }
     return null;
   }
@@ -534,20 +803,134 @@ export class Hud {
     // Title at top-left.
     this.titleMesh.position.set(PADDING + this.titleW / 2, this.bufferH - PADDING - this.titleH / 2, 0);
 
-    // Buttons at bottom-right, horizontal row, right-aligned.
-    let cursor = this.bufferW - PADDING;
-    for (let i = this.buttons.length - 1; i >= 0; i--) {
-      const b = this.buttons[i];
-      const right = cursor;
-      const left = right - b.W;
-      b.bx = left;
-      b.by = PADDING;
-      b.mesh.position.set(left + b.W / 2, PADDING + b.H / 2, 0);
-      cursor = left - BTN_GAP;
-    }
-
     this.layoutScale();
     this.layoutInfoCard();
+    this.layoutSettingsIcon();
+    if (this.settingsPanelOpen) this.layoutSettingsPanel();
+  }
+
+  private layoutSettingsIcon(): void {
+    // Bottom-right, where the standalone toggle/action buttons used to
+    // sit. Single trigger now — its panel exposes everything they did,
+    // plus the settings rows.
+    const iconCenterX = this.bufferW - PADDING - SETTINGS_ICON_SIZE / 2;
+    const iconCenterY = PADDING + SETTINGS_ICON_SIZE / 2;
+    const iconLeft   = this.bufferW - PADDING - SETTINGS_ICON_SIZE;
+    const iconBottom = PADDING;
+    this.settingsIconMesh.position.set(iconCenterX, iconCenterY, 0);
+    this.settingsIconBounds = {
+      x: iconLeft - SETTINGS_ICON_HIT_PAD,
+      y: iconBottom - SETTINGS_ICON_HIT_PAD,
+      w: SETTINGS_ICON_SIZE + 2 * SETTINGS_ICON_HIT_PAD,
+      h: SETTINGS_ICON_SIZE + 2 * SETTINGS_ICON_HIT_PAD,
+    };
+  }
+
+  private layoutSettingsPanel(): void {
+    if (!this.settingsPanelOpen) return;
+    // Panel opens upward and to the LEFT of the bottom-right trigger so
+    // it never extends off-screen on the right. Right edge aligns with
+    // the trigger's right edge (window_right - PADDING) so the column
+    // reads as a connected popover; bottom edge clears the trigger's top
+    // by SETTINGS_PANEL_TRIGGER_GAP.
+    const iconTopY = this.settingsIconBounds.y + this.settingsIconBounds.h - SETTINGS_ICON_HIT_PAD;
+    const panelBottomY = iconTopY + SETTINGS_PANEL_TRIGGER_GAP;
+    const panelRightX = this.bufferW - PADDING;
+    const panelLeftX = panelRightX - this.settingsPanelW;
+    this.settingsPanelX = panelLeftX;
+    this.settingsPanelY = panelBottomY;
+    this.settingsPanelMesh.position.set(
+      panelLeftX + this.settingsPanelW / 2,
+      panelBottomY + this.settingsPanelH / 2,
+      0,
+    );
+    const panelTop = panelBottomY + this.settingsPanelH;
+    this.settingsPanelCloseMesh.position.set(
+      panelRightX - CLOSE_X_BOX_SIZE / 2,
+      panelTop    - CLOSE_X_BOX_SIZE / 2,
+      0,
+    );
+    this.settingsPanelCloseBounds = {
+      x: panelRightX - CLOSE_X_BOX_SIZE - CLOSE_X_HIT_PAD,
+      y: panelTop    - CLOSE_X_BOX_SIZE - CLOSE_X_HIT_PAD,
+      w: CLOSE_X_BOX_SIZE + 2 * CLOSE_X_HIT_PAD,
+      h: CLOSE_X_BOX_SIZE + 2 * CLOSE_X_HIT_PAD,
+    };
+  }
+
+  private openSettingsPanel(): void {
+    if (this.settingsPanelOpen) return;
+    this.settingsPanelOpen = true;
+    this.rebuildSettingsPanel();
+    this.settingsPanelMesh.visible = true;
+    this.settingsPanelCloseMesh.visible = true;
+    this.layoutSettingsPanel();
+  }
+
+  private closeSettingsPanel(): void {
+    if (!this.settingsPanelOpen) return;
+    this.settingsPanelOpen = false;
+    this.settingsPanelMesh.visible = false;
+    this.settingsPanelCloseMesh.visible = false;
+    if (this.settingsPanelCloseHover) {
+      this.settingsPanelCloseHover = false;
+      this.settingsPanelCloseMat.map = this.closeXTexOff;
+      this.settingsPanelCloseMat.needsUpdate = true;
+    }
+    this.settingsHoveredRowId = null;
+  }
+
+  private rebuildSettingsPanel(): void {
+    const s = getSettings();
+    const sections: PanelSectionSpec[] = [
+      {
+        header: 'Display',
+        rows: [
+          { kind: 'toggle', id: 'labels', label: 'Show star labels',         on: this.toggleState.labels },
+          { kind: 'toggle', id: 'drops',  label: 'Show distance droplines',  on: this.toggleState.drops  },
+          { kind: 'toggle', id: 'spin',   label: 'Auto-rotate view',         on: this.toggleState.spin   },
+          { kind: 'action', id: 'reset',  label: 'Reset view' },
+        ],
+      },
+      {
+        header: 'Touch input',
+        rows: [
+          { kind: 'toggle', id: 'singleTouchPan', label: 'Pan with single touch', on: s.singleTouchAction === 'pan' },
+        ],
+      },
+    ];
+
+    if (this.settingsPanelMat.map) this.settingsPanelMat.map.dispose();
+    const layout = buildSettingsPanelTexture(sections, this.settingsHoveredRowId);
+    this.settingsPanelMat.map = layout.tex;
+    this.settingsPanelMat.needsUpdate = true;
+    this.settingsPanelW = layout.w;
+    this.settingsPanelH = layout.h;
+    this.settingsRowHits = layout.rowHits;
+    this.settingsPanelMesh.geometry.dispose();
+    this.settingsPanelMesh.geometry = new PlaneGeometry(layout.w, layout.h);
+    this.layoutSettingsPanel();
+  }
+
+  private isOverSettingsIcon(bufX: number, bufY: number): boolean {
+    const b = this.settingsIconBounds;
+    return bufX >= b.x && bufX < b.x + b.w && bufY >= b.y && bufY < b.y + b.h;
+  }
+
+  private isOverSettingsPanelClose(bufX: number, bufY: number): boolean {
+    if (!this.settingsPanelOpen) return false;
+    const b = this.settingsPanelCloseBounds;
+    return bufX >= b.x && bufX < b.x + b.w && bufY >= b.y && bufY < b.y + b.h;
+  }
+
+  // Click is anywhere inside the panel rectangle (used to absorb taps so
+  // they don't fall through to star picking).
+  private isOverSettingsPanel(bufX: number, bufY: number): boolean {
+    if (!this.settingsPanelOpen) return false;
+    return (
+      bufX >= this.settingsPanelX && bufX < this.settingsPanelX + this.settingsPanelW &&
+      bufY >= this.settingsPanelY && bufY < this.settingsPanelY + this.settingsPanelH
+    );
   }
 
   private layoutInfoCard(): void {

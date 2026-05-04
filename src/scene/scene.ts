@@ -24,6 +24,7 @@ import { StarPoints } from './stars';
 import { setSnappedLineViewport } from './materials';
 import { Hud } from './hud';
 import { STARS } from '../data/stars';
+import { getSettings } from '../settings';
 
 // Orbit radius bounds (camera-to-target ly). Replaces the old ortho frustum
 // height; under perspective, distance directly drives apparent size of
@@ -492,7 +493,17 @@ export class StarmapScene {
         } else if (this.pinchMode === 'pan') {
           const ddx = this.pinchMidX - oldMidX;
           const ddy = this.pinchMidY - oldMidY;
-          if (ddx !== 0 || ddy !== 0) this.applyTouchPan(ddx, ddy);
+          if (ddx !== 0 || ddy !== 0) {
+            // singleTouchAction = 'pan' swaps the camera-control mapping:
+            // single touch becomes the panner, and the two-finger pan
+            // gesture drives orbit. The disambiguator (pinch vs pan)
+            // doesn't change — only what the 'pan' commit *does*.
+            if (getSettings().singleTouchAction === 'pan') {
+              this.applyOrbitDelta(ddx, ddy);
+            } else {
+              this.applyTouchPan(ddx, ddy);
+            }
+          }
           this.focusAnimating = false;
         }
         this.pinchDist = d;
@@ -510,9 +521,17 @@ export class StarmapScene {
     }
     const dx = e.clientX - this.lastX, dy = e.clientY - this.lastY;
     this.lastX = e.clientX; this.lastY = e.clientY;
-    this.view.yaw   -= dx * 0.005;
-    this.view.pitch -= dy * 0.005;
-    this.view.pitch = Math.max(0.05, Math.min(Math.PI - 0.05, this.view.pitch));
+    // Single-touch behavior is configurable: 'orbit' (default) yaws/pitches
+    // the camera; 'pan' translates view.target along the camera's
+    // screen-aligned axes, leaving orbit to the two-finger gesture. Mouse
+    // and pen drags ignore the setting and always orbit — mice are
+    // single-button by definition and 2-button "two-finger pan" doesn't
+    // map cleanly to non-touch input.
+    if (e.pointerType === 'touch' && getSettings().singleTouchAction === 'pan') {
+      this.applyTouchPan(dx, dy);
+    } else {
+      this.applyOrbitDelta(dx, dy);
+    }
   }
 
   private measurePinch(): number {
@@ -560,6 +579,16 @@ export class StarmapScene {
     this._step.set(-cp * cy, -cp * sy, sp);  // screen_up in world
     this.view.target.addScaledVector(this._right, -dxPx * lyPerPx);
     this.view.target.addScaledVector(this._step, dyPx * lyPerPx);
+  }
+
+  // Yaw/pitch the camera by a screen-pixel delta. Shared by single-finger
+  // drag (the default) and two-finger pan-mode-when-singleTouchAction='pan'
+  // — same sensitivity (0.005 rad/CSS px) so swapping the gesture
+  // assignments doesn't change how fast the camera spins.
+  private applyOrbitDelta(dxPx: number, dyPx: number): void {
+    this.view.yaw   -= dxPx * 0.005;
+    this.view.pitch -= dyPx * 0.005;
+    this.view.pitch = Math.max(0.05, Math.min(Math.PI - 0.05, this.view.pitch));
   }
 
   // Keyboard: ESC dismisses selection; WASD pans the orbit pivot parallel
