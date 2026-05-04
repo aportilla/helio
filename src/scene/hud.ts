@@ -41,7 +41,9 @@ const COLOR_TITLE_BRIGHT = '#5ec8ff';
 const COLOR_TITLE_DIM    = '#2d7ab8';
 const COLOR_ACCENT       = '#3a8fe0';  // bright grid color (left border, on-state border)
 const COLOR_BORDER       = '#1e6fc4';  // dim grid color (off-state border)
+const COLOR_BG_ON        = '#10325d';  // dim blue fill behind the on-state settings trigger
 const COLOR_BTN_OFF_TEXT = '#5ec8ff';
+const COLOR_BTN_ON_TEXT  = '#ffffff';
 const COLOR_BTN_HOVER_TEXT = '#cfeeff';
 const COLOR_SCALE        = 0xe8f6ff;   // near-white for the scale bar + ticks
 
@@ -249,22 +251,50 @@ function buildInfoCardTexture(starIdx: number): { tex: CanvasTexture; w: number;
   return { tex: nearestFilteredTexture(c), w: W, h: H };
 }
 
-// Three horizontal "slider" lines centered in a SETTINGS_ICON_SIZE × SIZE
-// transparent box. Color is the only difference between off and hover
-// states, so we build both up-front and swap textures on hover (cheaper
-// than rebuilding the canvas mid-frame).
-function buildSettingsIconTexture(color: string): CanvasTexture {
+// Settings trigger: a 17×17 bordered button with a three-line "menu"
+// glyph centered inside. Four states pre-built up-front and swapped
+// based on (panel-open?, hover?):
+//   - off       : dim border, transparent bg, dim icon
+//   - offHover  : bright border, transparent bg, brighter icon
+//   - on        : bright border, dim-blue fill, white icon (panel open)
+//   - onHover   : bright border, dim-blue fill, palest-cyan icon
+type SettingsIconState = 'off' | 'offHover' | 'on' | 'onHover';
+
+function buildSettingsIconTexture(state: SettingsIconState): CanvasTexture {
+  const SIZE = SETTINGS_ICON_SIZE;
   const c = document.createElement('canvas');
-  c.width = SETTINGS_ICON_SIZE; c.height = SETTINGS_ICON_SIZE;
+  c.width = SIZE; c.height = SIZE;
   const g = c.getContext('2d')!;
+
+  const isOn = state === 'on' || state === 'onHover';
+  const isHover = state === 'offHover' || state === 'onHover';
+  const borderColor = isOn || isHover ? COLOR_ACCENT : COLOR_BORDER;
+  const iconColor = isOn
+    ? (state === 'onHover' ? COLOR_BTN_HOVER_TEXT : COLOR_BTN_ON_TEXT)
+    : (isHover ? COLOR_CLOSE_X_HOVER : COLOR_CLOSE_X);
+
+  if (isOn) {
+    g.fillStyle = COLOR_BG_ON;
+    g.fillRect(0, 0, SIZE, SIZE);
+  }
+
+  // 1 px border on all four sides.
+  g.fillStyle = borderColor;
+  g.fillRect(0, 0, SIZE, 1);
+  g.fillRect(0, SIZE - 1, SIZE, 1);
+  g.fillRect(0, 0, 1, SIZE);
+  g.fillRect(SIZE - 1, 0, 1, SIZE);
+
   // Three 9-px-wide, 1-px-tall lines on rows 5/8/11 — symmetric in a
-  // 17-row box (5 px above, 5 px below, 2 px gaps between lines).
-  g.fillStyle = color;
+  // 17-row box (5 px above the top line, 5 px below the bottom line,
+  // 2 px gaps between lines).
+  g.fillStyle = iconColor;
   const lineW = 9;
-  const lineX = (SETTINGS_ICON_SIZE - lineW) / 2;  // 4
+  const lineX = (SIZE - lineW) / 2;  // 4
   g.fillRect(lineX, 5, lineW, 1);
   g.fillRect(lineX, 8, lineW, 1);
   g.fillRect(lineX, 11, lineW, 1);
+
   return nearestFilteredTexture(c);
 }
 
@@ -511,6 +541,8 @@ export class Hud {
   private readonly settingsIconMat: MeshBasicMaterial;
   private readonly settingsIconTexOff: CanvasTexture;
   private readonly settingsIconTexHover: CanvasTexture;
+  private readonly settingsIconTexOn: CanvasTexture;
+  private readonly settingsIconTexOnHover: CanvasTexture;
   private settingsIconBounds = { x: 0, y: 0, w: 0, h: 0 };
   private settingsIconHover = false;
 
@@ -595,8 +627,10 @@ export class Hud {
     this.scene.add(this.closeXMesh);
 
     // ---- settings icon (bottom-left trigger) -----------------------------
-    this.settingsIconTexOff   = buildSettingsIconTexture(COLOR_CLOSE_X);
-    this.settingsIconTexHover = buildSettingsIconTexture(COLOR_CLOSE_X_HOVER);
+    this.settingsIconTexOff     = buildSettingsIconTexture('off');
+    this.settingsIconTexHover   = buildSettingsIconTexture('offHover');
+    this.settingsIconTexOn      = buildSettingsIconTexture('on');
+    this.settingsIconTexOnHover = buildSettingsIconTexture('onHover');
     this.settingsIconMat = new MeshBasicMaterial({ map: this.settingsIconTexOff, transparent: true, depthTest: false, depthWrite: false });
     this.settingsIconMesh = new Mesh(new PlaneGeometry(SETTINGS_ICON_SIZE, SETTINGS_ICON_SIZE), this.settingsIconMat);
     this.settingsIconMesh.renderOrder = 100;
@@ -739,8 +773,7 @@ export class Hud {
     const onSettingsIcon = this.isOverSettingsIcon(bufX, bufY);
     if (onSettingsIcon !== this.settingsIconHover) {
       this.settingsIconHover = onSettingsIcon;
-      this.settingsIconMat.map = onSettingsIcon ? this.settingsIconTexHover : this.settingsIconTexOff;
-      this.settingsIconMat.needsUpdate = true;
+      this.applySettingsIconTexture();
     }
     let onSettingsPanelClose = false;
     let hoveredRow: PanelRowHit | null = null;
@@ -865,6 +898,7 @@ export class Hud {
     this.settingsPanelMesh.visible = true;
     this.settingsPanelCloseMesh.visible = true;
     this.layoutSettingsPanel();
+    this.applySettingsIconTexture();
   }
 
   private closeSettingsPanel(): void {
@@ -872,6 +906,7 @@ export class Hud {
     this.settingsPanelOpen = false;
     this.settingsPanelMesh.visible = false;
     this.settingsPanelCloseMesh.visible = false;
+    this.applySettingsIconTexture();
     if (this.settingsPanelCloseHover) {
       this.settingsPanelCloseHover = false;
       this.settingsPanelCloseMat.map = this.closeXTexOff;
@@ -915,6 +950,14 @@ export class Hud {
   private isOverSettingsIcon(bufX: number, bufY: number): boolean {
     const b = this.settingsIconBounds;
     return bufX >= b.x && bufX < b.x + b.w && bufY >= b.y && bufY < b.y + b.h;
+  }
+
+  private applySettingsIconTexture(): void {
+    const tex = this.settingsPanelOpen
+      ? (this.settingsIconHover ? this.settingsIconTexOnHover : this.settingsIconTexOn)
+      : (this.settingsIconHover ? this.settingsIconTexHover    : this.settingsIconTexOff);
+    this.settingsIconMat.map = tex;
+    this.settingsIconMat.needsUpdate = true;
   }
 
   private isOverSettingsPanelClose(bufX: number, bufY: number): boolean {
