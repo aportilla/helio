@@ -10,7 +10,7 @@ import {
   Scene,
   Vector3,
 } from 'three';
-import { CLASS_SIZE, STARS, STAR_CLUSTERS, clusterIndexFor } from '../data/stars';
+import { STARS, STAR_CLUSTERS, clusterIndexFor } from '../data/stars';
 import { makeLabelTexture } from '../data/pixel-font';
 
 // Labels render in their own ortho overlay pass at 1 unit = 1 buffer pixel,
@@ -55,7 +55,7 @@ const RETICLE_COLOR   = '#ffe98a';
 // them here too. Sharing a const isn't worth the cross-module coupling for
 // two numbers that haven't moved in this file's history.
 const STAR_REF_DIST = 50;
-const STAR_PX_SCALE_DIVISOR = 600;
+const STAR_PX_SCALE_DIVISOR = 800;
 
 function buildReticleTexture(size: number, armLen: number): CanvasTexture {
   const c = document.createElement('canvas');
@@ -249,8 +249,7 @@ export class Labels {
     const dist = Math.max(-this._view.z, 0.5);
     const rawScale = STAR_REF_DIST / dist;
     const depthScale = rawScale > 1 ? Math.pow(rawScale, 1 / 3) : rawScale;
-    const aSize = CLASS_SIZE[s.cls] ?? CLASS_SIZE.M;
-    const sz = Math.max(aSize * (this.pxScale / STAR_PX_SCALE_DIVISOR) * depthScale, 2);
+    const sz = Math.max(s.pxSize * (this.pxScale / STAR_PX_SCALE_DIVISOR) * depthScale, 2);
     return Math.floor(sz + 0.5);
   }
 

@@ -161,7 +161,7 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
         // (28:22:18:14:12:10:8:6:3) survives all the way to the closest
         // possible zoom and you can see Alpha Cen A, B, and Proxima as
         // visibly different-sized discs at a 5-ly orbit.
-        float sz = max(aSize * (uPxScale / 600.0) * depthScale, 2.0);
+        float sz = max(aSize * (uPxScale / 800.0) * depthScale, 2.0);
         sz = floor(sz + 0.5);
         // Render a slightly larger square than the actual disc and let the
         // fragment shader's discard test determine the real shape. Without

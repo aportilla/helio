@@ -1,5 +1,5 @@
 import { BufferAttribute, BufferGeometry, Points, ShaderMaterial, Vector3 } from 'three';
-import { CLASS_COLOR, CLASS_SIZE, STARS } from '../data/stars';
+import { CLASS_COLOR, STARS } from '../data/stars';
 import { makeStarsMaterial } from './materials';
 
 // gl.POINTS-based starfield. Stars draw AFTER droplines so the dot always
@@ -22,7 +22,7 @@ export class StarPoints {
       colors[i * 3 + 0] = col.r;
       colors[i * 3 + 1] = col.g;
       colors[i * 3 + 2] = col.b;
-      sizes[i] = CLASS_SIZE[s.cls] ?? CLASS_SIZE.M;
+      sizes[i] = s.pxSize;
     });
 
     geom.setAttribute('position', new BufferAttribute(positions, 3));

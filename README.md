@@ -112,23 +112,22 @@ Also exports `drawPixelText(g2d, text, x, y, color)` so the HUD can compose text
 
 If you need glyphs outside the current set, add a row to `FONT_GLYPHS` keyed by Unicode codepoint.
 
-### Spectral-class lookups
+### Star color and size
 
-Two lookup tables in `src/data/stars.ts`:
-- **`CLASS_COLOR`** — approximate blackbody color per spectral class (Mitchell Charity table). O/B/A trend blue, F/G white, K/M orange-red, WD pale blue, BD deep red.
-- **`CLASS_SIZE`** — direct visual pixel size per class at the reference resolution (uPxScale = 600, ≈ 1200 px-tall buffer): `O 28, B 22, A 18, F 14, G 12, K 10, M 8, BD 6, WD 3`. The shader scales by `uPxScale / 600`, multiplies by the per-frame `uZoomScale`, clamps to `[2, 28]`, and rounds to the nearest integer. To shrink/grow all stars uniformly, bump the divisor in `materials.ts` rather than re-tuning each class.
+- **`CLASS_COLOR`** in `src/data/stars.ts` — approximate blackbody color per spectral class (Mitchell Charity table). O/B/A trend blue, F/G white, K/M orange-red, WD pale blue, BD deep red. Color stays class-driven because it's a temperature signal, not a size one.
+- **Per-star `pxSize`**, baked at module load by `radiusToPxSize(s.radiusSolar)`. Each catalog entry carries a `radiusSolar` value (measured where available — interferometry for Sirius A/B, Procyon A, Altair, Alpha Cen A/B, etc.; Chandrasekhar-derived for white dwarfs; main-sequence-relation estimates for the fainter M dwarfs). The mapping is `R^(1/3)` linear, anchored so Sirius B (0.0084 R☉) lands at pxSize 3 and Procyon A (2.048 R☉) at 18. The shader takes `pxSize`, scales by `uPxScale / 800` (the global size knob — bump that divisor to shrink all stars uniformly), applies the depth-attenuation factor, floors at 2 px, and rounds to integer.
 
-A previous version derived `CLASS_SIZE` from `CLASS_RADIUS` via `log10(R) * 1.6`, but the log-compression made K through B all render in the 8–12 px band — most stars looked interchangeable. Direct sizes give clean separation across the catalog.
+Real radii in the catalog span ~250× (Sirius B → Procyon A), so a linear mapping would make WDs invisible and A-class dwarfs dominate. Cube-root compression takes that 250× range and maps it into a ~6× pixel range across `[3, 18]`: WDs 3–4 px, BDs/smallest M dwarfs ~7, Wolf 359 ~8, mid M dwarfs ~10, K dwarfs 12–13, the Sun ~14, F dwarfs ~16, A dwarfs 17–18. A `log10` mapping was tried first but over-compressed — it bunched M dwarfs and A dwarfs into ~11 vs ~18 px (a ~1.6× ratio), close enough that the brightest class barely stood out. Cube-root recovers roughly the same class spacing as the old per-class `CLASS_SIZE` table (~2× M-to-A) while keeping within-class variation: Wolf 359 (0.144 R☉) and Lalande 21185 (0.392 R☉) render as visibly different M dwarfs, which a class-keyed lookup couldn't express.
 
 ### Depth-attenuated star sizing
 
 Under perspective, the stars vertex shader scales each disc by a depth factor derived from view-space distance (`REF_DIST = 50`, matching `DEFAULT_VIEW.distance`):
-- Raw factor: `REF_DIST / dist`. At `REF_DIST` away the factor is 1 and the star renders at its table size.
-- **Asymmetric:** close-up side is cube-root-compressed (`pow(rawScale, 1/3)` when `rawScale > 1`), zoom-out side is linear. Linear close-up growth eats the screen — at orbit 5 ly a focused class-G star wants 10× growth and ends up dominating. Cube-root compression preserves the per-class ratio (28:22:…:8:6:3 is intact) but tames absolute growth — orbit 5 → 2.15×, orbit 4 → 2.32×. The exponent (1/3) is the tuning knob: smaller = flatter close-up, larger = more growth. Zoom-out stays linear so distant fields shrink at the natural rate.
-- Floored at 2 px so the smallest dwarfs stay visible at zoom-out. **No upper bound** — an upper clamp on the final size flattens the largest classes into a single blob the moment any of them hit the cap.
+- Raw factor: `REF_DIST / dist`. At `REF_DIST` away the factor is 1 and the star renders at its `pxSize` value.
+- **Asymmetric:** close-up side is cube-root-compressed (`pow(rawScale, 1/3)` when `rawScale > 1`), zoom-out side is linear. Linear close-up growth eats the screen — at orbit 5 ly a focused class-G star wants 10× growth and ends up dominating. Cube-root compression preserves the per-star ratio but tames absolute growth — orbit 5 → 2.15×, orbit 4 → 2.32×. The exponent (1/3) is the tuning knob: smaller = flatter close-up, larger = more growth. Zoom-out stays linear so distant fields shrink at the natural rate.
+- Floored at 2 px so the smallest dwarfs stay visible at zoom-out. **No upper bound** — an upper clamp on the final size flattens the brightest entries into a single blob the moment any of them hit the cap.
 - Computed per-vertex from `modelViewMatrix * position`, so it picks up both camera-to-target distance and each star's offset from the focus naturally.
 
-Smallest stars (white dwarfs, table size 3) hit the size-2 floor first as their depth crosses ~1.5 × `REF_DIST`.
+White dwarfs (`pxSize ≈ 3`) hit the size-2 floor first as their depth crosses ~1.5 × `REF_DIST`.
 
 ### Star clusters
 
