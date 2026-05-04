@@ -68,7 +68,7 @@ Star positions are approximated to ~0.5 ly from known distances + RA/Dec. That's
 
 ### Camera
 
-`PerspectiveCamera`, FOV 45°. The camera always orbits a focused star — the user can never look at empty space. Right-click on any star (no drag) to pivot the orbit onto it; `view.target` lerps to the new star over ~400 ms (ease-in-out cubic) while yaw/pitch/distance stay frozen, so the camera glides over rather than swinging.
+`PerspectiveCamera`, FOV 45°. The camera orbits a 3D pivot point (`view.target`). Right-click on any star (no drag) snaps the pivot onto it; `view.target` lerps to the new star over ~400 ms (ease-in-out cubic) while yaw/pitch/distance stay frozen, so the camera glides over rather than swinging. WASD then translates the pivot in 3D (camera follows by the same vector, distance preserved) so the user can pan away from any star and orbit empty space — clicks set the pivot, keys drift it.
 
 The orbit state lives in `view = { target, distance, yaw, pitch, spin }`. `distance` is the **camera-to-target orbit radius in light years** — closer = zoomed in. Wheel/pinch dolly the orbit in/out; bounds are `[4, 150]` ly. Initial focus = the Sun; the HUD's "reset view" snaps focus, distance, yaw, and pitch back to their defaults instantly (a snap, not a glide — animating four axes at once looks jolty).
 
@@ -166,8 +166,10 @@ Stars themselves are also rendered opaque (`transparent: false, depthWrite: true
 
 ### Input
 
-All input lives in `StarmapScene`. The model is deliberately minimal — the camera is always orbiting a focused star, so panning and free-flying are not exposed.
+All input lives in `StarmapScene`.
 - **Pointer drag** (any button) = orbit (yaw/pitch).
+- **WASD** = pan the orbit pivot parallel to the galactic plane (z=0). W/S move along the yaw heading (the camera's view direction projected onto the plane), A/D strafe perpendicular to it. Pitch is ignored on purpose: looking down at a star and pressing W glides over it instead of plunging into it. Camera and target translate together so the orbit radius is preserved. Pan rate scales with `view.distance` so the screen-space movement rate is consistent across zooms.
+- **Q / E** = orbit left / right around the current pivot (yaw rate is constant in radians/sec).
 - **Wheel** = zoom (orbit radius). **Two-finger pinch** = zoom on touch.
 
 Touch input is unified through Pointer Events, not a separate `touchmove` path. `pointers` (a `Map<pointerId, {x,y}>`) tracks every active pointer; while exactly one is down, drag = orbit; the moment a second pointer lands, orbit drag is abandoned and the gesture switches to pinch-zoom driven by the two-finger separation. Without this hand-off (the previous code ran `pointermove` orbit and `touchmove` pinch concurrently) iPad Safari pinches always came with an unwanted yaw/pitch jolt from the first finger's `pointermove` events. The canvas also sets `touch-action: none` so iOS doesn't claim the gesture for page pan/zoom before our handlers see it. `pointercancel` resets gesture state when the OS steals a pointer (palm rejection, etc).
@@ -176,7 +178,7 @@ Touch input is unified through Pointer Events, not a separate `touchmove` path. 
 - **Hover** uses the same `Raycaster` against `gl.POINTS` (threshold 0.6 ly) as the click handlers — the hovered star drives the transient boxed tooltip in the label overlay.
 - The info card's close-X (top-right corner) clears the selection.
 
-**ESC** dismisses the current selection (info card + reticle), the same as clicking the card's close-X. That's the only keyboard binding. The HUD "reset view" button snaps focus back to the Sun + default yaw/pitch/distance.
+**ESC** dismisses the current selection (info card + reticle), the same as clicking the card's close-X. The HUD "reset view" button snaps focus back to the Sun + default yaw/pitch/distance. Held-key state is cleared on `window.blur` so a key whose keyup got swallowed by alt-tab doesn't leave the camera drifting.
 
 ## Coding conventions
 
@@ -190,7 +192,6 @@ Touch input is unified through Pointer Events, not a separate `touchmove` path. 
 ## Things that are deliberately not here
 
 - **No physically-accurate star positions or motions.** Catalog is for visualization, not navigation.
-- **No panning or free-fly camera.** The view is always orbiting a star; the only way to look elsewhere is to right-click another star and let the focus glide over.
-- **No keyboard navigation.** Removed alongside pan — drag, wheel, and left/right-click on a star are the whole input vocabulary.
+- **No free-fly camera.** The camera is always orbiting `view.target`. WASD translates the pivot but never decouples camera from target — there's no roll, no head-tilt independent of the orbit pivot.
 - **Animation is restricted to autospin, the boot splash fade, and the focus-pivot lerp.** Don't add others without intent.
 - **No texture-based stars or labels.** Everything is procedural / canvas-rasterized so the pixel-perfect look survives any zoom level.

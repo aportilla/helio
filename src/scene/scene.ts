@@ -50,6 +50,16 @@ const CLICK_DRAG_PX = 4;
 // the camera glides over to the new orbital pivot rather than swinging.
 const FOCUS_ANIM_MS = 400;
 
+// WASD/QE keyboard fly. Pan rate scales with view.distance so the visual
+// movement speed stays consistent at any zoom level (zoom in → smaller world
+// step per second, but the same screen-space rate). QE orbit is in radians
+// per second.
+const PAN_RATE_PER_DISTANCE = 0.5;
+const ORBIT_RATE_RAD = 1.5;
+// Clamp per-frame dt so a stalled tab or breakpoint resume doesn't hurl the
+// camera across the scene on the next frame.
+const MAX_TICK_DT_MS = 100;
+
 interface ViewState {
   target: Vector3;
   distance: number;  // orbit radius (camera-to-target ly)
@@ -117,12 +127,24 @@ export class StarmapScene {
   private readonly _onWheel         = (e: WheelEvent) => this.onWheel(e);
   private readonly _onContextMenu   = (e: Event) => e.preventDefault();
   private readonly _onKeyDown       = (e: KeyboardEvent) => this.onKeyDown(e);
+  private readonly _onKeyUp         = (e: KeyboardEvent) => this.onKeyUp(e);
+  private readonly _onBlur          = () => this.heldKeys.clear();
   private readonly _onResize        = () => this.resize();
 
   // Reusable per-frame scratch.
   private readonly _ndc  = new Vector2();
   private readonly _buf  = new Vector2();
   private readonly _hudPt = { x: 0, y: 0 };
+  private readonly _forward = new Vector3();
+  private readonly _right   = new Vector3();
+  private readonly _step    = new Vector3();
+  private static readonly WORLD_UP = new Vector3(0, 0, 1);
+
+  // Held-key state for WASD pan + QE orbit. Continuous-while-held; cleared
+  // on blur so a key whose keyup got swallowed (alt-tab, etc.) doesn't get
+  // stuck and carry the camera off-screen.
+  private readonly heldKeys = new Set<string>();
+  private lastTickMs = 0;
 
   // Cached drawing-buffer dimensions, populated by resize(). All pixel-aware
   // shader work uses these — NOT window.innerWidth/Height — because the
@@ -208,6 +230,7 @@ export class StarmapScene {
     this.running = false;
     cancelAnimationFrame(this.rafId);
     this.detachListeners();
+    this.lastTickMs = 0;
   }
 
   // -- listeners ---------------------------------------------------------
@@ -220,6 +243,8 @@ export class StarmapScene {
     this.canvas.addEventListener('wheel',         this._onWheel, { passive: false });
     this.canvas.addEventListener('contextmenu',   this._onContextMenu);
     window.addEventListener('keydown', this._onKeyDown);
+    window.addEventListener('keyup',   this._onKeyUp);
+    window.addEventListener('blur',    this._onBlur);
     window.addEventListener('resize',  this._onResize);
   }
 
@@ -231,6 +256,8 @@ export class StarmapScene {
     this.canvas.removeEventListener('wheel',         this._onWheel);
     this.canvas.removeEventListener('contextmenu',   this._onContextMenu);
     window.removeEventListener('keydown', this._onKeyDown);
+    window.removeEventListener('keyup',   this._onKeyUp);
+    window.removeEventListener('blur',    this._onBlur);
     window.removeEventListener('resize',  this._onResize);
   }
 
@@ -366,11 +393,56 @@ export class StarmapScene {
     return Math.hypot(a.x - b.x, a.y - b.y);
   }
 
-  // ESC dismisses the current selection (info card + reticle), mirroring
-  // the close-X button. Listening on window so it fires regardless of
-  // focus, since the canvas itself isn't focusable.
+  // Keyboard: ESC dismisses selection; WASD pans the orbit pivot parallel
+  // to the galactic plane (camera follows by the same vector, distance
+  // preserved); QE orbits around the pivot. Listening on window so it
+  // fires regardless of focus, since the canvas itself isn't focusable.
   private onKeyDown(e: KeyboardEvent): void {
-    if (e.key === 'Escape') this.deselect();
+    if (e.key === 'Escape') {
+      this.deselect();
+      return;
+    }
+    const k = e.key.toLowerCase();
+    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e') {
+      this.heldKeys.add(k);
+      // User taking manual control cancels any in-flight focus glide,
+      // otherwise the lerp would fight the WASD translation.
+      this.focusAnimating = false;
+      e.preventDefault();
+    }
+  }
+
+  private onKeyUp(e: KeyboardEvent): void {
+    this.heldKeys.delete(e.key.toLowerCase());
+  }
+
+  // Per-frame WASD/QE update. Forward and right are derived from yaw alone
+  // (no pitch term) so WASD pans parallel to the galactic plane regardless
+  // of camera tilt — looking down at a star and pressing W glides across
+  // the plane instead of plunging into it. Pitch is clamped < π so the
+  // camera always has a well-defined yaw direction.
+  private applyHeldKeys(dt: number): void {
+    if (this.heldKeys.size === 0) return;
+
+    const sy = Math.sin(this.view.yaw);
+    const cy = Math.cos(this.view.yaw);
+    // Camera = target + R*(sp*cy, sp*sy, cp); the horizontal projection of
+    // (target - camera) drops the cp term. Already unit length: cy² + sy² = 1.
+    this._forward.set(-cy, -sy, 0);
+    this._right.crossVectors(this._forward, StarmapScene.WORLD_UP).normalize();
+
+    this._step.set(0, 0, 0);
+    if (this.heldKeys.has('w')) this._step.add(this._forward);
+    if (this.heldKeys.has('s')) this._step.sub(this._forward);
+    if (this.heldKeys.has('d')) this._step.add(this._right);
+    if (this.heldKeys.has('a')) this._step.sub(this._right);
+    if (this._step.lengthSq() > 0) {
+      this._step.normalize().multiplyScalar(this.view.distance * PAN_RATE_PER_DISTANCE * dt);
+      this.view.target.add(this._step);
+    }
+
+    if (this.heldKeys.has('q')) this.view.yaw += ORBIT_RATE_RAD * dt;
+    if (this.heldKeys.has('e')) this.view.yaw -= ORBIT_RATE_RAD * dt;
   }
 
   private deselect(): void {
@@ -497,7 +569,16 @@ export class StarmapScene {
   private tick = (): void => {
     if (!this.running) return;
 
+    const now = performance.now();
+    // Frame delta in seconds, clamped so a stalled tab resume doesn't
+    // teleport the camera. First frame after start: dt = 0.
+    const dt = this.lastTickMs > 0
+      ? Math.min(now - this.lastTickMs, MAX_TICK_DT_MS) / 1000
+      : 0;
+    this.lastTickMs = now;
+
     if (this.view.spin) this.view.yaw += 0.0015;
+    this.applyHeldKeys(dt);
 
     if (this.focusAnimating) {
       const t = Math.min(1, (performance.now() - this.focusAnimStart) / FOCUS_ANIM_MS);
