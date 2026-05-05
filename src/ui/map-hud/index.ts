@@ -1,0 +1,404 @@
+// MapHud — composition root for the star map's HUD overlay.
+//
+// Owns:
+//   - title (top-left) — static
+//   - scaleBar (bottom-left) — bar + 2 ticks + label, set per camera frame
+//   - settingsIcon (bottom-right) — IconButton, 4-state (panel open/closed × hover)
+//   - settingsPanel (popover above the settings icon) — Panel
+//   - panelClose — IconButton sibling of settingsPanel
+//   - infoCard (top-right) — InfoCard, shown when a star is selected
+//   - cardClose — IconButton sibling of infoCard
+//
+// External API matches the previous Hud class so scene.ts plugs in
+// unchanged: scene, camera, onToggle/onAction/onDeselect/onSettingsChanged
+// callbacks, and resize/setScale/setSelectedStar/setToggleState/
+// handleClick/handlePointerMove methods.
+
+import {
+  CanvasTexture,
+  OrthographicCamera,
+  Scene,
+} from 'three';
+import { getSettings, setSetting } from '../../settings';
+import {
+  paintCloseX,
+  paintHamburger,
+  paintSurface,
+} from '../painter';
+import { colors, sizes } from '../theme';
+import { paintToTexture } from '../widget';
+import { IconButton, type IconButtonStates } from '../icon-button';
+import { Panel, type PanelHit, type PanelSpec } from '../panel';
+import { TitleBlock } from './title';
+import { ScaleBar } from './scale-bar';
+import { InfoCard } from './info-card';
+
+export type ToggleId = 'labels' | 'drops' | 'spin';
+export type ActionId = 'reset';
+
+// Inline texture-pool factories for the icons that use IconButton's
+// shared-texture path. Building them here keeps disposal in the
+// orchestrator (single owner) — IconButton borrows references and
+// never disposes them itself.
+
+function buildCloseXTexture(glyphColor: string): CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = sizes.closeBox; c.height = sizes.closeBox;
+  paintCloseX(c.getContext('2d')!, 0, 0, glyphColor);
+  return paintToTexture(c);
+}
+
+type SettingsIconState = 'off' | 'offHover' | 'on' | 'onHover';
+
+function buildSettingsIconTexture(state: SettingsIconState): CanvasTexture {
+  const SIZE = sizes.iconBox;
+  const c = document.createElement('canvas');
+  c.width = SIZE; c.height = SIZE;
+  const g = c.getContext('2d')!;
+
+  const isOn = state === 'on' || state === 'onHover';
+  const isHover = state === 'offHover' || state === 'onHover';
+  const borderColor = isOn || isHover ? colors.borderAccent : colors.borderDim;
+  const iconColor = isOn
+    ? (state === 'onHover' ? colors.glyphOnHover : colors.glyphOnState)
+    : (isHover ? colors.glyphHover : colors.glyphOff);
+
+  // Background fill: dim-blue when on (selected highlight), dark
+  // semi-transparent navy when off — same color as the info card and
+  // settings panel so the button reads as the same UI family.
+  paintSurface(g, 0, 0, SIZE, SIZE, {
+    bg: isOn ? colors.surfaceOn : colors.surface,
+    border: borderColor,
+  });
+  paintHamburger(g, 0, 0, SIZE, iconColor);
+
+  return paintToTexture(c);
+}
+
+export class MapHud {
+  readonly scene = new Scene();
+  readonly camera = new OrthographicCamera(0, 1, 1, 0, -1, 1);
+
+  private bufferW = 1;
+  private bufferH = 1;
+
+  // Toggle state for the in-panel checkboxes. Held here (orchestrator
+  // owns the truth) and serialized into the panel rows on each rebuild.
+  // Defaults match the prior standalone-button defaults so existing
+  // behavior is preserved out of the box.
+  private readonly toggleState: { [K in ToggleId]: boolean } = {
+    labels: true,
+    drops:  true,
+    spin:   false,
+  };
+
+  // Composed widgets
+  private readonly title: TitleBlock;
+  private readonly scaleBar: ScaleBar;
+  private readonly infoCard: InfoCard;
+  private readonly cardClose: IconButton;
+  private readonly settingsIcon: IconButton;
+  private readonly settingsPanel: Panel;
+  private readonly panelClose: IconButton;
+
+  // Shared texture pools — disposed in dispose() (single owner).
+  private readonly closeXTextures: IconButtonStates;
+  private readonly settingsIconTextures: IconButtonStates;
+
+  private settingsPanelOpen = false;
+  private hoveredRowId: string | null = null;
+
+  // Public callbacks. The scene wires these to its own toggle methods.
+  onToggle: (id: ToggleId, on: boolean) => void = () => {};
+  onAction: (id: ActionId) => void = () => {};
+  onDeselect: () => void = () => {};
+  // Fires when a setting changes via the modal — scene reads getSettings()
+  // each gesture so this is informational, but having a hook lets the
+  // scene react immediately if a setting requires recomputed state.
+  onSettingsChanged: () => void = () => {};
+
+  constructor() {
+    // ---- title -----------------------------------------------------------
+    this.title = new TitleBlock();
+    this.title.addTo(this.scene);
+
+    // ---- scale bar -------------------------------------------------------
+    this.scaleBar = new ScaleBar();
+    this.scaleBar.addTo(this.scene);
+
+    // ---- info card -------------------------------------------------------
+    this.infoCard = new InfoCard(100);
+    this.infoCard.addTo(this.scene);
+
+    // ---- shared texture pools -------------------------------------------
+    this.closeXTextures = {
+      off:   buildCloseXTexture(colors.glyphOff),
+      hover: buildCloseXTexture(colors.glyphHover),
+    };
+    this.settingsIconTextures = {
+      off:     buildSettingsIconTexture('off'),
+      hover:   buildSettingsIconTexture('offHover'),
+      on:      buildSettingsIconTexture('on'),
+      onHover: buildSettingsIconTexture('onHover'),
+    };
+
+    // ---- close-X on info card -------------------------------------------
+    this.cardClose = new IconButton(sizes.closeBox, this.closeXTextures, {
+      renderOrder: 101,                 // above the card (100)
+      hitPad: sizes.closeHitPad,
+    });
+    this.cardClose.setVisible(false);
+    this.cardClose.addTo(this.scene);
+
+    // ---- settings icon (bottom-right trigger) ---------------------------
+    this.settingsIcon = new IconButton(sizes.iconBox, this.settingsIconTextures, {
+      renderOrder: 100,
+      hitPad: sizes.iconHitPad,
+    });
+    this.settingsIcon.addTo(this.scene);
+
+    // ---- settings panel (modal) -----------------------------------------
+    this.settingsPanel = new Panel(100);
+    this.settingsPanel.addTo(this.scene);
+
+    this.panelClose = new IconButton(sizes.closeBox, this.closeXTextures, {
+      renderOrder: 101,                 // above the panel (100)
+      hitPad: sizes.closeHitPad,
+    });
+    this.panelClose.setVisible(false);
+    this.panelClose.addTo(this.scene);
+  }
+
+  // -- public API -------------------------------------------------------
+
+  resize(bufferW: number, bufferH: number): void {
+    this.bufferW = bufferW;
+    this.bufferH = bufferH;
+    this.camera.left = 0; this.camera.right = bufferW;
+    this.camera.bottom = 0; this.camera.top = bufferH;
+    this.camera.updateProjectionMatrix();
+    this.layoutAll();
+  }
+
+  setScale(step: number, widthPx: number): void {
+    this.scaleBar.set(step, widthPx);
+    this.scaleBar.layout(sizes.edgePad);
+    // Settings icon sits above the scale; no re-anchor needed today
+    // (icon is anchored bottom-right at edgePad, not relative to scale)
+    // — but if a future design moves it above the scale label, add an
+    // explicit re-anchor here using scaleBar.labelHeight.
+  }
+
+  setSelectedStar(starIdx: number): void {
+    this.infoCard.setStar(starIdx);
+    if (starIdx < 0) {
+      this.cardClose.setVisible(false);
+      this.cardClose.resetHover();
+      return;
+    }
+    this.cardClose.setVisible(true);
+    this.layoutInfoCard();
+  }
+
+  // External state sync — scene calls this if state flips from
+  // elsewhere (e.g. keyboard shortcut, reset re-arming autospin off).
+  setToggleState(id: ToggleId, on: boolean): void {
+    if (this.toggleState[id] === on) return;
+    this.toggleState[id] = on;
+    if (this.settingsPanelOpen) this.rebuildPanelSpec();
+  }
+
+  // Returns true if the click hit any HUD interactive element.
+  handleClick(bufX: number, bufY: number): boolean {
+    if (this.cardClose.visible && this.cardClose.bounds.contains(bufX, bufY)) {
+      this.onDeselect();
+      return true;
+    }
+    if (this.settingsIcon.bounds.contains(bufX, bufY)) {
+      // Click trigger when panel is already open → close. Common popover
+      // toggle pattern.
+      if (this.settingsPanelOpen) this.closePanel();
+      else this.openPanel();
+      return true;
+    }
+    if (this.settingsPanelOpen) {
+      if (this.panelClose.bounds.contains(bufX, bufY)) {
+        this.closePanel();
+        return true;
+      }
+      const hit = this.settingsPanel.hitRow(bufX, bufY);
+      if (hit) {
+        this.dispatchRow(hit);
+        return true;
+      }
+      // Tap inside the panel rect but on no row — absorb so it doesn't
+      // fall through to star picking behind the panel.
+      if (this.settingsPanel.hitsBackground(bufX, bufY)) return true;
+    }
+    return false;
+  }
+
+  // Returns true if the cursor is over any HUD interactive element
+  // (caller changes cursor to pointer in that case).
+  handlePointerMove(bufX: number, bufY: number): boolean {
+    const onCloseX = this.cardClose.visible && this.cardClose.bounds.contains(bufX, bufY);
+    this.cardClose.setHover(onCloseX);
+
+    const onSettingsIcon = this.settingsIcon.bounds.contains(bufX, bufY);
+    this.settingsIcon.setHover(onSettingsIcon);
+
+    let onPanelClose = false;
+    let hoveredRow: PanelHit | null = null;
+    if (this.settingsPanelOpen) {
+      onPanelClose = this.panelClose.bounds.contains(bufX, bufY);
+      this.panelClose.setHover(onPanelClose);
+
+      hoveredRow = this.settingsPanel.hitRow(bufX, bufY);
+      const newId = hoveredRow ? hoveredRow.id : null;
+      if (newId !== this.hoveredRowId) {
+        this.hoveredRowId = newId;
+        this.settingsPanel.setHoveredRow(newId);
+      }
+    }
+    return onCloseX || onSettingsIcon || onPanelClose || hoveredRow !== null;
+  }
+
+  // -- internal: dispatch / panel state ---------------------------------
+
+  private dispatchRow(hit: PanelHit): void {
+    if (hit.kind === 'action') {
+      this.onAction(hit.id as ActionId);
+      return;
+    }
+    if (hit.id === 'singleTouchPan') {
+      const next = getSettings().singleTouchAction === 'pan' ? 'orbit' : 'pan';
+      setSetting('singleTouchAction', next);
+      this.onSettingsChanged();
+      this.rebuildPanelSpec();
+      return;
+    }
+    // Toggle row backed by a ToggleId — flip internal state, fire the
+    // callback, rebuild so the checkbox glyph updates.
+    const id = hit.id as ToggleId;
+    this.toggleState[id] = !this.toggleState[id];
+    this.onToggle(id, this.toggleState[id]);
+    this.rebuildPanelSpec();
+  }
+
+  private buildPanelSpec(): PanelSpec {
+    const s = getSettings();
+    return {
+      title: 'Settings',
+      sections: [
+        {
+          header: 'Display',
+          rows: [
+            { kind: 'toggle', id: 'labels', label: 'Show star labels',         on: this.toggleState.labels },
+            { kind: 'toggle', id: 'drops',  label: 'Show distance droplines',  on: this.toggleState.drops  },
+            { kind: 'toggle', id: 'spin',   label: 'Auto-rotate view',         on: this.toggleState.spin   },
+            { kind: 'action', id: 'reset',  label: 'Reset view' },
+          ],
+        },
+        {
+          header: 'Touch input',
+          rows: [
+            { kind: 'toggle', id: 'singleTouchPan', label: 'Pan with single touch', on: s.singleTouchAction === 'pan' },
+          ],
+        },
+      ],
+    };
+  }
+
+  // Rebuild the spec → panel re-paints. Width/height may change, so
+  // re-anchor after every rebuild (mirrors the prior `rebuildSettingsPanel
+  // → layoutSettingsPanel` sequence).
+  private rebuildPanelSpec(): void {
+    this.settingsPanel.setSpec(this.buildPanelSpec());
+    this.layoutSettingsPanel();
+  }
+
+  private openPanel(): void {
+    if (this.settingsPanelOpen) return;
+    this.settingsPanelOpen = true;
+    this.rebuildPanelSpec();
+    this.panelClose.setVisible(true);
+    this.layoutSettingsPanel();
+    this.settingsIcon.setSelected(true);
+  }
+
+  private closePanel(): void {
+    if (!this.settingsPanelOpen) return;
+    this.settingsPanelOpen = false;
+    this.settingsPanel.setVisible(false);
+    this.panelClose.setVisible(false);
+    this.settingsIcon.setSelected(false);
+    this.panelClose.resetHover();
+    this.hoveredRowId = null;
+  }
+
+  // -- layout -----------------------------------------------------------
+
+  private layoutAll(): void {
+    this.title.anchorTo('tl', this.bufferW, this.bufferH, sizes.edgePad, sizes.edgePad);
+    this.scaleBar.layout(sizes.edgePad);
+    this.layoutInfoCard();
+    this.settingsIcon.anchorTo('br', this.bufferW, this.bufferH, sizes.edgePad, sizes.edgePad);
+    if (this.settingsPanelOpen) this.layoutSettingsPanel();
+  }
+
+  private layoutInfoCard(): void {
+    if (!this.infoCard.visible) return;
+    // Top-right corner. Uses sizes.cardMargin (a touch farther in than
+    // the title/buttons' sizes.edgePad) so the boxed border has visible
+    // breathing room from the screen edge. Read width/height directly
+    // (not visibleBounds.w/h) so the very first layout after setStar()
+    // sees the freshly-painted size instead of the pre-placement zeros.
+    const cardRight = this.bufferW - sizes.cardMargin;
+    const cardTop   = this.bufferH - sizes.cardMargin;
+    this.infoCard.placeAt(cardRight - this.infoCard.width, cardTop - this.infoCard.height);
+
+    // Close-X flush with the card's top-right corner.
+    this.cardClose.placeAt(cardRight - sizes.closeBox, cardTop - sizes.closeBox);
+  }
+
+  private layoutSettingsPanel(): void {
+    if (!this.settingsPanelOpen) return;
+    // Panel opens upward and to the LEFT of the bottom-right trigger so
+    // it never extends off-screen on the right. Right edge aligns with
+    // the trigger's right edge (window_right - sizes.edgePad) so the
+    // column reads as a connected popover; bottom edge clears the
+    // trigger's *visible* top by sizes.panelTriggerGap (un-padded by
+    // hitPad — gap should track what the user sees, not the inflated
+    // click target).
+    const vis = this.settingsIcon.visibleBounds;
+    const panelBottom = vis.y + vis.h + sizes.panelTriggerGap;
+    const panelRight = this.bufferW - sizes.edgePad;
+    const panelW = this.settingsPanel.width;
+    const panelH = this.settingsPanel.height;
+    this.settingsPanel.placeAt(panelRight - panelW, panelBottom);
+
+    // Panel close-X flush with the panel's top-right corner.
+    const panelTop = panelBottom + panelH;
+    this.panelClose.placeAt(panelRight - sizes.closeBox, panelTop - sizes.closeBox);
+  }
+
+  // -- lifecycle --------------------------------------------------------
+
+  dispose(): void {
+    // IconButton instances borrow textures from the pools below; they
+    // don't dispose them. Single-owner cleanup happens here.
+    for (const k of Object.keys(this.closeXTextures) as Array<keyof IconButtonStates>) {
+      this.closeXTextures[k]?.dispose();
+    }
+    for (const k of Object.keys(this.settingsIconTextures) as Array<keyof IconButtonStates>) {
+      this.settingsIconTextures[k]?.dispose();
+    }
+    this.title.dispose();
+    this.scaleBar.dispose();
+    this.infoCard.dispose();
+    this.cardClose.dispose();
+    this.settingsIcon.dispose();
+    this.settingsPanel.dispose();
+    this.panelClose.dispose();
+  }
+}

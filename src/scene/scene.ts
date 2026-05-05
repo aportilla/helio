@@ -22,7 +22,7 @@ import { Droplines } from './droplines';
 import { Labels } from './labels';
 import { StarPoints } from './stars';
 import { setSnappedLineViewport } from './materials';
-import { Hud } from './hud';
+import { MapHud } from '../ui/map-hud';
 import { STARS } from '../data/stars';
 import { getSettings } from '../settings';
 
@@ -107,7 +107,7 @@ export class StarmapScene {
   private readonly droplines: Droplines;
   private readonly labels: Labels;
   private readonly starPoints: StarPoints;
-  private readonly hud: Hud;
+  private readonly hud: MapHud;
 
   // Drag state. Any pointer drag = orbit (yaw/pitch); pan was removed because
   // the camera always orbits a star, never an arbitrary world point.
@@ -156,7 +156,7 @@ export class StarmapScene {
   private pinchStartBx = 0;
   private pinchStartBy = 0;
   private readonly pointer = { x: 0, y: 0, has: false };
-  // Selection state lives in Labels (reticle) and Hud (info card) — Scene
+  // Selection state lives in Labels (reticle) and MapHud (info card) — Scene
   // routes click events to both but doesn't hold a copy itself.
 
   // Focus animation: view.target lerps from focusFrom → focusTo over
@@ -250,7 +250,7 @@ export class StarmapScene {
 
     this.labels = new Labels();
 
-    this.hud = new Hud();
+    this.hud = new MapHud();
     this.hud.onToggle = (id, on) => {
       if (id === 'labels') this.labels.setShowLabels(on);
       else if (id === 'drops') this.droplines.setMasterVisible(on);
