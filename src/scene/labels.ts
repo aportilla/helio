@@ -329,8 +329,12 @@ export class Labels {
     //     4 so it always paints above every other overlay element. Same
     //     anchor offset as plain, so the text shifts ~2 px from the box's
     //     extra padding/border — a deliberate state-change cue.
+    // Hover on a *selected* cluster falls through to the plain branch: the
+    // reticle already provides the "this is the active system" feedback, so
+    // adding the boxed hover on top would be redundant chrome.
     // Hover ignores `showLabels` on purpose: with labels off, the boxed
-    // hover is the only feedback that pointing at a star did anything.
+    // hover (or, when selected, the plain label) is the only feedback that
+    // pointing at a star did anything.
     // Without the per-renderOrder depth sort, all cluster labels would share
     // renderOrder 1 with uniform z, and draw order would fall back to scene-
     // add (catalog) order — far labels could paint over near ones.
@@ -360,7 +364,7 @@ export class Labels {
           opacity *= 1 - (dCam - LABEL_CAM_FADE_NEAR) / (LABEL_CAM_FADE_FAR - LABEL_CAM_FADE_NEAR);
         }
       }
-      if (isHover) {
+      if (isHover && !isSelected) {
         L.mesh.visible = false;
         L.hoverMesh.visible = true;
         (L.hoverMesh.material as MeshBasicMaterial).opacity = opacity;
