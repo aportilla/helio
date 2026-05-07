@@ -66,10 +66,11 @@ export function setSnappedLineViewport(w: number, h: number): void {
 // and setting gl_PointSize = 1. Used by droplines for the dotted (far-side
 // of the galactic plane) variant — far simpler than baking dash segments
 // into LineSegments geometry, since each dot is a single vertex.
-export function snappedDotsMat(opts: { color: number }): ShaderMaterial {
+export function snappedDotsMat(opts: { color: number; opacity?: number }): ShaderMaterial {
   const m = new ShaderMaterial({
     uniforms: {
       uColor:    { value: new Color(opts.color) },
+      uOpacity:  { value: opts.opacity ?? 1.0 },
       uViewport: { value: new Vector2(window.innerWidth, window.innerHeight) },
     },
     vertexShader: `
@@ -88,11 +89,12 @@ export function snappedDotsMat(opts: { color: number }): ShaderMaterial {
     `,
     fragmentShader: `
       uniform vec3 uColor;
+      uniform float uOpacity;
       void main() {
-        gl_FragColor = vec4(uColor, 1.0);
+        gl_FragColor = vec4(uColor, uOpacity);
       }
     `,
-    transparent: false,
+    transparent: true,
     depthWrite: false,
   });
   // Reuse the snapped-line registry so resize() pushes the new viewport into
@@ -107,8 +109,9 @@ export function snappedDotsMat(opts: { color: number }): ShaderMaterial {
 //
 // Under perspective, size is depth-attenuated: a star at REF_DIST renders at
 // its table size; closer stars enlarge proportionally, farther stars shrink.
-// REF_DIST = DEFAULT_VIEW.distance (50) so when focused on a star at the
-// orbit center, that star renders at exactly its table size.
+// REF_DIST anchors the depth-attenuation curve to the value the per-class
+// table sizes were tuned against — independent of the default orbit radius
+// (which can be tweaked for framing without rescaling every disc).
 export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
   const m = new ShaderMaterial({
     uniforms: {

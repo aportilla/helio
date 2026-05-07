@@ -25,7 +25,7 @@ const FOV_DEG = 45;
 const NEAR = 0.1;
 const FAR = 1000;
 const NICE_STEPS = [20, 10, 5, 2.5, 1, 0.5, 0.2, 0.1];
-const DEFAULT_VIEW = { distance: 50, yaw: 1.1, pitch: 1.2 };
+const DEFAULT_VIEW = { distance: 30, yaw: 1.1, pitch: 1.2 };
 
 // Each render-buffer ("env") pixel is upscaled by the browser into this many
 // physical screen pixels via image-rendering: pixelated. Larger = chunkier
@@ -916,12 +916,16 @@ export class StarmapScene {
     this.updateCamera();
     this.emitScale();
 
-    this.droplines.update(this.camera);
     this.starPoints.setFocus(this.view.target);
 
-    // Hover detection — pick the star whose ray-distance is smallest.
+    // Hover detection — pick the star whose ray-distance is smallest, then
+    // share the cluster-mapped index with both the label overlay (boxed-hover
+    // variant) and the droplines (always-show-on-hover override).
     const hovered = this.pointer.has ? this.pickStar(this.pointer.x, this.pointer.y) : -1;
+    const hoveredCluster = hovered >= 0 ? clusterIndexFor(hovered) : -1;
     this.labels.setHovered(hovered);
+    this.droplines.setHovered(hoveredCluster);
+    this.droplines.update(this.camera, this.view.target);
     this.labels.update(this.camera, this.view.target);
 
     this.renderer.render(this.scene, this.camera);
