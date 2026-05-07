@@ -36,7 +36,7 @@ export class Grid {
     ]);
     this.group.add(new Line(yAxis, lineMat));
 
-    const arrowMat = snappedLineMat({ color: 0x3a8fe0, opacity: ARROW_OPACITY });
+    const arrowMat = snappedLineMat({ color: 0x1e6fc4, opacity: ARROW_OPACITY });
     const shaft = new BufferGeometry().setFromPoints([
       new Vector3(20, 0, 0), new Vector3(24, 0, 0),
     ]);
