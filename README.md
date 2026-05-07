@@ -54,13 +54,18 @@ src/
     base-panel.ts           Repaint-on-state-change canvas-texture panel base
     panel.ts                Settings popover (sectioned rows: toggles + actions)
     icon-button.ts          Pre-built texture-pool button (off/hover/on/onHover)
-    action-button.ts        Text pill button ("View System")
+    action-button.ts        Text pill button (off/hover/disabled), used for
+                            "View System" and "Focus"
     painter.ts              Shared 2D primitives: surfaces, glyphs, close-X,
                             hamburger, left-arrow, etc.
     theme.ts                colors / sizes / fonts shared across widgets
+    hit-test.ts             HitResult type — the three-way 'interactive' /
+                            'opaque' / 'transparent' contract HUDs expose
+                            for pointer-event routing
     map-hud/
       index.ts              MapHud: title, scale bar, settings trigger + panel,
-                            info card with close-X and "View System" button
+                            info card with close-X, "View System" pill, and
+                            disable-when-focused "Focus" pill
       title.ts              Static top-left title block
       scale-bar.ts          Bottom-left scale bar (bar + 2 ticks + label)
       info-card.ts          Top-right cluster info card
@@ -91,13 +96,15 @@ src/
 
 There's no UI plumbing between the bootstrap and the scenes: each scene owns its own HUD orchestrator (`MapHud` for galaxy view, `SystemHud` for system view), each with its own ortho pass at 1 unit = 1 buffer pixel. HUD widgets are built on `Widget` (Mesh + PlaneGeometry + MeshBasicMaterial + optional CanvasTexture) so HUD geometry shares the rest of the scene's pixel grid.
 
-Each HUD captures pointer events first (in the scene's `onPointerDown` / `onPointerMove` via `clientToHud()`), so clicking a button or a panel row never starts a pan/orbit and hovering swaps the cursor to `pointer`. `MapHud` exposes `onToggle`, `onAction`, `onDeselect`, `onViewSystem`, and `onSettingsChanged` callbacks; `SystemHud` exposes `onBack`. The settings panel's touch-input row writes through `setSetting` in `src/settings.ts`. The scene reads `getSettings()` at gesture time (pull-on-read), so a flipped preference takes effect on the very next pointer event with no callback plumbing.
+Each HUD captures pointer events first (in the scene's `onPointerDown` / `onPointerMove` via `clientToHud()`), so clicking a button or a panel row never starts a pan/orbit and hovering swaps the cursor to `pointer`. `MapHud` exposes `onToggle`, `onAction`, `onDeselect`, `onViewSystem`, `onFocus`, and `onSettingsChanged` callbacks; `SystemHud` exposes `onBack`. The settings panel's touch-input row writes through `setSetting` in `src/settings.ts`. The scene reads `getSettings()` at gesture time (pull-on-read), so a flipped preference takes effect on the very next pointer event with no callback plumbing.
+
+Each HUD also exposes `hitTest(bufX, bufY)` returning one of `'interactive' | 'opaque' | 'transparent'` (see `src/ui/hit-test.ts`). The scene queries it once per `pointermove` and only sets `pointer.has = true` when the result is `'transparent'`, so stars behind a button, panel, or info card body don't light up hover labels through the chrome above them. `'opaque'` covers visually-solid surfaces that aren't clickable (panel background, card body, disabled focus button) — they block scene picks and absorb clicks (so a mousedown on the card body doesn't start an orbit drag) without changing the cursor. `'interactive'` adds the cursor swap and dispatches the click. This three-way model is the seed of the layered input router described in [`FUTURE_PLANNING.md`](./FUTURE_PLANNING.md); each HUD's `hitTest` will become an `InputLayer` when modals / tooltips / context menus arrive.
 
 The `scene/` modules know **nothing about the DOM** beyond the `HTMLCanvasElement` they render into and `window` for size/input listeners. Don't add DOM queries in there — route data through callbacks or new methods on the scene.
 
 ### UI subsystem
 
-Helio is a 4X game — the galaxy map is the *first* screen, not the only one. Future siblings (research tree, fleet management, diplomacy, system inspector, ship designer, encyclopedia) will share the same `WebGLRenderer`, the same pixel grid, and the same widget toolkit. That's why `src/ui/` houses *generic* primitives — `Widget`, `BasePanel`, `IconButton`, `ActionButton`, the painter module, theme tokens — rather than map-specific HUD chrome. When proposing structure (file layout, base classes, orchestrators), think "what does this look like with five more screens" rather than just optimizing for the map. Defer until concrete consumers exist: UiStack/layer manager, ScrollPanel, world-anchored placement, modal/tooltip/popover taxonomies. Build what current screens need; design only what the next one will.
+Helio is a 4X game — the galaxy map is the *first* screen, not the only one. Future siblings (research tree, fleet management, diplomacy, system inspector, ship designer, encyclopedia) will share the same `WebGLRenderer`, the same pixel grid, and the same widget toolkit. That's why `src/ui/` houses *generic* primitives — `Widget`, `BasePanel`, `IconButton`, `ActionButton`, the painter module, theme tokens, the `HitResult` contract — rather than map-specific HUD chrome. When proposing structure (file layout, base classes, orchestrators), think "what does this look like with five more screens" rather than just optimizing for the map. Defer until concrete consumers exist: full input router (today each HUD owns its own `hitTest` directly — see [`FUTURE_PLANNING.md`](./FUTURE_PLANNING.md)), keyboard focus stack, ScrollPanel, world-anchored placement, modal/tooltip/popover taxonomies. Build what current screens need; design only what the next one will.
 
 ### Coordinate system
 
@@ -263,7 +270,7 @@ Touch input is unified through Pointer Events, not a separate `touchmove` path. 
 - **Touch long-press on a star** (single finger held still for 500 ms, < 8 px drift) = touch-only mirror of right-click — selects the cluster and glides the orbit pivot to its COM. Mouse and pen are excluded so a normal click never animates focus. Cancelled by movement, second-finger entry, lift, or OS-cancel; the trailing `pointerup` is suppressed so the hold doesn't also register as a tap-select.
 - **Spacebar** mirrors right-click on the current selection: glides the orbit pivot to the selected cluster's COM. No-op when nothing is selected (still calls `preventDefault` so the page doesn't scroll).
 - **Hover** uses the same `Raycaster` against `gl.POINTS` (threshold 0.6 ly) as the click handlers — the hovered star promotes its cluster's label to the boxed hover variant in the label overlay.
-- The info card's close-X (top-right corner) clears the selection. A **View System** pill button beneath the info card opens the system view for the selected cluster (alternative to double-clicking). The settings panel's close-X (top-right of its own box) closes the panel.
+- The info card's close-X (top-right corner) clears the selection. A **View System** pill button beneath the info card opens the system view for the selected cluster (alternative to double-clicking). A sibling **Focus** pill mirrors right-click / spacebar — it glides the orbit pivot to the selected cluster's COM, and is disabled (dim border + dim text, click absorbed but not dispatched) while the pivot already sits there. The settings panel's close-X (top-right of its own box) closes the panel.
 
 **ESC** dismisses the current selection in galaxy view (info card + reticle), the same as clicking the card's close-X. In system view, ESC exits back to the galaxy view (same as the back button in the header). "Reset view" in the settings panel snaps focus back to the Sun + default yaw/pitch/distance. Held-key state is cleared on `window.blur` so a key whose keyup got swallowed by alt-tab doesn't leave the camera drifting.
 

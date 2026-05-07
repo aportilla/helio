@@ -122,6 +122,71 @@ Only `snapshot()`, `WorldSnapshot`, and small enum tables (spectral class names,
 
 Today's renderer draws the real-stars catalog (~100 stars within 20 ly). A 4X galaxy would be procgen, fictional, and probably 200–2000 systems. Either the sim owns a procgen galaxy (and the real catalog becomes a tutorial/sandbox scenario or is retired), or the sim seeds from the real catalog and procgens outward from Sol. Decision affects whether `RAW_STARS` in `src/data/stars.ts` survives or migrates into `sim/scenarios/`.
 
+## UI input layering
+
+The current pointer model is a one-step seam: each HUD orchestrator (`MapHud`, `SystemHud`) exposes `hitTest(bufX, bufY): 'interactive' | 'opaque' | 'transparent'` and the active scene queries it once per `pointermove` to decide whether the event reaches world picking. That handles the two consumers we have today (hover gating and click absorb on opaque chrome). It does **not** handle the consumers we know are coming.
+
+### Trigger for promotion
+
+Promote to a real router when the **first** of these lands:
+1. A modal dialog (confirm prompts, diplomacy, rename — anything that should fully trap input until dismissed).
+2. A tooltip-on-hover (informational popover that occludes visually but should NOT absorb hover from the layer below — the underlying widget should stay hovered).
+3. A right-click context menu (popover that absorbs but auto-dismisses on outside-click).
+
+Each of these sharpens the interface in a different direction; building the router before any of them exist would be guessing at semantics.
+
+### Planned shape
+
+```
+src/ui/input/
+  router.ts          InputRouter — owns the layer stack, walks top-down per event
+  layer.ts           InputLayer interface
+  focus.ts           FocusManager — keyboard focus stack (separate concern)
+```
+
+```ts
+export interface InputLayer {
+  hitTest(bufX: number, bufY: number): HitResult;          // existing contract
+  onPointerMove?(bufX: number, bufY: number): void;
+  onPointerDown?(bufX: number, bufY: number, e: PointerEvent): boolean;
+  onPointerLeave?(): void;                                  // pointer left this layer
+  // keyboard hooks added when FocusManager lands
+}
+```
+
+`InputRouter.handlePointerMove(x, y)` walks the layer stack top-down. The first layer whose `hitTest` returns `'interactive'` or `'opaque'` is the owning layer; deliver the event to it, call `onPointerLeave` on every layer below that previously had the pointer, set the cursor to `pointer` iff the result is `'interactive'`. `'transparent'` falls through to the next layer. The bottom layer is always the world (`StarmapScene` / `SystemScene`), which receives the residue.
+
+Layer priority order, in roughly the order we'll add them:
+
+1. **Modal layer** — at most one modal at a time; its `hitTest` returns `'interactive'` inside the modal rect and `'opaque'` everywhere else. Outside-clicks are absorbed *and* dispatched as a "modal-dismiss" hint (each modal decides whether to honor it).
+2. **Popover layer** — settings panel today; tooltips and right-click menus later. `'interactive'` inside, `'transparent'` outside (no scrim). Tooltips opt out of click-absorb so the underlying widget still receives clicks through the tooltip rect.
+3. **HUD widgets** — info card, scale bar, title, action buttons, settings trigger. The current per-HUD `hitTest` becomes this layer's `hitTest`, unchanged.
+4. **World** — `StarmapScene` / `SystemScene`. Catch-all bottom; star picking only fires here.
+
+`AppController` owns the `InputRouter` instance — same lifecycle as the shared `WebGLRenderer`. Layer push/pop happens when modes change (entering system view replaces the map HUD layer with the system HUD layer) or when a popover/modal opens/closes.
+
+### Keyboard focus (separate stack)
+
+Pointer hit-testing and keyboard focus are orthogonal — pointer routes by *position*, keyboard routes by *who claimed focus*. `FocusManager` owns a key-consumer stack:
+
+- A single stack of consumers; top of stack receives each key event first. If it returns `false` (didn't consume), the event walks down.
+- The world is the bottom consumer. Its WASD/QE/space handlers only fire when nothing above consumed.
+- Modals push themselves on open, pop on close — automatic focus trap.
+- Future text input fields (rename ship, set production target) push themselves while focused; they consume W/A/S/D as letter input instead of camera pan.
+- ESC is handled top-down (highest consumer wins): modal-dismiss > popover-dismiss > selection-clear > no-op.
+
+Today the scene routes `keydown` directly. The migration is a single seam: replace the scene's `window.addEventListener('keydown', ...)` with `focusManager.handle(e)`, register the scene as the bottom consumer.
+
+### What's deferred further
+
+- **Tab navigation between widgets** (virtual highlight without mouse). Real but not urgent — strategy games rarely use Tab cycling.
+- **Drag-and-drop layer** (fleet management, ship-design parts). Distinct enough from pointer routing that it deserves its own design pass when the first concrete consumer arrives.
+- **Z-order conflicts within a single layer** (two popovers open at once). Stack discipline solves it for now (one popover at a time); revisit if a real use case emerges.
+
+### Migration cost from today's state
+
+Low. Each HUD's existing `hitTest` is already the future `InputLayer.hitTest` — we lift it under the router, we don't rewrite it. The scene's existing `pointer.has` gating moves into the router's `transparent`-falls-through walk. The `HitResult` type stays where it is.
+
 ## WASM port (deferred)
 
 The simulation is intended to be portable to Rust→WASM via `wasm-bindgen` once profiling justifies it. The five-function public API and the SoA `TypedArray` state shape are the design choices that make this cheap later. The render layer (Three.js, HUD, fonts) stays JS/TS forever — calling Three.js from WASM crosses the JS↔WASM boundary on every draw and is *slower* than calling it from JS.
