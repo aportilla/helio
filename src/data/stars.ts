@@ -382,8 +382,8 @@ export const STARS: readonly Star[] = expandCoincidentSets(RAW_STAR_OBJECTS);
 // =============================================================================
 
 // Stars within this pairwise distance (ly) get grouped into a cluster, sharing
-// one visible label and a multi-line hover tooltip listing every member. Bumped
-// from 0.20 to 0.25 to comfortably contain Alpha Cen + Proxima after curation
+// one visible label, one selection reticle, and one dropline. Bumped from 0.20
+// to 0.25 to comfortably contain Alpha Cen + Proxima after curation
 // (Proxima now sits ~0.20 ly from AB instead of the source data's ~0.05 ly).
 // Larger values risk over-clustering unrelated stars; smaller miss real
 // hierarchical systems.

@@ -37,7 +37,7 @@ src/
     grid.ts                 Concentric range rings + cross axes + galactic-centre arrow
     droplines.ts            Vertical pin from each star to the galactic plane
     stars.ts                gl.POINTS starfield with per-star size + color
-    labels.ts               Bitmap-font overlay pass: star names, axis ticks, hover tooltip
+    labels.ts               Bitmap-font overlay pass: star names, axis ticks, selection reticle
     materials.ts            Pixel-snapped line ShaderMaterial + the stars shader
     hud.ts                  Pixel-art HUD (title, scale bar, settings trigger +
                             popover panel) rendered as a second orthographic
@@ -106,10 +106,10 @@ Don't re-enable color management without auditing every call site that mixes `ne
 `makeLabelTexture(...)` is overloaded three ways:
 - `(text, color, opts?)` — single line, single color
 - `(segments, opts?)` — single line with per-segment colors (`TextSegment[]`)
-- `(lines, opts?)` — multi-line, used by the cluster hover tooltip (`TextSegment[][]`)
+- `(lines, opts?)` — multi-line with per-segment colors per line (`TextSegment[][]`)
 
 Options:
-- `box: true` — draws a bordered tooltip frame (used for the hover tooltip)
+- `box: true` — draws a bordered surface frame around the text (used by the hovered cluster label)
 - `noHalo: true` — skip the dark halo normally painted around glyph edges. The halo helps text read against busy backgrounds but darkens a label's perceptual brightness; opt out when you want a label to color-match a nearby grid line (the `GALACTIC CENTRE` label uses this).
 
 Also exports `drawPixelText(g2d, text, x, y, color)` so the HUD can compose text into its own canvases alongside borders/fills without going through `makeLabelTexture`.
@@ -137,7 +137,7 @@ White dwarfs (`pxSize ≈ 3`) hit the size-2 floor first as their depth crosses 
 
 Stars within `CLUSTER_THRESHOLD_LY = 0.25` of each other (`buildClusters` in `src/data/stars.ts`) are grouped via union-find. Captures both ringed-out coincident binaries (Sirius A/B at the same source coords, post-processed onto a small ring) and curated hierarchical systems (Alpha Cen A/B + Proxima at ~0.20 ly apart, 40 Eridani A vs BC sub-pair, etc.). Each cluster has a **primary** (the heaviest member by `mass`, with `CLASS_SIZE` as a tie-breaker) and an ordered `members` list with the primary first.
 
-`Labels` (in `src/scene/labels.ts`) renders one visible label per cluster — anchored at the primary's position, suffixed with ` +N` (in dim cyan) when the cluster has additional members. Hovering any star in a cluster surfaces a multi-line tooltip listing every member with its class and distance, anchored at the primary's screen position so it doesn't twitch as you move between near-coincident dots.
+`Labels` (in `src/scene/labels.ts`) renders one visible label per cluster — anchored at the primary's position, suffixed with ` +N` (in dim cyan) when the cluster has additional members. Hovering any star in a cluster swaps that cluster's label for a bordered-box variant (same text, same anchor, styled like the other surface boxes) and bumps it to a renderOrder above the reticle so it always paints clear of every other overlay element. Anchored at the primary so the emphasis doesn't twitch as you move between near-coincident dots; ignores the `show labels` toggle so a hover always produces feedback.
 
 Lookup helpers exported alongside the catalog: `STAR_CLUSTERS: readonly StarCluster[]` and `clusterIndexFor(starIdx) => number`.
 
@@ -187,7 +187,7 @@ All input lives in `StarmapScene`.
 Touch input is unified through Pointer Events, not a separate `touchmove` path. `pointers` (a `Map<pointerId, {x,y}>`) tracks every active pointer; while exactly one is down, drag = orbit-or-pan; the moment a second pointer lands, the single-finger gesture is abandoned and the two-finger gesture takes over (starting in `'undecided'`). Without this hand-off (the previous code ran `pointermove` orbit and `touchmove` pinch concurrently) iPad Safari pinches always came with an unwanted yaw/pitch jolt from the first finger's `pointermove` events. A third-or-later finger landing during an active two-finger gesture is tracked for clean lift-handling but does NOT reset the locked mode — palm contact mid-pinch shouldn't clobber the gesture. The canvas also sets `touch-action: none` so iOS doesn't claim the gesture for page pan/zoom before our handlers see it. `pointercancel` resets gesture state when the OS steals a pointer (palm rejection, etc).
 - **Left-click on a star** (no/minimal drag, < 4 px movement) = select that star's **system** (a multi-star cluster is one selectable unit). Info card lists every member, reticle bracketing encloses every member's rendered disc, AND the orbit pivot animates to the cluster's center of mass — so left-clicking either component of a binary glides to the same vantage.
 - **Right-click on a star** (no/minimal drag) = select only — info card + reticle update, but the camera stays where it is. Useful for inspecting a system without losing your current vantage on another.
-- **Hover** uses the same `Raycaster` against `gl.POINTS` (threshold 0.6 ly) as the click handlers — the hovered star drives the transient boxed tooltip in the label overlay.
+- **Hover** uses the same `Raycaster` against `gl.POINTS` (threshold 0.6 ly) as the click handlers — the hovered star promotes its cluster's label to the boxed hover variant in the label overlay.
 - The info card's close-X (top-right corner) clears the selection. The settings panel's close-X (top-right of its own box) closes the panel.
 
 **ESC** dismisses the current selection (info card + reticle), the same as clicking the card's close-X. "Reset view" in the settings panel snaps focus back to the Sun + default yaw/pitch/distance. Held-key state is cleared on `window.blur` so a key whose keyup got swallowed by alt-tab doesn't leave the camera drifting.

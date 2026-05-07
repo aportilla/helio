@@ -104,21 +104,26 @@ export function makeLabelTexture(
   const lineH = font.lineHeight;
 
   const box = !!opts?.box;
-  const pad = box ? 4 : 3;
+  // Boxed labels get an extra px of horizontal breathing room (padX > padY)
+  // so glyphs don't crowd the side borders — vertically the cap-height +
+  // descender already leaves visible whitespace inside the frame, but
+  // horizontally the glyphs sit right against their cells.
+  const padX = box ? 5 : 3;
+  const padY = box ? 4 : 3;
   let maxTextW = 0;
   for (const line of lines) {
     let lineW = 0;
     for (const seg of line) lineW += font.measureText(seg.text);
     if (lineW > maxTextW) maxTextW = lineW;
   }
-  const w = maxTextW + pad * 2;
-  const h = lineH * lines.length + pad * 2;
+  const w = maxTextW + padX * 2;
+  const h = lineH * lines.length + padY * 2;
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const g = c.getContext('2d')!;
 
   if (box) {
-    g.fillStyle = 'rgba(0,8,20,0.92)';
+    g.fillStyle = '#000814';
     g.fillRect(0, 0, w, h);
     g.fillStyle = '#3a8fe0';
     g.fillRect(0, 0, w, 1); g.fillRect(0, h - 1, w, 1);
@@ -126,8 +131,8 @@ export function makeLabelTexture(
   }
 
   lines.forEach((line, lineIdx) => {
-    let cursor = pad;
-    const cellY = pad + lineH * lineIdx;
+    let cursor = padX;
+    const cellY = padY + lineH * lineIdx;
     for (const seg of line) {
       font.drawText(g, seg.text, cursor, cellY, seg.color);
       cursor += font.measureText(seg.text);

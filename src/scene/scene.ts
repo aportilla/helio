@@ -428,7 +428,8 @@ export class StarmapScene {
 
   private onPointerMove(e: PointerEvent): void {
     // Touch input has no hover semantics — a finger crossing a star mid-drag
-    // or mid-pinch shouldn't surface the tooltip. Mouse/pen still get hover.
+    // or mid-pinch shouldn't trigger the boxed hover label. Mouse/pen still
+    // get hover.
     if (e.pointerType === 'touch') {
       this.pointer.has = false;
     } else {

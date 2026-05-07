@@ -24,10 +24,14 @@ import { makeLabelTexture } from '../data/pixel-font';
 // typography stable while the stars do the depth-cueing work.
 
 interface ClusterLabel {
-  mesh: Mesh;
+  mesh: Mesh;        // plain text, anchored above primary, depth-sorted
+  hoverMesh: Mesh;   // boxed variant for hover emphasis, hidden by default
+  clusterIdx: number;
   primaryStarIdx: number;
   w: number;
   h: number;
+  hoverW: number;
+  hoverH: number;
 }
 
 interface AnchoredLabel {
@@ -37,17 +41,17 @@ interface AnchoredLabel {
   h: number;
 }
 
-// Buffer-pixel gap between a star's projected position and its label/tooltip.
+// Buffer-pixel gap between a star's projected position and its label.
 const LABEL_OFFSET_PX = 6;
-const TIP_OFFSET_PX = 18;
 
 // Yellow corner-bracket reticle around the selected cluster. The brackets
 // enclose every member's *rendered* disc each frame (see computeRenderedStarSize)
 // so a single dwarf gets a tight square, a tilted binary ring gets a
 // rectangular bbox showing the system's screen orientation, and a close-up
 // class-O gets a big one — fixed-size looked equally wrong at every extreme.
-// Color matches the hover-tooltip star-name color so "selected" feels visually
-// related to "highlighted".
+// Color matches the info-card star-name color (`colors.starName`) so the
+// reticle reads as part of the same "selected system" visual language as
+// the card itself.
 const RETICLE_GAP_PX  = 4;   // pixels between outermost disc edge and bracket corner
 const RETICLE_MIN_SIZE = 12; // floor (per axis) so tiny stars still get a visible reticle
 const RETICLE_COLOR   = '#ffe98a';
@@ -97,14 +101,9 @@ export class Labels {
   private readonly clusterLabels: ClusterLabel[] = [];
   private readonly axisLabels: AnchoredLabel[] = [];
   private readonly gcLabel: AnchoredLabel;
-  private readonly tipMesh: Mesh;
-  private readonly tipMat: MeshBasicMaterial;
-  private tipW = 0;
-  private tipH = 0;
 
   private showLabels = true;
   private hoveredCluster = -1;
-  private lastHoveredCluster = -1;
   private selectedCluster = -1;
 
   private readonly reticleMesh: Mesh;
@@ -125,7 +124,13 @@ export class Labels {
     // Sol's label is warm-white rather than yellow so it stays readable when
     // its quad overlaps the equally-yellow Sol dot. Multi-star clusters get
     // a " +N" suffix in dim cyan to indicate hidden members.
-    STAR_CLUSTERS.forEach(cluster => {
+    //
+    // We build TWO meshes per cluster: a plain text label (default) and a
+    // boxed variant used as the hover-emphasis state. Eager build avoids any
+    // first-hover canvas work and the memory cost is negligible (~80 small
+    // textures). The hover mesh sits at a fixed high renderOrder so it
+    // always paints above the depth-sorted plain labels and the reticle.
+    STAR_CLUSTERS.forEach((cluster, clusterIdx) => {
       const primary = STARS[cluster.primary];
       const isSol = primary.name === 'Sol';
       const nameColor = isSol ? '#ffffcc' : '#5ec8ff';
@@ -133,12 +138,25 @@ export class Labels {
       const segments = extras > 0
         ? [{ text: primary.name, color: nameColor }, { text: ` +${extras}`, color: '#2d7ab8' }]
         : [{ text: primary.name, color: nameColor }];
-      const { tex, w, h } = makeLabelTexture(segments);
-      const mesh = new Mesh(new PlaneGeometry(w, h), labelMat(tex));
+      const plain = makeLabelTexture(segments);
+      const mesh = new Mesh(new PlaneGeometry(plain.w, plain.h), labelMat(plain.tex));
       mesh.renderOrder = 1;
       mesh.visible = false;
       this.scene.add(mesh);
-      this.clusterLabels.push({ mesh, primaryStarIdx: cluster.primary, w, h });
+
+      const boxed = makeLabelTexture(segments, { box: true });
+      const hoverMesh = new Mesh(new PlaneGeometry(boxed.w, boxed.h), labelMat(boxed.tex));
+      hoverMesh.renderOrder = 4;
+      hoverMesh.visible = false;
+      this.scene.add(hoverMesh);
+
+      this.clusterLabels.push({
+        mesh, hoverMesh,
+        clusterIdx,
+        primaryStarIdx: cluster.primary,
+        w: plain.w, h: plain.h,
+        hoverW: boxed.w, hoverH: boxed.h,
+      });
     });
 
     // Galactic-centre pointer label.
@@ -164,13 +182,6 @@ export class Labels {
       this.scene.add(mesh);
       this.axisLabels.push({ mesh, worldPos: new Vector3(x, y, z), w: t.w, h: t.h });
     }
-
-    // Hover tooltip — texture rebuilt only on hover transitions.
-    this.tipMat = new MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false });
-    this.tipMesh = new Mesh(new PlaneGeometry(1, 1), this.tipMat);
-    this.tipMesh.renderOrder = 2;
-    this.tipMesh.visible = false;
-    this.scene.add(this.tipMesh);
 
     // Selection reticle — texture and quad rebuilt on size change in
     // ensureReticleSize(). Start with a 1×1 placeholder; first selection
@@ -200,8 +211,9 @@ export class Labels {
 
   setShowLabels(show: boolean): void {
     this.showLabels = show;
-    // Cluster labels and tooltip are gated per-frame; only the static
-    // ancillary labels need direct visibility toggles here.
+    // Cluster labels are gated per-frame (and the hovered label always
+    // shows regardless); only the static ancillary labels need direct
+    // visibility toggles here.
     this.gcLabel.mesh.visible = show;
     for (const a of this.axisLabels) a.mesh.visible = show;
   }
@@ -286,49 +298,48 @@ export class Labels {
 
   update(camera: Camera, viewTarget: Vector3): void {
     this.viewTarget = viewTarget;
-    // Refresh the tooltip texture on hover transitions only — texture build
-    // is heavy (multi-line bitmap composition) and we don't want it per-frame.
-    if (this.hoveredCluster >= 0 && this.lastHoveredCluster !== this.hoveredCluster) {
-      const cluster = STAR_CLUSTERS[this.hoveredCluster];
-      if (this.tipMat.map) this.tipMat.map.dispose();
-      const lines = cluster.members.map(memIdx => {
-        const s = STARS[memIdx];
-        return [
-          { text: s.name,                       color: '#ffe98a' },
-          { text: '  ' + s.cls + '  ',          color: '#2d7ab8' },
-          { text: s.distLy.toFixed(2) + ' ly',  color: '#aee4ff' },
-        ];
-      });
-      const { tex, w, h } = makeLabelTexture(lines, { box: true });
-      this.tipMat.map = tex;
-      this.tipMat.needsUpdate = true;
-      this.tipW = w; this.tipH = h;
-      this.tipMesh.geometry.dispose();
-      this.tipMesh.geometry = new PlaneGeometry(w, h);
-      this.lastHoveredCluster = this.hoveredCluster;
-    }
-    if (this.hoveredCluster < 0) this.lastHoveredCluster = -1;
 
-    // Cluster labels — each anchored above its primary star.
-    // Sort by main-camera distance so nearer labels overlap farther ones.
-    // Three.js sorts transparent meshes by renderOrder ascending (then z),
-    // so a higher renderOrder draws later = on top. Setting it to -distance
-    // makes nearer stars (smaller dist) get a value closer to 0 and farther
-    // stars get a more negative one. All values stay <= 0, safely below the
-    // tooltip (renderOrder 2) and reticle (3) so those still render on top.
-    // Without this, all cluster labels share renderOrder 1 and the overlay
-    // mesh z is uniform, so draw order falls back to scene-add order — i.e.
-    // catalog order, not camera distance — and a far label can paint over a
-    // near one.
+    // Cluster labels — each anchored above its primary star, in one of two
+    // states:
+    //   - plain: depth-sorted (renderOrder = -distance) so nearer labels
+    //     overlap farther ones. All values stay <= 0, safely below the
+    //     reticle (3) and the hover variant (4).
+    //   - boxed hover: shown only for the hovered cluster, fixed renderOrder
+    //     4 so it always paints above every other overlay element. Same
+    //     anchor offset as plain, so the text shifts ~2 px from the box's
+    //     extra padding/border — a deliberate state-change cue.
+    // Hover ignores `showLabels` on purpose: with labels off, the boxed
+    // hover is the only feedback that pointing at a star did anything.
+    // Without the per-renderOrder depth sort, all cluster labels would share
+    // renderOrder 1 with uniform z, and draw order would fall back to scene-
+    // add (catalog) order — far labels could paint over near ones.
     for (const L of this.clusterLabels) {
-      if (!this.showLabels) { L.mesh.visible = false; continue; }
+      const isHover = L.clusterIdx === this.hoveredCluster;
+      if (!this.showLabels && !isHover) {
+        L.mesh.visible = false; L.hoverMesh.visible = false; continue;
+      }
       const s = STARS[L.primaryStarIdx];
       this._world.set(s.x, s.y, s.z);
-      if (!this.projectToBuffer(this._world, camera)) { L.mesh.visible = false; continue; }
-      L.mesh.visible = true;
-      const cy = this._screen.y + LABEL_OFFSET_PX + L.h * 0.5;
-      this.placeAt(L.mesh, this._screen.x, cy, L.w, L.h);
-      L.mesh.renderOrder = -this._world.distanceTo(camera.position);
+      if (!this.projectToBuffer(this._world, camera)) {
+        L.mesh.visible = false; L.hoverMesh.visible = false; continue;
+      }
+      if (isHover) {
+        L.mesh.visible = false;
+        L.hoverMesh.visible = true;
+        // -1 keeps the glyphs at the same screen position as the plain
+        // label: the boxed canvas uses pad=4 (vs plain's pad=3) so its
+        // glyph row sits 1px lower inside the canvas. Without this offset
+        // the bottom-anchored quads end up rendering the text 1px higher
+        // on screen in the hover state — visually the text twitches up.
+        const cy = this._screen.y + LABEL_OFFSET_PX + L.hoverH * 0.5 - 1;
+        this.placeAt(L.hoverMesh, this._screen.x, cy, L.hoverW, L.hoverH);
+      } else {
+        L.hoverMesh.visible = false;
+        L.mesh.visible = true;
+        const cy = this._screen.y + LABEL_OFFSET_PX + L.h * 0.5;
+        this.placeAt(L.mesh, this._screen.x, cy, L.w, L.h);
+        L.mesh.renderOrder = -this._world.distanceTo(camera.position);
+      }
     }
 
     // Galactic-centre label — anchored to the right of the +X arrow tip.
@@ -385,22 +396,6 @@ export class Labels {
       }
     } else {
       this.reticleMesh.visible = false;
-    }
-
-    // Tooltip anchored at the cluster's primary so it doesn't shift between
-    // coincident binary members as the cursor moves.
-    if (this.hoveredCluster >= 0) {
-      const primary = STARS[STAR_CLUSTERS[this.hoveredCluster].primary];
-      this._world.set(primary.x, primary.y, primary.z);
-      if (this.projectToBuffer(this._world, camera)) {
-        this.tipMesh.visible = true;
-        const cy = this._screen.y + TIP_OFFSET_PX + this.tipH * 0.5;
-        this.placeAt(this.tipMesh, this._screen.x, cy, this.tipW, this.tipH);
-      } else {
-        this.tipMesh.visible = false;
-      }
-    } else {
-      this.tipMesh.visible = false;
     }
   }
 }
