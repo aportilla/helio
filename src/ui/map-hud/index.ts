@@ -26,6 +26,7 @@ import {
 } from '../painter';
 import { colors, sizes } from '../theme';
 import { paintToTexture } from '../widget';
+import { ActionButton } from '../action-button';
 import { IconButton, type IconButtonStates } from '../icon-button';
 import { Panel, type PanelHit, type PanelSpec } from '../panel';
 import { TitleBlock } from './title';
@@ -96,9 +97,14 @@ export class MapHud {
   private readonly scaleBar: ScaleBar;
   private readonly infoCard: InfoCard;
   private readonly cardClose: IconButton;
+  private readonly viewSystemBtn: ActionButton;
   private readonly settingsIcon: IconButton;
   private readonly settingsPanel: Panel;
   private readonly panelClose: IconButton;
+
+  // Mirror of the currently-selected cluster so handleClick can route
+  // the View System button press without round-tripping through scene.
+  private selectedClusterIdx = -1;
 
   // Shared texture pools — disposed in dispose() (single owner).
   private readonly closeXTextures: IconButtonStates;
@@ -111,6 +117,7 @@ export class MapHud {
   onToggle: (id: ToggleId, on: boolean) => void = () => {};
   onAction: (id: ActionId) => void = () => {};
   onDeselect: () => void = () => {};
+  onViewSystem: (clusterIdx: number) => void = () => {};
   // Fires when a setting changes via the modal — scene reads getSettings()
   // each gesture so this is informational, but having a hook lets the
   // scene react immediately if a setting requires recomputed state.
@@ -148,6 +155,14 @@ export class MapHud {
     });
     this.cardClose.setVisible(false);
     this.cardClose.addTo(this.scene);
+
+    // ---- "View System" button beneath the info card ---------------------
+    this.viewSystemBtn = new ActionButton('View System', {
+      renderOrder: 100,
+      hitPad: sizes.closeHitPad,
+    });
+    this.viewSystemBtn.setVisible(false);
+    this.viewSystemBtn.addTo(this.scene);
 
     // ---- settings icon (bottom-right trigger) ---------------------------
     this.settingsIcon = new IconButton(sizes.iconBox, this.settingsIconTextures, {
@@ -189,13 +204,17 @@ export class MapHud {
   }
 
   setSelectedCluster(clusterIdx: number): void {
+    this.selectedClusterIdx = clusterIdx;
     this.infoCard.setCluster(clusterIdx);
     if (clusterIdx < 0) {
       this.cardClose.setVisible(false);
       this.cardClose.resetHover();
+      this.viewSystemBtn.setVisible(false);
+      this.viewSystemBtn.resetHover();
       return;
     }
     this.cardClose.setVisible(true);
+    this.viewSystemBtn.setVisible(true);
     this.layoutInfoCard();
   }
 
@@ -211,6 +230,10 @@ export class MapHud {
   handleClick(bufX: number, bufY: number): boolean {
     if (this.cardClose.visible && this.cardClose.bounds.contains(bufX, bufY)) {
       this.onDeselect();
+      return true;
+    }
+    if (this.viewSystemBtn.visible && this.viewSystemBtn.bounds.contains(bufX, bufY)) {
+      if (this.selectedClusterIdx >= 0) this.onViewSystem(this.selectedClusterIdx);
       return true;
     }
     if (this.settingsIcon.bounds.contains(bufX, bufY)) {
@@ -243,6 +266,9 @@ export class MapHud {
     const onCloseX = this.cardClose.visible && this.cardClose.bounds.contains(bufX, bufY);
     this.cardClose.setHover(onCloseX);
 
+    const onViewBtn = this.viewSystemBtn.visible && this.viewSystemBtn.bounds.contains(bufX, bufY);
+    this.viewSystemBtn.setHover(onViewBtn);
+
     const onSettingsIcon = this.settingsIcon.bounds.contains(bufX, bufY);
     this.settingsIcon.setHover(onSettingsIcon);
 
@@ -259,7 +285,7 @@ export class MapHud {
         this.settingsPanel.setHoveredRow(newId);
       }
     }
-    return onCloseX || onSettingsIcon || onPanelClose || hoveredRow !== null;
+    return onCloseX || onViewBtn || onSettingsIcon || onPanelClose || hoveredRow !== null;
   }
 
   // -- internal: dispatch / panel state ---------------------------------
@@ -354,10 +380,15 @@ export class MapHud {
     // sees the freshly-painted size instead of the pre-placement zeros.
     const cardRight = this.bufferW - sizes.cardMargin;
     const cardTop   = this.bufferH - sizes.cardMargin;
-    this.infoCard.placeAt(cardRight - this.infoCard.width, cardTop - this.infoCard.height);
+    const cardBottom = cardTop - this.infoCard.height;
+    this.infoCard.placeAt(cardRight - this.infoCard.width, cardBottom);
 
     // Close-X flush with the card's top-right corner.
     this.cardClose.placeAt(cardRight - sizes.closeBox, cardTop - sizes.closeBox);
+
+    // View System button: right-aligned with the card, gap below it.
+    const btn = this.viewSystemBtn;
+    btn.placeAt(cardRight - btn.width, cardBottom - sizes.cardActionGap - btn.height);
   }
 
   private layoutSettingsPanel(): void {
@@ -396,6 +427,7 @@ export class MapHud {
     this.scaleBar.dispose();
     this.infoCard.dispose();
     this.cardClose.dispose();
+    this.viewSystemBtn.dispose();
     this.settingsIcon.dispose();
     this.settingsPanel.dispose();
     this.panelClose.dispose();

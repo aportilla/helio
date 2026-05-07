@@ -1,6 +1,4 @@
 import {
-  ColorManagement,
-  LinearSRGBColorSpace,
   PerspectiveCamera,
   Raycaster,
   Scene,
@@ -9,14 +7,6 @@ import {
   WebGLRenderer,
 } from 'three';
 
-// Opt out of Three.js color management. Without this, hex values in shader
-// uniforms (new Color(0x1e6fc4)) and hex strings in canvas fillStyle
-// ('#1e6fc4') end up rendering at *different* on-screen colors because the
-// two paths get different sRGB↔linear conversions. The whole project's
-// palette is hand-picked sRGB values intended to render literally, so we
-// turn off both color-management transforms (input and output) and let the
-// renderer just write raw sRGB to the framebuffer.
-ColorManagement.enabled = false;
 import { Grid } from './grid';
 import { Droplines } from './droplines';
 import { Labels } from './labels';
@@ -88,6 +78,11 @@ const ORBIT_RATE_RAD = 1.5;
 // camera across the scene on the next frame.
 const MAX_TICK_DT_MS = 100;
 
+// Window within which a second left-click on the same cluster counts as a
+// double-click (and opens the system view). Sized for a deliberate double
+// rather than a fast fidget.
+const DOUBLE_CLICK_MS = 350;
+
 interface ViewState {
   target: Vector3;
   distance: number;  // orbit radius (camera-to-target ly)
@@ -156,8 +151,12 @@ export class StarmapScene {
   private pinchStartBx = 0;
   private pinchStartBy = 0;
   private readonly pointer = { x: 0, y: 0, has: false };
-  // Selection state lives in Labels (reticle) and MapHud (info card) — Scene
-  // routes click events to both but doesn't hold a copy itself.
+  // Currently-selected cluster, mirrored across Labels (reticle), MapHud
+  // (info card + View System button), and Droplines (selected pin). Scene
+  // tracks its own copy so non-routing logic — spacebar focus, future
+  // keyboard actions on the selection — can read it without coupling to
+  // any one of those owners' internals.
+  private selectedClusterIdx = -1;
 
   // Focus animation: view.target lerps from focusFrom → focusTo over
   // FOCUS_ANIM_MS. view.distance also lerps from distanceFrom → distanceTo
@@ -173,6 +172,17 @@ export class StarmapScene {
 
   private rafId = 0;
   private running = false;
+
+  // Double-click tracking. A second left-click on the same cluster within
+  // DOUBLE_CLICK_MS of the first fires onViewSystem; either a click on a
+  // different cluster or a timed-out gap restarts the window.
+  private lastClickAt = 0;
+  private lastClickClusterIdx = -1;
+
+  // Fired when the user requests the system view for a cluster — either
+  // by clicking the "View System" button on the info card or by double-
+  // clicking a star. AppController wires this to enterSystem().
+  onViewSystem: (clusterIdx: number) => void = () => {};
 
   // Bound listeners stored so removeEventListener works in stop().
   private readonly _onPointerDown   = (e: PointerEvent) => this.onPointerDown(e);
@@ -212,25 +222,19 @@ export class StarmapScene {
   private cssW = 0;
   private cssH = 0;
 
-  constructor(canvas: HTMLCanvasElement) {
+  // Renderer is owned by AppController and shared across view modes.
+  // Pixel ratio + size are still driven from this scene's resize() (see
+  // resize() for the integer-multiple-of-N rounding that guarantees a
+  // clean nearest-neighbor upscale).
+  constructor(canvas: HTMLCanvasElement, renderer: WebGLRenderer) {
     this.canvas = canvas;
+    this.renderer = renderer;
     const sun = STARS.find(s => s.name === 'Sol')!;
     this.view = {
       target: new Vector3(sun.x, sun.y, sun.z),
       ...DEFAULT_VIEW,
       spin: false,
     };
-
-    this.renderer = new WebGLRenderer({ canvas, antialias: false, alpha: false });
-    // Pixel ratio is set in resize() so a DPR change (e.g. browser zoom) gets
-    // re-applied. Render buffer = (CSS px) × (DPR / N); the browser then
-    // nearest-neighbor upscales the canvas back to its CSS box, so 1 buffer
-    // pixel becomes N×N physical pixels — but only when CSS × DPR is divisible
-    // by N. resize() rounds the target physical-pixel count down to a multiple
-    // of N to guarantee an exact N:1 upscale. See resize() for the why.
-    this.renderer.setClearColor(0x000008, 1);
-    // Match the disabled ColorManagement at the top of this file.
-    this.renderer.outputColorSpace = LinearSRGBColorSpace;
 
     // PerspectiveCamera. Drop-lines now converge toward a vanishing point —
     // an intentional break with the old ortho "parallel pin" geometry, in
@@ -268,6 +272,7 @@ export class StarmapScene {
       }
     };
     this.hud.onDeselect = () => this.deselect();
+    this.hud.onViewSystem = (idx) => this.onViewSystem(idx);
   }
 
   // -- public API --------------------------------------------------------
@@ -397,19 +402,33 @@ export class StarmapScene {
     if (hit < 0) return;
     // Multi-star systems are selected as a unit: any member click resolves
     // to the cluster, and the reticle/dropline/info-card all operate on
-    // the cluster rather than the clicked star. Left-click also focuses
-    // the camera on the cluster's COM (not the clicked member's position)
-    // so a binary's two members both glide to the same vantage. Right-
-    // click: select only. Empty-space clicks leave selection unchanged.
+    // the cluster rather than the clicked star. Left-click selects only —
+    // the camera stays put so a follow-up click can be captured as a
+    // double-click without fighting an in-flight focus glide. Right-click
+    // selects AND animates the orbit pivot to the cluster's COM (not the
+    // clicked member's position), so a binary's two members both glide to
+    // the same vantage. Empty-space clicks leave selection unchanged.
     const clusterIdx = clusterIndexFor(hit);
+    this.selectedClusterIdx = clusterIdx;
     this.labels.setSelectedCluster(clusterIdx);
     this.hud.setSelectedCluster(clusterIdx);
     this.droplines.setSelectedCluster(clusterIdx);
-    if (wasLeftClick) {
+    if (wasRightClick) {
       const com = STAR_CLUSTERS[clusterIdx].com;
       this.animateFocusTo(com.x, com.y, com.z);
+    } else if (wasLeftClick) {
+      // Double-left-click on the same cluster → open the system view.
+      // Reset the window after firing so a triple-click doesn't fire twice.
+      const now = performance.now();
+      if (now - this.lastClickAt < DOUBLE_CLICK_MS && this.lastClickClusterIdx === clusterIdx) {
+        this.onViewSystem(clusterIdx);
+        this.lastClickAt = 0;
+        this.lastClickClusterIdx = -1;
+      } else {
+        this.lastClickAt = now;
+        this.lastClickClusterIdx = clusterIdx;
+      }
     }
-    void wasRightClick;
   }
 
   private onPointerCancel(e: PointerEvent): void {
@@ -597,13 +616,26 @@ export class StarmapScene {
     this.view.pitch = Math.max(0.05, Math.min(Math.PI - 0.05, this.view.pitch));
   }
 
-  // Keyboard: ESC dismisses selection; WASD pans the orbit pivot parallel
-  // to the galactic plane (camera follows by the same vector, distance
-  // preserved); QE orbits around the pivot. Listening on window so it
-  // fires regardless of focus, since the canvas itself isn't focusable.
+  // Keyboard: ESC dismisses selection; SPACE focuses the camera on the
+  // current selection (matches what right-click does on a star);
+  // WASD pans the orbit pivot parallel to the galactic plane (camera
+  // follows by the same vector, distance preserved); QE orbits around
+  // the pivot. Listening on window so it fires regardless of focus,
+  // since the canvas itself isn't focusable.
   private onKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
       this.deselect();
+      return;
+    }
+    if (e.key === ' ') {
+      if (this.selectedClusterIdx >= 0) {
+        const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
+        this.animateFocusTo(com.x, com.y, com.z);
+      }
+      // preventDefault even on no-op — spacebar would otherwise scroll
+      // the page (visible if the canvas is shorter than the viewport
+      // after the multiple-of-N rounding in resize).
+      e.preventDefault();
       return;
     }
     const k = e.key.toLowerCase();
@@ -655,6 +687,7 @@ export class StarmapScene {
   }
 
   private deselect(): void {
+    this.selectedClusterIdx = -1;
     this.labels.setSelectedCluster(-1);
     this.hud.setSelectedCluster(-1);
     this.droplines.setSelectedCluster(-1);

@@ -109,6 +109,31 @@ export function paintCheckbox(
   }
 }
 
+// Centered left-pointing triangle. Apex at column 0 of the middle row;
+// base on the right. With TRIANGLE_W=4 and TRIANGLE_H=7 the triangle fits
+// inside the standard sizes.iconBox (17×17) with comfortable padding.
+export function paintLeftArrow(
+  g: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  size: number,
+  color: string,
+): void {
+  const TRIANGLE_W = 4;
+  const TRIANGLE_H = 7;
+  const offX = x + Math.floor((size - TRIANGLE_W) / 2);
+  const offY = y + Math.floor((size - TRIANGLE_H) / 2);
+  g.fillStyle = color;
+  // Each row has length (W - dist) and starts at column dist, where dist
+  // is the row's distance from the vertical center. Center row spans the
+  // full width 0..W-1; outer rows narrow toward the right edge.
+  const center = (TRIANGLE_H - 1) / 2;
+  for (let r = 0; r < TRIANGLE_H; r++) {
+    const dist = Math.abs(r - center);
+    g.fillRect(offX + dist, offY + r, TRIANGLE_W - dist, 1);
+  }
+}
+
 // Three horizontal lines centered in a `size`×`size` square — the
 // hamburger "menu" glyph for the settings trigger. With size=17 the lines
 // sit at rows 5, 8, 11 (5 px above the top line, 5 below the bottom, 2 px

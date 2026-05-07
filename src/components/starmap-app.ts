@@ -1,6 +1,6 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, query, state } from 'lit/decorators.js';
-import { StarmapScene } from '../scene/scene';
+import { AppController } from '../scene/app-controller';
 import './starmap-boot';
 
 @customElement('starmap-app')
@@ -32,11 +32,11 @@ export class StarmapApp extends LitElement {
   @state() private bootFading = false;
   @state() private bootRemoved = false;
 
-  private scene?: StarmapScene;
+  private controller?: AppController;
 
   firstUpdated(): void {
-    this.scene = new StarmapScene(this.canvasEl);
-    this.scene.start();
+    this.controller = new AppController(this.canvasEl);
+    this.controller.start();
 
     // Hold the splash briefly, fade, then unmount.
     setTimeout(() => {
@@ -47,8 +47,8 @@ export class StarmapApp extends LitElement {
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.scene?.stop();
-    this.scene = undefined;
+    this.controller?.stop();
+    this.controller = undefined;
   }
 
   render() {

@@ -79,6 +79,7 @@ export const sizes = {
   // Info card / panel — name-line trailing space for a corner close-X
   nameToCloseGap: 4,
   cardNameGap:    2,  // gap between name line and body lines
+  cardActionGap:  4,  // gap between info card bottom and the action button below it
 } as const;
 
 export const fonts = {
