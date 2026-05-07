@@ -30,18 +30,43 @@ src/
   main.ts                   Imports global styles + registers <starmap-app>
   styles.css                Body reset + boot-splash CSS variables
   components/               Lit web components (only the canvas host + boot splash now)
-    starmap-app.ts          Root component; owns the canvas + StarmapScene instance
+    starmap-app.ts          Root component; owns the canvas + AppController instance
     starmap-boot.ts         Centered "INITIALIZING STELLAR CATALOG" splash
   scene/                    Three.js code — no DOM coupling beyond the canvas
-    scene.ts                StarmapScene: camera, input, render loop, owns sub-objects
+    app-controller.ts       AppController: owns the WebGLRenderer + swaps which
+                            view-mode scene is currently driving the canvas
+                            (StarmapScene ↔ SystemScene)
+    scene.ts                StarmapScene (galaxy view): camera, input, render loop
+    system-scene.ts         SystemScene (close-up of one cluster): peer of
+                            StarmapScene, lazily constructed on entry, disposed
+                            on exit
     grid.ts                 Concentric range rings + cross axes + galactic-centre arrow
     droplines.ts            Vertical pin from each star to the galactic plane
     stars.ts                gl.POINTS starfield with per-star size + color
     labels.ts               Bitmap-font overlay pass: star names, axis ticks, selection reticle
     materials.ts            Pixel-snapped line ShaderMaterial + the stars shader
-    hud.ts                  Pixel-art HUD (title, scale bar, settings trigger +
-                            popover panel) rendered as a second orthographic
-                            pass after the main scene
+  ui/                       Pixel-art HUD widget toolkit + view-mode HUD
+                            orchestrators. Each HUD renders in its own ortho
+                            pass at 1 unit = 1 buffer pixel.
+    widget.ts               Widget base: Mesh + PlaneGeometry + MeshBasicMaterial
+                            + (optional) CanvasTexture + Bounds rect; one
+                            owned-texture lifecycle for subclasses
+    base-panel.ts           Repaint-on-state-change canvas-texture panel base
+    panel.ts                Settings popover (sectioned rows: toggles + actions)
+    icon-button.ts          Pre-built texture-pool button (off/hover/on/onHover)
+    action-button.ts        Text pill button ("View System")
+    painter.ts              Shared 2D primitives: surfaces, glyphs, close-X,
+                            hamburger, left-arrow, etc.
+    theme.ts                colors / sizes / fonts shared across widgets
+    map-hud/
+      index.ts              MapHud: title, scale bar, settings trigger + panel,
+                            info card with close-X and "View System" button
+      title.ts              Static top-left title block
+      scale-bar.ts          Bottom-left scale bar (bar + 2 ticks + label)
+      info-card.ts          Top-right cluster info card
+    system-hud/
+      index.ts              SystemHud: header bar + back button + reused InfoCard
+      header-bar.ts         Full-width top bar with system name centered
   settings.ts               Persisted user preferences (localStorage, versioned
                             JSON blob, default-merging on read so the schema
                             can grow without invalidating old saves)
@@ -55,11 +80,13 @@ src/
 
 ### Component / scene split
 
-`StarmapApp` (the Lit root) is now minimal — it owns the canvas, mounts the boot splash, and instantiates `StarmapScene`. There's no UI plumbing between Lit and the scene: the title, scale bar, settings trigger, and settings panel all live inside `Hud` (a second orthographic pass at 1 unit = 1 buffer pixel) and are drawn with `Mesh + PlaneGeometry` so they share the rest of the scene's pixel grid.
+`StarmapApp` (the Lit root) is minimal — it owns the canvas, mounts the boot splash, and instantiates an `AppController`. The controller owns the shared `WebGLRenderer` and decides which view-mode scene's `tick()` loop is currently driving the canvas. Two peer scenes share the renderer: `StarmapScene` (galaxy view, the default) and `SystemScene` (close-up of one cluster, lazily constructed on entry, disposed on exit). Only one is running at a time.
 
-The HUD captures pointer events first (in `StarmapScene.onPointerDown` / `onPointerMove` via `clientToHud()`), so clicking the trigger or a panel row never starts a pan/orbit and hovering swaps the cursor to `pointer`. Toggle/action rows in the settings panel fire `hud.onToggle` and `hud.onAction` (same callback shape as before); the touch-input row writes through `setSetting` in `src/settings.ts`. The scene reads `getSettings()` at gesture time (pull-on-read), so a flipped preference takes effect on the very next pointer event with no callback plumbing.
+There's no UI plumbing between Lit and the scenes: each scene owns its own HUD orchestrator (`MapHud` for galaxy view, `SystemHud` for system view), each with its own ortho pass at 1 unit = 1 buffer pixel. HUD widgets are built on `Widget` (Mesh + PlaneGeometry + MeshBasicMaterial + optional CanvasTexture) so HUD geometry shares the rest of the scene's pixel grid.
 
-The `scene/` modules know **nothing about Lit or the DOM** beyond the `HTMLCanvasElement` they render into and `window` for size/input listeners. Don't add DOM queries in there — route data through callbacks or new methods on `StarmapScene`.
+Each HUD captures pointer events first (in the scene's `onPointerDown` / `onPointerMove` via `clientToHud()`), so clicking a button or a panel row never starts a pan/orbit and hovering swaps the cursor to `pointer`. `MapHud` exposes `onToggle`, `onAction`, `onDeselect`, `onViewSystem`, and `onSettingsChanged` callbacks; `SystemHud` exposes `onBack`. The settings panel's touch-input row writes through `setSetting` in `src/settings.ts`. The scene reads `getSettings()` at gesture time (pull-on-read), so a flipped preference takes effect on the very next pointer event with no callback plumbing.
+
+The `scene/` modules know **nothing about Lit or the DOM** beyond the `HTMLCanvasElement` they render into and `window` for size/input listeners. Don't add DOM queries in there — route data through callbacks or new methods on the scene.
 
 ### Coordinate system
 
@@ -78,6 +105,16 @@ The orbit state lives in `view = { target, distance, yaw, pitch, spin }`. `dista
 
 Drop-lines now converge toward a vanishing point; under perspective, that's the honest depth cue and we lean into it. The half-plane dimming and the focused-star pivot do most of the orientation work that the parallel pins used to.
 
+### System view
+
+A close-up tactical view of one cluster lives in `SystemScene` (peer of `StarmapScene`, swapped in by `AppController`). Entry: clicking the **View System** pill button on the galaxy info card, or double-left-clicking a star. Exit: the back button in the system view's header bar, or `Escape`.
+
+`AppController` owns the shared `WebGLRenderer` and the persistent `StarmapScene` instance. Galaxy view state — camera, selection, settings — lives on the `StarmapScene` instance, so the round-trip preserves it without any serialization: `enterSystem` calls `starmap.stop()` and constructs a fresh `SystemScene`; `exitSystem` disposes the system scene and calls `starmap.start()` again. The galaxy scene's `tick()` is paused, not torn down, so resuming is instant and the camera comes back exactly where the user left it.
+
+`SystemHud` mirrors `MapHud`'s structure (own scene + ortho camera + composed widgets, `autoClear` off). It owns a full-width `HeaderBar` with the system name centered and a 1-px accent line along the bottom, an `IconButton` back-arrow on the left edge of the header, and reuses the galaxy view's `InfoCard` (no close-X — the back button is the exit) to list every cluster member.
+
+The 3D scene inside `SystemScene` is currently a skeleton: an empty `Scene`, a `PerspectiveCamera` orbited via simple yaw/pitch on pointer drag, and `wheel` zoom. Future work fills in the cluster's stars as scaled-up disks; today the HUD chrome carries the view.
+
 ### Pixel-perfect rendering — the load-bearing constraints
 
 The whole "pixel art" look depends on a stack of choices that all have to stay consistent:
@@ -87,7 +124,7 @@ The whole "pixel art" look depends on a stack of choices that all have to stay c
 2. **Pixel-snapped line shader** (`snappedLineMat` in `materials.ts`) — the vertex shader rounds each projected vertex to the nearest integer screen pixel before rasterization. Eliminates sub-pixel shimmer on thin lines. Used for grid arcs, axes, the galactic-centre arrow, and the solid variant of droplines. A sibling `snappedDotsMat` does the same for 1-pixel `Points` (snapping each point's center to a pixel center so `gl_PointSize = 1` covers exactly one pixel) — used by the dotted dropline variant.
 3. **Stars shader** (`makeStarsMaterial`) — `gl.POINTS` with a procedural circle in the fragment shader (no texture sampling, no AA fringe). The vertex shader rounds size to the nearest integer pixel count (so zoom transitions step 2→3→4→5…) and snaps the projected center to the pixel grid using a **parity-aware** snap: even sizes snap to a pixel boundary (integer window coord), odd sizes to a pixel center (half-integer). The snapped center is passed to the fragment shader as a varying `vCenter`. The fragment shader then computes its pixel-grid offset directly from `gl_FragCoord.xy - vCenter` — `gl_FragCoord.xy` is always integer+0.5, and `vCenter` is integer or half-integer, so the difference lands at clean pixel-spacing offsets symmetric about both axes by construction. **Don't use `gl_PointCoord`** for the discard test: its sub-pixel precision is implementation-defined and produces visibly asymmetric discs on some GPUs when the point center sits at sub-pixel positions. The discard threshold is the true Euclidean radius (`length(d) > vRadius`) so sizes 1/2/3 render as full squares and size 4 onward starts dropping corners — the natural pixel-disc progression. The pixel-snap math runs **after** the perspective divide (`clip.xy / clip.w`) so it works identically under ortho and perspective projection.
 4. **Label overlay pass** (`Labels` in `labels.ts`) — labels are rendered in a second ortho pass at 1 unit = 1 buffer pixel, the same scheme as the HUD, rather than as 3D Sprites in the main scene. Each frame the cluster primary's world position is projected by the **main** camera; the result drives a `Mesh + PlaneGeometry` placement in the overlay scene, with the top-left corner snapped to an integer buffer pixel so every texel renders. Constant on-screen size keeps typography stable while the depth-attenuated stars do the depth-cueing work — depth-scaling labels on top of depth-scaling stars would just make distant labels illegible.
-5. **HUD** (`Hud` in `hud.ts`) — third ortho pass at 1 unit = 1 buffer pixel, rendered after the main scene and label overlay with `autoClear` toggled off. Geometry is `Mesh + PlaneGeometry + MeshBasicMaterial` so positions and sizes are integer pixel counts that match the rest of the scene's grid. The settings trigger uses two pre-built textures (off / hover) swapped on hover. The settings panel is a single canvas texture rebuilt on state change (toggle flipped, hovered row changed) — cheaper than maintaining one texture per row state because the panel is small and rebuilds run only on user input, not per frame. The info card follows the same rebuild-on-change pattern.
+5. **HUD** (`MapHud` in `src/ui/map-hud/`, `SystemHud` in `src/ui/system-hud/`) — third ortho pass at 1 unit = 1 buffer pixel, rendered after the main scene and label overlay with `autoClear` toggled off. Geometry is `Mesh + PlaneGeometry + MeshBasicMaterial` (the `Widget` base in `src/ui/widget.ts`) so positions and sizes are integer pixel counts that match the rest of the scene's grid. The settings trigger is an `IconButton` backed by a four-texture pool (off / hover / on / onHover) swapped on hover and panel-open state. The settings panel and info card extend `BasePanel`: a single canvas texture rebuilt on state change (toggle flipped, hovered row changed, selection changed) — cheaper than maintaining one texture per row state because each panel is small and rebuilds run only on user input, not per frame.
 
 If you add new scene geometry, route it through `snappedLineMat` for lines and the existing point-shader pattern for sprites — don't introduce vanilla `LineBasicMaterial` or `PointsMaterial`, they'll shimmer.
 
@@ -185,12 +222,14 @@ All input lives in `StarmapScene`.
   Both metrics are scalar magnitudes so the heuristic is orientation-agnostic — the same numbers come out whether the fingers are stacked, side-by-side, or diagonal. The zoom threshold is doubled relative to pan because in a symmetric pinch *both* fingers contribute to separation change, so 80 px sep ≈ 40 px per finger ≈ comparable per-finger effort to a 40 px pan. Thresholds are well above touch-down jitter, so contact-stabilization noise can't lock a mode on its own — only deliberate motion crosses. When both signals cross in the same frame, the larger ratio (signal/threshold) wins; for the sepDelta gate specifically, an asymmetric pan along the separation axis (both fingers moving the same direction at different speeds) is filtered out via per-finger projection sign-checks so it can't fake a zoom.
 
 Touch input is unified through Pointer Events, not a separate `touchmove` path. `pointers` (a `Map<pointerId, {x,y}>`) tracks every active pointer; while exactly one is down, drag = orbit-or-pan; the moment a second pointer lands, the single-finger gesture is abandoned and the two-finger gesture takes over (starting in `'undecided'`). Without this hand-off (the previous code ran `pointermove` orbit and `touchmove` pinch concurrently) iPad Safari pinches always came with an unwanted yaw/pitch jolt from the first finger's `pointermove` events. A third-or-later finger landing during an active two-finger gesture is tracked for clean lift-handling but does NOT reset the locked mode — palm contact mid-pinch shouldn't clobber the gesture. The canvas also sets `touch-action: none` so iOS doesn't claim the gesture for page pan/zoom before our handlers see it. `pointercancel` resets gesture state when the OS steals a pointer (palm rejection, etc).
-- **Left-click on a star** (no/minimal drag, < 4 px movement) = select that star's **system** (a multi-star cluster is one selectable unit). Info card lists every member, reticle bracketing encloses every member's rendered disc, AND the orbit pivot animates to the cluster's center of mass — so left-clicking either component of a binary glides to the same vantage.
-- **Right-click on a star** (no/minimal drag) = select only — info card + reticle update, but the camera stays where it is. Useful for inspecting a system without losing your current vantage on another.
+- **Left-click on a star** (no/minimal drag, < 4 px movement) = select that star's **system** (a multi-star cluster is one selectable unit). Info card lists every member, reticle bracketing encloses every member's rendered disc, but the camera stays put — a follow-up click can then be captured as a double-click without fighting an in-flight focus glide.
+- **Double-left-click on a star** = open the system view (close-up `SystemScene` for the clicked cluster). A second left-click on the same cluster within the double-click window fires `onViewSystem`; clicks on a different cluster or a timed-out gap restart the window.
+- **Right-click on a star** (no/minimal drag) = select AND animate the orbit pivot to the cluster's center of mass — so right-clicking either component of a binary glides to the same vantage.
+- **Spacebar** mirrors right-click on the current selection: glides the orbit pivot to the selected cluster's COM. No-op when nothing is selected (still calls `preventDefault` so the page doesn't scroll).
 - **Hover** uses the same `Raycaster` against `gl.POINTS` (threshold 0.6 ly) as the click handlers — the hovered star promotes its cluster's label to the boxed hover variant in the label overlay.
-- The info card's close-X (top-right corner) clears the selection. The settings panel's close-X (top-right of its own box) closes the panel.
+- The info card's close-X (top-right corner) clears the selection. A **View System** pill button beneath the info card opens the system view for the selected cluster (alternative to double-clicking). The settings panel's close-X (top-right of its own box) closes the panel.
 
-**ESC** dismisses the current selection (info card + reticle), the same as clicking the card's close-X. "Reset view" in the settings panel snaps focus back to the Sun + default yaw/pitch/distance. Held-key state is cleared on `window.blur` so a key whose keyup got swallowed by alt-tab doesn't leave the camera drifting.
+**ESC** dismisses the current selection in galaxy view (info card + reticle), the same as clicking the card's close-X. In system view, ESC exits back to the galaxy view (same as the back button in the header). "Reset view" in the settings panel snaps focus back to the Sun + default yaw/pitch/distance. Held-key state is cleared on `window.blur` so a key whose keyup got swallowed by alt-tab doesn't leave the camera drifting.
 
 ## Coding conventions
 
