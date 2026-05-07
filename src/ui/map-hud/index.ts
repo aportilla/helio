@@ -3,10 +3,14 @@
 // Owns:
 //   - title (top-left) — static
 //   - scaleBar (bottom-left) — bar + 2 ticks + label, set per camera frame
-//   - settingsIcon (bottom-right) — IconButton, 4-state (panel open/closed × hover)
-//   - settingsPanel (popover above the settings icon) — Panel
+//   - settingsIcon (top-right) — IconButton, 4-state (panel open/closed × hover)
+//   - settingsPanel (popover below the settings icon) — Panel
 //   - panelClose — IconButton sibling of settingsPanel
-//   - infoCard (top-right) — InfoCard, shown when a star is selected
+//   - infoCard (bottom-right) — InfoCard, shown when a star is selected.
+//                               Action buttons anchor to the screen's
+//                               bottom-right and the card stacks above
+//                               them, so the buttons hold a consistent
+//                               position regardless of card height.
 //   - cardClose — IconButton sibling of infoCard
 //
 // External API: scene, camera, onToggle/onAction/onDeselect/
@@ -177,7 +181,7 @@ export class MapHud {
     this.focusBtn.setVisible(false);
     this.focusBtn.addTo(this.scene);
 
-    // ---- settings icon (bottom-right trigger) ---------------------------
+    // ---- settings icon (top-right trigger) ------------------------------
     this.settingsIcon = new IconButton(sizes.iconBox, this.settingsIconTextures, {
       renderOrder: 100,
       hitPad: sizes.iconHitPad,
@@ -210,10 +214,6 @@ export class MapHud {
   setScale(step: number, widthPx: number): void {
     this.scaleBar.set(step, widthPx);
     this.scaleBar.layout(sizes.edgePad);
-    // Settings icon sits above the scale; no re-anchor needed today
-    // (icon is anchored bottom-right at edgePad, not relative to scale)
-    // — but if a future design moves it above the scale label, add an
-    // explicit re-anchor here using scaleBar.labelHeight.
   }
 
   setSelectedCluster(clusterIdx: number): void {
@@ -417,7 +417,11 @@ export class MapHud {
     this.rebuildPanelSpec();
     this.panelClose.setVisible(true);
     this.layoutSettingsPanel();
-    this.settingsIcon.setSelected(true);
+    // The panel's close-X sits at the burger icon's exact footprint
+    // (closeBox === iconBox at the same anchor), so hide the icon to
+    // avoid two glyphs stomping on each other — the X visually replaces
+    // the burger as the open-state affordance.
+    this.settingsIcon.setVisible(false);
   }
 
   private closePanel(): void {
@@ -425,7 +429,8 @@ export class MapHud {
     this.settingsPanelOpen = false;
     this.settingsPanel.setVisible(false);
     this.panelClose.setVisible(false);
-    this.settingsIcon.setSelected(false);
+    this.settingsIcon.setVisible(true);
+    this.settingsIcon.resetHover();
     this.panelClose.resetHover();
     this.hoveredRowId = null;
   }
@@ -436,52 +441,56 @@ export class MapHud {
     this.title.anchorTo('tl', this.bufferW, this.bufferH, sizes.edgePad, sizes.edgePad);
     this.scaleBar.layout(sizes.edgePad);
     this.layoutInfoCard();
-    this.settingsIcon.anchorTo('br', this.bufferW, this.bufferH, sizes.edgePad, sizes.edgePad);
+    this.settingsIcon.anchorTo('tr', this.bufferW, this.bufferH, sizes.edgePad, sizes.edgePad);
     if (this.settingsPanelOpen) this.layoutSettingsPanel();
   }
 
   private layoutInfoCard(): void {
     if (!this.infoCard.visible) return;
-    // Top-right corner. Uses sizes.cardMargin (a touch farther in than
-    // the title/buttons' sizes.edgePad) so the boxed border has visible
+    // Bottom-right corner. Action buttons anchor to the screen bottom so
+    // they hold a fixed position regardless of how tall the card is; the
+    // card stacks above them and grows upward as the cluster gets more
+    // members. Uses sizes.cardMargin (a touch farther in than the
+    // title/scale's sizes.edgePad) so the boxed border has visible
     // breathing room from the screen edge. Read width/height directly
-    // (not visibleBounds.w/h) so the very first layout after setStar()
+    // (not visibleBounds.w/h) so the very first layout after setCluster()
     // sees the freshly-painted size instead of the pre-placement zeros.
     const cardRight = this.bufferW - sizes.cardMargin;
-    const cardTop   = this.bufferH - sizes.cardMargin;
-    const cardBottom = cardTop - this.infoCard.height;
+
+    // Action buttons sit in a row anchored to the screen's bottom edge.
+    // View System anchors to the right; Focus sits to its left with a
+    // small gap. Both share the same Y so the row reads as a single strip.
+    const btnBottom = sizes.cardMargin;
+    this.viewSystemBtn.placeAt(cardRight - this.viewSystemBtn.width, btnBottom);
+    const focusRight = cardRight - this.viewSystemBtn.width - sizes.cardActionInterButtonGap;
+    this.focusBtn.placeAt(focusRight - this.focusBtn.width, btnBottom);
+
+    // Card sits above the button row, growing upward.
+    const cardBottom = btnBottom + this.viewSystemBtn.height + sizes.cardActionGap;
     this.infoCard.placeAt(cardRight - this.infoCard.width, cardBottom);
 
     // Close-X flush with the card's top-right corner.
+    const cardTop = cardBottom + this.infoCard.height;
     this.cardClose.placeAt(cardRight - sizes.closeBox, cardTop - sizes.closeBox);
-
-    // Action buttons sit in a row beneath the card. View System anchors
-    // to the card's right edge; Focus sits to its left with a small gap.
-    // Both share the same Y so the row reads as a single strip.
-    const btnY = cardBottom - sizes.cardActionGap - this.viewSystemBtn.height;
-    this.viewSystemBtn.placeAt(cardRight - this.viewSystemBtn.width, btnY);
-    const focusRight = cardRight - this.viewSystemBtn.width - sizes.cardActionInterButtonGap;
-    this.focusBtn.placeAt(focusRight - this.focusBtn.width, btnY);
   }
 
   private layoutSettingsPanel(): void {
     if (!this.settingsPanelOpen) return;
-    // Panel opens upward and to the LEFT of the bottom-right trigger so
-    // it never extends off-screen on the right. Right edge aligns with
-    // the trigger's right edge (window_right - sizes.edgePad) so the
-    // column reads as a connected popover; bottom edge clears the
-    // trigger's *visible* top by sizes.panelTriggerGap (un-padded by
-    // hitPad — gap should track what the user sees, not the inflated
-    // click target).
-    const vis = this.settingsIcon.visibleBounds;
-    const panelBottom = vis.y + vis.h + sizes.panelTriggerGap;
+    // Panel anchors directly to the top-right corner — same corner as the
+    // settings (burger) icon — and grows downward. The panel close-X sits
+    // at the panel's top-right, which is exactly the icon's footprint
+    // (closeBox === iconBox), so when the panel is open the close-X
+    // visually replaces the burger as the same-position affordance to
+    // dismiss it. No vertical gap to the trigger because the close-X *is*
+    // the trigger's new state.
     const panelRight = this.bufferW - sizes.edgePad;
+    const panelTop = this.bufferH - sizes.edgePad;
     const panelW = this.settingsPanel.width;
     const panelH = this.settingsPanel.height;
+    const panelBottom = panelTop - panelH;
     this.settingsPanel.placeAt(panelRight - panelW, panelBottom);
 
     // Panel close-X flush with the panel's top-right corner.
-    const panelTop = panelBottom + panelH;
     this.panelClose.placeAt(panelRight - sizes.closeBox, panelTop - sizes.closeBox);
   }
 

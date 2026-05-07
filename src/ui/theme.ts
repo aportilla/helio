@@ -21,8 +21,9 @@ export const colors = {
   borderAccent: '#3a8fe0',          // bright outline / hover / dialog edge
   borderDim:    '#1e6fc4',          // inactive surface outline
 
-  // Surface fills
-  surface:   'rgba(0,8,20,0.92)',   // panel/card background
+  // Surface fills — fully opaque so HUD chrome reads as a solid plate
+  // against the scene; stars behind a panel/button must not show through.
+  surface:   '#000814',             // panel/card/button background
   surfaceOn: '#10325d',             // dim-blue selected fill (settings icon when panel open)
 
   // Glyphs (close-X, hamburger)
@@ -69,7 +70,6 @@ export const sizes = {
   scaleLabelGap: 2,
 
   // Settings panel layout rhythm
-  panelTriggerGap:       6,  // gap between settings icon and panel
   panelTitleGap:         2,  // gap below title line
   panelTitleToSection:   4,
   panelSectionGapBefore: 6,

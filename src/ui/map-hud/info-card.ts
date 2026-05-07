@@ -1,4 +1,4 @@
-// Cluster info card — shown in the top-right when a star (i.e. its
+// Cluster info card — shown in the bottom-right when a star (i.e. its
 // containing cluster) is selected. Single-member clusters look like the
 // previous single-star layout; multi-member systems list every member
 // with its own block of body rows under a member sub-header.
