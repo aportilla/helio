@@ -16,7 +16,7 @@ No CSS framework, no state library, no testing framework yet.
 
 ```
 npm run dev        # vite dev server, opens browser
-npm run build      # tsc --noEmit + vite build → dist/
+npm run build      # tsc + vite build → dist/   (tsconfig sets noEmit, so tsc just type-checks)
 npm run preview    # serve dist/
 npm run typecheck  # tsc --noEmit
 ```
@@ -26,8 +26,9 @@ npm run typecheck  # tsc --noEmit
 ```
 index.html                  Vite entry — single <script> tag pointing at main.ts
 src/
-  main.ts                   Imports global styles, registers fonts, mounts the
-                            canvas + boot splash, instantiates AppController
+  main.ts                   Imports global styles, calls initFonts() (eagerly
+                            parses UI fonts + injects custom ► glyph), mounts
+                            the canvas + boot splash, instantiates AppController
   styles.css                Body reset + canvas + boot-splash styles
   scene/                    Three.js code — no DOM coupling beyond the canvas
     app-controller.ts       AppController: owns the WebGLRenderer + swaps which
@@ -70,7 +71,14 @@ src/
   data/
     stars.ts                Star catalog (name, x/y/z in ly, spectral class, distance);
                             also computes star clusters and lookup
-    pixel-font.ts           Inline Monaco 11px BDF data + canvas-texture text renderer
+    BDF/<Family>/<n>.bdf    Bundled bitmap fonts — 25 Mac-classic families
+                            (Monaco, Chicago, Geneva, EspySans, …) shipped as
+                            raw .bdf text and discovered at build time
+    bdf-font.ts             Minimal BDF parser + per-font canvas atlas renderer
+    font-provider.ts        Typed FONTS catalog, lazy registration, DEV-mode
+                            drift check between FONTS and on-disk .bdf files
+    pixel-font.ts           makeLabelTexture / drawPixelText — composition
+                            helpers over font-provider for the rest of the app
 ```
 
 ## Architecture notes
@@ -127,28 +135,44 @@ If you add new scene geometry, route it through `snappedLineMat` for lines and t
 
 ### Color management is OFF
 
-`scene.ts` runs `ColorManagement.enabled = false` at module load and sets `renderer.outputColorSpace = LinearSRGBColorSpace` in the constructor. This is intentional and load-bearing.
+`app-controller.ts` runs `ColorManagement.enabled = false` at module load and sets `renderer.outputColorSpace = LinearSRGBColorSpace` on the shared `WebGLRenderer` in the constructor. This is intentional and load-bearing.
 
 The whole project's palette is hand-picked sRGB hex values (`0x1e6fc4`, `#5ec8ff`, etc.) intended to render at *exactly* those values on screen. With Three.js's default color management, two parallel paths (shader uniforms via `new Color(0x...)` vs canvas-texture pixels via `fillStyle = '#...'`) get different sRGB↔linear conversions and end up rendering at *different* on-screen colors — most visible where a `GALACTIC CENTRE` text label sits next to a grid ring drawn at the same hex. With management off, every hex value is the displayed value end-to-end, and there's no lighting math to break.
 
 Don't re-enable color management without auditing every call site that mixes `new Color()` (in shaders) with canvas-rendered text textures.
 
-### Bitmap font
+### Bitmap fonts
 
-`src/data/pixel-font.ts` ships an inline subset of **Monaco 11px** as BDF data (encoding, advance, bbox metrics, hex rows). Coverage: ASCII 32–126 (with no `[`, `]`, `\`, `^`, `_`, `` ` ``) plus `°` (degree), `·` (middle dot), `—` (em-dash), and `►` (custom right-pointer).
+The HUD draws from a catalog of Mac-classic bitmap fonts shipped as `.bdf` files under `src/data/BDF/<Family>/<size>.bdf`. Vite's `import.meta.glob('./BDF/**/*.bdf', { query: '?raw', eager: true })` bundles every file as a string at build time; `font-provider.ts` indexes them by `(family, size)` and parses lazily on first `getFont(spec)` request. A typed `FONTS` constant gives callers autocomplete:
 
-`makeLabelTexture(...)` is overloaded three ways:
+```ts
+import { FONTS } from './data/font-provider';
+FONTS.Monaco[11]      // ok
+FONTS.Chicago[999]    // ts error — no such size
+FONTS.NotAFamily      // ts error — no such family
+```
+
+In DEV builds, a drift check warns if `FONTS` and the on-disk directory disagree — a typo in a typed entry, or a `.bdf` added without one (so callers can't autocomplete to it).
+
+`initFonts()` (called once from `main.ts` before any label texture is built) eagerly parses **Monaco 11** + **Chicago 15** so the first frame doesn't pay parse cost, and injects the custom `►` (U+25BA, used in info-card name lines) onto Monaco via `BdfFont.addGlyph()`. Coverage beyond that is whatever the `.bdf` source carries — printable ASCII for every font, plus the typical Mac symbol set (`°`, `·`, `—`, etc.) on most. MacRoman codepoints 128–255 are remapped to Unicode by glyph name (`degree` → U+00B0, `bullet` → U+00B7, `emdash` → U+2014); glyphs named `uniXXXX` carry their codepoint in the name.
+
+`bdf-font.ts` builds one canvas atlas per font, with white-on-transparent pixels: white callers take a fast direct-blit path; other colors route through a per-call temp canvas with `source-in` tinting. Memory stays at one atlas per font regardless of how many colors are used.
+
+The HUD's font selections live in `src/ui/theme.ts` — EspySans 20 for the title, EspySans 15 for card/panel headers, Monaco 11 for body text. Tweak the tokens there to swap fonts globally.
+
+`makeLabelTexture(...)` (in `pixel-font.ts`) is overloaded three ways:
 - `(text, color, opts?)` — single line, single color
 - `(segments, opts?)` — single line with per-segment colors (`TextSegment[]`)
 - `(lines, opts?)` — multi-line with per-segment colors per line (`TextSegment[][]`)
 
 Options:
+- `font: FONTS.Family[size]` — pick the font; defaults to Monaco 11
 - `box: true` — draws a bordered surface frame around the text (used by the hovered cluster label)
 - `noHalo: true` — skip the dark halo normally painted around glyph edges. The halo helps text read against busy backgrounds but darkens a label's perceptual brightness; opt out when you want a label to color-match a nearby grid line (the `GALACTIC CENTRE` label uses this).
 
-Also exports `drawPixelText(g2d, text, x, y, color)` so the HUD can compose text into its own canvases alongside borders/fills without going through `makeLabelTexture`.
+Also exports `drawPixelText(g2d, text, x, y, color, font?)` so the HUD can compose text into its own canvases alongside borders/fills without going through `makeLabelTexture`.
 
-If you need glyphs outside the current set, add a row to `FONT_GLYPHS` keyed by Unicode codepoint.
+To add a font, drop the `.bdf` at `src/data/BDF/<Family>/<size>.bdf` and add a typed entry to `FONTS` in `font-provider.ts`. To add a glyph that isn't in the source — like a custom UI symbol — parse the font and call `addGlyph(codepoint, glyph)` on it; the atlas rebuilds lazily on the next draw. The `►` injection in `initFonts()` is the canonical example.
 
 ### Star color and size
 

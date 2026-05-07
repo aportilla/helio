@@ -7,8 +7,8 @@
 // `sizes.edgePad = 8` becomes a 24-physical-pixel inset.
 //
 // Color values are literal sRGB. Three.js ColorManagement is disabled
-// (see scene.ts) so every hex string and numeric color renders at exactly
-// the value written here. Don't introduce any conversion layer.
+// (see app-controller.ts) so every hex string and numeric color renders
+// at exactly the value written here. Don't introduce any conversion layer.
 
 import { FONTS } from '../data/font-provider';
 
