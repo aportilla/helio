@@ -11,10 +11,7 @@ document.body.appendChild(canvas);
 
 const splash = document.createElement('div');
 splash.className = 'boot-splash';
-const splashCursor = document.createElement('span');
-splashCursor.className = 'blink';
-splashCursor.textContent = '_';
-splash.append('INITIALIZING STELLAR CATALOG', splashCursor);
+splash.innerHTML = '<div class="dot"></div><div class="ring"></div><div class="ring delay"></div>';
 document.body.appendChild(splash);
 
 const controller = new AppController(canvas);

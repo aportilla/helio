@@ -167,8 +167,7 @@ Slot management (autosave cadence, quicksave, named saves) is UI plumbing on top
 
 The end-state delivery target is a desktop binary distributed on Steam and/or itch.io. Plan is to wrap the built `dist/` in **Electron**: largest binary (~80–150 MB per platform) but the most battle-tested ecosystem for indie web-tech games on Steam (auto-update, code signing, Steamworks SDK bindings). Tauri remains a smaller-binary alternative if Electron's footprint becomes a concern.
 
-Two changes the codebase already needs whenever the wrapper happens:
+One change the codebase already needs whenever the wrapper happens:
 - `vite.config.ts` has `base: '/starmap/'` for GitHub Pages. Desktop builds need `'./'` or `'/'` — gate behind a build env var.
-- `index.html` pulls `VT323` from Google Fonts. Self-host the `.woff2` so the desktop build runs offline. (The in-scene type uses bundled `.bdf` fonts already; only the boot splash uses VT323.)
 
 itch.io HTML5 (zip of `dist/`, served in an iframe) remains a zero-effort intermediate distribution channel that doesn't require any wrapper at all.

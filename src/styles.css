@@ -35,18 +35,35 @@ canvas {
 .boot-splash {
   position: fixed;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
   background: var(--bg);
-  color: var(--label);
-  font-family: 'VT323', monospace;
-  font-size: 18px;
-  letter-spacing: 3px;
   z-index: 10;
   transition: opacity 0.5s;
 }
 .boot-splash.fading { opacity: 0; }
-.boot-splash .blink { animation: blink 1s steps(2) infinite; }
 
-@keyframes blink { 50% { opacity: 0; } }
+/* Stack the dot and rings in a single grid cell so they share screen center. */
+.boot-splash > * { grid-area: 1 / 1; align-self: center; justify-self: center; }
+
+.boot-splash .dot {
+  width: 4px;
+  height: 4px;
+  background: var(--label);
+}
+
+/* Concentric range-ring vocabulary borrowed from the map. steps() jumps the
+   size in integer-pixel increments per frame so the 1-px border stays crisp
+   instead of softening through a sub-pixel scale interpolation. */
+.boot-splash .ring {
+  width: 4px;
+  height: 4px;
+  border: 1px solid var(--label);
+  animation: boot-ping 1.2s steps(7) infinite;
+}
+.boot-splash .ring.delay { animation-delay: 0.6s; }
+
+@keyframes boot-ping {
+  0%   { width: 4px;  height: 4px;  opacity: 1; }
+  100% { width: 32px; height: 32px; opacity: 0; }
+}
