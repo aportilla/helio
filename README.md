@@ -1,4 +1,6 @@
-# Starmap
+# Helio
+
+The galaxy-map screen of **Helio**, a planned 4X space strategy game in the lineage of Ascendancy (1995).
 
 A 3D pixel-art visualization of the stars within ~20 light years of the Sun. Perspective camera orbiting a focused star, stellar discs sized by spectral class and depth-attenuated, drop-lines pinning each star to the galactic plane, all rendered in a deliberately chunky retro aesthetic.
 
