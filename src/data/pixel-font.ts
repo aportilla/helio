@@ -68,11 +68,6 @@ export interface LabelTextureResult {
 
 export interface LabelTextureOptions {
   box?: boolean;
-  // Skip the dark halo that's normally drawn around glyphs. The halo helps
-  // text read against busy backgrounds (droplines, stars) but darkens the
-  // glyph's perceptual brightness — counterproductive when you want a
-  // label to color-match a nearby grid line.
-  noHalo?: boolean;
   // Font to render with (e.g. FONT_MONACO_11, FONTS.Chicago[15]). Defaults
   // to DEFAULT_FONT when omitted.
   font?: FontSpec;
@@ -140,8 +135,7 @@ export function makeLabelTexture(
   });
 
   // Halo only for non-boxed labels — the box bg already provides contrast.
-  // Callers can also opt out via noHalo when they want literal color match.
-  if (!box && !opts?.noHalo) addDarkHalo(g, w, h);
+  if (!box) addDarkHalo(g, w, h);
 
   const tex = new CanvasTexture(c);
   tex.minFilter = NearestFilter;

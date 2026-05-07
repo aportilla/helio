@@ -34,13 +34,6 @@ interface ClusterLabel {
   hoverH: number;
 }
 
-interface AnchoredLabel {
-  mesh: Mesh;
-  worldPos: Vector3;
-  w: number;
-  h: number;
-}
-
 // Buffer-pixel gap between a star's projected position and its label.
 const LABEL_OFFSET_PX = 6;
 
@@ -120,7 +113,6 @@ export class Labels {
   private pxScale = 1;
 
   private readonly clusterLabels: ClusterLabel[] = [];
-  private readonly gcLabel: AnchoredLabel;
 
   private showLabels = true;
   private hoveredCluster = -1;
@@ -179,18 +171,6 @@ export class Labels {
       });
     });
 
-    // Galactic-centre pointer label.
-    // noHalo so the label color matches the literal grid-arrow hex, not a
-    // subtly darkened halo'd version.
-    const gc = makeLabelTexture('GALACTIC CENTRE', '#1e6fc4', { noHalo: true });
-    const gcMesh = new Mesh(new PlaneGeometry(gc.w, gc.h), labelMat(gc.tex));
-    gcMesh.renderOrder = 1;
-    this.scene.add(gcMesh);
-    // worldPos is the arrow tip; the per-frame placement nudges the label
-    // past it along the projected arrow direction so the arrow line passes
-    // through the label's center from any view angle (see update()).
-    this.gcLabel = { mesh: gcMesh, worldPos: new Vector3(24, 0, 0), w: gc.w, h: gc.h };
-
     // Selection reticle — texture and quad rebuilt on size change in
     // ensureReticleSize(). Start with a 1×1 placeholder; first selection
     // triggers the real build.
@@ -219,10 +199,6 @@ export class Labels {
 
   setShowLabels(show: boolean): void {
     this.showLabels = show;
-    // Cluster labels are gated per-frame (and the hovered label always
-    // shows regardless); only the static ancillary labels need direct
-    // visibility toggles here.
-    this.gcLabel.mesh.visible = show;
   }
 
   setHovered(starIdx: number): void {
@@ -368,41 +344,6 @@ export class Labels {
         const cy = this._screen.y + LABEL_OFFSET_PX + L.h * 0.5;
         this.placeAt(L.mesh, this._screen.x, cy, L.w, L.h);
         L.mesh.renderOrder = -dCam;
-      }
-    }
-
-    // Galactic-centre label — pushed past the arrow tip along the arrow's
-    // screen-space direction, so the arrow line passes through the label's
-    // center regardless of yaw/pitch. A fixed screen-x offset (the prior
-    // approach) flipped to the wrong side of the arrow when viewed from the
-    // -X half-space, since "+x in screen" no longer corresponds to "+X in
-    // world". Project (24,0,0) for the tip and (25,0,0) for a step along the
-    // arrow line; the normalized screen delta is the direction the arrow
-    // visually points, and we offset by w/2 + gap along it.
-    this.gcLabel.mesh.visible = false;
-    if (this.showLabels && this.projectToBuffer(this.gcLabel.worldPos, camera)) {
-      const tipX = this._screen.x;
-      const tipY = this._screen.y;
-      this._world.set(25, 0, 0);
-      if (this.projectToBuffer(this._world, camera)) {
-        let dx = this._screen.x - tipX;
-        let dy = this._screen.y - tipY;
-        const len = Math.hypot(dx, dy);
-        // Camera looking nearly along ±X collapses the projected arrow to a
-        // point. Skip placement rather than render at a degenerate position;
-        // the arrow itself is also edge-on / invisible there.
-        if (len >= 0.5) {
-          dx /= len; dy /= len;
-          const push = this.gcLabel.w * 0.5 + 6;
-          this.gcLabel.mesh.visible = true;
-          this.placeAt(
-            this.gcLabel.mesh,
-            tipX + dx * push,
-            tipY + dy * push,
-            this.gcLabel.w,
-            this.gcLabel.h,
-          );
-        }
       }
     }
 

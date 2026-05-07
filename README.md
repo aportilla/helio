@@ -110,7 +110,7 @@ Helio is a 4X game — the galaxy map is the *first* screen, not the only one. F
 ### Coordinate system
 
 Galactic cartesian, units in light years:
-- **+X** points toward the galactic centre (where the `GALACTIC CENTRE` arrow points)
+- **+X** points toward the galactic centre (where the +X arrow points)
 - **+Z** points toward the north galactic pole (the camera's up vector is fixed to `(0, 0, 1)`)
 - The Sun sits at the origin
 
@@ -153,7 +153,7 @@ If you add new scene geometry, route it through `snappedLineMat` for lines and t
 
 `app-controller.ts` runs `ColorManagement.enabled = false` at module load and sets `renderer.outputColorSpace = LinearSRGBColorSpace` on the shared `WebGLRenderer` in the constructor. This is intentional and load-bearing.
 
-The whole project's palette is hand-picked sRGB hex values (`0x1e6fc4`, `#5ec8ff`, etc.) intended to render at *exactly* those values on screen. With Three.js's default color management, two parallel paths (shader uniforms via `new Color(0x...)` vs canvas-texture pixels via `fillStyle = '#...'`) get different sRGB↔linear conversions and end up rendering at *different* on-screen colors — most visible where a `GALACTIC CENTRE` text label sits next to a grid ring drawn at the same hex. With management off, every hex value is the displayed value end-to-end, and there's no lighting math to break.
+The whole project's palette is hand-picked sRGB hex values (`0x1e6fc4`, `#5ec8ff`, etc.) intended to render at *exactly* those values on screen. With Three.js's default color management, two parallel paths (shader uniforms via `new Color(0x...)` vs canvas-texture pixels via `fillStyle = '#...'`) get different sRGB↔linear conversions and end up rendering at *different* on-screen colors — visible wherever a canvas-rendered text label sits next to a shader-drawn grid line, dropline, or arrow at the same hex. With management off, every hex value is the displayed value end-to-end, and there's no lighting math to break.
 
 Don't re-enable color management without auditing every call site that mixes `new Color()` (in shaders) with canvas-rendered text textures.
 
@@ -184,7 +184,6 @@ The HUD's font selections live in `src/ui/theme.ts` — EspySans 20 for the titl
 Options:
 - `font: FONTS.Family[size]` — pick the font; defaults to Monaco 11
 - `box: true` — draws a bordered surface frame around the text (used by the hovered cluster label)
-- `noHalo: true` — skip the dark halo normally painted around glyph edges. The halo helps text read against busy backgrounds but darkens a label's perceptual brightness; opt out when you want a label to color-match a nearby grid line (the `GALACTIC CENTRE` label uses this).
 
 Also exports `drawPixelText(g2d, text, x, y, color, font?)` so the HUD can compose text into its own canvases alongside borders/fills without going through `makeLabelTexture`.
 
