@@ -6,9 +6,9 @@ Think 1980s starbase HUD: inline bitmap-font labels, cyan-on-near-black palette,
 
 ## Stack
 
-- **Vite 5** — dev server + build (`vite.config.ts` opens the browser on `npm run dev`)
+- **Vite 8** — dev server + build (`vite.config.ts` opens the browser on `npm run dev`)
 - **TypeScript 5** — strict mode, `noUnusedLocals`/`noUnusedParameters`, `noEmit` (Vite handles emit)
-- **Three.js r170** — WebGL renderer, scene graph, shaders
+- **Three.js r184** — WebGL renderer, scene graph, shaders
 
 No CSS framework, no state library, no testing framework yet.
 
