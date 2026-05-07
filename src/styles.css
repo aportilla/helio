@@ -1,4 +1,4 @@
-/* Used by the boot splash; the in-scene HUD owns its own colors. */
+/* The boot splash and document use these; the in-scene HUD owns its own colors. */
 :root {
   --bg: #000008;
   --label: #5ec8ff;
@@ -14,3 +14,39 @@ html, body {
 
 body { cursor: grab; }
 body.grabbing { cursor: grabbing; }
+
+canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  /* Render buffer is upscaled to fit the CSS box. Default linear scaling
+     softens edges on hi-DPI — nearest-neighbor preserves the crisp
+     pixel-art look. */
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  /* Mobile Safari otherwise hijacks two-finger pinch as page zoom and
+     single-finger drag as page pan, swallowing the events the scene
+     needs to drive orbit/pinch-zoom itself. */
+  touch-action: none;
+}
+
+.boot-splash {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  color: var(--label);
+  font-family: 'VT323', monospace;
+  font-size: 18px;
+  letter-spacing: 3px;
+  z-index: 10;
+  transition: opacity 0.5s;
+}
+.boot-splash.fading { opacity: 0; }
+.boot-splash .blink { animation: blink 1s steps(2) infinite; }
+
+@keyframes blink { 50% { opacity: 0; } }

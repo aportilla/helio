@@ -13,9 +13,7 @@
     "isolatedModules": true,
     "noEmit": true,
     "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "experimentalDecorators": true,
-    "useDefineForClassFields": false
+    "allowSyntheticDefaultImports": true
   },
   "include": ["src"]
 }

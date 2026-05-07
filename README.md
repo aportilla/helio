@@ -8,7 +8,6 @@ Think 1980s starbase HUD: inline bitmap-font labels, cyan-on-near-black palette,
 
 - **Vite 5** — dev server + build (`vite.config.ts` opens the browser on `npm run dev`)
 - **TypeScript 5** — strict mode, `noUnusedLocals`/`noUnusedParameters`, `noEmit` (Vite handles emit)
-- **Lit 3** — only used for the canvas host element and the one-shot boot splash
 - **Three.js r170** — WebGL renderer, scene graph, shaders
 
 No CSS framework, no state library, no testing framework yet.
@@ -25,13 +24,11 @@ npm run typecheck  # tsc --noEmit
 ## Project layout
 
 ```
-index.html                  Vite entry — mounts <starmap-app>
+index.html                  Vite entry — single <script> tag pointing at main.ts
 src/
-  main.ts                   Imports global styles + registers <starmap-app>
-  styles.css                Body reset + boot-splash CSS variables
-  components/               Lit web components (only the canvas host + boot splash now)
-    starmap-app.ts          Root component; owns the canvas + AppController instance
-    starmap-boot.ts         Centered "INITIALIZING STELLAR CATALOG" splash
+  main.ts                   Imports global styles, registers fonts, mounts the
+                            canvas + boot splash, instantiates AppController
+  styles.css                Body reset + canvas + boot-splash styles
   scene/                    Three.js code — no DOM coupling beyond the canvas
     app-controller.ts       AppController: owns the WebGLRenderer + swaps which
                             view-mode scene is currently driving the canvas
@@ -78,15 +75,15 @@ src/
 
 ## Architecture notes
 
-### Component / scene split
+### Bootstrap / scene split
 
-`StarmapApp` (the Lit root) is minimal — it owns the canvas, mounts the boot splash, and instantiates an `AppController`. The controller owns the shared `WebGLRenderer` and decides which view-mode scene's `tick()` loop is currently driving the canvas. Two peer scenes share the renderer: `StarmapScene` (galaxy view, the default) and `SystemScene` (close-up of one cluster, lazily constructed on entry, disposed on exit). Only one is running at a time.
+`main.ts` is minimal — it imports the global stylesheet, parses the bundled BDF fonts, creates the canvas + boot splash directly via `document.createElement`, and instantiates an `AppController`. The controller owns the shared `WebGLRenderer` and decides which view-mode scene's `tick()` loop is currently driving the canvas. Two peer scenes share the renderer: `StarmapScene` (galaxy view, the default) and `SystemScene` (close-up of one cluster, lazily constructed on entry, disposed on exit). Only one is running at a time.
 
-There's no UI plumbing between Lit and the scenes: each scene owns its own HUD orchestrator (`MapHud` for galaxy view, `SystemHud` for system view), each with its own ortho pass at 1 unit = 1 buffer pixel. HUD widgets are built on `Widget` (Mesh + PlaneGeometry + MeshBasicMaterial + optional CanvasTexture) so HUD geometry shares the rest of the scene's pixel grid.
+There's no UI plumbing between the bootstrap and the scenes: each scene owns its own HUD orchestrator (`MapHud` for galaxy view, `SystemHud` for system view), each with its own ortho pass at 1 unit = 1 buffer pixel. HUD widgets are built on `Widget` (Mesh + PlaneGeometry + MeshBasicMaterial + optional CanvasTexture) so HUD geometry shares the rest of the scene's pixel grid.
 
 Each HUD captures pointer events first (in the scene's `onPointerDown` / `onPointerMove` via `clientToHud()`), so clicking a button or a panel row never starts a pan/orbit and hovering swaps the cursor to `pointer`. `MapHud` exposes `onToggle`, `onAction`, `onDeselect`, `onViewSystem`, and `onSettingsChanged` callbacks; `SystemHud` exposes `onBack`. The settings panel's touch-input row writes through `setSetting` in `src/settings.ts`. The scene reads `getSettings()` at gesture time (pull-on-read), so a flipped preference takes effect on the very next pointer event with no callback plumbing.
 
-The `scene/` modules know **nothing about Lit or the DOM** beyond the `HTMLCanvasElement` they render into and `window` for size/input listeners. Don't add DOM queries in there — route data through callbacks or new methods on the scene.
+The `scene/` modules know **nothing about the DOM** beyond the `HTMLCanvasElement` they render into and `window` for size/input listeners. Don't add DOM queries in there — route data through callbacks or new methods on the scene.
 
 ### Coordinate system
 
@@ -236,6 +233,5 @@ Touch input is unified through Pointer Events, not a separate `touchmove` path. 
 - TypeScript strict mode is on. Don't disable rules per-file; fix the type instead.
 - The scene code uses **scratch `Vector3`/`Vector2` instances on `this`** to avoid per-frame allocations in the tick loop. When you add new per-frame math, reuse an existing scratch or add a new private one — don't `new Vector3()` inside `tick()`.
 - Comments explain **why** (the load-bearing constraint, the surprising trade-off, the bug it works around). They don't restate what the code does. Match this style — a wall of comments above obvious code is noise; a one-line "uses floor not round because FP jitter at exact half-pixels would twitch" earns its keep.
-- Each Lit component is a single file, owns its own styles, and exports its tag name through `HTMLElementTagNameMap` so consumers get autocomplete.
 - HUD sizes are in **env pixels** (1 env pixel = `ENV_PX_PER_SCREEN_PX = 3` physical pixels). When tweaking visual sizes, divide your physical-pixel target by 3 — e.g. a "9-physical-pixel-tall scale-bar tick" is `SCALE_TICK_H = 3`.
 - No emojis in source unless explicitly part of the visual design.

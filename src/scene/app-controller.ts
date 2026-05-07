@@ -1,7 +1,7 @@
 // Top-level scene controller. Owns the shared WebGLRenderer and the
-// view-mode scenes. Lit's <starmap-app> instantiates one of these and
-// hands it the canvas; the controller decides which scene's render loop
-// is currently driving the canvas.
+// view-mode scenes. main.ts instantiates one of these and hands it the
+// canvas; the controller decides which scene's render loop is currently
+// driving the canvas.
 //
 // Two peer scenes share the same canvas + renderer:
 //   - StarmapScene (galaxy view, the default)
