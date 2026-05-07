@@ -13,8 +13,8 @@ const COLOR_DOTS  = 0x15464c;
 // Dots are baked into the geometry at fixed Z intervals so perspective
 // compresses them at distance and stretches them up close — a distant
 // dropline stays visually tight while the focused one carries the same
-// pattern density it always had. 0.25 ly mirrors the legacy 1px-on / 3px-off
-// proportion at the default 50 ly orbit (~17 px/ly = ~4 px between dots).
+// pattern density it always had. 0.25 ly was tuned to mirror the legacy
+// 1-px-on / 3-px-off screen-space pattern at a mid-range orbit.
 const DOT_PERIOD_LY = 0.25;
 
 // Distance fade — kept in sync with the cluster-label fade in labels.ts so a

@@ -191,7 +191,7 @@ Real radii in the catalog span ~250× (Sirius B → Procyon A), so a linear mapp
 
 ### Depth-attenuated star sizing
 
-Under perspective, the stars vertex shader scales each disc by a depth factor derived from view-space distance (`REF_DIST = 50`, matching `DEFAULT_VIEW.distance`):
+Under perspective, the stars vertex shader scales each disc by a depth factor derived from view-space distance (`REF_DIST = 50`). REF_DIST anchors the curve at the value the per-class table sizes were tuned against; it's intentionally decoupled from `DEFAULT_VIEW.distance` so the default framing can be tweaked without rescaling every disc.
 - Raw factor: `REF_DIST / dist`. At `REF_DIST` away the factor is 1 and the star renders at its `pxSize` value.
 - **Asymmetric:** close-up side is cube-root-compressed (`pow(rawScale, 1/3)` when `rawScale > 1`), zoom-out side is linear. Linear close-up growth eats the screen — at orbit 5 ly a focused class-G star wants 10× growth and ends up dominating. Cube-root compression preserves the per-star ratio but tames absolute growth — orbit 5 → 2.15×, orbit 4 → 2.32×. The exponent (1/3) is the tuning knob: smaller = flatter close-up, larger = more growth. Zoom-out stays linear so distant fields shrink at the natural rate.
 - Floored at 2 px so the smallest dwarfs stay visible at zoom-out. **No upper bound** — an upper clamp on the final size flattens the brightest entries into a single blob the moment any of them hit the cap.
