@@ -252,6 +252,10 @@ Touch input is unified through Pointer Events, not a separate `touchmove` path. 
 
 **ESC** dismisses the current selection in galaxy view (info card + reticle), the same as clicking the card's close-X. In system view, ESC exits back to the galaxy view (same as the back button in the header). "Reset view" in the settings panel snaps focus back to the Sun + default yaw/pitch/distance. Held-key state is cleared on `window.blur` so a key whose keyup got swallowed by alt-tab doesn't leave the camera drifting.
 
+## Planned architecture
+
+Forward-looking design intent — the simulation layer (`src/sim/`), WASM port, save-state management, and desktop (Electron) distribution — lives in [`FUTURE_PLANNING.md`](./FUTURE_PLANNING.md). That document describes parts of the codebase that don't exist yet but whose boundaries are already decided, so implementation has a target to hit. It is durable architectural intent, distinct from session-scoped planning artifacts (which stay local-only via `.git/info/exclude`).
+
 ## Coding conventions
 
 - TypeScript strict mode is on. Don't disable rules per-file; fix the type instead.
