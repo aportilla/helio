@@ -95,6 +95,10 @@ Each HUD captures pointer events first (in the scene's `onPointerDown` / `onPoin
 
 The `scene/` modules know **nothing about the DOM** beyond the `HTMLCanvasElement` they render into and `window` for size/input listeners. Don't add DOM queries in there — route data through callbacks or new methods on the scene.
 
+### UI subsystem
+
+Helio is a 4X game — the galaxy map is the *first* screen, not the only one. Future siblings (research tree, fleet management, diplomacy, system inspector, ship designer, encyclopedia) will share the same `WebGLRenderer`, the same pixel grid, and the same widget toolkit. That's why `src/ui/` houses *generic* primitives — `Widget`, `BasePanel`, `IconButton`, `ActionButton`, the painter module, theme tokens — rather than map-specific HUD chrome. When proposing structure (file layout, base classes, orchestrators), think "what does this look like with five more screens" rather than just optimizing for the map. Defer until concrete consumers exist: UiStack/layer manager, ScrollPanel, world-anchored placement, modal/tooltip/popover taxonomies. Build what current screens need; design only what the next one will.
+
 ### Coordinate system
 
 Galactic cartesian, units in light years:
@@ -123,6 +127,8 @@ A close-up tactical view of one cluster lives in `SystemScene` (peer of `Starmap
 The 3D scene inside `SystemScene` is currently a skeleton: an empty `Scene`, a `PerspectiveCamera` orbited via simple yaw/pitch on pointer drag, and `wheel` zoom. Future work fills in the cluster's stars as scaled-up disks; today the HUD chrome carries the view.
 
 ### Pixel-perfect rendering — the load-bearing constraints
+
+**The pixel-crisp look is the committed visual identity** — not a stepping stone toward a softer aesthetic, and deliberately distinct from the organic-CG genre peers (Ascendancy, Master of Orion 2). If a future feature seems to want a gradient, an anti-aliased stroke, sub-pixel positioning, or DOM-rendered text inside the canvas, the answer is to find a pixel-crisp way to express the same intent (dithering, alternating-row tints, halo'd labels, palette swaps) — not to soften the rules. The painter primitives in `src/ui/painter.ts` and the theme tokens in `src/ui/theme.ts` encode this commitment; treat them as constraints, not defaults to grow past.
 
 The whole "pixel art" look depends on a stack of choices that all have to stay consistent:
 
