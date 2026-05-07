@@ -256,6 +256,7 @@ All input lives in `StarmapScene`.
 - **Mouse / pen drag** (any button) = orbit (yaw/pitch). Always orbits regardless of the touch-input setting — single-button mice don't have a clean equivalent of two-finger gestures.
 - **Single-finger touch drag** = orbit by default; pans the camera target along the camera's screen-aligned right/up axes when "Pan with single touch" is enabled in the settings panel. The setting is persisted via `localStorage` (see `src/settings.ts`) and read fresh per gesture, so toggling takes effect on the next pointer event.
 - **WASD** = pan the orbit pivot parallel to the galactic plane (z=0). W/S move along the yaw heading (the camera's view direction projected onto the plane), A/D strafe perpendicular to it. Pitch is ignored on purpose: looking down at a star and pressing W glides over it instead of plunging into it. Camera and target translate together so the orbit radius is preserved. Pan rate scales with `view.distance` so the screen-space movement rate is consistent across zooms.
+- **Z / X** = sink / lift the orbit pivot along world up (the galactic plane normal). Same camera-follows-target translation and `view.distance`-scaled rate as WASD, so the view drops below or rises above the plane without changing orbit radius.
 - **Q / E** = orbit left / right around the current pivot (yaw rate is constant in radians/sec).
 - **Wheel** = zoom (orbit radius).
 - **Two-finger touch gesture** = stays `'undecided'` (nothing applied) until either signal crosses its threshold:

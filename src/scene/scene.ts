@@ -736,7 +736,7 @@ export class StarmapScene {
       return;
     }
     const k = e.key.toLowerCase();
-    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e') {
+    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e' || k === 'z' || k === 'x') {
       // Skip when a browser-shortcut modifier is held (Cmd+W close tab,
       // Ctrl+S save, Alt+D address-bar focus, etc.) — let the browser have
       // those. Shift stays live so it remains available for future tuning
@@ -754,11 +754,12 @@ export class StarmapScene {
     this.heldKeys.delete(e.key.toLowerCase());
   }
 
-  // Per-frame WASD/QE update. Forward and right are derived from yaw alone
+  // Per-frame WASD/QE/ZX update. Forward and right are derived from yaw alone
   // (no pitch term) so WASD pans parallel to the galactic plane regardless
   // of camera tilt — looking down at a star and pressing W glides across
   // the plane instead of plunging into it. Pitch is clamped < π so the
-  // camera always has a well-defined yaw direction.
+  // camera always has a well-defined yaw direction. Z/X translate along
+  // world up (galactic plane normal) so they sink/lift the view.
   private applyHeldKeys(dt: number): void {
     if (this.heldKeys.size === 0) return;
 
@@ -774,6 +775,8 @@ export class StarmapScene {
     if (this.heldKeys.has('s')) this._step.sub(this._forward);
     if (this.heldKeys.has('d')) this._step.add(this._right);
     if (this.heldKeys.has('a')) this._step.sub(this._right);
+    if (this.heldKeys.has('x')) this._step.add(StarmapScene.WORLD_UP);
+    if (this.heldKeys.has('z')) this._step.sub(StarmapScene.WORLD_UP);
     if (this._step.lengthSq() > 0) {
       this._step.normalize().multiplyScalar(this.view.distance * PAN_RATE_PER_DISTANCE * dt);
       this.view.target.add(this._step);
