@@ -83,6 +83,15 @@ const MAX_TICK_DT_MS = 100;
 // rather than a fast fidget.
 const DOUBLE_CLICK_MS = 350;
 
+// Long-press: touch-only equivalent of right-click. Hold a finger still on
+// a star for LONG_PRESS_MS and we select that cluster AND animate the orbit
+// pivot to its COM (matching the mouse right-click branch). Movement above
+// LONG_PRESS_MOVE_PX from the press position cancels the timer — looser
+// than CLICK_DRAG_PX because users drift more during a held press than a
+// quick tap.
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_PX = 8;
+
 interface ViewState {
   target: Vector3;
   distance: number;  // orbit radius (camera-to-target ly)
@@ -178,6 +187,14 @@ export class StarmapScene {
   // different cluster or a timed-out gap restarts the window.
   private lastClickAt = 0;
   private lastClickClusterIdx = -1;
+
+  // Long-press timer state. Armed in onPointerDown for touch pointers only,
+  // cancelled by movement / second finger / lift / OS-cancel / scene stop.
+  // longPressFired suppresses the trailing pointerup's click path so a hold
+  // doesn't double-fire as both long-press AND tap-select.
+  private longPressTimer: number | null = null;
+  private longPressPointerId = -1;
+  private longPressFired = false;
 
   // Fired when the user requests the system view for a cluster — either
   // by clicking the "View System" button on the info card or by double-
@@ -290,6 +307,7 @@ export class StarmapScene {
     this.running = false;
     cancelAnimationFrame(this.rafId);
     this.detachListeners();
+    this.cancelLongPress();
     this.lastTickMs = 0;
   }
 
@@ -353,6 +371,7 @@ export class StarmapScene {
       // Second finger landed mid-drag → enter pinch and abandon the orbit
       // gesture. Without this hand-off, the first finger's pointermoves would
       // keep yawing/pitching the camera while the pinch is zooming.
+      this.cancelLongPress();
       this.dragging = false;
       document.body.classList.remove('grabbing');
       this.pinching = true;
@@ -371,11 +390,24 @@ export class StarmapScene {
     this.lastX = e.clientX; this.lastY = e.clientY;
     this.downX = e.clientX; this.downY = e.clientY;
     document.body.classList.add('grabbing');
+
+    // Touch-only long-press: hold a finger still on a star for LONG_PRESS_MS
+    // and we mirror the mouse right-click branch (select + animate to COM).
+    // Mouse and pen are excluded so a regular click never triggers focus
+    // animation. Cancelled by movement, second-finger entry, lift, OS-cancel,
+    // or scene stop.
+    if (e.pointerType === 'touch') {
+      this.longPressPointerId = e.pointerId;
+      this.longPressFired = false;
+      const x = e.clientX, y = e.clientY;
+      this.longPressTimer = window.setTimeout(() => this.fireLongPress(x, y), LONG_PRESS_MS);
+    }
   }
 
   private onPointerUp(e: PointerEvent): void {
     const wasPinching = this.pinching;
     this.pointers.delete(e.pointerId);
+    this.cancelLongPress();
 
     if (wasPinching) {
       // Stay in pinch mode while any pointer remains. Lifting one of two
@@ -386,6 +418,17 @@ export class StarmapScene {
         this.pinchDist = 0;
         this.pinchMode = 'undecided';
       }
+      return;
+    }
+
+    // Long-press already did the selection + focus animation while the
+    // finger was still down. Swallow the trailing pointerup so it doesn't
+    // also fire as a tap-select (and thereby start a double-click window
+    // that could open the system view on the next tap).
+    if (this.longPressFired) {
+      this.longPressFired = false;
+      this.dragging = false;
+      document.body.classList.remove('grabbing');
       return;
     }
 
@@ -436,6 +479,7 @@ export class StarmapScene {
     // Drop it from tracking and reset gesture state so the next gesture
     // starts clean.
     this.pointers.delete(e.pointerId);
+    this.cancelLongPress();
     if (this.pointers.size < 2) this.pinchDist = 0;
     if (this.pointers.size === 0) {
       this.pinching = false;
@@ -443,6 +487,31 @@ export class StarmapScene {
       this.dragging = false;
       document.body.classList.remove('grabbing');
     }
+  }
+
+  private cancelLongPress(): void {
+    if (this.longPressTimer !== null) {
+      clearTimeout(this.longPressTimer);
+      this.longPressTimer = null;
+    }
+  }
+
+  // Mirrors the mouse right-click branch in onPointerUp: select the picked
+  // cluster and glide the orbit pivot to its COM. Empty-space presses are
+  // a no-op (same as a tap on empty space). longPressFired is set so the
+  // trailing pointerup suppresses its own click path.
+  private fireLongPress(clientX: number, clientY: number): void {
+    this.longPressTimer = null;
+    const hit = this.pickStar(clientX, clientY);
+    if (hit < 0) return;
+    const clusterIdx = clusterIndexFor(hit);
+    this.selectedClusterIdx = clusterIdx;
+    this.labels.setSelectedCluster(clusterIdx);
+    this.hud.setSelectedCluster(clusterIdx);
+    this.droplines.setSelectedCluster(clusterIdx);
+    const com = STAR_CLUSTERS[clusterIdx].com;
+    this.animateFocusTo(com.x, com.y, com.z);
+    this.longPressFired = true;
   }
 
   private onPointerMove(e: PointerEvent): void {
@@ -456,6 +525,14 @@ export class StarmapScene {
     }
     if (this.pointers.has(e.pointerId)) {
       this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    // Cancel a pending long-press the moment the holding finger drifts
+    // beyond LONG_PRESS_MOVE_PX from its press position — we'd rather
+    // commit to orbit/pan than fire a focus animation under a moving finger.
+    if (this.longPressTimer !== null && e.pointerId === this.longPressPointerId) {
+      const moved = Math.hypot(e.clientX - this.downX, e.clientY - this.downY);
+      if (moved > LONG_PRESS_MOVE_PX) this.cancelLongPress();
     }
 
     if (this.pinching) {

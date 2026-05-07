@@ -10,6 +10,8 @@ html, body {
   height: 100%;
   overflow: hidden;
   background: var(--bg);
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 body { cursor: grab; }
@@ -30,6 +32,13 @@ canvas {
      single-finger drag as page pan, swallowing the events the scene
      needs to drive orbit/pinch-zoom itself. */
   touch-action: none;
+  /* iOS otherwise paints a gray/blue tap flash, a long-press callout
+     (image save / "Look Up"), and a text-selection scrim across the
+     canvas — none of which belong on a 3D scene we're driving ourselves.
+     -webkit-touch-callout: none also stops Safari's own ~500 ms long-press
+     menu from racing the in-app long-press timer. */
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
 }
 
 .boot-splash {
