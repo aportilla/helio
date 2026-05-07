@@ -916,7 +916,6 @@ export class StarmapScene {
     this.updateCamera();
     this.emitScale();
 
-    this.grid.update(this.camera.position.x, this.camera.position.y, this.view.target.x, this.view.target.y);
     this.droplines.update(this.camera);
     this.starPoints.setFocus(this.view.target);
 

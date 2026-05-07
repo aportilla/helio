@@ -114,7 +114,7 @@ Star positions are approximated to ~0.5 ly from known distances + RA/Dec. That's
 
 The orbit state lives in `view = { target, distance, yaw, pitch, spin }`. `distance` is the **camera-to-target orbit radius in light years** — closer = zoomed in. Wheel/pinch dolly the orbit in/out; bounds are `[4, 150]` ly. Initial focus = the Sun; the HUD's "reset view" snaps focus, distance, yaw, and pitch back to their defaults instantly (a snap, not a glide — animating four axes at once looks jolty).
 
-Drop-lines now converge toward a vanishing point; under perspective, that's the honest depth cue and we lean into it. The half-plane dimming and the focused-star pivot do most of the orientation work that the parallel pins used to.
+Drop-lines now converge toward a vanishing point; under perspective, that's the honest depth cue and we lean into it. The focused-star pivot does the orientation work that the parallel pins used to.
 
 ### System view
 
@@ -224,12 +224,6 @@ Source catalogs typically place binary/triple system members at exactly the same
 2. **Manual hierarchy.** Systems with known internal structure (a primary plus a wider companion or sub-pair) get explicit position offsets in `RAW_STARS`, marked with `// CURATED:` comments. Currently curated: Alpha Cen + Proxima (~0.20 ly), 40 Eridani A vs BC sub-pair (~0.08 ly), Gliese 570 A vs BC (~0.08 ly), 36 Ophiuchi AB vs C (~0.10 ly). The post-processor still rings any coincident members within those systems, so a curated A-vs-BC layout still gets the BC pair distributed on a tight ring.
 
 Curation guidance lives at the top of `src/data/stars.ts` — read the "FUTURE CURATION" comment block before adding new systems. Magnitudes (~0.08 for tight pairs, ~0.15–0.20 for wider companions) are visualization choices, not real-world separations.
-
-### Grid half-plane dimming
-
-The galactic plane is split into 4 quadrants by the cross axes. Each frame, `Grid.update()` figures out which **half** of the plane is "behind" the camera (based on which world axis the camera is more aligned with) and dims those two quadrants' arcs. The half-axes between quadrants dim only when **both** flanking quadrants are dim — otherwise the axis IS the boundary between the bright and dim halves, so it stays bright. The galactic-centre arrow on +X follows the same rule.
-
-It's a subtle orientation cue that makes the depth of the 3D scene readable without explicit shading.
 
 ### Drop-line styling
 

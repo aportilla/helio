@@ -3,10 +3,10 @@ import { STARS, STAR_CLUSTERS } from '../data/stars';
 import { snappedDotsMat, snappedLineMat } from './materials';
 
 // Premultiplied against black bg — these are the on-screen colors. Solid is
-// the original 0x3ad1e6 cut to ~40% brightness; dots get a touch less so they
+// the original 0x3ad1e6 cut to ~32% brightness; dots get a touch less so they
 // still read as the "receding / behind the plane" variant.
-const COLOR_SOLID = 0x164c53;
-const COLOR_DOTS  = 0x134349;
+const COLOR_SOLID = 0x123d42;
+const COLOR_DOTS  = 0x0f363a;
 
 // World-space spacing between dots on the dotted (far-side-of-plane) variant.
 // Dots are baked into the geometry at fixed Z intervals so perspective
