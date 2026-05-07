@@ -214,7 +214,7 @@ export class StarmapScene {
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
-    const sun = STARS.find(s => s.name === 'Sun')!;
+    const sun = STARS.find(s => s.name === 'Sol')!;
     this.view = {
       target: new Vector3(sun.x, sun.y, sun.z),
       ...DEFAULT_VIEW,

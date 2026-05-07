@@ -122,13 +122,13 @@ export class Labels {
 
   constructor() {
     // One label per cluster, displayed at the primary's projected position.
-    // Sun's label is warm-white rather than yellow so it stays readable when
-    // its quad overlaps the equally-yellow Sun dot. Multi-star clusters get
+    // Sol's label is warm-white rather than yellow so it stays readable when
+    // its quad overlaps the equally-yellow Sol dot. Multi-star clusters get
     // a " +N" suffix in dim cyan to indicate hidden members.
     STAR_CLUSTERS.forEach(cluster => {
       const primary = STARS[cluster.primary];
-      const isSun = primary.name === 'Sun';
-      const nameColor = isSun ? '#ffffcc' : '#5ec8ff';
+      const isSol = primary.name === 'Sol';
+      const nameColor = isSol ? '#ffffcc' : '#5ec8ff';
       const extras = cluster.members.length - 1;
       const segments = extras > 0
         ? [{ text: primary.name, color: nameColor }, { text: ` +${extras}`, color: '#2d7ab8' }]

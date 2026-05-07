@@ -83,7 +83,7 @@ type StarTuple = readonly [string, number, number, number, SpectralClass, number
 // the threshold up to keep them grouped.
 
 const RAW_STARS: readonly StarTuple[] = [
-  ['Sun',                  0.000,  0.000,   0.000, 'G',   0.00, 1.00,    1.000  ],
+  ['Sol',                  0.000,  0.000,   0.000, 'G',   0.00, 1.00,    1.000  ],
   // CURATED: Proxima moved out from the AB pair to ~0.20 ly distance.
   // Source data placed it at 0.045 ly from AB; the true astronomical value
   // is ~0.21 ly. Direction follows the original AB→Proxima vector.

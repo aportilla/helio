@@ -56,9 +56,9 @@ export class Droplines {
 
     for (let cIdx = 0; cIdx < STAR_CLUSTERS.length; cIdx++) {
       const cluster = STAR_CLUSTERS[cIdx];
-      // Skip the Sun's cluster — its COM sits at the origin so a pin would
+      // Skip Sol's cluster — its COM sits at the origin so a pin would
       // be a zero-length degenerate.
-      if (STARS[cluster.primary].name === 'Sun') continue;
+      if (STARS[cluster.primary].name === 'Sol') continue;
       const com = cluster.com;
 
       const solidGeom = new BufferGeometry().setFromPoints([
