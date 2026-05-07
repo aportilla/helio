@@ -44,6 +44,27 @@ interface AnchoredLabel {
 // Buffer-pixel gap between a star's projected position and its label.
 const LABEL_OFFSET_PX = 6;
 
+// Cluster-label distance fade. Two independent ramps multiply into a final
+// opacity; either gate can hide the label outright at its FAR threshold.
+// Hover and selection bypass both ramps so pointing at or clicking a far
+// star always shows its label. Distance is measured to the primary, not the
+// cluster COM, since the label itself is anchored at the primary.
+//
+// Focus ramp (orbit `view.target` → primary): the dominant gate at close
+// zoom — keeps the visible label set scoped to the user's current point of
+// interest.
+//
+// Camera ramp (camera position → primary): kicks in as the user zooms out.
+// CAM_NEAR is chosen larger than FADE_FAR plus a "reasonably close" orbit
+// radius (~10 ly), so at close zoom every label that survives the focus gate
+// is also inside the camera bubble — only the focus gate effectively fires.
+// As orbit distance grows past CAM_NEAR, stars exit the camera bubble and
+// the labels dim independent of how the focus bubble would rate them.
+const LABEL_FADE_NEAR     = 8;
+const LABEL_FADE_FAR      = 14;
+const LABEL_CAM_FADE_NEAR = 25;
+const LABEL_CAM_FADE_FAR  = 55;
+
 // Yellow corner-bracket reticle around the selected cluster. The brackets
 // enclose every member's *rendered* disc each frame (see computeRenderedStarSize)
 // so a single dwarf gets a tight square, a tilted binary ring gets a
@@ -315,6 +336,8 @@ export class Labels {
     // add (catalog) order — far labels could paint over near ones.
     for (const L of this.clusterLabels) {
       const isHover = L.clusterIdx === this.hoveredCluster;
+      const isSelected = L.clusterIdx === this.selectedCluster;
+      const bypassFade = isHover || isSelected;
       if (!this.showLabels && !isHover) {
         L.mesh.visible = false; L.hoverMesh.visible = false; continue;
       }
@@ -323,9 +346,24 @@ export class Labels {
       if (!this.projectToBuffer(this._world, camera)) {
         L.mesh.visible = false; L.hoverMesh.visible = false; continue;
       }
+      const dCam = this._world.distanceTo(camera.position);
+      let opacity = 1;
+      if (!bypassFade) {
+        const dFocus = this._world.distanceTo(viewTarget);
+        if (dFocus >= LABEL_FADE_FAR || dCam >= LABEL_CAM_FADE_FAR) {
+          L.mesh.visible = false; L.hoverMesh.visible = false; continue;
+        }
+        if (dFocus > LABEL_FADE_NEAR) {
+          opacity *= 1 - (dFocus - LABEL_FADE_NEAR) / (LABEL_FADE_FAR - LABEL_FADE_NEAR);
+        }
+        if (dCam > LABEL_CAM_FADE_NEAR) {
+          opacity *= 1 - (dCam - LABEL_CAM_FADE_NEAR) / (LABEL_CAM_FADE_FAR - LABEL_CAM_FADE_NEAR);
+        }
+      }
       if (isHover) {
         L.mesh.visible = false;
         L.hoverMesh.visible = true;
+        (L.hoverMesh.material as MeshBasicMaterial).opacity = opacity;
         // -1 keeps the glyphs at the same screen position as the plain
         // label: the boxed canvas uses pad=4 (vs plain's pad=3) so its
         // glyph row sits 1px lower inside the canvas. Without this offset
@@ -336,9 +374,10 @@ export class Labels {
       } else {
         L.hoverMesh.visible = false;
         L.mesh.visible = true;
+        (L.mesh.material as MeshBasicMaterial).opacity = opacity;
         const cy = this._screen.y + LABEL_OFFSET_PX + L.h * 0.5;
         this.placeAt(L.mesh, this._screen.x, cy, L.w, L.h);
-        L.mesh.renderOrder = -this._world.distanceTo(camera.position);
+        L.mesh.renderOrder = -dCam;
       }
     }
 

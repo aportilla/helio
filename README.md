@@ -207,6 +207,15 @@ Stars within `CLUSTER_THRESHOLD_LY = 0.25` of each other (`buildClusters` in `sr
 
 Lookup helpers exported alongside the catalog: `STAR_CLUSTERS: readonly StarCluster[]` and `clusterIndexFor(starIdx) => number`.
 
+### Cluster label visibility
+
+When the master `show labels` toggle is on, cluster labels are gated by **two independent distance ramps** that multiply into a final opacity. Either FAR threshold hides the mesh outright (skipped, not drawn at zero alpha):
+
+- **Focus ramp** — primary's distance to `view.target` (the orbit pivot). `LABEL_FADE_NEAR = 8`, `LABEL_FADE_FAR = 14` ly. Scopes the visible label set to the user's current point of interest.
+- **Camera ramp** — primary's distance to the camera. `LABEL_CAM_FADE_NEAR = 25`, `LABEL_CAM_FADE_FAR = 55` ly. CAM_NEAR is deliberately set above FADE_FAR plus a "reasonably close" orbit radius (~10 ly) so at close zoom every label that survives the focus gate is also well inside the camera bubble — only the focus gate effectively fires. As orbit distance grows past CAM_NEAR, stars exit the camera bubble and labels dim regardless of focus.
+
+Hover and selection **bypass both ramps** so pointing at or clicking a far star always lights its label. Hover additionally bypasses the master toggle (the boxed-hover state is the only feedback that pointing at a star did anything when labels are off).
+
 ### Multi-star system layout (post-processing)
 
 Source catalogs typically place binary/triple system members at exactly the same Cartesian coords because real inter-member separations (10–1000 AU) are far below our 0.01-ly precision. Two layered mechanisms make those systems read at zoom-in:
