@@ -41,13 +41,15 @@ interface AnchoredLabel {
 const LABEL_OFFSET_PX = 6;
 const TIP_OFFSET_PX = 18;
 
-// Yellow corner-bracket reticle around the selected star. Outer size tracks
-// the star's *rendered* disc each frame (see computeRenderedStarSize) so a
-// tiny dwarf gets a tight reticle and a close-up class-O gets a big one —
-// fixed-size looked equally wrong at both extremes. Color matches the hover-
-// tooltip star-name color so "selected" feels visually related to "highlighted".
-const RETICLE_GAP_PX  = 4;   // pixels between disc edge and bracket corner
-const RETICLE_MIN_SIZE = 12; // floor so tiny stars still get a visible reticle
+// Yellow corner-bracket reticle around the selected cluster. The brackets
+// enclose every member's *rendered* disc each frame (see computeRenderedStarSize)
+// so a single dwarf gets a tight square, a tilted binary ring gets a
+// rectangular bbox showing the system's screen orientation, and a close-up
+// class-O gets a big one — fixed-size looked equally wrong at every extreme.
+// Color matches the hover-tooltip star-name color so "selected" feels visually
+// related to "highlighted".
+const RETICLE_GAP_PX  = 4;   // pixels between outermost disc edge and bracket corner
+const RETICLE_MIN_SIZE = 12; // floor (per axis) so tiny stars still get a visible reticle
 const RETICLE_COLOR   = '#ffe98a';
 
 // Stars shader constants — kept here so computeRenderedStarSize can mirror
@@ -103,7 +105,7 @@ export class Labels {
   private showLabels = true;
   private hoveredCluster = -1;
   private lastHoveredCluster = -1;
-  private selectedStar = -1;
+  private selectedCluster = -1;
 
   private readonly reticleMesh: Mesh;
   private currentReticleSize = -1;
@@ -208,8 +210,8 @@ export class Labels {
     this.hoveredCluster = starIdx >= 0 ? clusterIndexFor(starIdx) : -1;
   }
 
-  setSelected(starIdx: number): void {
-    this.selectedStar = starIdx;
+  setSelectedCluster(clusterIdx: number): void {
+    this.selectedCluster = clusterIdx;
   }
 
   // Project a world position into buffer-pixel coords (Y-up, origin at
@@ -345,22 +347,41 @@ export class Labels {
       this.placeAt(a.mesh, this._screen.x, this._screen.y, a.w, a.h);
     }
 
-    // Selection reticle — anchored at the actual selected star (not the
-    // cluster primary), since the user can click any cluster member and
-    // expect the reticle to land on the dot they hit. projectToBuffer's
-    // focus-target short-circuit kicks in automatically when the selection
-    // also happens to be the camera's orbit target.
-    if (this.selectedStar >= 0) {
-      const s = STARS[this.selectedStar];
-      this._world.set(s.x, s.y, s.z);
-      if (this.projectToBuffer(this._world, camera)) {
-        const starSize = this.computeRenderedStarSize(this.selectedStar, camera);
-        const reticleSize = Math.max(RETICLE_MIN_SIZE, starSize + 2 * RETICLE_GAP_PX);
-        this.ensureReticleSize(reticleSize);
-        this.reticleMesh.visible = true;
-        this.placeAt(this.reticleMesh, this._screen.x, this._screen.y, reticleSize, reticleSize);
-      } else {
+    // Selection reticle — bbox of every cluster member's rendered disc, so
+    // a binary/triple reads as a single selectable system whose brackets
+    // describe its current screen orientation. Single-member clusters
+    // collapse to the previous square-around-one-disc behavior. If a member
+    // is behind the camera (projectToBuffer false) we still draw brackets
+    // around the visible ones rather than hiding the whole reticle.
+    if (this.selectedCluster >= 0) {
+      const cluster = STAR_CLUSTERS[this.selectedCluster];
+      let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+      for (const memIdx of cluster.members) {
+        const s = STARS[memIdx];
+        this._world.set(s.x, s.y, s.z);
+        if (!this.projectToBuffer(this._world, camera)) continue;
+        const r = this.computeRenderedStarSize(memIdx, camera) * 0.5;
+        if (this._screen.x - r < xmin) xmin = this._screen.x - r;
+        if (this._screen.x + r > xmax) xmax = this._screen.x + r;
+        if (this._screen.y - r < ymin) ymin = this._screen.y - r;
+        if (this._screen.y + r > ymax) ymax = this._screen.y + r;
+      }
+      if (xmin === Infinity) {
         this.reticleMesh.visible = false;
+      } else {
+        // Square reticle, sized to enclose the larger of the two bbox
+        // dimensions (so a tilted binary's brackets fully contain both
+        // members on either axis), centered on the bbox midpoint. Keeps
+        // the visual identity consistent across single-star and multi-
+        // star selections — only the size scales with the system.
+        const padded = 2 * RETICLE_GAP_PX;
+        const span = Math.max(xmax - xmin, ymax - ymin);
+        const size = Math.max(RETICLE_MIN_SIZE, Math.ceil(span + padded));
+        this.ensureReticleSize(size);
+        this.reticleMesh.visible = true;
+        const cx = (xmin + xmax) * 0.5;
+        const cy = (ymin + ymax) * 0.5;
+        this.placeAt(this.reticleMesh, cx, cy, size, size);
       }
     } else {
       this.reticleMesh.visible = false;

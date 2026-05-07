@@ -394,6 +394,12 @@ export interface StarCluster {
   readonly primary: number;
   // All member star indices, primary first.
   readonly members: readonly number[];
+  // Mass-weighted center of mass (Σmᵢ·rᵢ / Σmᵢ) in galactic ly, computed
+  // once at module load. The selection reticle, dropline anchor, and
+  // left-click focus animation all use this so a multi-star system reads
+  // as one entity rather than as its individually-selectable members.
+  // For single-member clusters, com === primary's position by construction.
+  readonly com: { readonly x: number; readonly y: number; readonly z: number };
 }
 
 function buildClusters(): readonly StarCluster[] {
@@ -439,7 +445,20 @@ function buildClusters(): readonly StarCluster[] {
       },
       members[0],
     );
-    return { primary, members: [primary, ...members.filter(m => m !== primary)] };
+    const ordered = [primary, ...members.filter(m => m !== primary)];
+    // Mass-weighted COM. Mass is in solar masses; the absolute scale cancels
+    // in the division, so we don't need to normalize. Single-member clusters
+    // collapse to that member's position regardless of mass value.
+    let sumM = 0, sumX = 0, sumY = 0, sumZ = 0;
+    for (const m of ordered) {
+      const s = STARS[m];
+      sumM += s.mass;
+      sumX += s.mass * s.x;
+      sumY += s.mass * s.y;
+      sumZ += s.mass * s.z;
+    }
+    const com = { x: sumX / sumM, y: sumY / sumM, z: sumZ / sumM };
+    return { primary, members: ordered, com };
   });
 }
 

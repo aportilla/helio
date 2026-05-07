@@ -9,10 +9,9 @@
 //   - infoCard (top-right) — InfoCard, shown when a star is selected
 //   - cardClose — IconButton sibling of infoCard
 //
-// External API matches the previous Hud class so scene.ts plugs in
-// unchanged: scene, camera, onToggle/onAction/onDeselect/onSettingsChanged
-// callbacks, and resize/setScale/setSelectedStar/setToggleState/
-// handleClick/handlePointerMove methods.
+// External API: scene, camera, onToggle/onAction/onDeselect/
+// onSettingsChanged callbacks, and resize/setScale/setSelectedCluster/
+// setToggleState/handleClick/handlePointerMove methods.
 
 import {
   CanvasTexture,
@@ -189,9 +188,9 @@ export class MapHud {
     // explicit re-anchor here using scaleBar.labelHeight.
   }
 
-  setSelectedStar(starIdx: number): void {
-    this.infoCard.setStar(starIdx);
-    if (starIdx < 0) {
+  setSelectedCluster(clusterIdx: number): void {
+    this.infoCard.setCluster(clusterIdx);
+    if (clusterIdx < 0) {
       this.cardClose.setVisible(false);
       this.cardClose.resetHover();
       return;

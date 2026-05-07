@@ -23,7 +23,7 @@ import { Labels } from './labels';
 import { StarPoints } from './stars';
 import { setSnappedLineViewport } from './materials';
 import { MapHud } from '../ui/map-hud';
-import { STARS } from '../data/stars';
+import { STARS, STAR_CLUSTERS, clusterIndexFor } from '../data/stars';
 import { getSettings } from '../settings';
 
 // Orbit radius bounds (camera-to-target ly). Replaces the old ortho frustum
@@ -395,14 +395,19 @@ export class StarmapScene {
     if (!isClick) return;
     const hit = this.pickStar(e.clientX, e.clientY);
     if (hit < 0) return;
-    // Left-click: select AND focus. Right-click: select only. Empty-space
-    // clicks leave selection unchanged (no accidental deselect on a near-miss).
-    this.labels.setSelected(hit);
-    this.hud.setSelectedStar(hit);
-    this.droplines.setSelected(hit);
+    // Multi-star systems are selected as a unit: any member click resolves
+    // to the cluster, and the reticle/dropline/info-card all operate on
+    // the cluster rather than the clicked star. Left-click also focuses
+    // the camera on the cluster's COM (not the clicked member's position)
+    // so a binary's two members both glide to the same vantage. Right-
+    // click: select only. Empty-space clicks leave selection unchanged.
+    const clusterIdx = clusterIndexFor(hit);
+    this.labels.setSelectedCluster(clusterIdx);
+    this.hud.setSelectedCluster(clusterIdx);
+    this.droplines.setSelectedCluster(clusterIdx);
     if (wasLeftClick) {
-      const s = STARS[hit];
-      this.animateFocusTo(s.x, s.y, s.z);
+      const com = STAR_CLUSTERS[clusterIdx].com;
+      this.animateFocusTo(com.x, com.y, com.z);
     }
     void wasRightClick;
   }
@@ -649,9 +654,9 @@ export class StarmapScene {
   }
 
   private deselect(): void {
-    this.labels.setSelected(-1);
-    this.hud.setSelectedStar(-1);
-    this.droplines.setSelected(-1);
+    this.labels.setSelectedCluster(-1);
+    this.hud.setSelectedCluster(-1);
+    this.droplines.setSelectedCluster(-1);
   }
 
   private onWheel(e: WheelEvent): void {
