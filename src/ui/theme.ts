@@ -80,6 +80,7 @@ export const sizes = {
   nameToCloseGap: 4,
   cardNameGap:    2,  // gap between name line and body lines
   cardActionGap:  4,  // gap between info card bottom and the action button below it
+  cardActionInterButtonGap: 4,  // horizontal gap between adjacent action buttons
 } as const;
 
 export const fonts = {

@@ -15,6 +15,7 @@ import {
   OrthographicCamera,
   Scene,
 } from 'three';
+import { type HitResult } from '../hit-test';
 import { paintLeftArrow, paintSurface } from '../painter';
 import { colors, sizes } from '../theme';
 import { paintToTexture } from '../widget';
@@ -81,12 +82,18 @@ export class SystemHud {
     this.layoutAll();
   }
 
-  // Returns true if the click hit any HUD interactive element.
+  // Returns true if the click was consumed by the HUD (interactive widget
+  // dispatch OR opaque-surface absorb). Caller should NOT start a world
+  // drag/pick when this returns true.
   handleClick(bufX: number, bufY: number): boolean {
     if (this.backBtn.bounds.contains(bufX, bufY)) {
       this.onBack();
       return true;
     }
+    // Absorb clicks on opaque chrome (header bar background, info card
+    // body) so they don't start an orbit drag underneath.
+    if (this.headerBar.visibleBounds.contains(bufX, bufY)) return true;
+    if (this.infoCard.visible && this.infoCard.visibleBounds.contains(bufX, bufY)) return true;
     return false;
   }
 
@@ -96,6 +103,17 @@ export class SystemHud {
     const onBack = this.backBtn.bounds.contains(bufX, bufY);
     this.backBtn.setHover(onBack);
     return onBack;
+  }
+
+  // Three-way pointer hit-test (see hit-test.ts). System view has no
+  // world picking yet, but the seam exists so the same model scales when
+  // SystemScene grows pickable geometry, and so click absorption (via
+  // handleClick) and hover routing share one source of truth.
+  hitTest(bufX: number, bufY: number): HitResult {
+    if (this.backBtn.bounds.contains(bufX, bufY)) return 'interactive';
+    if (this.headerBar.visibleBounds.contains(bufX, bufY)) return 'opaque';
+    if (this.infoCard.visible && this.infoCard.visibleBounds.contains(bufX, bufY)) return 'opaque';
+    return 'transparent';
   }
 
   private layoutAll(): void {

@@ -83,6 +83,12 @@ const MAX_TICK_DT_MS = 100;
 // rather than a fast fidget.
 const DOUBLE_CLICK_MS = 350;
 
+// Squared-distance epsilon (ly²) used to decide whether view.target is "on"
+// the selected cluster's COM — drives the Focus button's enabled state.
+// 0.01 ly = ~38 AU; well below any visually significant offset and far
+// above FP jitter from the focus lerp's terminal copy().
+const FOCUS_EPSILON_SQ = 0.01 * 0.01;
+
 // Long-press: touch-only equivalent of right-click. Hold a finger still on
 // a star for LONG_PRESS_MS and we select that cluster AND animate the orbit
 // pivot to its COM (matching the mouse right-click branch). Movement above
@@ -290,6 +296,10 @@ export class StarmapScene {
     };
     this.hud.onDeselect = () => this.deselect();
     this.hud.onViewSystem = (idx) => this.onViewSystem(idx);
+    this.hud.onFocus = (idx) => {
+      const com = STAR_CLUSTERS[idx].com;
+      this.animateFocusTo(com.x, com.y, com.z);
+    };
   }
 
   // -- public API --------------------------------------------------------
@@ -456,6 +466,9 @@ export class StarmapScene {
     this.labels.setSelectedCluster(clusterIdx);
     this.hud.setSelectedCluster(clusterIdx);
     this.droplines.setSelectedCluster(clusterIdx);
+    // Focus button starts in the right state for the new selection
+    // (without waiting for the next tick to repaint).
+    this.updateSelectedFocusedState();
     if (wasRightClick) {
       const com = STAR_CLUSTERS[clusterIdx].com;
       this.animateFocusTo(com.x, com.y, com.z);
@@ -509,16 +522,21 @@ export class StarmapScene {
     this.labels.setSelectedCluster(clusterIdx);
     this.hud.setSelectedCluster(clusterIdx);
     this.droplines.setSelectedCluster(clusterIdx);
+    this.updateSelectedFocusedState();
     const com = STAR_CLUSTERS[clusterIdx].com;
     this.animateFocusTo(com.x, com.y, com.z);
     this.longPressFired = true;
   }
 
   private onPointerMove(e: PointerEvent): void {
-    // Touch input has no hover semantics — a finger crossing a star mid-drag
-    // or mid-pinch shouldn't trigger the boxed hover label. Mouse/pen still
-    // get hover.
-    if (e.pointerType === 'touch') {
+    // Hit-test the HUD layer first. Touch input has no hover semantics
+    // (drop pointer regardless); mouse/pen leak to the world only when
+    // the HUD is fully transparent at the cursor — anything 'opaque' or
+    // 'interactive' must occlude scene picking, otherwise a star behind
+    // a panel/button would still light up its hover label.
+    this.clientToHud(e.clientX, e.clientY, this._hudPt);
+    const hudHit = this.hud.hitTest(this._hudPt.x, this._hudPt.y);
+    if (e.pointerType === 'touch' || hudHit !== 'transparent') {
       this.pointer.has = false;
     } else {
       this.pointer.x = e.clientX; this.pointer.y = e.clientY; this.pointer.has = true;
@@ -615,10 +633,12 @@ export class StarmapScene {
 
     // Update HUD hover state. While actively dragging the camera we skip the
     // HUD hover update so the cursor doesn't lose its grabbing affordance.
+    // Cursor follows hudHit so it only switches to pointer over an
+    // interactive element — opaque chrome (panel bg, info card body)
+    // keeps the default cursor.
     if (!this.dragging) {
-      this.clientToHud(e.clientX, e.clientY, this._hudPt);
-      const onButton = this.hud.handlePointerMove(this._hudPt.x, this._hudPt.y);
-      this.canvas.style.cursor = onButton ? 'pointer' : '';
+      this.hud.handlePointerMove(this._hudPt.x, this._hudPt.y);
+      this.canvas.style.cursor = hudHit === 'interactive' ? 'pointer' : '';
       return;
     }
     const dx = e.clientX - this.lastX, dy = e.clientY - this.lastY;
@@ -770,6 +790,21 @@ export class StarmapScene {
     this.droplines.setSelectedCluster(-1);
   }
 
+  // Push the Focus button's enabled/disabled state to the HUD. Disabled
+  // when view.target sits on the selected cluster's COM (i.e. the camera
+  // is already focused on it). No-op when nothing is selected — the
+  // focus button is hidden in that case anyway. The HUD's setter is
+  // gated, so calling this every frame only allocates on transition.
+  private updateSelectedFocusedState(): void {
+    if (this.selectedClusterIdx < 0) return;
+    const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
+    const dx = this.view.target.x - com.x;
+    const dy = this.view.target.y - com.y;
+    const dz = this.view.target.z - com.z;
+    const focused = (dx * dx + dy * dy + dz * dz) < FOCUS_EPSILON_SQ;
+    this.hud.setSelectedFocused(focused);
+  }
+
   private onWheel(e: WheelEvent): void {
     e.preventDefault();
     this.setZoom(this.view.distance * Math.pow(1.0015, e.deltaY));
@@ -915,6 +950,7 @@ export class StarmapScene {
 
     this.updateCamera();
     this.emitScale();
+    this.updateSelectedFocusedState();
 
     this.starPoints.setFocus(this.view.target);
 

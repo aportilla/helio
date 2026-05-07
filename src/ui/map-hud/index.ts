@@ -27,6 +27,7 @@ import {
 import { colors, sizes } from '../theme';
 import { paintToTexture } from '../widget';
 import { ActionButton } from '../action-button';
+import { type HitResult } from '../hit-test';
 import { IconButton, type IconButtonStates } from '../icon-button';
 import { Panel, type PanelHit, type PanelSpec } from '../panel';
 import { TitleBlock } from './title';
@@ -98,6 +99,7 @@ export class MapHud {
   private readonly infoCard: InfoCard;
   private readonly cardClose: IconButton;
   private readonly viewSystemBtn: ActionButton;
+  private readonly focusBtn: ActionButton;
   private readonly settingsIcon: IconButton;
   private readonly settingsPanel: Panel;
   private readonly panelClose: IconButton;
@@ -118,6 +120,7 @@ export class MapHud {
   onAction: (id: ActionId) => void = () => {};
   onDeselect: () => void = () => {};
   onViewSystem: (clusterIdx: number) => void = () => {};
+  onFocus: (clusterIdx: number) => void = () => {};
   // Fires when a setting changes via the modal — scene reads getSettings()
   // each gesture so this is informational, but having a hook lets the
   // scene react immediately if a setting requires recomputed state.
@@ -163,6 +166,16 @@ export class MapHud {
     });
     this.viewSystemBtn.setVisible(false);
     this.viewSystemBtn.addTo(this.scene);
+
+    // ---- "Focus" button (sibling of View System) ------------------------
+    // Disabled while the orbit pivot is already on the selected cluster's
+    // COM; scene drives that via setSelectedFocused() each tick.
+    this.focusBtn = new ActionButton('Focus', {
+      renderOrder: 100,
+      hitPad: sizes.closeHitPad,
+    });
+    this.focusBtn.setVisible(false);
+    this.focusBtn.addTo(this.scene);
 
     // ---- settings icon (bottom-right trigger) ---------------------------
     this.settingsIcon = new IconButton(sizes.iconBox, this.settingsIconTextures, {
@@ -211,11 +224,21 @@ export class MapHud {
       this.cardClose.resetHover();
       this.viewSystemBtn.setVisible(false);
       this.viewSystemBtn.resetHover();
+      this.focusBtn.setVisible(false);
+      this.focusBtn.resetHover();
       return;
     }
     this.cardClose.setVisible(true);
     this.viewSystemBtn.setVisible(true);
+    this.focusBtn.setVisible(true);
     this.layoutInfoCard();
+  }
+
+  // Drive the focus button's enabled/disabled state. Scene calls this
+  // each tick (gated to only fire on transitions inside ActionButton).
+  setSelectedFocused(focused: boolean): void {
+    this.focusBtn.setDisabled(focused);
+    if (focused) this.focusBtn.resetHover();
   }
 
   // External state sync — scene calls this if state flips from
@@ -226,7 +249,9 @@ export class MapHud {
     if (this.settingsPanelOpen) this.rebuildPanelSpec();
   }
 
-  // Returns true if the click hit any HUD interactive element.
+  // Returns true if the click was consumed by the HUD (interactive widget
+  // dispatch OR opaque-surface absorb). Caller should NOT start a world
+  // drag/pick when this returns true.
   handleClick(bufX: number, bufY: number): boolean {
     if (this.cardClose.visible && this.cardClose.bounds.contains(bufX, bufY)) {
       this.onDeselect();
@@ -234,6 +259,15 @@ export class MapHud {
     }
     if (this.viewSystemBtn.visible && this.viewSystemBtn.bounds.contains(bufX, bufY)) {
       if (this.selectedClusterIdx >= 0) this.onViewSystem(this.selectedClusterIdx);
+      return true;
+    }
+    // Focus button absorbs the click whether enabled or not — the disabled
+    // pixels are still opaque, so a click on them must NOT fall through to
+    // star picking. Dispatch only when enabled.
+    if (this.focusBtn.visible && this.focusBtn.bounds.contains(bufX, bufY)) {
+      if (!this.focusBtn.isDisabled && this.selectedClusterIdx >= 0) {
+        this.onFocus(this.selectedClusterIdx);
+      }
       return true;
     }
     if (this.settingsIcon.bounds.contains(bufX, bufY)) {
@@ -257,7 +291,36 @@ export class MapHud {
       // fall through to star picking behind the panel.
       if (this.settingsPanel.hitsBackground(bufX, bufY)) return true;
     }
+    // Final absorb: any opaque non-interactive HUD surface that wasn't
+    // already returned above (e.g. info card body). Without this, a click
+    // on the visible card surface would start an orbit drag underneath.
+    if (this.infoCard.visible && this.infoCard.visibleBounds.contains(bufX, bufY)) return true;
     return false;
+  }
+
+  // Three-way pointer hit-test. Scene queries this on every pointermove
+  // to gate world hover/picking — pointer over an opaque or interactive
+  // HUD surface must not also light up a star behind it.
+  hitTest(bufX: number, bufY: number): HitResult {
+    // Panel chrome takes priority when open — panel is drawn on top of
+    // any non-modal HUD chrome, so the visual stack and hit stack agree.
+    if (this.settingsPanelOpen) {
+      if (this.panelClose.bounds.contains(bufX, bufY)) return 'interactive';
+      if (this.settingsPanel.hitRow(bufX, bufY)) return 'interactive';
+      if (this.settingsPanel.hitsBackground(bufX, bufY)) return 'opaque';
+    }
+    if (this.cardClose.visible && this.cardClose.bounds.contains(bufX, bufY)) return 'interactive';
+    if (this.viewSystemBtn.visible && this.viewSystemBtn.bounds.contains(bufX, bufY)) return 'interactive';
+    if (this.focusBtn.visible && this.focusBtn.bounds.contains(bufX, bufY)) {
+      // Disabled focus button: visually opaque but not clickable.
+      return this.focusBtn.isDisabled ? 'opaque' : 'interactive';
+    }
+    if (this.settingsIcon.bounds.contains(bufX, bufY)) return 'interactive';
+    if (this.infoCard.visible && this.infoCard.visibleBounds.contains(bufX, bufY)) return 'opaque';
+    // Title + scale bar render text on transparent canvases — let their
+    // empty pixels remain transparent (the user expectation matches: a
+    // star peeks through the gaps, so it should also accept hover/click).
+    return 'transparent';
   }
 
   // Returns true if the cursor is over any HUD interactive element
@@ -268,6 +331,12 @@ export class MapHud {
 
     const onViewBtn = this.viewSystemBtn.visible && this.viewSystemBtn.bounds.contains(bufX, bufY);
     this.viewSystemBtn.setHover(onViewBtn);
+
+    // Disabled focus button: still over the rect, but no hover swap and
+    // no cursor change — it shouldn't read as interactive.
+    const overFocusBtn = this.focusBtn.visible && this.focusBtn.bounds.contains(bufX, bufY);
+    const onFocusBtn = overFocusBtn && !this.focusBtn.isDisabled;
+    this.focusBtn.setHover(onFocusBtn);
 
     const onSettingsIcon = this.settingsIcon.bounds.contains(bufX, bufY);
     this.settingsIcon.setHover(onSettingsIcon);
@@ -285,7 +354,7 @@ export class MapHud {
         this.settingsPanel.setHoveredRow(newId);
       }
     }
-    return onCloseX || onViewBtn || onSettingsIcon || onPanelClose || hoveredRow !== null;
+    return onCloseX || onViewBtn || onFocusBtn || onSettingsIcon || onPanelClose || hoveredRow !== null;
   }
 
   // -- internal: dispatch / panel state ---------------------------------
@@ -386,9 +455,13 @@ export class MapHud {
     // Close-X flush with the card's top-right corner.
     this.cardClose.placeAt(cardRight - sizes.closeBox, cardTop - sizes.closeBox);
 
-    // View System button: right-aligned with the card, gap below it.
-    const btn = this.viewSystemBtn;
-    btn.placeAt(cardRight - btn.width, cardBottom - sizes.cardActionGap - btn.height);
+    // Action buttons sit in a row beneath the card. View System anchors
+    // to the card's right edge; Focus sits to its left with a small gap.
+    // Both share the same Y so the row reads as a single strip.
+    const btnY = cardBottom - sizes.cardActionGap - this.viewSystemBtn.height;
+    this.viewSystemBtn.placeAt(cardRight - this.viewSystemBtn.width, btnY);
+    const focusRight = cardRight - this.viewSystemBtn.width - sizes.cardActionInterButtonGap;
+    this.focusBtn.placeAt(focusRight - this.focusBtn.width, btnY);
   }
 
   private layoutSettingsPanel(): void {
@@ -428,6 +501,7 @@ export class MapHud {
     this.infoCard.dispose();
     this.cardClose.dispose();
     this.viewSystemBtn.dispose();
+    this.focusBtn.dispose();
     this.settingsIcon.dispose();
     this.settingsPanel.dispose();
     this.panelClose.dispose();

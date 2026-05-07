@@ -155,6 +155,10 @@ export function paintHamburger(
 
 export interface PillButtonOpts {
   hover: boolean;
+  // Disabled overrides hover: dim border + dim text, no hover swap. The
+  // host widget is responsible for ignoring hover/click hits while in
+  // this state — paint just renders the visual.
+  disabled?: boolean;
   font?: FontSpec;
 }
 
@@ -173,10 +177,19 @@ export function paintPillButton(
   const W = textW + padX * 2;
   const H = getFont(opts.font).lineHeight + padY * 2;
 
-  const borderColor = opts.hover ? colors.borderAccent : colors.borderDim;
-  const textColor   = opts.hover ? colors.glyphOnHover : colors.titleBright;
+  const borderColor = opts.disabled
+    ? colors.borderDim
+    : (opts.hover ? colors.borderAccent : colors.borderDim);
+  const textColor = opts.disabled
+    ? colors.titleDim
+    : (opts.hover ? colors.glyphOnHover : colors.titleBright);
 
-  paintBorder(g, x, y, W, H, borderColor);
+  // Solid bg fill — buttons read as opaque against the scene so stars
+  // behind them don't show through, matching the panel/card surface
+  // family. Without this fill, the pointer-blocking added at the HUD
+  // layer would be invisible: the user would see a star under the
+  // button and expect hover/click to reach it.
+  paintSurface(g, x, y, W, H, { bg: colors.surface, border: borderColor });
 
   const textX = x + Math.round((W - textW) / 2);
   drawPixelText(g, text, textX, y + padY, textColor, opts.font);
