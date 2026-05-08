@@ -12,6 +12,7 @@ import { Droplines } from './droplines';
 import { Labels } from './labels';
 import { StarPoints } from './stars';
 import { setSnappedLineViewport } from './materials';
+import { RenderScaleObserver } from './render-scale';
 import { MapHud } from '../ui/map-hud';
 import { STARS, STAR_CLUSTERS, clusterIndexFor } from '../data/stars';
 import { getSettings } from '../settings';
@@ -26,11 +27,6 @@ const NEAR = 0.1;
 const FAR = 1000;
 const NICE_STEPS = [20, 10, 5, 2.5, 1, 0.5, 0.2, 0.1];
 const DEFAULT_VIEW = { distance: 30, yaw: 1.1, pitch: 1.2 };
-
-// Each render-buffer ("env") pixel is upscaled by the browser into this many
-// physical screen pixels via image-rendering: pixelated. Larger = chunkier
-// pixel-art look + fewer GPU pixels (perf bonus, 1/N² fragments).
-const ENV_PX_PER_SCREEN_PX = 3;
 
 // A pointer release that moved less than this many CSS pixels from its
 // pressdown counts as a click (vs the start of an orbit drag). Forgiving
@@ -118,6 +114,7 @@ export class StarmapScene {
   private readonly labels: Labels;
   private readonly starPoints: StarPoints;
   private readonly hud: MapHud;
+  private readonly renderScale = new RenderScaleObserver();
 
   // Drag state. Any pointer drag = orbit (yaw/pitch); pan was removed because
   // the camera always orbits a star, never an arbitrary world point.
@@ -301,6 +298,11 @@ export class StarmapScene {
       const com = STAR_CLUSTERS[idx].com;
       this.animateFocusTo(com.x, com.y, com.z);
     };
+
+    // Re-resize whenever DPR crosses an integer-N boundary (browser zoom,
+    // monitor swap, OS scale change). resize() already reads the current N
+    // from this.renderScale, so the callback only needs to re-trigger it.
+    this.renderScale.subscribe(() => this.resize());
   }
 
   // -- public API --------------------------------------------------------
@@ -891,11 +893,12 @@ export class StarmapScene {
     // CSS and buffer from that. Up to (N-1) physical pixels of black bezel
     // can show on the right/bottom — invisible against the dark scene.
     const dpr = window.devicePixelRatio;
-    const physW = Math.floor(window.innerWidth  * dpr / ENV_PX_PER_SCREEN_PX) * ENV_PX_PER_SCREEN_PX;
-    const physH = Math.floor(window.innerHeight * dpr / ENV_PX_PER_SCREEN_PX) * ENV_PX_PER_SCREEN_PX;
+    const N = this.renderScale.scale;
+    const physW = Math.floor(window.innerWidth  * dpr / N) * N;
+    const physH = Math.floor(window.innerHeight * dpr / N) * N;
     const cssW = physW / dpr;
     const cssH = physH / dpr;
-    this.renderer.setPixelRatio(dpr / ENV_PX_PER_SCREEN_PX);
+    this.renderer.setPixelRatio(dpr / N);
     this.renderer.setSize(cssW, cssH);
     this.cssW = cssW;
     this.cssH = cssH;

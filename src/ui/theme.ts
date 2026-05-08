@@ -2,9 +2,10 @@
 // Tokens, no logic. If a value appears in two `build*Texture` functions
 // across the HUD subtree, it lives here.
 //
-// All sizes are *env pixels* — 1 env pixel = ENV_PX_PER_SCREEN_PX (3)
-// physical pixels after the browser's nearest-neighbor upscale. So
-// `sizes.edgePad = 8` becomes a 24-physical-pixel inset.
+// All sizes are *env pixels* — 1 env pixel = N physical pixels after the
+// browser's nearest-neighbor upscale, where N is chosen at runtime by
+// RenderScaleObserver to land closest to a 72-DPI visual size for the
+// current devicePixelRatio (typically 3 on retina, 1 on a 1080p desktop).
 //
 // Color values are literal sRGB. Three.js ColorManagement is disabled
 // (see app-controller.ts) so every hex string and numeric color renders

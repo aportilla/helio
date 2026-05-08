@@ -15,10 +15,8 @@ import {
 } from 'three';
 import { STAR_CLUSTERS } from '../data/stars';
 import { SystemHud } from '../ui/system-hud';
+import { RenderScaleObserver } from './render-scale';
 
-// Same upscale factor the galaxy view uses; the integer-multiple-of-N
-// resize logic below is identical.
-const ENV_PX_PER_SCREEN_PX = 3;
 const FOV_DEG = 45;
 const NEAR = 0.01;
 const FAR = 100;
@@ -39,6 +37,7 @@ export class SystemScene {
   private readonly camera: PerspectiveCamera;
   private readonly scene = new Scene();
   private readonly hud: SystemHud;
+  private readonly renderScale = new RenderScaleObserver();
 
   private bufferW = 0;
   private bufferH = 0;
@@ -82,6 +81,12 @@ export class SystemScene {
 
     this.hud = new SystemHud(clusterIdx);
     this.hud.onBack = () => this.onExit();
+
+    // DPR boundary crossings (zoom, monitor swap) re-trigger resize so the
+    // pixel-ratio + buffer dims pick up the new integer N.
+    this.renderScale.subscribe(() => {
+      if (this.running) this.resize();
+    });
   }
 
   start(): void {
@@ -103,6 +108,7 @@ export class SystemScene {
   dispose(): void {
     this.stop();
     this.hud.dispose();
+    this.renderScale.dispose();
   }
 
   // -- listeners --------------------------------------------------------
@@ -183,11 +189,12 @@ export class SystemScene {
   // neighbor upscale only divides cleanly when CSS×DPR is a multiple of N).
   private resize(): void {
     const dpr = window.devicePixelRatio;
-    const physW = Math.floor(window.innerWidth  * dpr / ENV_PX_PER_SCREEN_PX) * ENV_PX_PER_SCREEN_PX;
-    const physH = Math.floor(window.innerHeight * dpr / ENV_PX_PER_SCREEN_PX) * ENV_PX_PER_SCREEN_PX;
+    const N = this.renderScale.scale;
+    const physW = Math.floor(window.innerWidth  * dpr / N) * N;
+    const physH = Math.floor(window.innerHeight * dpr / N) * N;
     const cssW = physW / dpr;
     const cssH = physH / dpr;
-    this.renderer.setPixelRatio(dpr / ENV_PX_PER_SCREEN_PX);
+    this.renderer.setPixelRatio(dpr / N);
     this.renderer.setSize(cssW, cssH);
     this.cssW = cssW;
     this.cssH = cssH;
