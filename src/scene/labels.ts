@@ -10,7 +10,7 @@ import {
   Scene,
   Vector3,
 } from 'three';
-import { STARS, STAR_CLUSTERS, clusterIndexFor } from '../data/stars';
+import { STARS, STAR_CLUSTERS, WAYPOINT_STAR_NAMES, clusterIndexFor } from '../data/stars';
 import { makeLabelTexture } from '../data/pixel-font';
 
 // Labels render in their own ortho overlay pass at 1 unit = 1 buffer pixel,
@@ -32,6 +32,11 @@ interface ClusterLabel {
   h: number;
   hoverW: number;
   hoverH: number;
+  // Curated waymarker star (Sol, Sirius, Vega, …). Cluster labels with this
+  // flag fade in via a third independent opacity ramp keyed to orbit
+  // distance (see LABEL_WAYPOINT_*), so they're the only labels still
+  // visible at zoom-out and act as named landmarks.
+  isWaypoint: boolean;
 }
 
 // Buffer-pixel gap between a star's projected position and its label.
@@ -57,6 +62,22 @@ const LABEL_FADE_NEAR     = 8;
 const LABEL_FADE_FAR      = 14;
 const LABEL_CAM_FADE_NEAR = 25;
 const LABEL_CAM_FADE_FAR  = 55;
+
+// Waymarker fade-in. A separate opacity ramp keyed to the camera's
+// distance from Sol (i.e. the origin) so a small curated set of well-known
+// stars (WAYPOINT_STAR_NAMES in data/stars.ts) gain their labels back as
+// the user gets "far from home" — either by zooming out, or by panning the
+// pivot away from Sol while still zoomed in. Camera-from-Sol catches both;
+// orbit distance alone misses the panned-while-close case. Polarity is
+// *reversed* from the ramps above: close to Sol = invisible, far = visible.
+// The waypoint and per-label opacities combine via max() each frame, so a
+// waypoint inside the focus/camera bubble stays continuously visible as
+// the user drifts away (no gap between the regular fade-out and the
+// waymarker fade-in). Tuned so default zoom centered on Sol (camera
+// ~30 ly out) keeps waypoints hidden and far excursions / near-max zoom
+// show them solidly.
+const LABEL_WAYPOINT_HIDE_BELOW = 60;
+const LABEL_WAYPOINT_SHOW_ABOVE = 110;
 
 // Yellow corner-bracket reticle around the selected cluster. The brackets
 // enclose every member's *rendered* disc each frame (see computeRenderedStarSize)
@@ -169,6 +190,7 @@ export class Labels {
         primaryStarIdx: cluster.primary,
         w: plain.w, h: plain.h,
         hoverW: boxed.w, hoverH: boxed.h,
+        isWaypoint: WAYPOINT_STAR_NAMES.has(primary.name),
       });
     });
 
@@ -283,6 +305,13 @@ export class Labels {
   update(camera: Camera, viewTarget: Vector3): void {
     this.viewTarget = viewTarget;
 
+    // Camera distance from Sol (origin) drives the waymarker fade-in. Used
+    // instead of orbit distance so that panning the pivot far from Sol —
+    // even at close zoom — also surfaces waymarkers; you're "in unfamiliar
+    // territory" the moment the camera leaves Sol's neighborhood, however
+    // you got there.
+    const camFromSol = camera.position.length();
+
     // Cluster labels — each anchored above its primary star, in one of two
     // states:
     //   - plain: depth-sorted (renderOrder = -distance) so nearer labels
@@ -316,15 +345,33 @@ export class Labels {
       const dCam = this._world.distanceTo(camera.position);
       let opacity = 1;
       if (!bypassFade) {
+        // Standard per-label fade — focus and camera-distance ramps multiply.
         const dFocus = this._world.distanceTo(viewTarget);
+        let normalOpacity = 1;
         if (dFocus >= LABEL_FADE_FAR || dCam >= LABEL_CAM_FADE_FAR) {
+          normalOpacity = 0;
+        } else {
+          if (dFocus > LABEL_FADE_NEAR) {
+            normalOpacity *= 1 - (dFocus - LABEL_FADE_NEAR) / (LABEL_FADE_FAR - LABEL_FADE_NEAR);
+          }
+          if (dCam > LABEL_CAM_FADE_NEAR) {
+            normalOpacity *= 1 - (dCam - LABEL_CAM_FADE_NEAR) / (LABEL_CAM_FADE_FAR - LABEL_CAM_FADE_NEAR);
+          }
+        }
+        // Waymarker fade-in keyed to camera-from-Sol, max'd with the
+        // regular ramp so a waypoint already inside the focus bubble
+        // doesn't blink out between the regular FADE_FAR cutoffs and
+        // HIDE_BELOW.
+        let waypointOpacity = 0;
+        if (L.isWaypoint && camFromSol > LABEL_WAYPOINT_HIDE_BELOW) {
+          waypointOpacity = camFromSol >= LABEL_WAYPOINT_SHOW_ABOVE
+            ? 1
+            : (camFromSol - LABEL_WAYPOINT_HIDE_BELOW) /
+              (LABEL_WAYPOINT_SHOW_ABOVE - LABEL_WAYPOINT_HIDE_BELOW);
+        }
+        opacity = Math.max(normalOpacity, waypointOpacity);
+        if (opacity <= 0) {
           L.mesh.visible = false; L.hoverMesh.visible = false; continue;
-        }
-        if (dFocus > LABEL_FADE_NEAR) {
-          opacity *= 1 - (dFocus - LABEL_FADE_NEAR) / (LABEL_FADE_FAR - LABEL_FADE_NEAR);
-        }
-        if (dCam > LABEL_CAM_FADE_NEAR) {
-          opacity *= 1 - (dCam - LABEL_CAM_FADE_NEAR) / (LABEL_CAM_FADE_FAR - LABEL_CAM_FADE_NEAR);
         }
       }
       if (isHover && !isSelected) {

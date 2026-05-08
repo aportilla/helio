@@ -622,3 +622,21 @@ const STAR_TO_CLUSTER = (() => {
 export function clusterIndexFor(starIdx: number): number {
   return STAR_TO_CLUSTER[starIdx];
 }
+
+// Curated waypoint stars — bright, well-known anchors distributed across the
+// catalog's 0–40 ly range. The galaxy view fades their cluster labels in as
+// the camera moves away from Sol, so the player has named landmarks to
+// orient by once they've left home territory (every other label has been
+// culled by the focus/camera-distance ramps in labels.ts by that point).
+//
+// Names match the cluster *primary* (heaviest member) since labels are
+// anchored on the primary. "Rigil Kentaurus" is the catalog name for Alpha
+// Cen A; the cluster pulls in Toliman + Proxima as members so its label
+// renders as "Rigil Kentaurus +2".
+export const WAYPOINT_STAR_NAMES: ReadonlySet<string> = new Set([
+  'Sol',
+  'Altair',
+  'Vega',
+  'Arcturus',
+  'Pollux',
+]);
