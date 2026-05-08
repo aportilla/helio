@@ -1,4 +1,9 @@
 import { Color } from 'three';
+import nearestCsv from './nearest-stars.csv?raw';
+import twentyTwentyFiveCsv from './stars-20-25ly.csv?raw';
+import twentyFiveThirtyCsv from './stars-25-30ly.csv?raw';
+import thirtyThirtyFiveCsv from './stars-30-35ly.csv?raw';
+import thirtyFiveFortyCsv from './stars-35-40ly.csv?raw';
 
 export type SpectralClass = 'O' | 'B' | 'A' | 'F' | 'G' | 'K' | 'M' | 'WD' | 'BD';
 
@@ -8,18 +13,20 @@ export interface Star {
   readonly y: number;
   readonly z: number;
   readonly cls: SpectralClass;
-  // Catalog-stated distance from Sun in ly. Used as a label/reference; may
-  // differ slightly from sqrt(x²+y²+z²) after curation/post-processing —
-  // we treat distLy as authoritative for display, position as approximate.
+  // Catalog-stated distance from Sun in ly. The CSV's distance is the
+  // upstream Wikipedia value (parallax-derived); √(x²+y²+z²) is computed
+  // from the same distance × the unit RA/Dec direction, so the two agree by
+  // construction except for floating-point rounding.
   readonly distLy: number;
   // Solar masses. Used for primary determination within a cluster
   // (heaviest member becomes the label anchor) and for mass-weighted
   // barycenters in the post-processor. Approximate (catalog quality).
   readonly mass: number;
-  // Stellar radius in solar radii (R☉). Measured where available
-  // (interferometry, eclipsing binaries, asteroseismology, Chandrasekhar
-  // mass-radius for white dwarfs); main-sequence-relation estimate
-  // otherwise. The visualization-side pxSize is derived from this.
+  // Stellar radius in solar radii (R☉). Wikipedia's nearest-stars table
+  // doesn't carry a radius column, so this is always derived at load time
+  // from class + mass — Chandrasekhar M^(-1/3) for WDs, ~Jupiter-radius
+  // constant for BDs, and a rough main-sequence M^0.8 elsewhere. The
+  // visualization-side pxSize is computed from radiusSolar.
   readonly radiusSolar: number;
   // Reference visual disc size in pixels at the default zoom (the shader
   // applies depth-attenuation on top of this). Computed from radiusSolar
@@ -27,178 +34,352 @@ export interface Star {
   readonly pxSize: number;
 }
 
-type StarTuple = readonly [string, number, number, number, SpectralClass, number, number, number];
-
 // =============================================================================
-// RAW_STARS — catalog tuple [name, x, y, z, class, distLy, mass]
+// CSV-driven catalog
 // =============================================================================
 //
-// Coordinate system: galactic Cartesian (ly). +X toward galactic centre,
-// +Z toward north galactic pole. Positions accurate to ~0.5 ly — fine for
-// visualization, not navigation.
+// Source of truth: src/data/nearest-stars.csv, a 1:1 mirror of the main table
+// at https://en.wikipedia.org/wiki/List_of_nearest_stars. Refresh by
+// re-running `node scripts/scrape-wiki-stars.mjs` (the scraper handles
+// rowspan/colspan, single- vs double-quoted attrs, the {{RA|h|m|s}} /
+// {{DEC|d|m|s}} templates, and footnote-glyph stripping).
 //
-// MULTI-STAR SYSTEMS — curation philosophy
-// ----------------------------------------
-// Most binary/triple systems in source catalogs share identical Cartesian
-// coordinates because the inter-member separation (10-1000 AU = 0.0002-0.02
-// ly) is far below our 0.01-ly precision. Two layered mechanisms make those
-// systems read correctly at zoom-in:
+// The CSV carries name, distance (ly), constellation, RA/Dec (degrees),
+// raw spectral class, mass (M☉), magnitudes, and parallax. At module load
+// we:
+//   1. Hardcode Sol (Wikipedia lists it with a degenerate distance and no
+//      RA/Dec, so it's filtered out by the scraper and re-added here).
+//   2. Normalize the raw Wikipedia spectral class (e.g. "M5.5Ve" → 'M',
+//      "DA2" → 'WD', "L8±1"/"T1±2"/"Y4" → 'BD').
+//   3. Rotate ICRS RA/Dec into galactic Cartesian (+X→galactic centre,
+//      +Z→north galactic pole) and scale by distance.
+//   4. Derive radiusSolar from class + mass (Wikipedia carries no radius).
 //
-// 1. AUTOMATIC ring distribution. The post-processor (`expandCoincidentSets`
-//    below) detects any 2+ stars at effectively-identical positions and
-//    distributes them on a small 3D circle of radius MIN_VIS_LY. The ring
-//    plane and starting phase are seeded from the primary's name, so each
-//    system gets its own orientation in space (no two binaries read as
-//    matching horizontal sausages from a top-down view) but every system
-//    is stable across reloads. Mass-sorted member ordering is preserved.
-//
-// 2. MANUAL hierarchy. For systems with known internal hierarchy (a primary
-//    plus a wider companion or sub-pair), member positions in this table
-//    are nudged to encode that hierarchy. Marked with `// CURATED:` notes.
-//    The post-processor still rings any remaining coincident members within
-//    those systems, so e.g. 40 Eri's BC sub-pair stays a tight pair while
-//    A sits clearly apart.
-//
-// FUTURE CURATION — guidance
-// --------------------------
-// Adding stars: append to the tuple list with [name, x, y, z, class, distLy,
-// mass, radiusSolar]. Mass values are approximate; ±20% is fine. Radius is
-// in solar radii — use a measured value where available, otherwise estimate
-// from class (M dwarfs ~0.10–0.50, K dwarfs ~0.6–0.85, G dwarfs ~0.85–1.05,
-// F dwarfs ~1.3–1.6, A dwarfs ~1.6–2.0, white dwarfs ~0.008–0.014, brown
-// dwarfs ~0.10). If two members share coordinates, that's expected — the
-// post-processor handles it.
-//
-// Encoding hierarchy: if a known multi-system has a primary plus a wider
-// companion (or a tight sub-pair), give the wider member a position offset
-// from the primary by ~0.08-0.20 ly along any direction. Magnitude reflects
-// rough visual hierarchy (tight pair = ~0.08, wider companion = ~0.15-0.20),
-// not the literal real-world separation (which is sub-resolution anyway).
-// Document the choice with a `// CURATED:` comment so future editors know
-// it's a deliberate visualization choice, not a measured position.
-//
-// Cluster grouping: stars within CLUSTER_THRESHOLD_LY (0.25) are grouped
-// into one labelled cluster. If you curate a wide companion at distance > the
-// threshold, it'll appear as a separate cluster — adjust the offset down or
-// the threshold up to keep them grouped.
+// Coincident binary/triple members (Wikipedia gives the same RA/Dec for
+// every component because real separations are sub-parsec) are then
+// distributed onto a small per-system ring by `expandCoincidentSets`
+// downstream, exactly as before.
 
-const RAW_STARS: readonly StarTuple[] = [
-  ['Sol',                  0.000,  0.000,   0.000, 'G',   0.00, 1.00,    1.000  ],
-  // CURATED: Proxima moved out from the AB pair to ~0.20 ly distance.
-  // Source data placed it at 0.045 ly from AB; the true astronomical value
-  // is ~0.21 ly. Direction follows the original AB→Proxima vector.
-  ['Proxima Centauri',    -1.569, -1.259,  -3.830, 'M',   4.24, 0.122,   0.145  ],
-  ['Alpha Cen A',         -1.710, -1.400,  -3.830, 'G',   4.37, 1.10,    1.224  ],
-  ['Alpha Cen B',         -1.710, -1.400,  -3.830, 'K',   4.37, 0.91,    0.863  ],
-  ["Barnard's Star",       5.070,  2.190,   2.600, 'M',   5.96, 0.144,   0.196  ],
-  ['Luhman 16',           -5.360, -3.350,  -1.270, 'BD',  6.50, 0.034,   0.100  ],
-  ['Wolf 359',            -1.870,  7.210,  -1.540, 'M',   7.86, 0.090,   0.144  ],
-  ['Lalande 21185',       -6.470,  1.140,   4.810, 'M',   8.29, 0.39,    0.392  ],
-  ['Sirius A',             1.930,  8.070,  -2.470, 'A',   8.60, 2.06,    1.711  ],
-  ['Sirius B',             1.930,  8.070,  -2.470, 'WD',  8.60, 1.02,    0.0084 ],
-  ['Luyten 726-8 A',       6.250, -4.830,  -5.460, 'M',   8.73, 0.10,    0.140  ],
-  ['Luyten 726-8 B',       6.250, -4.830,  -5.460, 'M',   8.73, 0.10,    0.140  ],
-  ['Ross 154',             8.520,  0.640,  -2.700, 'M',   9.69, 0.17,    0.240  ],
-  ['Ross 248',             7.400, -0.340,   6.520, 'M',  10.30, 0.136,   0.160  ],
-  ['Epsilon Eridani',      3.280, -8.130,  -5.350, 'K',  10.50, 0.82,    0.735  ],
-  ['Lacaille 9352',        8.510, -2.600,  -6.450, 'M',  10.74, 0.50,    0.474  ],
-  ['Ross 128',            -5.430,  6.400,   6.600, 'M',  11.03, 0.17,    0.197  ],
-  ['EZ Aquarii',           9.400, -2.840,  -5.950, 'M',  11.27, 0.10,    0.175  ],
-  ['Procyon A',           -4.760,  9.880,   1.390, 'F',  11.40, 1.50,    2.048  ],
-  ['Procyon B',           -4.760,  9.880,   1.390, 'WD', 11.40, 0.60,    0.012  ],
-  ['61 Cygni A',           6.470,  3.030,   9.000, 'K',  11.40, 0.70,    0.665  ],
-  ['61 Cygni B',           6.470,  3.030,   9.000, 'K',  11.40, 0.63,    0.595  ],
-  ['Struve 2398 A',        3.310,  4.010,  10.730, 'M',  11.53, 0.39,    0.350  ],
-  ['Struve 2398 B',        3.310,  4.010,  10.730, 'M',  11.53, 0.32,    0.300  ],
-  ['Groombridge 34 A',     1.220, -0.540,  11.700, 'M',  11.62, 0.41,    0.380  ],
-  ['Groombridge 34 B',     1.220, -0.540,  11.700, 'M',  11.62, 0.16,    0.160  ],
-  ['DX Cancri',           -4.290,  9.900,   4.850, 'M',  11.68, 0.087,   0.110  ],
-  ['Epsilon Indi',         8.800, -5.540,  -5.560, 'K',  11.82, 0.76,    0.711  ],
-  ['Tau Ceti',             3.530, -9.610,  -5.450, 'G',  11.91, 0.78,    0.793  ],
-  ['GJ 1061',             -2.550, -1.520, -11.680, 'M',  12.04, 0.12,    0.156  ],
-  ['YZ Ceti',              6.080, -6.450,  -8.060, 'M',  12.13, 0.13,    0.168  ],
-  ["Luyten's Star",       -6.440,  9.980,   1.220, 'M',  12.36, 0.26,    0.350  ],
-  ["Teegarden's Star",     9.060,  5.820,  -5.050, 'M',  12.50, 0.090,   0.107  ],
-  ['SCR 1845-6357',        8.680, -2.800,  -8.790, 'M',  12.57, 0.075,   0.100  ],
-  ["Kapteyn's Star",       6.490, -2.620, -10.810, 'M',  12.76, 0.281,   0.291  ],
-  ['Lacaille 8760',        9.380, -3.950,  -7.540, 'M',  12.87, 0.60,    0.510  ],
-  ['Kruger 60 A',          4.890,  1.370,  11.960, 'M',  13.15, 0.27,    0.350  ],
-  ['Kruger 60 B',          4.890,  1.370,  11.960, 'M',  13.15, 0.18,    0.240  ],
-  ['DENIS 1048-39',       -9.760,  5.760,  -5.300, 'M',  13.20, 0.080,   0.100  ],
-  ['Ross 614 A',          -5.680,  8.020,  -9.210, 'M',  13.40, 0.22,    0.270  ],
-  ['Ross 614 B',          -5.680,  8.020,  -9.210, 'M',  13.40, 0.11,    0.130  ],
-  ['Wolf 1061',            4.730,  2.720,  12.870, 'M',  14.05, 0.30,    0.307  ],
-  ["van Maanen's Star",    5.230, -6.490, -11.010, 'WD', 14.07, 0.68,    0.0094 ],
-  ['Gliese 1',             4.140, -5.370, -12.300, 'M',  14.22, 0.45,    0.480  ],
-  ['Wolf 424 A',          -4.580, 11.800,   6.940, 'M',  14.31, 0.143,   0.170  ],
-  ['Wolf 424 B',          -4.580, 11.800,   6.940, 'M',  14.31, 0.131,   0.160  ],
-  ['TZ Arietis',          -2.120,  9.990, -10.470, 'M',  14.60, 0.13,    0.160  ],
-  ['Gliese 687',           6.090,  4.940,  12.260, 'M',  14.79, 0.40,    0.420  ],
-  ['LHS 292',             -7.270,  7.050,  -9.950, 'M',  14.80, 0.080,   0.110  ],
-  ['Gliese 674',           7.500,  3.980, -11.700, 'M',  14.80, 0.35,    0.370  ],
-  ['Gliese 440 (WD)',     -9.560,  5.810,  -8.870, 'WD', 15.10, 0.62,    0.0130 ],
-  ['GJ 1245 A',            4.680,  4.270,  13.700, 'M',  15.20, 0.12,    0.140  ],
-  ['GJ 1245 B',            4.680,  4.270,  13.700, 'M',  15.20, 0.12,    0.130  ],
-  ['Gliese 876',           5.630, -7.580, -11.420, 'M',  15.30, 0.37,    0.376  ],
-  ['LHS 288',             -4.520,  1.240, -14.550, 'M',  15.60, 0.10,    0.130  ],
-  ['Gliese 412 A',       -11.480,  7.650,   7.380, 'M',  15.83, 0.48,    0.390  ],
-  ['Gliese 412 B',       -11.480,  7.650,   7.380, 'M',  15.83, 0.10,    0.130  ],
-  ['Groombridge 1618',    -9.150,  6.580,  11.030, 'K',  15.89, 0.66,    0.620  ],
-  ['AD Leonis',           -8.240, 12.420,   4.430, 'M',  16.19, 0.42,    0.390  ],
-  ['Gliese 832',           9.420, -4.300, -12.330, 'M',  16.20, 0.45,    0.480  ],
-  ['DEN 0255-4700',        6.410, -9.870, -10.820, 'BD', 16.20, 0.025,   0.090  ],
-  ['GJ 1116 A',           -9.380, 12.600,   3.120, 'M',  16.30, 0.10,    0.120  ],
-  ['GJ 1116 B',           -9.380, 12.600,   3.120, 'M',  16.30, 0.10,    0.110  ],
-  ['Gliese 581',           6.540,  5.710, -13.810, 'M',  16.30, 0.31,    0.299  ],
-  // CURATED: 40 Eridani is a hierarchical triple — A is the K-type primary,
-  // BC is a tight WD+M sub-pair (~400 AU). Source had ABC all coincident;
-  // BC pair offset by 0.08 ly in +y so the A-vs-BC hierarchy reads at zoom-in.
-  ['40 Eridani A',        -2.220, -4.210, -15.590, 'K',  16.30, 0.84,    0.812  ],
-  ['40 Eridani B',        -2.220, -4.130, -15.590, 'WD', 16.30, 0.57,    0.0140 ],
-  ['40 Eridani C',        -2.220, -4.130, -15.590, 'M',  16.30, 0.20,    0.310  ],
-  ['EV Lacertae',          7.280,  3.150,  14.490, 'M',  16.47, 0.32,    0.360  ],
-  ['70 Ophiuchi A',       10.780, -2.050,  12.480, 'K',  16.60, 0.89,    0.860  ],
-  ['70 Ophiuchi B',       10.780, -2.050,  12.480, 'K',  16.60, 0.71,    0.660  ],
-  ['Altair',              12.950,  2.560,   9.930, 'A',  16.73, 1.79,    1.790  ],
-  ['Gliese 1002',         -6.720,-11.170, -11.040, 'M',  16.00, 0.12,    0.137  ],
-  ['EI Cancri',          -10.960, 12.820,   3.460, 'M',  17.10, 0.17,    0.180  ],
-  // CURATED: Gliese 570 — A is the K primary, BC is a tight M+M sub-pair.
-  // Source had ABC coincident; BC offset by 0.08 ly in +y for hierarchy.
-  ['Gliese 570 A',        12.520,  1.970, -11.650, 'K',  17.20, 0.80,    0.740  ],
-  ['Gliese 570 B',        12.520,  2.050, -11.650, 'M',  17.20, 0.55,    0.460  ],
-  ['Gliese 570 C',        12.520,  2.050, -11.650, 'M',  17.20, 0.16,    0.180  ],
-  ['Gliese 169.1 A',     -10.470,  6.900,  11.950, 'M',  17.52, 0.39,    0.420  ],
-  ['Gliese 783 A',        10.160, -1.090, -14.570, 'K',  17.62, 0.79,    0.710  ],
-  ['Gliese 783 B',        10.160, -1.090, -14.570, 'M',  17.62, 0.14,    0.160  ],
-  ['Gliese 892',           3.900,  4.080,  16.940, 'K',  17.72, 0.79,    0.690  ],
-  ['Eta Cassiopeiae A',    0.150,  6.100,  16.970, 'G',  19.42, 0.97,    1.040  ],
-  ['Eta Cassiopeiae B',    0.150,  6.100,  16.970, 'K',  19.42, 0.57,    0.660  ],
-  // CURATED: 36 Ophiuchi — AB is the tight K+K binary, C is a wider K
-  // companion. Source had ABC coincident; C offset by 0.10 ly in +y so the
-  // AB-vs-C hierarchy reads at zoom-in. AB stay coincident (post-processor
-  // rings them). Component A carries the IAU-approved proper name
-  // "Guniibuu" (Kamilaroi/Euahlayi, "robin red-breast"); B and C retain
-  // their Flamsteed designations since neither has a proper name. Per
-  // Wikipedia, the three masses (A 0.75, B 0.76, C 0.72 M☉) are within
-  // measurement noise of each other; A and B are swapped here (0.76/0.75)
-  // so A stays the cluster primary — every popular reference calls it
-  // "36 Oph A" / "Guniibuu", and surfacing B as the label would feel wrong.
-  ['Guniibuu',            14.040, -2.200,  11.960, 'K',  19.42, 0.76,    0.690  ],
-  ['36 Ophiuchi B',       14.040, -2.200,  11.960, 'K',  19.42, 0.75,    0.680  ],
-  ['36 Ophiuchi C',       14.040, -2.100,  11.960, 'K',  19.42, 0.72,    0.650  ],
-  ['HR 7703 A',           13.850, -3.220, -11.720, 'K',  19.62, 0.79,    0.710  ],
-  ['HR 7703 B',           13.850, -3.220, -11.720, 'M',  19.62, 0.20,    0.200  ],
-  ['82 Eridani',          -3.850, -9.380, -16.380, 'G',  19.71, 0.93,    0.940  ],
-  ['Delta Pavonis',        8.240, -5.190, -17.250, 'G',  19.92, 0.99,    1.220  ],
-  ['Sigma Draconis',       3.270,  0.720,  18.580, 'K',  18.77, 0.81,    0.778  ],
-  ['Gliese 33',            3.060, -8.140, -13.830, 'K',  17.42, 0.78,    0.790  ],
-  ['Gliese 205',          -9.210, 11.860,  -7.180, 'M',  18.50, 0.63,    0.550  ],
-  ['Gliese 250 A',        -8.740, 13.900,  -6.720, 'K',  18.70, 0.55,    0.590  ],
-  ['Gliese 250 B',        -8.740, 13.900,  -6.720, 'M',  18.70, 0.18,    0.180  ],
-  ['Gliese 229 A',        -5.500, 11.790, -12.470, 'M',  18.79, 0.50,    0.450  ],
-  ['Gliese 229 B',        -5.500, 11.790, -12.470, 'BD', 18.79, 0.05,    0.100  ],
-  ['Gliese 693',           8.500,  4.120, -15.420, 'M',  19.03, 0.27,    0.300  ],
+// ICRS → Galactic rotation matrix (J2000), per the IAU 1958 / Hipparcos
+// convention. Multiplying [cos(δ)·cos(α), cos(δ)·sin(α), sin(δ)]ᵀ by this
+// matrix yields the unit galactic vector (+X→GC, +Y→l=90°, +Z→NGP).
+const ICRS_TO_GAL: readonly (readonly [number, number, number])[] = [
+  [-0.054875539726, -0.873437108010, -0.483834985808],
+  [+0.494109453312, -0.444829589425, +0.746982251810],
+  [-0.867666135858, -0.198076386122, +0.455983795705],
 ];
+
+function equatorialToGalactic(raDeg: number, decDeg: number, distLy: number): { x: number; y: number; z: number } {
+  const ra = raDeg * Math.PI / 180;
+  const dec = decDeg * Math.PI / 180;
+  const cosDec = Math.cos(dec);
+  const xe = cosDec * Math.cos(ra);
+  const ye = cosDec * Math.sin(ra);
+  const ze = Math.sin(dec);
+  const M = ICRS_TO_GAL;
+  return {
+    x: distLy * (M[0][0] * xe + M[0][1] * ye + M[0][2] * ze),
+    y: distLy * (M[1][0] * xe + M[1][1] * ye + M[1][2] * ze),
+    z: distLy * (M[2][0] * xe + M[2][1] * ye + M[2][2] * ze),
+  };
+}
+
+// Wikipedia spectral classes are MK strings ("M5.5Ve", "G2V", "F5IV–V",
+// "DA2", "L8±1", "T7", "Y4", "sdM4", "M?", ...). Squash to our 9-bucket
+// SpectralClass enum: white dwarfs (any "D[A-Z]..." prefix) → WD; brown
+// dwarfs (L/T/Y) → BD; otherwise the first MK letter wins (handles prefixes
+// like 'sd' and trailing peculiarity flags).
+//
+// Returns null for genuinely-unknown classes (empty cell, or no recognizable
+// MK letter anywhere in the string). The loader treats null as "skip this
+// row" rather than falling back to 'BD' — guessing class would render the
+// star as a visually-wrong tiny red dot rather than honestly omitting it.
+// Affects a handful of binary sub-components (Chi1 Orionis B, Gliese 250 Bb,
+// Gliese 867 C/D, Gliese 508 Ab/B, WT 460 B) where Wikipedia gave us name +
+// position but no spectral type and the catalog has no detail page either.
+function normalizeSpectralClass(raw: string): SpectralClass | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (/^D[A-Z]/.test(trimmed)) return 'WD';
+  const m = /[OBAFGKMLTY]/.exec(trimmed);
+  if (!m) return null;
+  const c = m[0];
+  if (c === 'L' || c === 'T' || c === 'Y') return 'BD';
+  return c as SpectralClass;
+}
+
+// FNV-1a 32-bit string hash. Cheap, stable across runs and platforms — used
+// to seed mulberry32 wherever we want a deterministic-per-key random draw
+// (per-star mass jitter, per-system ring orientation in expandCoincidentSets).
+function hash32(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
+  }
+  return h >>> 0;
+}
+
+// Mulberry32 PRNG — tiny, fast, good enough for the once-per-load draws we
+// need. Reseeded each time so every reload reproduces the same value for
+// the same input key (no Heisenberg "looks different every refresh").
+function mulberry32(seed: number): () => number {
+  let t = seed >>> 0;
+  return () => {
+    t = (t + 0x6D2B79F5) >>> 0;
+    let r = t;
+    r = Math.imul(r ^ (r >>> 15), r | 1);
+    r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Typical mass range (M☉) per spectral class, matching the standard
+// astronomical class boundaries (O ≥ 16, B 2.1–16, A 1.4–2.1, F 1.04–1.4,
+// G 0.80–1.04, K 0.45–0.80, M 0.08–0.45 — main-sequence-mass thresholds);
+// WD spans the bulk of observed white-dwarf masses, BD the substellar
+// range between deuterium- and hydrogen-burning limits. Used for entries
+// where Wikipedia's mass column is empty: rather than collapse them to a
+// single per-class default (visually identical M dwarfs everywhere), we
+// sample log-uniformly within the range using a position-seeded PRNG.
+const CLASS_MASS_RANGE: Record<SpectralClass, readonly [number, number]> = {
+  O:  [16,    90],
+  B:  [ 2.1,  16],
+  A:  [ 1.4,   2.1],
+  F:  [ 1.04,  1.4],
+  G:  [ 0.80,  1.04],
+  K:  [ 0.45,  0.80],
+  M:  [ 0.08,  0.45],
+  WD: [ 0.50,  1.00],
+  BD: [ 0.013, 0.075],
+};
+
+// Derive a deterministic per-star mass from class + position. Same star at
+// the same coordinates always gets the same mass across reloads — and
+// since Wikipedia gives binary partners identical RA/Dec (which expand
+// out to identical pre-ring positions), same-class coincident pairs
+// honestly land at the same mass, which is roughly what a real same-class
+// binary looks like anyway. Log-uniform across the class range so the
+// 6× span on BDs (and the 5× span on M dwarfs) reads as visible variety
+// rather than clustering near one end.
+function syntheticMass(cls: SpectralClass, x: number, y: number, z: number): number {
+  const [lo, hi] = CLASS_MASS_RANGE[cls];
+  const seed = hash32(`${x.toFixed(4)},${y.toFixed(4)},${z.toFixed(4)}`);
+  const t = mulberry32(seed)();
+  return Math.exp(Math.log(lo) + t * (Math.log(hi) - Math.log(lo)));
+}
+
+// Derive radius (R☉) from spectral class + mass:
+// - WD: Chandrasekhar M^(−1/3), anchored at ~0.012 R☉ for a typical 0.6 M☉ WD.
+// - BD: ~Jupiter-radius constant; mass barely affects radius across L/T/Y.
+// - Main sequence: rough M^0.8 anchored at the Sun (1 M☉ = 1 R☉). Loses the
+//   subgiant offset for entries like Procyon A (which the prior hand-tuned
+//   table caught via measured radii) — accepted regression for 1:1 source-
+//   of-truth simplicity.
+function radiusFromClassMass(cls: SpectralClass, mass: number): number {
+  if (cls === 'BD') return 0.10;
+  if (cls === 'WD') return 0.012 * Math.pow(mass / 0.6, -1 / 3);
+  return Math.pow(mass, 0.8);
+}
+
+// Bolometric correction (M_bol − M_V) by spectral class. Negative everywhere:
+// V-band undercaptures total flux for both very hot stars (UV-dominated) and
+// cool dwarfs (IR-dominated). Approximate values from the Pecaut & Mamajek
+// dwarf-star tables — exact enough for visualization, not for science.
+const BC_BY_CLASS: Partial<Record<SpectralClass, number>> = {
+  O: -4.0, B: -1.5, A: -0.3, F: -0.1, G: -0.1, K: -0.8, M: -2.5,
+};
+
+// Mass-luminosity exponent: L/L☉ = (M/M☉)^α. Steeper for high-mass, shallower
+// for low-mass M dwarfs. Approximate; the formula's main job here is to keep
+// brighter stars heavier and dimmer ones lighter, not to reach research
+// accuracy.
+const ML_ALPHA: Partial<Record<SpectralClass, number>> = {
+  O: 3.5, B: 3.8, A: 4.0, F: 4.0, G: 4.0, K: 3.0, M: 2.3,
+};
+
+const PARSEC_PER_LY = 1 / 3.2615637;
+
+// Compute mass from spectral class + apparent V-band magnitude + distance via
+// the standard chain: distance modulus → absolute V mag → bolometric mag (via
+// per-class BC) → luminosity → mass (via per-class M-L exponent). Returns
+// null when the chain doesn't apply or gives an out-of-range result, which
+// punts the row to the procedural-jitter fallback:
+//
+// - WD/BD classes have no entry in BC_BY_CLASS / ML_ALPHA (white dwarfs are
+//   off the main sequence; brown-dwarf luminosity is age-degenerate, so
+//   magnitude alone can't pin down mass).
+// - J-band magnitudes (used for substellar objects in our CSVs) carry a "J"
+//   suffix and are skipped — V-band BC values would mis-correct them.
+// - Magnitudes given as a range ("10.3–10.33") fall to the first numeric.
+// - Results outside [0.5·class_lo, 2·class_hi] are rejected, catching
+//   misclassifications, subgiants/giants whose elevated luminosity would
+//   inflate the inferred mass, and bad input data.
+function massFromMagnitude(cls: SpectralClass, appMagRaw: string, distLy: number): number | null {
+  const bc = BC_BY_CLASS[cls];
+  const alpha = ML_ALPHA[cls];
+  if (bc === undefined || alpha === undefined) return null;
+  if (/\bJ\b/.test(appMagRaw)) return null;
+  const m = /-?\d+(?:\.\d+)?/.exec(appMagRaw.replace(/−/g, '-'));
+  if (!m) return null;
+  const appMag = Number(m[0]);
+  if (!Number.isFinite(appMag) || distLy <= 0) return null;
+  const dPc = distLy * PARSEC_PER_LY;
+  const absMag = appMag - 5 * (Math.log10(dPc) - 1);
+  const bolMag = absMag + bc;
+  const lum = Math.pow(10, (4.74 - bolMag) / 2.5);
+  const mass = Math.pow(lum, 1 / alpha);
+  const [lo, hi] = CLASS_MASS_RANGE[cls];
+  if (mass < lo * 0.5 || mass > hi * 2) return null;
+  return mass;
+}
+
+// Minimal CSV parser — RFC-4180-ish. We control the upstream format so we
+// don't need to worry about exotic quoting or BOMs.
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let inQuote = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuote) {
+      if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (c === '"') inQuote = false;
+      else cell += c;
+    } else if (c === '"') {
+      inQuote = true;
+    } else if (c === ',') {
+      row.push(cell); cell = '';
+    } else if (c === '\n') {
+      row.push(cell); rows.push(row); row = []; cell = '';
+    } else if (c !== '\r') {
+      cell += c;
+    }
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
+// Parse one CSV file into Star[] (no Sol prepend, no dedupe — those happen
+// at the union level so multiple CSVs can be concatenated cleanly). Missing
+// optional columns (mass on the 20-25 ly CSV, etc.) are tolerated; per-row
+// missing distance/RA/Dec causes the row to be skipped with a DEV warning.
+function parseCsvCatalog(text: string, label: string): Star[] {
+  const rows = parseCsv(text);
+  const header = rows.shift();
+  if (!header) throw new Error(`${label}: empty CSV`);
+  const required = (col: string) => {
+    const i = header.indexOf(col);
+    if (i < 0) throw new Error(`${label}: missing column ${col}`);
+    return i;
+  };
+  const optional = (col: string) => header.indexOf(col); // -1 if absent
+  const NAME = required('name');
+  const DIST = required('distance_ly');
+  const RA = required('ra_deg');
+  const DEC = required('dec_deg');
+  const CLASS = required('spectral_class');
+  const MASS = optional('mass_msun');
+  const APP_MAG = optional('app_mag');
+
+  const out: Star[] = [];
+  // Number('') === 0, so a blanket `Number(cell)` on an empty CSV cell
+  // would silently produce 0 — a finite value that passes the "missing
+  // RA/Dec" check below and lands the star at the celestial-equator-axis
+  // origin. Treat empty cells as NaN explicitly so the skip path triggers.
+  const num = (cell: string | undefined): number => {
+    const t = (cell ?? '').trim();
+    return t ? Number(t) : NaN;
+  };
+  for (const row of rows) {
+    if (!row.length || (row.length === 1 && !row[0])) continue;
+    const name = row[NAME];
+    if (!name) continue;
+    const distLy = num(row[DIST]);
+    const raDeg = num(row[RA]);
+    const decDeg = num(row[DEC]);
+    if (![distLy, raDeg, decDeg].every(Number.isFinite)) {
+      // Distance/RA/Dec missing — can't place in 3D, skip rather than emit
+      // NaN geometry. Most often hits brown-dwarf rows where Wikipedia
+      // hasn't filled in coordinates yet.
+      if (import.meta.env?.DEV) console.warn(`${label}: skipping ${name} (incomplete RA/Dec/distance)`);
+      continue;
+    }
+    const cls = normalizeSpectralClass(row[CLASS]);
+    if (cls === null) {
+      // No usable spectral class — render-time defaults would mis-classify
+      // the star as a brown dwarf. Skip with a DEV warning so the gap is
+      // visible without polluting the scene.
+      if (import.meta.env?.DEV) console.warn(`${label}: skipping ${name} (no spectral class)`);
+      continue;
+    }
+    const pos = equatorialToGalactic(raDeg, decDeg, distLy);
+    // Mass priority: real catalog value > computed via M-L chain (class +
+    // app-mag + distance) > position-seeded procedural jitter. The chain
+    // wins for un-massed main-sequence rows whose magnitude carries the
+    // information; jitter only fires when both real mass and a usable
+    // V-band magnitude are missing (WDs, BDs, J-band-only entries).
+    //
+    // Note: Number('') === 0, which would silently give every mass-less
+    // row a zero mass and divide 0/0 → NaN COMs. Treat empty cells as
+    // missing so the priority chain takes over.
+    const massCell = MASS >= 0 ? (row[MASS] ?? '').trim() : '';
+    const massRaw = massCell ? Number(massCell) : NaN;
+    let mass: number;
+    if (Number.isFinite(massRaw)) {
+      mass = massRaw;
+    } else {
+      const appMagCell = APP_MAG >= 0 ? (row[APP_MAG] ?? '') : '';
+      const ml = massFromMagnitude(cls, appMagCell, distLy);
+      mass = ml ?? syntheticMass(cls, pos.x, pos.y, pos.z);
+    }
+    const radiusSolar = radiusFromClassMass(cls, mass);
+    out.push({
+      name, ...pos, cls, distLy, mass, radiusSolar,
+      pxSize: radiusToPxSize(radiusSolar),
+    });
+  }
+  return out;
+}
+
+// Build the full catalog: Sol + every CSV's contents, deduped by name. The
+// 0-20 ly source wins over 20-25 ly on conflict (the nearer page is the
+// more authoritative for any star Wikipedia editors moved between
+// brackets). DEV-mode warnings flag any cross-CSV duplicate so we know if
+// upstream pages drift into overlap.
+function loadCatalog(): Star[] {
+  // Sol comes first so it lands at index 0 and the rest of the catalog
+  // mirrors Wikipedia's distance-sorted order. Position is the origin and
+  // class/mass/radius are the canonical 1.0 (R☉ / M☉) values.
+  const stars: Star[] = [{
+    name: 'Sol',
+    x: 0, y: 0, z: 0,
+    cls: 'G',
+    distLy: 0,
+    mass: 1.0,
+    radiusSolar: 1.0,
+    pxSize: radiusToPxSize(1.0),
+  }];
+  const seen = new Set<string>(['Sol']);
+  const sources: { text: string; label: string }[] = [
+    { text: nearestCsv, label: 'nearest-stars.csv' },
+    { text: twentyTwentyFiveCsv, label: 'stars-20-25ly.csv' },
+    { text: twentyFiveThirtyCsv, label: 'stars-25-30ly.csv' },
+    { text: thirtyThirtyFiveCsv, label: 'stars-30-35ly.csv' },
+    { text: thirtyFiveFortyCsv, label: 'stars-35-40ly.csv' },
+  ];
+  for (const { text, label } of sources) {
+    for (const s of parseCsvCatalog(text, label)) {
+      if (seen.has(s.name)) {
+        if (import.meta.env?.DEV) console.warn(`${label}: dropping duplicate ${s.name} (already loaded from earlier source)`);
+        continue;
+      }
+      seen.add(s.name);
+      stars.push(s);
+    }
+  }
+  return stars;
+}
 
 // =============================================================================
 // Post-processor: ring out coincident sets so binary partners are visible
@@ -215,33 +396,6 @@ const MIN_VIS_LY = 0.04;
 // smallest curated hierarchical offset (0.08 ly) so curated layouts aren't
 // collapsed into the ring.
 const COINCIDENT_EPS_LY = 0.001;
-
-// FNV-1a 32-bit string hash. Used to seed mulberry32 so each multi-star
-// system gets its own deterministic ring orientation. Cheap, stable across
-// runs and platforms — we don't need cryptographic quality, just consistent
-// bucketing of strings → 32-bit ints.
-function hash32(s: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
-  }
-  return h >>> 0;
-}
-
-// Mulberry32 PRNG. Tiny, fast, and good enough for picking ring orientation
-// once per system at module load. Seeded from the primary's name hash so
-// every reload puts the binary in the same place — no frame-to-frame jitter,
-// no Heisenberg-style "looks different every time you load the page".
-function mulberry32(seed: number): () => number {
-  let t = seed >>> 0;
-  return () => {
-    t = (t + 0x6D2B79F5) >>> 0;
-    let r = t;
-    r = Math.imul(r ^ (r >>> 15), r | 1);
-    r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 function expandCoincidentSets(stars: readonly Star[]): Star[] {
   const out: Star[] = stars.map(s => ({ ...s }));
@@ -368,14 +522,7 @@ export function radiusToPxSize(radiusSolar: number): number {
   return PX_MIN + tc * (PX_MAX - PX_MIN);
 }
 
-const RAW_STAR_OBJECTS: Star[] = RAW_STARS.map(
-  ([name, x, y, z, cls, distLy, mass, radiusSolar]) => ({
-    name, x, y, z, cls, distLy, mass, radiusSolar,
-    pxSize: radiusToPxSize(radiusSolar),
-  }),
-);
-
-export const STARS: readonly Star[] = expandCoincidentSets(RAW_STAR_OBJECTS);
+export const STARS: readonly Star[] = expandCoincidentSets(loadCatalog());
 
 // =============================================================================
 // Cluster detection
