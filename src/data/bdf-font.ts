@@ -41,6 +41,10 @@ const NAME_TO_CODEPOINT: Record<string, number> = {
   degree: 0x00B0,
   bullet: 0x00B7,
   emdash: 0x2014,
+  endash: 0x2013,
+  odieresis: 0x00F6,
+  plusminus: 0x00B1,
+  greaterequal: 0x2265,
 };
 
 function decideCodepoint(name: string, encoding: number): number {
