@@ -53,15 +53,15 @@ const LABEL_OFFSET_PX = 6;
 // interest.
 //
 // Camera ramp (camera position → primary): kicks in as the user zooms out.
-// CAM_NEAR is chosen larger than FADE_FAR plus a "reasonably close" orbit
-// radius (~10 ly), so at close zoom every label that survives the focus gate
-// is also inside the camera bubble — only the focus gate effectively fires.
-// As orbit distance grows past CAM_NEAR, stars exit the camera bubble and
-// the labels dim independent of how the focus bubble would rate them.
-const LABEL_FADE_NEAR     = 8;
-const LABEL_FADE_FAR      = 14;
-const LABEL_CAM_FADE_NEAR = 25;
-const LABEL_CAM_FADE_FAR  = 55;
+// CAM_NEAR is chosen so that at a "reasonably close" orbit radius every
+// label that survives the focus gate is also inside the camera bubble —
+// only the focus gate effectively fires. As orbit distance grows past
+// that, stars exit the camera bubble and labels dim independent of how
+// the focus bubble would rate them.
+const LABEL_FADE_NEAR     = 12;
+const LABEL_FADE_FAR      = 20;
+const LABEL_CAM_FADE_NEAR = 30;
+const LABEL_CAM_FADE_FAR  = 60;
 
 // Waymarker fade-in. A separate opacity ramp keyed to the camera's
 // distance from Sol (i.e. the origin) so a small curated set of well-known
@@ -73,11 +73,12 @@ const LABEL_CAM_FADE_FAR  = 55;
 // The waypoint and per-label opacities combine via max() each frame, so a
 // waypoint inside the focus/camera bubble stays continuously visible as
 // the user drifts away (no gap between the regular fade-out and the
-// waymarker fade-in). Tuned so default zoom centered on Sol (camera
-// ~30 ly out) keeps waypoints hidden and far excursions / near-max zoom
-// show them solidly.
-const LABEL_WAYPOINT_HIDE_BELOW = 60;
-const LABEL_WAYPOINT_SHOW_ABOVE = 110;
+// waymarker fade-in). HIDE_BELOW is tuned against DEFAULT_VIEW.distance so
+// default zoom centered on Sol sits at (or just inside) the threshold —
+// waypoints stay hidden at rest and fade in as the user zooms or pans
+// further out. Far excursions / near-max zoom show them solidly.
+const LABEL_WAYPOINT_HIDE_BELOW = 30;
+const LABEL_WAYPOINT_SHOW_ABOVE = 90;
 
 // Yellow corner-bracket reticle around the selected cluster. The brackets
 // enclose every member's *rendered* disc each frame (see computeRenderedStarSize)

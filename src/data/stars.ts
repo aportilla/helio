@@ -650,7 +650,8 @@ export const WAYPOINT_STAR_IDS: ReadonlySet<string> = new Set([
   'vega',
   'arcturus',
   'pollux',
-  'capella-aa',
+  'iota-persei',
+  'eta-leporis',
   'nu-phoenicis',
   'fomalhaut-a'
 ]);
