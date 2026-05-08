@@ -4,10 +4,16 @@ import twentyTwentyFiveCsv from './stars-20-25ly.csv?raw';
 import twentyFiveThirtyCsv from './stars-25-30ly.csv?raw';
 import thirtyThirtyFiveCsv from './stars-30-35ly.csv?raw';
 import thirtyFiveFortyCsv from './stars-35-40ly.csv?raw';
+import fortyFortyFiveCsv from './stars-40-45ly.csv?raw';
+import fortyFiveFiftyCsv from './stars-45-50ly.csv?raw';
 
 export type SpectralClass = 'O' | 'B' | 'A' | 'F' | 'G' | 'K' | 'M' | 'WD' | 'BD';
 
 export interface Star {
+  // Stable identifier — the stellarcatalog.com slug (e.g. `fomalhaut-a`,
+  // `sirius-a`, `gliese-1`), or `sol` for the Sun. Survives display-name
+  // edits, so consumers like WAYPOINT_STAR_IDS key on this rather than name.
+  readonly id: string;
   readonly name: string;
   readonly x: number;
   readonly y: number;
@@ -274,6 +280,7 @@ function parseCsvCatalog(text: string, label: string): Star[] {
     return i;
   };
   const optional = (col: string) => header.indexOf(col); // -1 if absent
+  const ID = required('id');
   const NAME = required('name');
   const DIST = required('distance_ly');
   const RA = required('ra_deg');
@@ -334,8 +341,9 @@ function parseCsvCatalog(text: string, label: string): Star[] {
       mass = ml ?? syntheticMass(cls, pos.x, pos.y, pos.z);
     }
     const radiusSolar = radiusFromClassMass(cls, mass);
+    const id = (row[ID] ?? '').trim();
     out.push({
-      name, ...pos, cls, distLy, mass, radiusSolar,
+      id, name, ...pos, cls, distLy, mass, radiusSolar,
       pxSize: radiusToPxSize(radiusSolar),
     });
   }
@@ -352,6 +360,7 @@ function loadCatalog(): Star[] {
   // mirrors Wikipedia's distance-sorted order. Position is the origin and
   // class/mass/radius are the canonical 1.0 (R☉ / M☉) values.
   const stars: Star[] = [{
+    id: 'sol',
     name: 'Sol',
     x: 0, y: 0, z: 0,
     cls: 'G',
@@ -360,21 +369,23 @@ function loadCatalog(): Star[] {
     radiusSolar: 1.0,
     pxSize: radiusToPxSize(1.0),
   }];
-  const seen = new Set<string>(['Sol']);
+  const seen = new Set<string>(['sol']);
   const sources: { text: string; label: string }[] = [
     { text: nearestCsv, label: 'nearest-stars.csv' },
     { text: twentyTwentyFiveCsv, label: 'stars-20-25ly.csv' },
     { text: twentyFiveThirtyCsv, label: 'stars-25-30ly.csv' },
     { text: thirtyThirtyFiveCsv, label: 'stars-30-35ly.csv' },
     { text: thirtyFiveFortyCsv, label: 'stars-35-40ly.csv' },
+    { text: fortyFortyFiveCsv, label: 'stars-40-45ly.csv' },
+    { text: fortyFiveFiftyCsv, label: 'stars-45-50ly.csv' },
   ];
   for (const { text, label } of sources) {
     for (const s of parseCsvCatalog(text, label)) {
-      if (seen.has(s.name)) {
-        if (import.meta.env?.DEV) console.warn(`${label}: dropping duplicate ${s.name} (already loaded from earlier source)`);
+      if (seen.has(s.id)) {
+        if (import.meta.env?.DEV) console.warn(`${label}: dropping duplicate ${s.id} (${s.name}) (already loaded from earlier source)`);
         continue;
       }
-      seen.add(s.name);
+      seen.add(s.id);
       stars.push(s);
     }
   }
@@ -428,7 +439,7 @@ function expandCoincidentSets(stars: readonly Star[]): Star[] {
     // binary as an identical horizontal "= =" pair. Picking a random unit
     // normal seeded by the primary's name gives each system its own
     // tilt+phase, stable across reloads.
-    const rng = mulberry32(hash32(stars[set[0]].name));
+    const rng = mulberry32(hash32(stars[set[0]].id));
     // Uniform random unit vector on the sphere — the ring lies in the
     // plane perpendicular to this. Standard inverse-CDF method: theta is
     // the azimuth, cosPhi is the latitude (uniform in cos to avoid pole
@@ -624,19 +635,22 @@ export function clusterIndexFor(starIdx: number): number {
 }
 
 // Curated waypoint stars — bright, well-known anchors distributed across the
-// catalog's 0–40 ly range. The galaxy view fades their cluster labels in as
+// catalog's 0–50 ly range. The galaxy view fades their cluster labels in as
 // the camera moves away from Sol, so the player has named landmarks to
 // orient by once they've left home territory (every other label has been
 // culled by the focus/camera-distance ramps in labels.ts by that point).
 //
-// Names match the cluster *primary* (heaviest member) since labels are
-// anchored on the primary. "Rigil Kentaurus" is the catalog name for Alpha
-// Cen A; the cluster pulls in Toliman + Proxima as members so its label
-// renders as "Rigil Kentaurus +2".
-export const WAYPOINT_STAR_NAMES: ReadonlySet<string> = new Set([
-  'Sol',
-  'Altair',
-  'Vega',
-  'Arcturus',
-  'Pollux',
+// Keyed by stable slug id rather than display name, so display-name edits
+// (e.g. swapping "Alpha Piscis Austrini" → "Fomalhaut") don't break
+// waypoint membership. The id matches the cluster *primary* — the heaviest
+// member, which the label is anchored on.
+export const WAYPOINT_STAR_IDS: ReadonlySet<string> = new Set([
+  'sol',
+  'altair',
+  'vega',
+  'arcturus',
+  'pollux',
+  'capella-aa',
+  'nu-phoenicis',
+  'fomalhaut-a'
 ]);

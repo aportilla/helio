@@ -10,7 +10,7 @@ import {
   Scene,
   Vector3,
 } from 'three';
-import { STARS, STAR_CLUSTERS, WAYPOINT_STAR_NAMES, clusterIndexFor } from '../data/stars';
+import { STARS, STAR_CLUSTERS, WAYPOINT_STAR_IDS, clusterIndexFor } from '../data/stars';
 import { makeLabelTexture } from '../data/pixel-font';
 
 // Labels render in their own ortho overlay pass at 1 unit = 1 buffer pixel,
@@ -65,7 +65,7 @@ const LABEL_CAM_FADE_FAR  = 55;
 
 // Waymarker fade-in. A separate opacity ramp keyed to the camera's
 // distance from Sol (i.e. the origin) so a small curated set of well-known
-// stars (WAYPOINT_STAR_NAMES in data/stars.ts) gain their labels back as
+// stars (WAYPOINT_STAR_IDS in data/stars.ts) gain their labels back as
 // the user gets "far from home" — either by zooming out, or by panning the
 // pivot away from Sol while still zoomed in. Camera-from-Sol catches both;
 // orbit distance alone misses the panned-while-close case. Polarity is
@@ -166,7 +166,7 @@ export class Labels {
     // always paints above the depth-sorted plain labels and the reticle.
     STAR_CLUSTERS.forEach((cluster, clusterIdx) => {
       const primary = STARS[cluster.primary];
-      const isSol = primary.name === 'Sol';
+      const isSol = primary.id === 'sol';
       const nameColor = isSol ? '#ffffcc' : '#5ec8ff';
       const extras = cluster.members.length - 1;
       const segments = extras > 0
@@ -190,7 +190,7 @@ export class Labels {
         primaryStarIdx: cluster.primary,
         w: plain.w, h: plain.h,
         hoverW: boxed.w, hoverH: boxed.h,
-        isWaypoint: WAYPOINT_STAR_NAMES.has(primary.name),
+        isWaypoint: WAYPOINT_STAR_IDS.has(primary.id),
       });
     });
 

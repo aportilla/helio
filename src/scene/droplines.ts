@@ -69,7 +69,7 @@ export class Droplines {
       const cluster = STAR_CLUSTERS[cIdx];
       // Skip Sol's cluster — its COM sits at the origin so a pin would
       // be a zero-length degenerate.
-      if (STARS[cluster.primary].name === 'Sol') continue;
+      if (STARS[cluster.primary].id === 'sol') continue;
       const com = cluster.com;
       const primary = STARS[cluster.primary];
 

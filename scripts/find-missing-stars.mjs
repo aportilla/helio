@@ -66,6 +66,7 @@ const csvRows = parseCsv(readFileSync(CSV_PATH, 'utf8'));
 const header = csvRows.shift();
 const NAME_COL = header.indexOf('name');
 const DIST_COL = header.indexOf('distance_ly');
+const ID_COL = header.indexOf('id');  // -1 if the CSV pre-dates the id column
 if (NAME_COL < 0 || DIST_COL < 0) throw new Error(`${CSV_PATH}: missing name or distance_ly column`);
 
 // Build a set of every name variant present in ANY of our CSVs (not just
@@ -118,6 +119,7 @@ if (ADD && missing.length) {
     const row = new Array(header.length).fill('');
     row[NAME_COL] = s.primary;
     row[DIST_COL] = String(s.distLy);
+    if (ID_COL >= 0) row[ID_COL] = s.slug.replace(/^stars\//, '');
     return row;
   });
   const all = [header, ...csvRows, ...newRows];

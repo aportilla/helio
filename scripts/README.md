@@ -19,6 +19,7 @@ If a CSV gets corrupted (e.g. by a scraper bug), the recovery path is to clear t
 | `scrape-wiki-stars.mjs` | Initial-seed a CSV from a Wikipedia "List of star systems within X-Y light-years" table. |
 | `find-missing-stars.mjs` | Compare a CSV against the local stellarcatalog listing; report (or `--add`) stars present in the catalog but absent from the CSV. |
 | `fill-from-stellarcatalog.mjs` | For rows missing some field, fetch the star's stellarcatalog detail page and fill empty cells. Cached on disk. |
+| `sync-with-catalog.mjs` | Sweep all CSVs against the catalog: assign each row a stable `id` (catalog slug) and rewrite `name` to the catalog's primary, with component-letter preservation and a hardcoded skip-list for known regressions. Default dry-run; `--apply` to write. |
 | `lookup-star.mjs` | Resolve a star name (or distance range) to a stellarcatalog URL. Useful for ad-hoc poking. |
 | `lib/catalog-index.mjs` | Shared helpers: catalog HTML parsing, name normalization + variant generation, CSV (de)serialization. Imported by the other scripts. |
 
@@ -32,10 +33,11 @@ Best when the bracket is far enough out that Wikipedia's table is sparser than s
 
 ```bash
 # 1. Empty CSV with the canonical header
-echo "name,distance_ly,constellation,ra_deg,dec_deg,spectral_class,mass_msun,app_mag,abs_mag,parallax_mas" \
+echo "id,name,distance_ly,constellation,ra_deg,dec_deg,spectral_class,mass_msun,app_mag,abs_mag,parallax_mas" \
   > src/data/stars-40-45ly.csv
 
-# 2. Append every catalog star in [40, 45] ly (range inferred from filename)
+# 2. Append every catalog star in [40, 45] ly (range inferred from filename;
+#    populates the id column from the catalog slug)
 node scripts/find-missing-stars.mjs --csv=src/data/stars-40-45ly.csv --add
 
 # 3. Fetch each detail page and fill RA/Dec, mass, magnitudes, etc.
