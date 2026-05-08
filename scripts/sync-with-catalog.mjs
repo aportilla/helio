@@ -78,6 +78,8 @@ const SKIP_RENAMES = new Set([
   'Alsafi',
   'Guniibuu',
   'Rigil Kentaurus',
+  // Short-form name preferred over the catalog's long J-coords primary.
+  'WISE 2220-3628',
 ]);
 
 // ---------- helpers ----------

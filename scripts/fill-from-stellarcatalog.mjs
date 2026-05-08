@@ -93,7 +93,9 @@ function parseJsonLd(html) {
       if (!p || !p.name) continue;
       if (p.name === 'parallax') out.parallax = Number(p.value);
       else if (p.name === 'mass') out.mass = Number(p.value);
-      else if (p.name === 'starType') out.starType = String(p.value);
+      // starType in JSON-LD is sometimes right-padded with spaces ("M4V        ").
+      // Trim before storing — we'd otherwise write the padding into the CSV.
+      else if (p.name === 'starType') out.starType = String(p.value).trim();
       else if (p.name === 'distance') out.distLy = Number(p.value);
     }
     if (out.parallax != null || out.mass != null) break;

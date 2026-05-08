@@ -39,10 +39,22 @@ scripts/
                             Fetch stellarcatalog detail pages to fill empty
                             fields (RA/Dec, mass, magnitudes, parallax, class).
                             Cached on disk; only ever fills empty cells.
+  sync-with-catalog.mjs     Sweep all CSVs: assign each row a stable `id`
+                            (catalog slug) and rewrite `name` to the catalog's
+                            primary, with a hardcoded skip-list for known
+                            regressions (Barnard's Star, Keid, Rigil Kentaurus…).
+  expand-systems-from-catalog.mjs
+                            For each catalog primary in our CSVs, fetch its
+                            detail page, parse <h2> sibling sections, and
+                            either bind existing sibling rows to the canonical
+                            id or add missing siblings.
+  audit-unresolved.mjs      Read-only: categorize rows whose id isn't a
+                            literal catalog slug as OVERLAP / NEAR / DISTINCT
+                            by 3D distance to the nearest catalog-matched row.
   lookup-star.mjs           Ad-hoc: resolve a star name (or distance range)
                             to a stellarcatalog URL.
   lib/catalog-index.mjs     Shared helpers (catalog parsing, name matching,
-                            CSV serialization).
+                            CSV serialization, stale-slug redirects).
 src/
   main.ts                   Imports global styles, calls initFonts() (eagerly
                             parses UI fonts + injects custom ► glyph), mounts

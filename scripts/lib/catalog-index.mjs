@@ -15,12 +15,45 @@ export const CATALOG_BASE_URL = 'https://www.stellarcatalog.com';
 // The schema is rigid — regex is sufficient and avoids pulling in a parser.
 const ROW_RE = /<a href='(stars\/[^']+)'>([^<]*)(?:<div class='note'[^>]*>([^<]*)<\/div>)?<\/a>[\s\S]*?<span class='value'>([^<]+)<\/span>/g;
 
+// Catalog duplicates: the same physical star listed under two slugs, where
+// one of the entries has corrupt detail-page data (wrong RA/Dec/distance).
+// Map the stale slug → the canonical one. `loadCatalog` then:
+//   - drops the stale entry from the returned list (find-missing-stars
+//     won't double-count it; expand-systems won't hit its broken page)
+//   - merges the stale entry's primary + aliases into the canonical's alias
+//     list (so findStar can still reach the canonical from a CSV row that
+//     happens to use the stale entry's name)
+//
+// Currently known: wise-2220-3628's detail page has fields zeroed out
+// ("0h 22m 20.000s" instead of the slug-encoded "22h 20m 55s", "0°28'17.4"
+// instead of "-36°28'17.4"); wise-j22205531-3628174 is the correct entry.
+const STALE_SLUG_REDIRECTS = new Map([
+  ['stars/wise-2220-3628', 'stars/wise-j22205531-3628174'],
+]);
+
 export function loadCatalog(path) {
   const html = readFileSync(path, 'utf8');
   const stars = [];
+  // First pass: collect stale entries' names so we can fold them in as
+  // aliases of their canonical. Two-pass because the stale and canonical
+  // may appear in either order in the source HTML.
+  const staleNamesByCanonical = new Map();
+  for (let m; (m = ROW_RE.exec(html)); ) {
+    const [, slug, primary, aliasesStr] = m;
+    const canon = STALE_SLUG_REDIRECTS.get(slug);
+    if (!canon) continue;
+    const aliases = aliasesStr ? aliasesStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const queue = staleNamesByCanonical.get(canon) ?? [];
+    queue.push(primary.trim(), ...aliases);
+    staleNamesByCanonical.set(canon, queue);
+  }
+  ROW_RE.lastIndex = 0;
   for (let m; (m = ROW_RE.exec(html)); ) {
     const [, slug, primary, aliasesStr, distStr] = m;
+    if (STALE_SLUG_REDIRECTS.has(slug)) continue;  // skip the stale entry itself
     const aliases = aliasesStr ? aliasesStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const staleAliases = staleNamesByCanonical.get(slug);
+    if (staleAliases) aliases.push(...staleAliases);
     const distLy = Number(distStr);
     stars.push({
       primary: primary.trim(),
