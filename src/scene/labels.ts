@@ -12,6 +12,12 @@ import {
 } from 'three';
 import { STARS, STAR_CLUSTERS, WAYPOINT_STAR_IDS, clusterIndexFor } from '../data/stars';
 import { makeLabelTexture } from '../data/pixel-font';
+import {
+  PIVOT_FADE_NEAR,
+  PIVOT_FADE_FAR,
+  CAMERA_FADE_NEAR,
+  CAMERA_FADE_FAR,
+} from './cluster-fade';
 
 // Labels render in their own ortho overlay pass at 1 unit = 1 buffer pixel,
 // the same scheme as Hud. World-locked anchors (cluster primary, galactic-
@@ -42,26 +48,8 @@ interface ClusterLabel {
 // Buffer-pixel gap between a star's projected position and its label.
 const LABEL_OFFSET_PX = 6;
 
-// Cluster-label distance fade. Two independent ramps multiply into a final
-// opacity; either gate can hide the label outright at its FAR threshold.
-// Hover and selection bypass both ramps so pointing at or clicking a far
-// star always shows its label. Distance is measured to the primary, not the
-// cluster COM, since the label itself is anchored at the primary.
-//
-// Focus ramp (orbit `view.target` → primary): the dominant gate at close
-// zoom — keeps the visible label set scoped to the user's current point of
-// interest.
-//
-// Camera ramp (camera position → primary): kicks in as the user zooms out.
-// CAM_NEAR is chosen so that at a "reasonably close" orbit radius every
-// label that survives the focus gate is also inside the camera bubble —
-// only the focus gate effectively fires. As orbit distance grows past
-// that, stars exit the camera bubble and labels dim independent of how
-// the focus bubble would rate them.
-const LABEL_FADE_NEAR     = 12;
-const LABEL_FADE_FAR      = 20;
-const LABEL_CAM_FADE_NEAR = 30;
-const LABEL_CAM_FADE_FAR  = 60;
+// Cluster-label distance fade ramps live in ./cluster-fade so droplines and
+// labels stay in lockstep as either gets tuned (PIVOT_FADE_*, CAMERA_FADE_*).
 
 // Waymarker fade-in. A separate opacity ramp keyed to the camera's
 // distance from Sol (i.e. the origin) so a small curated set of well-known
@@ -349,20 +337,20 @@ export class Labels {
         // Standard per-label fade — focus and camera-distance ramps multiply.
         const dFocus = this._world.distanceTo(viewTarget);
         let normalOpacity = 1;
-        if (dFocus >= LABEL_FADE_FAR || dCam >= LABEL_CAM_FADE_FAR) {
+        if (dFocus >= PIVOT_FADE_FAR || dCam >= CAMERA_FADE_FAR) {
           normalOpacity = 0;
         } else {
-          if (dFocus > LABEL_FADE_NEAR) {
-            normalOpacity *= 1 - (dFocus - LABEL_FADE_NEAR) / (LABEL_FADE_FAR - LABEL_FADE_NEAR);
+          if (dFocus > PIVOT_FADE_NEAR) {
+            normalOpacity *= 1 - (dFocus - PIVOT_FADE_NEAR) / (PIVOT_FADE_FAR - PIVOT_FADE_NEAR);
           }
-          if (dCam > LABEL_CAM_FADE_NEAR) {
-            normalOpacity *= 1 - (dCam - LABEL_CAM_FADE_NEAR) / (LABEL_CAM_FADE_FAR - LABEL_CAM_FADE_NEAR);
+          if (dCam > CAMERA_FADE_NEAR) {
+            normalOpacity *= 1 - (dCam - CAMERA_FADE_NEAR) / (CAMERA_FADE_FAR - CAMERA_FADE_NEAR);
           }
         }
         // Waymarker fade-in keyed to camera-from-Sol, max'd with the
-        // regular ramp so a waypoint already inside the focus bubble
-        // doesn't blink out between the regular FADE_FAR cutoffs and
-        // HIDE_BELOW.
+        // regular ramp so a waypoint already inside the pivot bubble
+        // doesn't blink out between the regular PIVOT_FADE_FAR cutoff
+        // and WAYPOINT_HIDE_BELOW.
         let waypointOpacity = 0;
         if (L.isWaypoint && camFromSol > LABEL_WAYPOINT_HIDE_BELOW) {
           waypointOpacity = camFromSol >= LABEL_WAYPOINT_SHOW_ABOVE

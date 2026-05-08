@@ -263,6 +263,10 @@ export class StarmapScene {
     this.raycaster.params.Points = { threshold: 0.6 };
 
     this.grid = new Grid();
+    // Grid (rings + axes + arrow) is selection-driven — hidden until the
+    // user picks a cluster. updateGridForSelection() drives visibility +
+    // anchor on every selection change.
+    this.grid.group.visible = false;
     this.scene.add(this.grid.group);
 
     this.starPoints = new StarPoints(window.innerHeight / 2);
@@ -542,6 +546,7 @@ export class StarmapScene {
     this.labels.setSelectedCluster(clusterIdx);
     this.hud.setSelectedCluster(clusterIdx);
     this.droplines.setSelectedCluster(clusterIdx);
+    this.updateGridForSelection();
     // Focus button starts in the right state for the new selection
     // (without waiting for the next tick to repaint).
     this.updateSelectedFocusedState();
@@ -815,6 +820,23 @@ export class StarmapScene {
     this.labels.setSelectedCluster(-1);
     this.hud.setSelectedCluster(-1);
     this.droplines.setSelectedCluster(-1);
+    this.updateGridForSelection();
+  }
+
+  // Range rings + axes + galactic-centre arrow are locked to the currently
+  // selected cluster, not the orbital pivot — they're a "this is the system
+  // you're inspecting" landmark, not a HUD chrome that follows the camera.
+  // No selection → grid hidden entirely (the catalog read as plain stars
+  // until the user picks one to explore). Droplines mirror this gating in
+  // Droplines.update() and drop to the selected cluster's COM.z plane.
+  private updateGridForSelection(): void {
+    if (this.selectedClusterIdx >= 0) {
+      const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
+      this.grid.group.position.set(com.x, com.y, com.z);
+      this.grid.group.visible = true;
+    } else {
+      this.grid.group.visible = false;
+    }
   }
 
   // Push the Focus button's enabled/disabled state to the HUD. Disabled

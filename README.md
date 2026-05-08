@@ -2,7 +2,7 @@
 
 The galaxy-map screen of **Helio**, a planned 4X space strategy game in the lineage of Ascendancy (1995).
 
-A 3D pixel-art visualization of the stars within ~20 light years of the Sun. Perspective camera orbiting a focused star, stellar discs sized by spectral class and depth-attenuated, drop-lines pinning each star to the galactic plane, all rendered in a deliberately chunky retro aesthetic.
+A 3D pixel-art visualization of the stars within ~50 light years of the Sun. Perspective camera orbiting a focused star, stellar discs sized by spectral class and depth-attenuated, range rings + drop-lines lighting up around the cluster you've selected (the catalog reads as plain stars until you pick one to inspect), all rendered in a deliberately chunky retro aesthetic.
 
 Think 1980s starbase HUD: inline bitmap-font labels, cyan-on-near-black palette, hand-drawn-looking concentric range rings. The HUD chrome (settings trigger, info card) renders as native pixel art inside the WebGL scene rather than as DOM elements. The settings trigger drops down a tabbed popover — **General** (auto-rotate, reset view), **Graphics** (display toggles, render-resolution chooser), **Controls** (touch input, plus a read-only keyboard / mouse reference).
 
@@ -68,8 +68,15 @@ src/
     system-scene.ts         SystemScene (close-up of one cluster): peer of
                             StarmapScene, lazily constructed on entry, disposed
                             on exit
-    grid.ts                 Concentric range rings + cross axes + galactic-centre arrow
-    droplines.ts            Vertical pin from each star to the galactic plane
+    grid.ts                 Concentric range rings + cross axes + galactic-
+                            centre arrow, group-translated to the selected
+                            cluster's COM (hidden when nothing is selected)
+    droplines.ts            Vertical pin from each cluster to the selected
+                            cluster's COM.z plane (hidden when nothing is
+                            selected). Geometry rewritten on selection
+                            change, not per-frame
+    cluster-fade.ts         Pivot + camera fade thresholds shared by labels
+                            and droplines so they flip in/out together
     stars.ts                gl.POINTS starfield with per-star size + color
     labels.ts               Bitmap-font overlay pass: star names, axis ticks, selection reticle
     materials.ts            Pixel-snapped line ShaderMaterial + the stars shader
@@ -303,12 +310,12 @@ Lookup helpers exported alongside the catalog: `STAR_CLUSTERS: readonly StarClus
 
 ### Cluster label visibility
 
-When the master `show labels` toggle is on, cluster labels are gated by **two independent distance ramps** that multiply into a final opacity. Either FAR threshold hides the mesh outright (skipped, not drawn at zero alpha):
+When the master `show labels` toggle is on, cluster labels are gated by **two independent distance ramps** that multiply into a final opacity. Either FAR threshold hides the mesh outright (skipped, not drawn at zero alpha). Both thresholds live in `src/scene/cluster-fade.ts` so labels and drop-lines stay in lockstep — a tweak in one place propagates to both consumers.
 
-- **Focus ramp** — primary's distance to `view.target` (the orbit pivot). `LABEL_FADE_NEAR = 8`, `LABEL_FADE_FAR = 14` ly. Scopes the visible label set to the user's current point of interest.
-- **Camera ramp** — primary's distance to the camera. `LABEL_CAM_FADE_NEAR = 25`, `LABEL_CAM_FADE_FAR = 55` ly. CAM_NEAR is deliberately set above FADE_FAR plus a "reasonably close" orbit radius (~10 ly) so at close zoom every label that survives the focus gate is also well inside the camera bubble — only the focus gate effectively fires. As orbit distance grows past CAM_NEAR, stars exit the camera bubble and labels dim regardless of focus.
+- **Pivot ramp** — primary's distance to `view.target` (the orbit pivot). `PIVOT_FADE_NEAR`, `PIVOT_FADE_FAR`. Scopes the visible label set to the user's current point of interest.
+- **Camera ramp** — primary's distance to the camera. `CAMERA_FADE_NEAR`, `CAMERA_FADE_FAR`. CAMERA_FADE_NEAR is deliberately set above PIVOT_FADE_FAR plus a "reasonably close" orbit radius so at close zoom every label that survives the pivot gate is also well inside the camera bubble — only the pivot gate effectively fires. As orbit distance grows past CAMERA_FADE_NEAR, stars exit the camera bubble and labels dim regardless of pivot.
 
-A third **waymarker ramp** runs in parallel for a curated list of bright, well-known stars (`WAYPOINT_STAR_NAMES` in `data/stars.ts` — Sol, Rigil Kentaurus, Sirius A, Procyon A, Altair, Vega, Arcturus). Polarity is *reversed* from the two ramps above: keyed to **the camera's distance from Sol** (`camera.position.length()` — Sol sits at origin), waypoint labels stay invisible below `LABEL_WAYPOINT_HIDE_BELOW = 60` ly, fade in linearly, and are fully visible at `LABEL_WAYPOINT_SHOW_ABOVE = 110` ly. Camera-from-Sol — rather than orbit distance — surfaces waymarkers whether the user got "far from home" by zooming out *or* by panning the pivot far from Sol while still zoomed in. The waypoint and per-label opacities combine via `max()` each frame, so a waypoint inside the focus bubble doesn't blink out between the regular `LABEL_*_FADE_FAR` thresholds and HIDE_BELOW. Effect: as the camera leaves Sol's neighborhood, every label disappears *except* this small set of named anchors — navigation landmarks for orienting in unfamiliar territory.
+A third **waymarker ramp** runs in parallel for a curated list of bright, well-known stars (`WAYPOINT_STAR_IDS` in `data/stars.ts` — Sol, Rigil Kentaurus, Sirius A, Procyon A, Altair, Vega, Arcturus). Polarity is *reversed* from the two ramps above: keyed to **the camera's distance from Sol** (`camera.position.length()` — Sol sits at origin), waypoint labels stay invisible below `LABEL_WAYPOINT_HIDE_BELOW = 30` ly, fade in linearly, and are fully visible at `LABEL_WAYPOINT_SHOW_ABOVE = 90` ly. Camera-from-Sol — rather than orbit distance — surfaces waymarkers whether the user got "far from home" by zooming out *or* by panning the pivot far from Sol while still zoomed in. The waypoint and per-label opacities combine via `max()` each frame, so a waypoint inside the pivot bubble doesn't blink out between the regular `PIVOT_FADE_FAR` / `CAMERA_FADE_FAR` thresholds and HIDE_BELOW. Effect: as the camera leaves Sol's neighborhood, every label disappears *except* this small set of named anchors — navigation landmarks for orienting in unfamiliar territory.
 
 Hover and selection **bypass all three ramps** so pointing at or clicking a far star always lights its label. Hover additionally bypasses the master toggle (the boxed-hover state is the only feedback that pointing at a star did anything when labels are off). Waypoint stars still respect the master toggle — turning labels off hides everything, including waymarkers.
 
@@ -318,16 +325,25 @@ Wikipedia gives every member of a binary/triple system the same RA/Dec because r
 
 Hierarchical systems where one component sits notably further out (Alpha Centauri's Proxima at ~0.21 ly from AB, 40 Eridani's BC sub-pair at sub-AU separations from A, etc.) read correctly without further intervention because Wikipedia gives each component its own RA/Dec where the separation is large enough to matter — Proxima ends up ~0.19 ly from the AB pair in our galactic Cartesian space, well within the cluster threshold but visibly offset.
 
-### Drop-line styling
+### Range rings + drop-lines (selection-driven)
 
-One pin per cluster, anchored at the cluster's mass-weighted **center of mass** (`StarCluster.com`, computed once at module load in `buildClusters`). The Sun's cluster is excluded since its COM sits at the origin. Non-primary cluster members — Sirius B, Alpha Cen B, Proxima, the Gliese 570 BC pair, etc. — share the cluster's pin rather than getting their own. The COM (rather than the primary's position) makes a binary/triple read as one system whose pin emerges from the geometric middle of the ring rather than from one of its members. Two flavors exist per pin: a **solid** `Line` (one full-length segment) and a **dotted** `Points` whose vertices are baked at fixed world-Z intervals (`DOT_PERIOD_LY = 0.25`). Each frame `Droplines.update()` picks solid if the COM is on the same side of the plane as the camera, dotted if on the far side.
+Both the rings (in `Grid`) and the per-cluster drop-lines (`Droplines`) are gated on the current selection. With nothing selected the entire subsystem is hidden — the catalog reads as plain stars, no chrome. Click a cluster and:
 
-Visibility is per-drop, not via `group.visible`. Three controls compose into per-frame opacity (mirroring labels — see "Cluster label visibility"):
-- **Master HUD toggle** sets `masterVisible`. When off, only selected + hovered clusters render their pins.
-- **Selection** (info card open) and **hover** (pointer over any star in the cluster) **always** show that cluster's pin at full opacity, regardless of the master toggle or fade ramps.
-- **Focus + camera distance fades** apply to every other rendered pin, keyed to the cluster *primary's* position (not the COM, so the pin and its label flip in/out together at the same camera distance). Constants `FADE_NEAR/FAR = 8/14` ly and `CAM_FADE_NEAR/FAR = 25/55` ly mirror `LABEL_FADE_*` / `LABEL_CAM_FADE_*` in `labels.ts` on purpose.
+- The grid `Group` (rings at radii 5/10/15/20 ly + cross axes + galactic-centre arrow) translates onto that cluster's COM and becomes visible. The arrow continues to point galactic +X, just from the new anchor — "from here, that way is the centre."
+- Every other cluster's drop-line lights up, terminating at the selected cluster's altitude (`STAR_CLUSTERS[selected].com.z`). Visualizes other systems' Z offsets relative to the one under inspection.
+- The selected cluster's own drop-line collapses onto the plane (`dz = 0`) and is hidden by `DEGENERATE_PLANE_DIST` — no zero-length pin pointing at itself. Sol gets a real pin whenever a non-Sol cluster is selected.
 
-World-space dotting is the load-bearing choice. The previous screen-space dashed shader used a single global gap-scale uniform driven by the camera's orbit radius — fine for the focused dropline, but every other dropline got the same scale, so distant pins ended up with absurdly stretched gaps (or one orphan dash) any time the user zoomed in close to a near star. Baking dots as actual vertices at fixed world-Z spacing lets perspective do the scaling per-line: distant pins compress, near ones stretch, no per-frame uniform plumbing needed. Dot count along a line scales with `|star.z|`, so longer pins visibly carry more dots than shorter ones — a real depth cue rather than a synthesized one. The trade is sub-pixel aliasing at extreme distance (period < 1 px), accepted as graceful degradation.
+Deselect (info-card close-X, ESC, or click off in empty space) → everything hides again.
+
+`Grid` is just a translated `Group`; selection writes `group.position` and toggles `group.visible` from `scene.ts` (see `updateGridForSelection`). One pin per cluster, anchored at the cluster's mass-weighted **center of mass** (`StarCluster.com`, computed once at module load in `buildClusters`). Non-primary cluster members — Sirius B, Alpha Cen B, Proxima, the Gliese 570 BC pair, etc. — share the cluster's pin rather than getting their own. The COM (rather than the primary's position) makes a binary/triple read as one system whose pin emerges from the geometric middle of the ring rather than from one of its members. Two flavors exist per pin: a **solid** `Line` (one full-length segment) and a **dotted** `Points` whose vertices live in a pre-allocated `MAX_DOTS_PER_PIN = 500` buffer (`DynamicDrawUsage`). Z-values are rewritten in place when the selection plane shifts, at fixed world-Z intervals (`DOT_PERIOD_LY = 0.25`), and `setDrawRange` slices the active count — avoids reallocating attributes on every selection change. Each frame `Droplines.update()` picks solid if the COM is on the same side of the plane as the camera, dotted if on the far side (`camera.position.z >= planeZ`).
+
+Visibility is per-drop, not via `group.visible`. Composed gating:
+- **Selection gate** (the outer one): no selection → every drop hidden, early return.
+- **Master HUD toggle** sets `masterVisible`. When off, only the hovered cluster renders its pin (the selected cluster's own pin is degenerate, hidden anyway).
+- **Hover** (pointer over any star in the cluster) **always** shows that cluster's pin at full opacity, bypassing the master toggle and fade ramps.
+- **Pivot + camera distance fades** apply to every other rendered pin, keyed to the cluster *primary's* position (not the COM, so the pin and its label flip in/out together at the same camera distance). Thresholds live in `src/scene/cluster-fade.ts` (shared with labels) — fade is keyed to `view.target` (the orbit pivot), not the locked rings, so "what's near where the camera is currently looking" still applies even after the user pans the pivot away from the selection.
+
+World-space dotting is the load-bearing choice. The previous screen-space dashed shader used a single global gap-scale uniform driven by the camera's orbit radius — fine for the focused dropline, but every other dropline got the same scale, so distant pins ended up with absurdly stretched gaps (or one orphan dash) any time the user zoomed in close to a near star. Baking dots as actual vertices at fixed world-Z spacing lets perspective do the scaling per-line: distant pins compress, near ones stretch, no per-frame uniform plumbing needed. Dot count along a line scales with `|com.z - planeZ|`, so longer pins visibly carry more dots than shorter ones — a real depth cue rather than a synthesized one. The trade is sub-pixel aliasing at extreme distance (period < 1 px), accepted as graceful degradation.
 
 The choice of `Points` over `LineSegments` for the dotted variant is a deliberate simplification: each dot is one vertex with `gl_PointSize = 1`, snapped to a pixel center. No endpoint pairs, no risk of zero-length segments dropping at extreme zoom, and the GPU's point-sprite fast path is cheaper than line rasterization for sub-pixel-thin output.
 
