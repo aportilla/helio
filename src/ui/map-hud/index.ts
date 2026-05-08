@@ -1,7 +1,6 @@
 // MapHud — composition root for the star map's HUD overlay.
 //
 // Owns:
-//   - scaleBar (bottom-left) — bar + 2 ticks + label, set per camera frame
 //   - settingsIcon (top-right) — IconButton, 4-state (panel open/closed × hover)
 //   - settingsPanel — tabbed Panel anchored to the top-right corner; tabs
 //                     are 'general', 'graphics', 'controls'. Active tab
@@ -16,7 +15,7 @@
 //   - cardClose — IconButton sibling of infoCard
 //
 // External API: scene, camera, onToggle/onAction/onDeselect/onViewSystem/
-// onFocus/onSettingsChanged callbacks; resize, setScale, setSelectedCluster,
+// onFocus/onSettingsChanged callbacks; resize, setSelectedCluster,
 // setSelectedFocused, setAutoScale (called by the scene when DPR boundary
 // crosses, so the Resolution radio's disable states stay live), setToggleState,
 // handleClick, hitTest, handlePointerMove, dispose.
@@ -39,7 +38,6 @@ import { ActionButton } from '../action-button';
 import { type HitResult } from '../hit-test';
 import { IconButton, type IconButtonStates } from '../icon-button';
 import { Panel, type PanelHit, type PanelSpec, type TabHit } from '../panel';
-import { ScaleBar } from './scale-bar';
 import { InfoCard } from './info-card';
 
 export type ToggleId = 'labels' | 'drops' | 'spin';
@@ -99,7 +97,6 @@ export class MapHud {
   private readonly toggleState: { [K in ToggleId]: boolean };
 
   // Composed widgets
-  private readonly scaleBar: ScaleBar;
   private readonly infoCard: InfoCard;
   private readonly cardClose: IconButton;
   private readonly viewSystemBtn: ActionButton;
@@ -150,10 +147,6 @@ export class MapHud {
       drops:  s.showDroplines,
       spin:   false,
     };
-
-    // ---- scale bar -------------------------------------------------------
-    this.scaleBar = new ScaleBar();
-    this.scaleBar.addTo(this.scene);
 
     // ---- info card -------------------------------------------------------
     this.infoCard = new InfoCard(100);
@@ -225,11 +218,6 @@ export class MapHud {
     this.camera.bottom = 0; this.camera.top = bufferH;
     this.camera.updateProjectionMatrix();
     this.layoutAll();
-  }
-
-  setScale(step: number, widthPx: number): void {
-    this.scaleBar.set(step, widthPx);
-    this.scaleBar.layout(sizes.edgePad);
   }
 
   setSelectedCluster(clusterIdx: number): void {
@@ -363,9 +351,6 @@ export class MapHud {
     }
     if (this.settingsIcon.bounds.contains(bufX, bufY)) return 'interactive';
     if (this.infoCard.visible && this.infoCard.visibleBounds.contains(bufX, bufY)) return 'opaque';
-    // Scale bar renders text on a transparent canvas — let its empty
-    // pixels remain transparent (a star peeks through the gaps, so it
-    // should also accept hover/click).
     return 'transparent';
   }
 
@@ -601,7 +586,6 @@ export class MapHud {
   // -- layout -----------------------------------------------------------
 
   private layoutAll(): void {
-    this.scaleBar.layout(sizes.edgePad);
     this.layoutInfoCard();
     this.settingsIcon.anchorTo('tr', this.bufferW, this.bufferH, sizes.edgePad, sizes.edgePad);
     if (this.settingsPanelOpen) this.layoutSettingsPanel();
@@ -667,7 +651,6 @@ export class MapHud {
     for (const k of Object.keys(this.settingsIconTextures) as Array<keyof IconButtonStates>) {
       this.settingsIconTextures[k]?.dispose();
     }
-    this.scaleBar.dispose();
     this.infoCard.dispose();
     this.cardClose.dispose();
     this.viewSystemBtn.dispose();

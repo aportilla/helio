@@ -25,7 +25,6 @@ const ZOOM_MAX = 150;
 const FOV_DEG = 45;
 const NEAR = 0.1;
 const FAR = 1000;
-const NICE_STEPS = [20, 10, 5, 2.5, 1, 0.5, 0.2, 0.1];
 const DEFAULT_VIEW = { distance: 30, yaw: 1.1, pitch: 1.2 };
 
 // A pointer release that moved less than this many CSS pixels from its
@@ -930,18 +929,6 @@ export class StarmapScene {
     this.labels.resize(this.bufferW, this.bufferH);
   }
 
-  // Scale bar measures size at the focused-star plane (camera-to-target
-  // distance). Px-per-ly there = bufferH / (2 · tan(fov/2) · distance).
-  private emitScale(): void {
-    const halfFovTan = Math.tan((FOV_DEG * Math.PI / 180) * 0.5);
-    const pxPerLy = this.bufferH / (2 * halfFovTan * this.view.distance);
-    let chosen = NICE_STEPS[NICE_STEPS.length - 1];
-    for (const step of NICE_STEPS) {
-      if (step * pxPerLy <= 150) { chosen = step; break; }
-    }
-    this.hud.setScale(chosen, Math.round(chosen * pxPerLy));
-  }
-
   // -- main loop ---------------------------------------------------------
 
   private tick = (): void => {
@@ -972,7 +959,6 @@ export class StarmapScene {
     }
 
     this.updateCamera();
-    this.emitScale();
     this.updateSelectedFocusedState();
 
     this.starPoints.setFocus(this.view.target);

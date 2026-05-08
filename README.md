@@ -4,7 +4,7 @@ The galaxy-map screen of **Helio**, a planned 4X space strategy game in the line
 
 A 3D pixel-art visualization of the stars within ~20 light years of the Sun. Perspective camera orbiting a focused star, stellar discs sized by spectral class and depth-attenuated, drop-lines pinning each star to the galactic plane, all rendered in a deliberately chunky retro aesthetic.
 
-Think 1980s starbase HUD: inline bitmap-font labels, cyan-on-near-black palette, hand-drawn-looking concentric range rings. The HUD chrome (scale bar, settings trigger) renders as native pixel art inside the WebGL scene rather than as DOM elements. The settings trigger drops down a tabbed popover — **General** (auto-rotate, reset view), **Graphics** (display toggles, render-resolution chooser), **Controls** (touch input, plus a read-only keyboard / mouse reference).
+Think 1980s starbase HUD: inline bitmap-font labels, cyan-on-near-black palette, hand-drawn-looking concentric range rings. The HUD chrome (settings trigger, info card) renders as native pixel art inside the WebGL scene rather than as DOM elements. The settings trigger drops down a tabbed popover — **General** (auto-rotate, reset view), **Graphics** (display toggles, render-resolution chooser), **Controls** (touch input, plus a read-only keyboard / mouse reference).
 
 ## Stack
 
@@ -67,12 +67,11 @@ src/
                             'opaque' / 'transparent' contract HUDs expose
                             for pointer-event routing
     map-hud/
-      index.ts              MapHud: scale bar, settings trigger + tabbed
-                            settings panel, info card with close-X,
-                            "View System" pill, and disable-when-focused
-                            "Focus" pill. Routes pointer events through
+      index.ts              MapHud: settings trigger + tabbed settings
+                            panel, info card with close-X, "View System"
+                            pill, and disable-when-focused "Focus" pill.
+                            Routes pointer events through
                             hitTab → probeRadio → hitRow → hitsBackground.
-      scale-bar.ts          Bottom-left scale bar (bar + 2 ticks + label)
       info-card.ts          Bottom-right cluster info card (stacks
                             above fixed-position action buttons)
     system-hud/

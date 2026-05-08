@@ -38,9 +38,6 @@ export const colors = {
   textBodyHover: '#ffffff',         // hovered row label
   textKey:       '#2d7ab8',         // info card keys, panel section headers
   starName:      '#ffe98a',         // info card star name, panel title
-
-  // Scale bar (numeric — passed to MeshBasicMaterial.color)
-  scaleBar: 0xe8f6ff,
 } as const;
 
 export const sizes = {
@@ -65,10 +62,6 @@ export const sizes = {
   checkbox:         9,
   checkboxFill:     3,   // center dot when on (centered: (9-3)/2 = 3)
   checkboxLabelGap: 4,
-
-  // Scale bar
-  scaleTickH:    3,
-  scaleLabelGap: 2,
 
   // Settings panel layout rhythm
   panelTitleGap:         2,  // gap below title line
