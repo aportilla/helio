@@ -21,10 +21,22 @@ export interface Settings {
   // the two-finger "pan" gesture instead drives orbit. Pinch-to-zoom is
   // unchanged either way.
   singleTouchAction: SingleTouchAction;
+  // Display toggles surfaced in the settings panel. Persisted so a user
+  // who turns droplines off (the more common case after first visit)
+  // doesn't have to re-toggle on every reload. The transient `spin`
+  // toggle is intentionally NOT here — it's a session-scoped fidget,
+  // not a preference that should survive a refresh.
+  showLabels: boolean;
+  showDroplines: boolean;
 }
 
 const STORAGE_KEY = 'starmap.settings';
-const DEFAULTS: Settings = { version: 1, singleTouchAction: 'orbit' };
+const DEFAULTS: Settings = {
+  version: 1,
+  singleTouchAction: 'orbit',
+  showLabels: true,
+  showDroplines: false,
+};
 
 function readFromStorage(): Settings {
   try {
@@ -33,10 +45,13 @@ function readFromStorage(): Settings {
     const parsed = JSON.parse(raw) as Partial<Settings>;
     // Validate each field individually and merge over defaults so adding
     // new fields later doesn't break old saves. Reject any value that
-    // isn't one of the known enum literals.
+    // isn't one of the known enum literals; for booleans, fall back to
+    // the default unless the stored value is exactly `true` or `false`.
     return {
       ...DEFAULTS,
       singleTouchAction: parsed.singleTouchAction === 'pan' ? 'pan' : 'orbit',
+      showLabels: typeof parsed.showLabels === 'boolean' ? parsed.showLabels : DEFAULTS.showLabels,
+      showDroplines: typeof parsed.showDroplines === 'boolean' ? parsed.showDroplines : DEFAULTS.showDroplines,
     };
   } catch {
     return { ...DEFAULTS };

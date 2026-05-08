@@ -87,15 +87,11 @@ export class MapHud {
   private bufferW = 1;
   private bufferH = 1;
 
-  // Toggle state for the in-panel checkboxes. Held here (orchestrator
-  // owns the truth) and serialized into the panel rows on each rebuild.
-  // Defaults match the prior standalone-button defaults so existing
-  // behavior is preserved out of the box.
-  private readonly toggleState: { [K in ToggleId]: boolean } = {
-    labels: true,
-    drops:  true,
-    spin:   false,
-  };
+  // Toggle state for the in-panel checkboxes. Initialized in the constructor
+  // from `getSettings()` for the persisted display toggles (labels, drops);
+  // `spin` is session-scoped so it always starts off. The HUD writes through
+  // setSetting() on toggle so refresh restores the same state.
+  private readonly toggleState: { [K in ToggleId]: boolean };
 
   // Composed widgets
   private readonly title: TitleBlock;
@@ -131,6 +127,13 @@ export class MapHud {
   onSettingsChanged: () => void = () => {};
 
   constructor() {
+    const s = getSettings();
+    this.toggleState = {
+      labels: s.showLabels,
+      drops:  s.showDroplines,
+      spin:   false,
+    };
+
     // ---- title -----------------------------------------------------------
     this.title = new TitleBlock();
     this.title.addTo(this.scene);
@@ -371,11 +374,15 @@ export class MapHud {
       this.rebuildPanelSpec();
       return;
     }
-    // Toggle row backed by a ToggleId — flip internal state, fire the
-    // callback, rebuild so the checkbox glyph updates.
+    // Toggle row backed by a ToggleId — flip internal state, persist if
+    // the toggle is settings-backed, fire the callback, rebuild so the
+    // checkbox glyph updates. `spin` is session-scoped (no persist).
     const id = hit.id as ToggleId;
-    this.toggleState[id] = !this.toggleState[id];
-    this.onToggle(id, this.toggleState[id]);
+    const next = !this.toggleState[id];
+    this.toggleState[id] = next;
+    if (id === 'labels') setSetting('showLabels', next);
+    else if (id === 'drops') setSetting('showDroplines', next);
+    this.onToggle(id, next);
     this.rebuildPanelSpec();
   }
 

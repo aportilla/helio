@@ -272,10 +272,11 @@ export class StarmapScene {
     this.starPoints = new StarPoints(window.innerHeight / 2);
     this.scene.add(this.starPoints.points);
 
-    this.droplines = new Droplines();
+    const initialSettings = getSettings();
+    this.droplines = new Droplines(initialSettings.showDroplines);
     this.scene.add(this.droplines.group);
 
-    this.labels = new Labels();
+    this.labels = new Labels(initialSettings.showLabels);
 
     this.hud = new MapHud();
     this.hud.onToggle = (id, on) => {

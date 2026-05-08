@@ -59,11 +59,12 @@ export class Droplines {
   // off while keeping a depth cue for the system they're inspecting or just
   // pointing at. Visibility + opacity is applied per-drop in update() rather
   // than via group.visible so those overrides can punch through.
-  private masterVisible = true;
+  private masterVisible: boolean;
   private selectedCluster = -1;
   private hoveredCluster = -1;
 
-  constructor() {
+  constructor(initialMasterVisible: boolean) {
+    this.masterVisible = initialMasterVisible;
     for (let cIdx = 0; cIdx < STAR_CLUSTERS.length; cIdx++) {
       const cluster = STAR_CLUSTERS[cIdx];
       // Skip Sol's cluster — its COM sits at the origin so a pin would

@@ -114,7 +114,7 @@ export class Labels {
 
   private readonly clusterLabels: ClusterLabel[] = [];
 
-  private showLabels = true;
+  private showLabels: boolean;
   private hoveredCluster = -1;
   private selectedCluster = -1;
 
@@ -131,7 +131,8 @@ export class Labels {
   // focused star to exact buffer-center coords (see projectToBuffer).
   private viewTarget: Vector3 | null = null;
 
-  constructor() {
+  constructor(initialShowLabels: boolean) {
+    this.showLabels = initialShowLabels;
     // One label per cluster, displayed at the primary's projected position.
     // Sol's label is warm-white rather than yellow so it stays readable when
     // its quad overlaps the equally-yellow Sol dot. Multi-star clusters get
