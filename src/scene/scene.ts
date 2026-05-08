@@ -716,8 +716,8 @@ export class StarmapScene {
     this.view.pitch = Math.max(0.05, Math.min(Math.PI - 0.05, this.view.pitch));
   }
 
-  // Keyboard: ESC dismisses selection; SPACE focuses the camera on the
-  // current selection (matches what right-click does on a star);
+  // Keyboard: ESC dismisses selection; SPACE / F focus the camera on
+  // the current selection (matches what right-click does on a star);
   // WASD pans the orbit pivot parallel to the galactic plane (camera
   // follows by the same vector, distance preserved); QE orbits around
   // the pivot. Listening on window so it fires regardless of focus,
@@ -727,7 +727,10 @@ export class StarmapScene {
       this.deselect();
       return;
     }
-    if (e.key === ' ') {
+    if (e.key === ' ' || e.key === 'f' || e.key === 'F') {
+      // Skip Cmd/Ctrl/Alt+F so the browser's find shortcut still works.
+      // Spacebar has no such conflict.
+      if (e.key !== ' ' && (e.ctrlKey || e.metaKey || e.altKey)) return;
       if (this.selectedClusterIdx >= 0) {
         const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
         this.animateFocusTo(com.x, com.y, com.z);
