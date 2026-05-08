@@ -534,7 +534,7 @@ export class MapHud {
               header: 'Mouse',
               rows: [
                 { kind: 'keybinding', key: 'Drag',         desc: 'Orbit' },
-                { kind: 'keybinding', key: 'Right-click',  desc: 'Select & focus star' },
+                { kind: 'keybinding', key: 'Click',        desc: 'Select & focus star' },
                 { kind: 'keybinding', key: 'Double-click', desc: 'Open system view' },
                 { kind: 'keybinding', key: 'Wheel',        desc: 'Zoom' },
               ],

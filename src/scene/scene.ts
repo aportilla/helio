@@ -84,12 +84,12 @@ const DOUBLE_CLICK_MS = 350;
 // above FP jitter from the focus lerp's terminal copy().
 const FOCUS_EPSILON_SQ = 0.01 * 0.01;
 
-// Long-press: touch-only equivalent of right-click. Hold a finger still on
-// a star for LONG_PRESS_MS and we select that cluster AND animate the orbit
-// pivot to its COM (matching the mouse right-click branch). Movement above
-// LONG_PRESS_MOVE_PX from the press position cancels the timer — looser
-// than CLICK_DRAG_PX because users drift more during a held press than a
-// quick tap.
+// Long-press: touch-only hook held alive as a placeholder for a future game
+// action (context menu, secondary command, etc.). LONG_PRESS_MS gates the
+// timer fire; LONG_PRESS_MOVE_PX cancels it when the holding finger drifts
+// (looser than CLICK_DRAG_PX because users drift more during a held press
+// than a quick tap). fireLongPress currently console.info's so the wiring
+// is observable in DevTools and rebinding is a one-line body change.
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_MOVE_PX = 8;
 
@@ -193,7 +193,7 @@ export class StarmapScene {
   // Long-press timer state. Armed in onPointerDown for touch pointers only,
   // cancelled by movement / second finger / lift / OS-cancel / scene stop.
   // longPressFired suppresses the trailing pointerup's click path so a hold
-  // doesn't double-fire as both long-press AND tap-select.
+  // doesn't double-fire as both long-press AND tap-select-and-focus.
   private longPressTimer: number | null = null;
   private longPressPointerId = -1;
   private longPressFired = false;
@@ -412,11 +412,12 @@ export class StarmapScene {
     this.downX = e.clientX; this.downY = e.clientY;
     document.body.classList.add('grabbing');
 
-    // Touch-only long-press: hold a finger still on a star for LONG_PRESS_MS
-    // and we mirror the mouse right-click branch (select + animate to COM).
-    // Mouse and pen are excluded so a regular click never triggers focus
-    // animation. Cancelled by movement, second-finger entry, lift, OS-cancel,
-    // or scene stop.
+    // Touch-only long-press hook: hold a finger still on a star for
+    // LONG_PRESS_MS and fireLongPress runs. Currently a console.info
+    // placeholder; will be rebound to a real game action later. Mouse
+    // and pen are excluded so a regular click doesn't accidentally
+    // fire it. Cancelled by movement, second-finger entry, lift,
+    // OS-cancel, or scene stop.
     if (e.pointerType === 'touch') {
       this.longPressPointerId = e.pointerId;
       this.longPressFired = false;
@@ -442,10 +443,10 @@ export class StarmapScene {
       return;
     }
 
-    // Long-press already did the selection + focus animation while the
-    // finger was still down. Swallow the trailing pointerup so it doesn't
-    // also fire as a tap-select (and thereby start a double-click window
-    // that could open the system view on the next tap).
+    // Long-press already fired its placeholder hook while the finger was
+    // still down. Swallow the trailing pointerup so the same hold doesn't
+    // also register as a tap-select-and-focus — preserves the original
+    // contract for when fireLongPress gets rebound to a real action.
     if (this.longPressFired) {
       this.longPressFired = false;
       this.dragging = false;
@@ -466,35 +467,31 @@ export class StarmapScene {
     if (hit < 0) return;
     // Multi-star systems are selected as a unit: any member click resolves
     // to the cluster, and the reticle/dropline/info-card all operate on
-    // the cluster rather than the clicked star. Left-click selects only —
-    // the camera stays put so a follow-up click can be captured as a
-    // double-click without fighting an in-flight focus glide. Right-click
-    // selects AND animates the orbit pivot to the cluster's COM (not the
-    // clicked member's position), so a binary's two members both glide to
-    // the same vantage. Empty-space clicks leave selection unchanged.
+    // the cluster rather than the clicked star. Empty-space clicks leave
+    // selection unchanged. Right-click is held alive as a placeholder hook
+    // (console.info) for a future game action; left-click selects AND
+    // animates the orbit pivot to the cluster's COM (not the clicked
+    // member's position), so a binary's two members both glide to the same
+    // vantage.
     const clusterIdx = clusterIndexFor(hit);
-    this.selectedClusterIdx = clusterIdx;
-    this.labels.setSelectedCluster(clusterIdx);
-    this.hud.setSelectedCluster(clusterIdx);
-    this.droplines.setSelectedCluster(clusterIdx);
-    // Focus button starts in the right state for the new selection
-    // (without waiting for the next tick to repaint).
-    this.updateSelectedFocusedState();
     if (wasRightClick) {
-      const com = STAR_CLUSTERS[clusterIdx].com;
-      this.animateFocusTo(com.x, com.y, com.z);
-    } else if (wasLeftClick) {
-      // Double-left-click on the same cluster → open the system view.
-      // Reset the window after firing so a triple-click doesn't fire twice.
-      const now = performance.now();
-      if (now - this.lastClickAt < DOUBLE_CLICK_MS && this.lastClickClusterIdx === clusterIdx) {
-        this.onViewSystem(clusterIdx);
-        this.lastClickAt = 0;
-        this.lastClickClusterIdx = -1;
-      } else {
-        this.lastClickAt = now;
-        this.lastClickClusterIdx = clusterIdx;
-      }
+      console.info('[scene] right-click hook on cluster', clusterIdx, STARS[STAR_CLUSTERS[clusterIdx].primary].name);
+      return;
+    }
+    if (!wasLeftClick) return;
+    this.selectAndFocusCluster(clusterIdx);
+    // Double-click on the same cluster → open the system view. Reset the
+    // window after firing so a triple-click doesn't fire twice. The first
+    // click's focus glide is in flight when the second click lands; the
+    // system-view transition disposes the starmap scene, killing the glide.
+    const now = performance.now();
+    if (now - this.lastClickAt < DOUBLE_CLICK_MS && this.lastClickClusterIdx === clusterIdx) {
+      this.onViewSystem(clusterIdx);
+      this.lastClickAt = 0;
+      this.lastClickClusterIdx = -1;
+    } else {
+      this.lastClickAt = now;
+      this.lastClickClusterIdx = clusterIdx;
     }
   }
 
@@ -520,23 +517,36 @@ export class StarmapScene {
     }
   }
 
-  // Mirrors the mouse right-click branch in onPointerUp: select the picked
-  // cluster and glide the orbit pivot to its COM. Empty-space presses are
-  // a no-op (same as a tap on empty space). longPressFired is set so the
-  // trailing pointerup suppresses its own click path.
+  // Placeholder long-touch hook. Currently logs to the console so the wiring
+  // is observable in DevTools; rebind the body to a real game action when
+  // touch long-press has something to do (context menu, secondary command,
+  // etc). longPressFired is set so the trailing pointerup suppresses its
+  // own click path — preserves the original contract for when this gets
+  // rebound to something user-visible.
   private fireLongPress(clientX: number, clientY: number): void {
     this.longPressTimer = null;
     const hit = this.pickStar(clientX, clientY);
     if (hit < 0) return;
     const clusterIdx = clusterIndexFor(hit);
+    console.info('[scene] long-press hook on cluster', clusterIdx, STARS[STAR_CLUSTERS[clusterIdx].primary].name);
+    this.longPressFired = true;
+  }
+
+  // Shared select-and-focus action: binds the selection to the given cluster
+  // and glides the orbit pivot onto its COM (not any one member's position),
+  // so a binary's two members both glide to the same vantage. Called from
+  // single-click in onPointerUp; future hooks (right-click, long-press,
+  // context menu) can route through here when they need the same behavior.
+  private selectAndFocusCluster(clusterIdx: number): void {
     this.selectedClusterIdx = clusterIdx;
     this.labels.setSelectedCluster(clusterIdx);
     this.hud.setSelectedCluster(clusterIdx);
     this.droplines.setSelectedCluster(clusterIdx);
+    // Focus button starts in the right state for the new selection
+    // (without waiting for the next tick to repaint).
     this.updateSelectedFocusedState();
     const com = STAR_CLUSTERS[clusterIdx].com;
     this.animateFocusTo(com.x, com.y, com.z);
-    this.longPressFired = true;
   }
 
   private onPointerMove(e: PointerEvent): void {
@@ -558,7 +568,7 @@ export class StarmapScene {
 
     // Cancel a pending long-press the moment the holding finger drifts
     // beyond LONG_PRESS_MOVE_PX from its press position — we'd rather
-    // commit to orbit/pan than fire a focus animation under a moving finger.
+    // commit to orbit/pan than fire the hook under a moving finger.
     if (this.longPressTimer !== null && e.pointerId === this.longPressPointerId) {
       const moved = Math.hypot(e.clientX - this.downX, e.clientY - this.downY);
       if (moved > LONG_PRESS_MOVE_PX) this.cancelLongPress();
@@ -725,11 +735,11 @@ export class StarmapScene {
   }
 
   // Keyboard: ESC dismisses selection; SPACE / F focus the camera on
-  // the current selection (matches what right-click does on a star);
-  // WASD pans the orbit pivot parallel to the galactic plane (camera
-  // follows by the same vector, distance preserved); QE orbits around
-  // the pivot. Listening on window so it fires regardless of focus,
-  // since the canvas itself isn't focusable.
+  // the current selection (re-runs the same focus glide that single-click
+  // already performs on a star); WASD pans the orbit pivot parallel to
+  // the galactic plane (camera follows by the same vector, distance
+  // preserved); QE orbits around the pivot. Listening on window so it
+  // fires regardless of focus, since the canvas itself isn't focusable.
   private onKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
       this.deselect();
