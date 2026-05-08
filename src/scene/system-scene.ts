@@ -15,7 +15,8 @@ import {
 } from 'three';
 import { STAR_CLUSTERS } from '../data/stars';
 import { SystemHud } from '../ui/system-hud';
-import { RenderScaleObserver } from './render-scale';
+import { RenderScaleObserver, effectiveScale } from './render-scale';
+import { getSettings } from '../settings';
 
 const FOV_DEG = 45;
 const NEAR = 0.01;
@@ -189,7 +190,11 @@ export class SystemScene {
   // neighbor upscale only divides cleanly when CSS×DPR is a multiple of N).
   private resize(): void {
     const dpr = window.devicePixelRatio;
-    const N = this.renderScale.scale;
+    // Same effectiveScale path as StarmapScene — the resolution preference
+    // applies to system view too even though there's no settings UI here
+    // (back-button-only HUD). Pulled fresh per resize so the setting
+    // takes effect on the next entry into system view.
+    const N = effectiveScale(this.renderScale.scale, getSettings().resolutionPreference);
     const physW = Math.floor(window.innerWidth  * dpr / N) * N;
     const physH = Math.floor(window.innerHeight * dpr / N) * N;
     const cssW = physW / dpr;

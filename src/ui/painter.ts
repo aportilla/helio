@@ -9,7 +9,7 @@
 // for sub-pixel alignment; misaligned input → misaligned output.
 
 import { drawPixelText, measurePixelText, getFont, type FontSpec } from '../data/pixel-font';
-import { colors, sizes } from './theme';
+import { colors, fonts, sizes } from './theme';
 
 // 4-strip 1-px border. No fill. Use paintSurface() if you also want a bg.
 export function paintBorder(
@@ -151,6 +151,68 @@ export function paintHamburger(
   g.fillRect(lineX, y + 5,  lineW, 1);
   g.fillRect(lineX, y + 8,  lineW, 1);
   g.fillRect(lineX, y + 11, lineW, 1);
+}
+
+export interface SegmentedPillOpts {
+  selected: boolean;
+  hover: boolean;
+  // Optional: when true, dim border + dim text, no hover swap, no
+  // visible selected-state lift. The host widget is responsible for
+  // ignoring hover/click hits while in this state. A disabled pill
+  // that's also `selected` keeps the surfaceOn fill so the user sees
+  // their pref is intact even when it's a no-op at the current display.
+  // Tabs always pass false (or omit); radios pass it conditionally.
+  disabled?: boolean;
+  // Caller-supplied target width — all pills in a strip render at the
+  // same width so the row reads as a unit even when labels differ.
+  width: number;
+  font?: FontSpec;
+}
+
+// Pill for a segmented control: tab strips and radio rows both use this.
+// Distinct from paintPillButton because the selected state is durable
+// (not transient hover) and uses surfaceOn fill — the same selected-fill
+// the burger icon adopts when its panel is open, so the "this is the
+// chosen one" reading is consistent across HUD chrome. Width is
+// caller-supplied (not measured from text) so a strip of three pills
+// renders at uniform width. Returns rendered height for layout cursor
+// advance.
+export function paintSegmentedPill(
+  g: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  text: string,
+  opts: SegmentedPillOpts,
+): { h: number } {
+  const padY = sizes.panelTabPadY;
+  const lineH = getFont(opts.font ?? fonts.body).lineHeight;
+  const W = opts.width;
+  const H = lineH + padY * 2;
+  const disabled = opts.disabled === true;
+
+  // Border: dim when disabled (overrides selected/hover); accent for
+  // selected/hover; dim otherwise.
+  const borderColor = disabled
+    ? colors.borderDim
+    : (opts.selected || opts.hover ? colors.borderAccent : colors.borderDim);
+  // Fill: selected → surfaceOn, otherwise plain surface. Disabled+selected
+  // still gets the fill so the user can see their pref is intact.
+  const bg = opts.selected ? colors.surfaceOn : colors.surface;
+  // Text: dim when disabled (overrides selected); bright on selected
+  // surfaceOn fill; hover-bright for non-selected hover; body otherwise.
+  const textColor = disabled
+    ? colors.titleDim
+    : (opts.selected
+      ? colors.glyphOnState
+      : (opts.hover ? colors.textBodyHover : colors.textBody));
+
+  paintSurface(g, x, y, W, H, { bg, border: borderColor });
+
+  const textW = measurePixelText(text, opts.font);
+  const textX = x + Math.round((W - textW) / 2);
+  drawPixelText(g, text, textX, y + padY, textColor, opts.font);
+
+  return { h: H };
 }
 
 export interface PillButtonOpts {

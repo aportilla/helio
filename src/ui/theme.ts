@@ -77,6 +77,19 @@ export const sizes = {
   panelSectionGapAfter:  2,
   panelRowPadY:          2,
 
+  // Tabbed panel — strip below the title, content below the strip
+  panelTabPadX:       6,  // horizontal padding inside each tab pill
+  panelTabPadY:       3,  // vertical padding inside each tab pill
+  panelTabGap:        2,  // horizontal gap between adjacent tabs
+  panelTabContentGap: 6,  // gap between the tab strip and the content below it
+
+  // Keybinding row layout (Controls tab — read-only key/desc rows)
+  kbKeyDescGap: 8,  // horizontal gap between the key column and the description column
+  kbRowPadY:    1,  // vertical padding inside each keybinding row
+
+  // Radio row layout (segmented chooser — e.g. Resolution: [Low][Med][High])
+  radioPillGap: 2,  // horizontal gap between adjacent radio pills
+
   // Info card / panel — name-line trailing space for a corner close-X
   nameToCloseGap: 4,
   cardNameGap:    2,  // gap between name line and body lines

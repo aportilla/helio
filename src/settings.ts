@@ -11,9 +11,15 @@
 // scale of preferences.
 
 export type SingleTouchAction = 'orbit' | 'pan';
+// Resolution preference: a bias applied to the auto-computed render scale
+// (the integer N from RenderScaleObserver targeting 72 DPI). 'medium'
+// keeps the auto value, 'low' nudges N up by 1 (chunkier, fewer fragments),
+// 'high' nudges N down by 1 (sharper, more fragments). Clamped to {1..4};
+// when the clamp swallows the bias the option is disabled in the UI.
+export type ResolutionPreference = 'low' | 'medium' | 'high';
 
 export interface Settings {
-  version: 1;
+  version: 2;
   // Behavior of a single-finger TOUCH drag (mouse drags always orbit,
   // unaffected by this setting). When 'orbit', single touch yaws/pitches
   // the camera (the original behavior); when 'pan', single touch shifts
@@ -28,14 +34,16 @@ export interface Settings {
   // not a preference that should survive a refresh.
   showLabels: boolean;
   showDroplines: boolean;
+  resolutionPreference: ResolutionPreference;
 }
 
 const STORAGE_KEY = 'starmap.settings';
 const DEFAULTS: Settings = {
-  version: 1,
+  version: 2,
   singleTouchAction: 'orbit',
   showLabels: true,
   showDroplines: false,
+  resolutionPreference: 'medium',
 };
 
 function readFromStorage(): Settings {
@@ -47,11 +55,13 @@ function readFromStorage(): Settings {
     // new fields later doesn't break old saves. Reject any value that
     // isn't one of the known enum literals; for booleans, fall back to
     // the default unless the stored value is exactly `true` or `false`.
+    const pref = parsed.resolutionPreference;
     return {
       ...DEFAULTS,
       singleTouchAction: parsed.singleTouchAction === 'pan' ? 'pan' : 'orbit',
       showLabels: typeof parsed.showLabels === 'boolean' ? parsed.showLabels : DEFAULTS.showLabels,
       showDroplines: typeof parsed.showDroplines === 'boolean' ? parsed.showDroplines : DEFAULTS.showDroplines,
+      resolutionPreference: pref === 'low' || pref === 'high' ? pref : 'medium',
     };
   } catch {
     return { ...DEFAULTS };

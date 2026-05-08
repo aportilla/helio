@@ -12,7 +12,7 @@ import { Droplines } from './droplines';
 import { Labels } from './labels';
 import { StarPoints } from './stars';
 import { setSnappedLineViewport } from './materials';
-import { RenderScaleObserver } from './render-scale';
+import { RenderScaleObserver, effectiveScale } from './render-scale';
 import { MapHud } from '../ui/map-hud';
 import { STARS, STAR_CLUSTERS, clusterIndexFor } from '../data/stars';
 import { getSettings } from '../settings';
@@ -275,12 +275,16 @@ export class StarmapScene {
 
     this.labels = new Labels(initialSettings.showLabels);
 
-    this.hud = new MapHud();
+    this.hud = new MapHud(this.renderScale.scale);
     this.hud.onToggle = (id, on) => {
       if (id === 'labels') this.labels.setShowLabels(on);
       else if (id === 'drops') this.droplines.setMasterVisible(on);
       else if (id === 'spin') this.view.spin = on;
     };
+    // Resolution preference (and any future settings that affect render
+    // pipeline state) reach the scene via this callback. Resize re-reads
+    // getSettings() and re-applies the buffer size.
+    this.hud.onSettingsChanged = () => this.resize();
     this.hud.onAction = (id) => {
       if (id === 'reset') {
         // Snap reset: animating target while distance/yaw/pitch jump would
@@ -300,9 +304,14 @@ export class StarmapScene {
     };
 
     // Re-resize whenever DPR crosses an integer-N boundary (browser zoom,
-    // monitor swap, OS scale change). resize() already reads the current N
-    // from this.renderScale, so the callback only needs to re-trigger it.
-    this.renderScale.subscribe(() => this.resize());
+    // monitor swap, OS scale change). resize() reads the current auto N
+    // from this.renderScale and applies the user's resolution preference;
+    // the HUD's Resolution radio also rebuilds its disable states off
+    // the new auto value.
+    this.renderScale.subscribe((scale) => {
+      this.hud.setAutoScale(scale);
+      this.resize();
+    });
   }
 
   // -- public API --------------------------------------------------------
@@ -896,7 +905,11 @@ export class StarmapScene {
     // CSS and buffer from that. Up to (N-1) physical pixels of black bezel
     // can show on the right/bottom — invisible against the dark scene.
     const dpr = window.devicePixelRatio;
-    const N = this.renderScale.scale;
+    // Auto N from the observer biased by the user's resolution preference
+    // (low=+1 chunkier, high=-1 sharper, medium=auto). Pulled fresh per
+    // resize so flipping the radio re-applies on the next tick without
+    // needing extra plumbing.
+    const N = effectiveScale(this.renderScale.scale, getSettings().resolutionPreference);
     const physW = Math.floor(window.innerWidth  * dpr / N) * N;
     const physH = Math.floor(window.innerHeight * dpr / N) * N;
     const cssW = physW / dpr;

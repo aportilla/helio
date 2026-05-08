@@ -19,6 +19,8 @@
 // minor jitter (e.g. 2 → 2.5 from a Chrome zoom step) is a no-op since both
 // resolve to N=3.
 
+import type { ResolutionPreference } from '../settings';
+
 export type RenderScale = 1 | 2 | 3 | 4;
 
 export function computeRenderScale(dpr: number): RenderScale {
@@ -27,6 +29,24 @@ export function computeRenderScale(dpr: number): RenderScale {
   if (raw <= 1) return 1;
   if (raw === 2) return 2;
   if (raw === 3) return 3;
+  return 4;
+}
+
+// Apply the user's resolution preference as a bias on the auto-computed
+// integer N. Higher N = chunkier (fewer fragments), lower N = sharper
+// (more fragments). Clamped to {1..4}; when the clamp swallows the bias,
+// the effective scale equals auto and the corresponding radio option is
+// disabled in the UI (caller's job to surface that).
+//
+//   low    → auto + 1
+//   medium → auto
+//   high   → auto - 1
+export function effectiveScale(auto: RenderScale, pref: ResolutionPreference): RenderScale {
+  const bias = pref === 'low' ? 1 : pref === 'high' ? -1 : 0;
+  const next = auto + bias;
+  if (next <= 1) return 1;
+  if (next === 2) return 2;
+  if (next === 3) return 3;
   return 4;
 }
 

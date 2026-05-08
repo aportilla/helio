@@ -4,7 +4,7 @@ The galaxy-map screen of **Helio**, a planned 4X space strategy game in the line
 
 A 3D pixel-art visualization of the stars within ~20 light years of the Sun. Perspective camera orbiting a focused star, stellar discs sized by spectral class and depth-attenuated, drop-lines pinning each star to the galactic plane, all rendered in a deliberately chunky retro aesthetic.
 
-Think 1980s starbase HUD: inline bitmap-font labels, cyan-on-near-black palette, hand-drawn-looking concentric range rings. The HUD chrome (title, scale bar, settings trigger) renders as native pixel art inside the WebGL scene rather than as DOM elements. Display toggles, "Reset view", and a touch-input preference all live in a popover settings panel that drops down from the top-right trigger.
+Think 1980s starbase HUD: inline bitmap-font labels, cyan-on-near-black palette, hand-drawn-looking concentric range rings. The HUD chrome (scale bar, settings trigger) renders as native pixel art inside the WebGL scene rather than as DOM elements. The settings trigger drops down a tabbed popover — **General** (auto-rotate, reset view), **Graphics** (display toggles, render-resolution chooser), **Controls** (touch input, plus a read-only keyboard / mouse reference).
 
 ## Stack
 
@@ -52,21 +52,26 @@ src/
                             + (optional) CanvasTexture + Bounds rect; one
                             owned-texture lifecycle for subclasses
     base-panel.ts           Repaint-on-state-change canvas-texture panel base
-    panel.ts                Settings popover (sectioned rows: toggles + actions)
+    panel.ts                Tabbed popover: title + tab strip + active tab's
+                            sections. Four row kinds — toggle, action,
+                            keybinding (read-only), and radio (segmented-pill
+                            chooser, supports per-pill disabled state)
     icon-button.ts          Pre-built texture-pool button (off/hover/on/onHover)
     action-button.ts        Text pill button (off/hover/disabled), used for
                             "View System" and "Focus"
     painter.ts              Shared 2D primitives: surfaces, glyphs, close-X,
-                            hamburger, left-arrow, etc.
+                            hamburger, left-arrow, plus paintPillButton
+                            (action) and paintSegmentedPill (tabs + radios)
     theme.ts                colors / sizes / fonts shared across widgets
     hit-test.ts             HitResult type — the three-way 'interactive' /
                             'opaque' / 'transparent' contract HUDs expose
                             for pointer-event routing
     map-hud/
-      index.ts              MapHud: title, scale bar, settings trigger + panel,
-                            info card with close-X, "View System" pill, and
-                            disable-when-focused "Focus" pill
-      title.ts              Static top-left title block
+      index.ts              MapHud: scale bar, settings trigger + tabbed
+                            settings panel, info card with close-X,
+                            "View System" pill, and disable-when-focused
+                            "Focus" pill. Routes pointer events through
+                            hitTab → probeRadio → hitRow → hitsBackground.
       scale-bar.ts          Bottom-left scale bar (bar + 2 ticks + label)
       info-card.ts          Bottom-right cluster info card (stacks
                             above fixed-position action buttons)
@@ -97,7 +102,7 @@ src/
 
 There's no UI plumbing between the bootstrap and the scenes: each scene owns its own HUD orchestrator (`MapHud` for galaxy view, `SystemHud` for system view), each with its own ortho pass at 1 unit = 1 buffer pixel. HUD widgets are built on `Widget` (Mesh + PlaneGeometry + MeshBasicMaterial + optional CanvasTexture) so HUD geometry shares the rest of the scene's pixel grid.
 
-Each HUD captures pointer events first (in the scene's `onPointerDown` / `onPointerMove` via `clientToHud()`), so clicking a button or a panel row never starts a pan/orbit and hovering swaps the cursor to `pointer`. `MapHud` exposes `onToggle`, `onAction`, `onDeselect`, `onViewSystem`, `onFocus`, and `onSettingsChanged` callbacks; `SystemHud` exposes `onBack`. `src/settings.ts` is the single source of truth for persisted user preferences — touch input, plus the persisted display toggles (`showLabels`, `showDroplines`). `MapHud` seeds its in-panel toggle state from `getSettings()` at construction and writes through `setSetting()` on each flip; the scene seeds the renderer-side state (`Labels`, `Droplines`) from the same source so the HUD checkbox and the rendered geometry agree on first paint. For touch input, the scene reads `getSettings()` at gesture time (pull-on-read), so a flipped preference takes effect on the very next pointer event with no callback plumbing. The `spin` toggle is intentionally NOT persisted — it's a session fidget, not a preference that should survive a refresh.
+Each HUD captures pointer events first (in the scene's `onPointerDown` / `onPointerMove` via `clientToHud()`), so clicking a button or a panel row never starts a pan/orbit and hovering swaps the cursor to `pointer`. `MapHud` exposes `onToggle`, `onAction`, `onDeselect`, `onViewSystem`, `onFocus`, and `onSettingsChanged` callbacks; `SystemHud` exposes `onBack`. `src/settings.ts` is the single source of truth for persisted user preferences — `singleTouchAction`, the display toggles (`showLabels`, `showDroplines`), and `resolutionPreference`. The blob is versioned; old saves are merged over fresh defaults on read so adding new fields can't invalidate them. `MapHud` seeds its in-panel toggle state from `getSettings()` at construction and writes through `setSetting()` on each flip; the scene seeds the renderer-side state (`Labels`, `Droplines`) from the same source so the HUD checkbox and the rendered geometry agree on first paint. For touch input and resolution, the scene reads `getSettings()` at gesture/resize time (pull-on-read), so a flipped preference takes effect on the next pointer event or resize with no callback plumbing — `onSettingsChanged` triggers a `resize()` so the resolution radio applies immediately rather than waiting for a window event. The `spin` toggle is intentionally NOT persisted — it's a session fidget, not a preference that should survive a refresh.
 
 Each HUD also exposes `hitTest(bufX, bufY)` returning one of `'interactive' | 'opaque' | 'transparent'` (see `src/ui/hit-test.ts`). The scene queries it once per `pointermove` and only sets `pointer.has = true` when the result is `'transparent'`, so stars behind a button, panel, or info card body don't light up hover labels through the chrome above them. `'opaque'` covers visually-solid surfaces that aren't clickable (panel background, card body, disabled focus button) — they block scene picks and absorb clicks (so a mousedown on the card body doesn't start an orbit drag) without changing the cursor. `'interactive'` adds the cursor swap and dispatches the click. This three-way model is the seed of the layered input router described in [`FUTURE_PLANNING.md`](./FUTURE_PLANNING.md); each HUD's `hitTest` will become an `InputLayer` when modals / tooltips / context menus arrive.
 
@@ -106,6 +111,27 @@ The `scene/` modules know **nothing about the DOM** beyond the `HTMLCanvasElemen
 ### UI subsystem
 
 Helio is a 4X game — the galaxy map is the *first* screen, not the only one. Future siblings (research tree, fleet management, diplomacy, system inspector, ship designer, encyclopedia) will share the same `WebGLRenderer`, the same pixel grid, and the same widget toolkit. That's why `src/ui/` houses *generic* primitives — `Widget`, `BasePanel`, `IconButton`, `ActionButton`, the painter module, theme tokens, the `HitResult` contract — rather than map-specific HUD chrome. When proposing structure (file layout, base classes, orchestrators), think "what does this look like with five more screens" rather than just optimizing for the map. Defer until concrete consumers exist: full input router (today each HUD owns its own `hitTest` directly — see [`FUTURE_PLANNING.md`](./FUTURE_PLANNING.md)), keyboard focus stack, ScrollPanel, world-anchored placement, modal/tooltip/popover taxonomies. Build what current screens need; design only what the next one will.
+
+### Settings panel
+
+`src/ui/panel.ts` is the tabbed-popover widget; `MapHud` builds its spec each rebuild, anchors it to the top-right corner, and routes pointer events into it. Three tabs are wired today:
+
+- **General** — `Auto-rotate view` (session-only `spin` toggle), `Reset view` (action).
+- **Graphics** — `Show star labels`, `Show distance droplines` (persisted toggles), and a `Resolution` radio with `Low` / `Medium` / `High` options. The radio biases the auto-computed render N (see "Pixel-perfect rendering" point 1) and the panel disables any option that would clamp to a no-op at the current display.
+- **Controls** — `Pan with single touch` (persisted), plus a read-only **Keyboard** + **Mouse** reference. The reference rows use the `keybinding` row kind: a key column in `colors.starName` (yellow) and a description column in `colors.textBody`, with the description column aligned across the section so multiple rows form a clean grid.
+
+Width is measured across **all** tabs' contents at rebuild time (not just the active one) so switching tabs never resizes the panel — width flicker would be worse than a few wasted pixels on shorter tabs. Height is per-active-tab, so the panel grows/shrinks vertically as the user switches; that's fine because the bottom edge moves while the top-right anchor stays put.
+
+Pointer events fan out through four parallel hit-test methods on `Panel`:
+
+- **`hitTab`** — tab strip at the top.
+- **`probeRadio`** — per-pill probing for radio rows. Returns `{ rowId, value, disabled }`; the orchestrator dispatches when not disabled and absorbs (returns `'opaque'` from `hitTest`) when disabled, so a click on a no-op option lands silently rather than falling through to the scene.
+- **`hitRow`** — toggle / action rows only. Radios are intentionally excluded here because they sit inside row Y bands but only consume sub-rects, and a row-wide hit would absorb clicks in the gaps between pills.
+- **`hitsBackground`** — final absorb for clicks/hovers anywhere on the panel surface that didn't match a more specific zone.
+
+`paintSegmentedPill` (in `src/ui/painter.ts`) is the shared primitive for tab pills and radio pills — same selected/hover styling, with an optional `disabled` flag radios use and tabs ignore. Keeping them on one primitive eliminates drift if the look evolves.
+
+The active tab resets to `general` each time the panel opens — most native settings dialogs behave this way, and persisting the last tab would mean a `settings.ts` schema bump for very little payoff.
 
 ### Coordinate system
 
@@ -140,7 +166,7 @@ The 3D scene inside `SystemScene` is currently a skeleton: an empty `Scene`, a `
 
 The whole "pixel art" look depends on a stack of choices that all have to stay consistent:
 
-1. **`renderer.setPixelRatio(devicePixelRatio / N)`** with `N = ENV_PX_PER_SCREEN_PX = 3` — the render buffer is sized so each render ("env") pixel becomes N×N physical pixels after the browser's `image-rendering: pixelated` nearest-neighbor upscale. The DPR-relative formula means the on-screen pixel size is consistent across retina (DPR=2) and non-retina (DPR=1) displays. Increasing N makes the look chunkier and reduces fragment work by 1/N². Critically, **all pixel-aware shader work must use `renderer.getDrawingBufferSize()` — NOT `window.innerWidth/Height`** — because the buffer is now smaller than the CSS viewport. `scene.ts` caches these as `bufferW`/`bufferH` in `resize()` and threads them into `setSnappedLineViewport`, `StarPoints.setPxScale`, `Labels.update`, and `Hud.resize`. Pointer math (raycast NDC, HUD click coords) uses cached `cssW`/`cssH` rather than `window.innerWidth/Height` for the same reason — the canvas may be a few CSS pixels smaller than the window after the integer-multiple rounding (next point).
+1. **`renderer.setPixelRatio(devicePixelRatio / N)`** where N is an integer in {1, 2, 3, 4} chosen at runtime by `RenderScaleObserver` (in `src/scene/render-scale.ts`) to land closest to a 72-DPI visual size for the current `devicePixelRatio` — typically 3 on retina (DPR=2) and 1 on a 1080p desktop (DPR=1). The render buffer is sized so each render ("env") pixel becomes N×N physical pixels after the browser's `image-rendering: pixelated` nearest-neighbor upscale. The user can bias N via the **Resolution** radio (`Low` = +1 chunkier, `Medium` = auto, `High` = −1 sharper); `effectiveScale(auto, pref)` clamps to {1..4}, and the panel disables options that would clamp to a no-op (e.g. `High` on a DPR=1 display, where auto is already 1). DPR boundary crossings (browser zoom, monitor swap, OS scale change) re-fire the observer so the auto N stays current. Increasing N makes the look chunkier and reduces fragment work by 1/N². Critically, **all pixel-aware shader work must use `renderer.getDrawingBufferSize()` — NOT `window.innerWidth/Height`** — because the buffer is now smaller than the CSS viewport. `scene.ts` caches these as `bufferW`/`bufferH` in `resize()` and threads them into `setSnappedLineViewport`, `StarPoints.setPxScale`, `Labels.update`, and `Hud.resize`. Pointer math (raycast NDC, HUD click coords) uses cached `cssW`/`cssH` rather than `window.innerWidth/Height` for the same reason — the canvas may be a few CSS pixels smaller than the window after the integer-multiple rounding (next point).
    **Integer-multiple sizing is load-bearing.** The browser's nearest-neighbor upscale is only exactly N:1 when the target physical pixel count is divisible by N. `resize()` rounds CSS×DPR (the target physical dimension) DOWN to a multiple of N before calling `setSize`, then derives CSS and buffer dimensions from that. Without this rounding, a non-divisible window (e.g. 1366px wide at DPR=2 = 2732 physical px = 911 buffer × 2.999 upscale) gets one buffer column every ~911 columns squashed into 2 physical px instead of 3 — visible as a column of mangled pixels in any label that happens to sit on top of it, with the artifact "following" labels as the camera rotates and they cross fixed bad columns. Cost: up to N-1 physical px of black bezel on the right/bottom (invisible against the dark scene + matching body bg).
 2. **Pixel-snapped line shader** (`snappedLineMat` in `materials.ts`) — the vertex shader rounds each projected vertex to the nearest integer screen pixel before rasterization. Eliminates sub-pixel shimmer on thin lines. Used for grid arcs, axes, the galactic-centre arrow, and the solid variant of droplines. A sibling `snappedDotsMat` does the same for 1-pixel `Points` (snapping each point's center to a pixel center so `gl_PointSize = 1` covers exactly one pixel) — used by the dotted dropline variant.
 3. **Stars shader** (`makeStarsMaterial`) — `gl.POINTS` with a procedural circle in the fragment shader (no texture sampling, no AA fringe). The vertex shader rounds size to the nearest integer pixel count (so zoom transitions step 2→3→4→5…) and snaps the projected center to the pixel grid using a **parity-aware** snap: even sizes snap to a pixel boundary (integer window coord), odd sizes to a pixel center (half-integer). The snapped center is passed to the fragment shader as a varying `vCenter`. The fragment shader then computes its pixel-grid offset directly from `gl_FragCoord.xy - vCenter` — `gl_FragCoord.xy` is always integer+0.5, and `vCenter` is integer or half-integer, so the difference lands at clean pixel-spacing offsets symmetric about both axes by construction. **Don't use `gl_PointCoord`** for the discard test: its sub-pixel precision is implementation-defined and produces visibly asymmetric discs on some GPUs when the point center sits at sub-pixel positions. The discard threshold is the true Euclidean radius (`length(d) > vRadius`) so sizes 1/2/3 render as full squares and size 4 onward starts dropping corners — the natural pixel-disc progression. The pixel-snap math runs **after** the perspective divide (`clip.xy / clip.w`) so it works identically under ortho and perspective projection.
@@ -284,5 +310,5 @@ Forward-looking design intent — the simulation layer (`src/sim/`), WASM port, 
 - TypeScript strict mode is on. Don't disable rules per-file; fix the type instead.
 - The scene code uses **scratch `Vector3`/`Vector2` instances on `this`** to avoid per-frame allocations in the tick loop. When you add new per-frame math, reuse an existing scratch or add a new private one — don't `new Vector3()` inside `tick()`.
 - Comments explain **why** (the load-bearing constraint, the surprising trade-off, the bug it works around). They don't restate what the code does. Match this style — a wall of comments above obvious code is noise; a one-line "uses floor not round because FP jitter at exact half-pixels would twitch" earns its keep.
-- HUD sizes are in **env pixels** (1 env pixel = `ENV_PX_PER_SCREEN_PX = 3` physical pixels). When tweaking visual sizes, divide your physical-pixel target by 3 — e.g. a "9-physical-pixel-tall scale-bar tick" is `SCALE_TICK_H = 3`.
+- HUD sizes are in **env pixels** (1 env pixel = N physical pixels after the nearest-neighbor upscale, where N is the runtime-chosen scale — typically 3 on retina). When tweaking visual sizes, think in env pixels — e.g. a 9-physical-pixel-tall tick on retina is `SCALE_TICK_H = 3`. The token visually scales with the user's resolution preference and the underlying display, but its env-pixel value is fixed.
 - No emojis in source unless explicitly part of the visual design.
