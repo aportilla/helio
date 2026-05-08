@@ -83,9 +83,9 @@ src/
   data/
     stars.ts                Star catalog (name, x/y/z in ly, spectral class, distance);
                             also computes star clusters and lookup
-    BDF/<Family>/<n>.bdf    Bundled bitmap fonts — 25 Mac-classic families
-                            (Monaco, Chicago, Geneva, EspySans, …) shipped as
-                            raw .bdf text and discovered at build time
+    BDF/<Family>/<n>.bdf    Bundled bitmap fonts — three Mac-classic families
+                            (Monaco, EspySans, EspySansBold) shipped as raw
+                            .bdf text and discovered at build time
     bdf-font.ts             Minimal BDF parser + per-font canvas atlas renderer
     font-provider.ts        Typed FONTS catalog, lazy registration, DEV-mode
                             drift check between FONTS and on-disk .bdf files
@@ -189,13 +189,13 @@ The HUD draws from a catalog of Mac-classic bitmap fonts shipped as `.bdf` files
 ```ts
 import { FONTS } from './data/font-provider';
 FONTS.Monaco[11]      // ok
-FONTS.Chicago[999]    // ts error — no such size
+FONTS.Monaco[999]     // ts error — no such size
 FONTS.NotAFamily      // ts error — no such family
 ```
 
 In DEV builds, a drift check warns if `FONTS` and the on-disk directory disagree — a typo in a typed entry, or a `.bdf` added without one (so callers can't autocomplete to it).
 
-`initFonts()` (called once from `main.ts` before any label texture is built) eagerly parses **Monaco 11** + **Chicago 15** so the first frame doesn't pay parse cost, and injects the custom `►` (U+25BA, used in info-card name lines) onto Monaco via `BdfFont.addGlyph()`. Coverage beyond that is whatever the `.bdf` source carries — printable ASCII for every font, plus the typical Mac symbol set (`°`, `·`, `—`, etc.) on most. MacRoman codepoints 128–255 are remapped to Unicode by glyph name (`degree` → U+00B0, `bullet` → U+00B7, `emdash` → U+2014); glyphs named `uniXXXX` carry their codepoint in the name.
+`initFonts()` (called once from `main.ts` before any label texture is built) eagerly parses **Monaco 11** so the first frame doesn't pay parse cost on the body font, and injects the custom `►` (U+25BA, used in info-card name lines) onto Monaco via `BdfFont.addGlyph()`. Coverage beyond that is whatever the `.bdf` source carries — printable ASCII for every font, plus the typical Mac symbol set (`°`, `·`, `—`, etc.) on most. MacRoman codepoints 128–255 are remapped to Unicode by glyph name (`degree` → U+00B0, `bullet` → U+00B7, `emdash` → U+2014); glyphs named `uniXXXX` carry their codepoint in the name.
 
 `bdf-font.ts` builds one canvas atlas per font, with white-on-transparent pixels: white callers take a fast direct-blit path; other colors route through a per-call temp canvas with `source-in` tinting. Memory stays at one atlas per font regardless of how many colors are used.
 

@@ -5,7 +5,6 @@ import { DEFAULT_FONT, getFont, type FontSpec } from './font-provider';
 export {
   DEFAULT_FONT,
   FONT_MONACO_11,
-  FONT_CHICAGO_15,
   FONTS,
   getFont,
   initFonts,
@@ -68,7 +67,7 @@ export interface LabelTextureResult {
 
 export interface LabelTextureOptions {
   box?: boolean;
-  // Font to render with (e.g. FONT_MONACO_11, FONTS.Chicago[15]). Defaults
+  // Font to render with (e.g. FONT_MONACO_11, FONTS.EspySans[15]). Defaults
   // to DEFAULT_FONT when omitted.
   font?: FontSpec;
 }
