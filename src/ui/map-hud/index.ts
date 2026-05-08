@@ -1,7 +1,6 @@
 // MapHud — composition root for the star map's HUD overlay.
 //
 // Owns:
-//   - title (top-left) — static
 //   - scaleBar (bottom-left) — bar + 2 ticks + label, set per camera frame
 //   - settingsIcon (top-right) — IconButton, 4-state (panel open/closed × hover)
 //   - settingsPanel (popover below the settings icon) — Panel
@@ -34,7 +33,6 @@ import { ActionButton } from '../action-button';
 import { type HitResult } from '../hit-test';
 import { IconButton, type IconButtonStates } from '../icon-button';
 import { Panel, type PanelHit, type PanelSpec } from '../panel';
-import { TitleBlock } from './title';
 import { ScaleBar } from './scale-bar';
 import { InfoCard } from './info-card';
 
@@ -94,7 +92,6 @@ export class MapHud {
   private readonly toggleState: { [K in ToggleId]: boolean };
 
   // Composed widgets
-  private readonly title: TitleBlock;
   private readonly scaleBar: ScaleBar;
   private readonly infoCard: InfoCard;
   private readonly cardClose: IconButton;
@@ -133,10 +130,6 @@ export class MapHud {
       drops:  s.showDroplines,
       spin:   false,
     };
-
-    // ---- title -----------------------------------------------------------
-    this.title = new TitleBlock();
-    this.title.addTo(this.scene);
 
     // ---- scale bar -------------------------------------------------------
     this.scaleBar = new ScaleBar();
@@ -320,9 +313,9 @@ export class MapHud {
     }
     if (this.settingsIcon.bounds.contains(bufX, bufY)) return 'interactive';
     if (this.infoCard.visible && this.infoCard.visibleBounds.contains(bufX, bufY)) return 'opaque';
-    // Title + scale bar render text on transparent canvases — let their
-    // empty pixels remain transparent (the user expectation matches: a
-    // star peeks through the gaps, so it should also accept hover/click).
+    // Scale bar renders text on a transparent canvas — let its empty
+    // pixels remain transparent (a star peeks through the gaps, so it
+    // should also accept hover/click).
     return 'transparent';
   }
 
@@ -445,7 +438,6 @@ export class MapHud {
   // -- layout -----------------------------------------------------------
 
   private layoutAll(): void {
-    this.title.anchorTo('tl', this.bufferW, this.bufferH, sizes.edgePad, sizes.edgePad);
     this.scaleBar.layout(sizes.edgePad);
     this.layoutInfoCard();
     this.settingsIcon.anchorTo('tr', this.bufferW, this.bufferH, sizes.edgePad, sizes.edgePad);
@@ -512,7 +504,6 @@ export class MapHud {
     for (const k of Object.keys(this.settingsIconTextures) as Array<keyof IconButtonStates>) {
       this.settingsIconTextures[k]?.dispose();
     }
-    this.title.dispose();
     this.scaleBar.dispose();
     this.infoCard.dispose();
     this.cardClose.dispose();
