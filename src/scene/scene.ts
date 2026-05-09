@@ -9,6 +9,7 @@ import {
 
 import { Grid } from './grid';
 import { Droplines } from './droplines';
+import { InputController, type InputHandlers } from './input-controller';
 import { Labels } from './labels';
 import { StarPoints } from './stars';
 import { setSnappedLineViewport } from './materials';
@@ -26,38 +27,6 @@ const FOV_DEG = 45;
 const NEAR = 0.1;
 const FAR = 1000;
 const DEFAULT_VIEW = { distance: 30, yaw: 1.1, pitch: 1.2 };
-
-// A pointer release that moved less than this many CSS pixels from its
-// pressdown counts as a click (vs the start of an orbit drag). Forgiving
-// enough to absorb hand jitter on a press.
-const CLICK_DRAG_PX = 4;
-
-// Two-finger classifier thresholds (CSS px). The gesture stays 'undecided'
-// (no zoom, no pan applied) until one of these is exceeded:
-//   - PAN: Euclidean distance the midpoint of the two pointers has
-//     traveled from gesture start.
-//   - ZOOM: scalar change in the distance between the two pointers
-//     (|currentDist - startDist|). Doubled relative to PAN because in a
-//     symmetric pinch BOTH fingers contribute to the separation change,
-//     so 80 px of separation ≈ each finger moving 40 px — comparable
-//     per-finger effort to a 40 px pan. When both signals cross in the
-//     same frame, the larger ratio (signal/threshold) wins. Both metrics
-//     are scalar magnitudes, so the heuristic is orientation-agnostic
-//     (same numbers whether the fingers are stacked, side-by-side, or
-//     diagonal). Sized well above touch-down jitter so contact-stabilization
-//     noise can never cross either threshold on its own — the user has
-//     to actually engage with the gesture before a mode locks.
-const GESTURE_COMMIT_PAN_PX = 40;
-const GESTURE_COMMIT_ZOOM_PX = 80;
-
-// "Actively moving along the separation axis" threshold for the pinch-vs-pan
-// classifier (CSS px). A finger whose displacement projects below this onto
-// the separation axis is treated as anchored — even if the other finger is
-// shooting off in the same signed direction, that's an anchor-style pinch
-// (thumb-fixed, index-splays), not a pan. Only when BOTH fingers project
-// above this *and* share a sign do we conclude the pair is translating
-// together (asymmetric pan along u), and zero out the zoom signal.
-const ACTIVE_PROJ_PX = 2;
 
 // Focus animation: only view.target lerps; yaw/pitch/distance stay frozen so
 // the camera glides over to the new orbital pivot rather than swinging.
@@ -85,25 +54,11 @@ const ORBIT_RATE_RAD = 1.5;
 // camera across the scene on the next frame.
 const MAX_TICK_DT_MS = 100;
 
-// Window within which a second left-click on the same cluster counts as a
-// double-click (and opens the system view). Sized for a deliberate double
-// rather than a fast fidget.
-const DOUBLE_CLICK_MS = 350;
-
 // Squared-distance epsilon (ly²) used to decide whether view.target is "on"
 // the selected cluster's COM — drives the Focus button's enabled state.
 // 0.01 ly = ~38 AU; well below any visually significant offset and far
 // above FP jitter from the focus lerp's terminal copy().
 const FOCUS_EPSILON_SQ = 0.01 * 0.01;
-
-// Long-press: touch-only hook held alive as a placeholder for a future game
-// action (context menu, secondary command, etc.). LONG_PRESS_MS gates the
-// timer fire; LONG_PRESS_MOVE_PX cancels it when the holding finger drifts
-// (looser than CLICK_DRAG_PX because users drift more during a held press
-// than a quick tap). fireLongPress currently console.info's so the wiring
-// is observable in DevTools and rebinding is a one-line body change.
-const LONG_PRESS_MS = 500;
-const LONG_PRESS_MOVE_PX = 8;
 
 interface ViewState {
   target: Vector3;
@@ -114,7 +69,6 @@ interface ViewState {
 }
 
 export class StarmapScene {
-  private readonly canvas: HTMLCanvasElement;
   private readonly renderer: WebGLRenderer;
   private readonly camera: PerspectiveCamera;
   private readonly scene = new Scene();
@@ -126,53 +80,12 @@ export class StarmapScene {
   private readonly starPoints: StarPoints;
   private readonly hud: MapHud;
   private readonly renderScale = new RenderScaleObserver();
+  private readonly input: InputController;
 
-  // Drag state. Any pointer drag = orbit (yaw/pitch); pan was removed because
-  // the camera always orbits a star, never an arbitrary world point.
-  private dragging = false;
-  private dragButton = 0;
-  private lastX = 0;
-  private lastY = 0;
-  private downX = 0;
-  private downY = 0;
-  // Active pointers, keyed by pointerId. size === 1 → orbit drag;
-  // size >= 2 → pinch zoom (orbit suppressed). Tracking via pointer events
-  // unifies mouse + touch + pen and lets pinch detection run off the same
-  // event stream as the drag, so a second finger landing mid-drag cleanly
-  // hands off to pinch instead of running both gestures simultaneously
-  // (the bug: on iPad Safari, the first finger's pointermove kept yawing
-  // the camera while touchmove was zooming, so every pinch came with an
-  // unwanted orbit jolt).
-  private readonly pointers = new Map<number, { x: number; y: number }>();
-  private pinching = false;
-  // Two-finger gesture commits to either zoom or pan on the first
-  // significant movement; once committed it stays in that mode for the
-  // rest of the gesture so a slight separation drift mid-pan can't yank
-  // the zoom (and vice versa). 'undecided' is the sampling window.
-  private pinchMode: 'undecided' | 'zoom' | 'pan' = 'undecided';
-  private pinchDist = 0;
-  // Midpoint of the active two-pointer pair, in CSS pixels.
-  private pinchMidX = 0;
-  private pinchMidY = 0;
-  // Snapshot of dist + mid at gesture start. The undecided-mode
-  // classifier measures sepDelta and midDelta from these anchors and
-  // commits to whichever signal first overshoots its own threshold
-  // (GESTURE_COMMIT_ZOOM_PX or GESTURE_COMMIT_PAN_PX); on a same-frame
-  // tie, the larger ratio (signal/threshold) wins.
-  private pinchStartDist = 0;
-  private pinchStartMidX = 0;
-  private pinchStartMidY = 0;
-  // Per-finger start positions, in the same iteration order as
-  // measurePinch/capturePinchMid. Used by the classifier to project each
-  // finger's motion onto the separation axis: a real pinch has the two
-  // projections in OPPOSITE directions; an asymmetric pan along that axis
-  // has them in the SAME direction. Without this gate, finger asymmetry
-  // along the line between fingers fakes a sepDelta that can outrun the
-  // midpoint delta and mis-commit a pan to zoom.
-  private pinchStartAx = 0;
-  private pinchStartAy = 0;
-  private pinchStartBx = 0;
-  private pinchStartBy = 0;
+  // Hover-pointer state, written by the input controller via the
+  // onPointerHoverChanged handler and read each tick to drive the boxed
+  // hover-label raycast. Touch input and mouse-over-HUD set has=false so
+  // chrome occlusion doesn't leak through to scene picking.
   private readonly pointer = { x: 0, y: 0, has: false };
   // Currently-selected cluster, mirrored across Labels (reticle), MapHud
   // (info card + View System button), and Droplines (selected pin). Scene
@@ -224,50 +137,21 @@ export class StarmapScene {
   private rafId = 0;
   private running = false;
 
-  // Double-click tracking. A second left-click on the same cluster within
-  // DOUBLE_CLICK_MS of the first fires onViewSystem; either a click on a
-  // different cluster or a timed-out gap restarts the window.
-  private lastClickAt = 0;
-  private lastClickClusterIdx = -1;
-
-  // Long-press timer state. Armed in onPointerDown for touch pointers only,
-  // cancelled by movement / second finger / lift / OS-cancel / scene stop.
-  // longPressFired suppresses the trailing pointerup's click path so a hold
-  // doesn't double-fire as both long-press AND tap-select-and-focus.
-  private longPressTimer: number | null = null;
-  private longPressPointerId = -1;
-  private longPressFired = false;
-
   // Fired when the user requests the system view for a cluster — either
   // by clicking the "View System" button on the info card or by double-
   // clicking a star. AppController wires this to enterSystem().
   onViewSystem: (clusterIdx: number) => void = () => {};
 
-  // Bound listeners stored so removeEventListener works in stop().
-  private readonly _onPointerDown   = (e: PointerEvent) => this.onPointerDown(e);
-  private readonly _onPointerUp     = (e: PointerEvent) => this.onPointerUp(e);
-  private readonly _onPointerMove   = (e: PointerEvent) => this.onPointerMove(e);
-  private readonly _onPointerCancel = (e: PointerEvent) => this.onPointerCancel(e);
-  private readonly _onWheel         = (e: WheelEvent) => this.onWheel(e);
-  private readonly _onContextMenu   = (e: Event) => e.preventDefault();
-  private readonly _onKeyDown       = (e: KeyboardEvent) => this.onKeyDown(e);
-  private readonly _onKeyUp         = (e: KeyboardEvent) => this.onKeyUp(e);
-  private readonly _onBlur          = () => this.heldKeys.clear();
-  private readonly _onResize        = () => this.resize();
+  private readonly _onResize = () => this.resize();
 
   // Reusable per-frame scratch.
   private readonly _ndc  = new Vector2();
   private readonly _buf  = new Vector2();
-  private readonly _hudPt = { x: 0, y: 0 };
   private readonly _forward = new Vector3();
   private readonly _right   = new Vector3();
   private readonly _step    = new Vector3();
   private static readonly WORLD_UP = new Vector3(0, 0, 1);
 
-  // Held-key state for WASD pan + QE orbit. Continuous-while-held; cleared
-  // on blur so a key whose keyup got swallowed (alt-tab, etc.) doesn't get
-  // stuck and carry the camera off-screen.
-  private readonly heldKeys = new Set<string>();
   private lastTickMs = 0;
 
   // Cached drawing-buffer dimensions, populated by resize(). All pixel-aware
@@ -286,7 +170,6 @@ export class StarmapScene {
   // resize() for the integer-multiple-of-N rounding that guarantees a
   // clean nearest-neighbor upscale).
   constructor(canvas: HTMLCanvasElement, renderer: WebGLRenderer) {
-    this.canvas = canvas;
     this.renderer = renderer;
     const sun = STARS.find(s => s.id === 'sol')!;
     this.view = {
@@ -348,6 +231,8 @@ export class StarmapScene {
       this.animateFocusTo(com.x, com.y, com.z);
     };
 
+    this.input = new InputController(canvas, this.buildInputHandlers());
+
     // Re-resize whenever DPR crosses an integer-N boundary (browser zoom,
     // monitor swap, OS scale change). resize() reads the current auto N
     // from this.renderScale and applies the user's resolution preference;
@@ -364,7 +249,8 @@ export class StarmapScene {
   start(): void {
     if (this.running) return;
     this.running = true;
-    this.attachListeners();
+    window.addEventListener('resize', this._onResize);
+    this.input.start();
     this.resize();
     this.tick();
   }
@@ -373,37 +259,60 @@ export class StarmapScene {
     if (!this.running) return;
     this.running = false;
     cancelAnimationFrame(this.rafId);
-    this.detachListeners();
-    this.cancelLongPress();
+    window.removeEventListener('resize', this._onResize);
+    this.input.stop();
     this.lastTickMs = 0;
   }
 
-  // -- listeners ---------------------------------------------------------
+  // -- input wiring -----------------------------------------------------
 
-  private attachListeners(): void {
-    this.canvas.addEventListener('pointerdown',   this._onPointerDown);
-    this.canvas.addEventListener('pointerup',     this._onPointerUp);
-    this.canvas.addEventListener('pointermove',   this._onPointerMove);
-    this.canvas.addEventListener('pointercancel', this._onPointerCancel);
-    this.canvas.addEventListener('wheel',         this._onWheel, { passive: false });
-    this.canvas.addEventListener('contextmenu',   this._onContextMenu);
-    window.addEventListener('keydown', this._onKeyDown);
-    window.addEventListener('keyup',   this._onKeyUp);
-    window.addEventListener('blur',    this._onBlur);
-    window.addEventListener('resize',  this._onResize);
-  }
-
-  private detachListeners(): void {
-    this.canvas.removeEventListener('pointerdown',   this._onPointerDown);
-    this.canvas.removeEventListener('pointerup',     this._onPointerUp);
-    this.canvas.removeEventListener('pointermove',   this._onPointerMove);
-    this.canvas.removeEventListener('pointercancel', this._onPointerCancel);
-    this.canvas.removeEventListener('wheel',         this._onWheel);
-    this.canvas.removeEventListener('contextmenu',   this._onContextMenu);
-    window.removeEventListener('keydown', this._onKeyDown);
-    window.removeEventListener('keyup',   this._onKeyUp);
-    window.removeEventListener('blur',    this._onBlur);
-    window.removeEventListener('resize',  this._onResize);
+  // Bridge from InputController gesture intents to scene-side state. The
+  // controller is gesture-only (decides what's happening); scene applies
+  // the deltas to view-state and runs selection/animation logic.
+  private buildInputHandlers(): InputHandlers {
+    return {
+      clientToHud: (x, y, out) => this.clientToHud(x, y, out),
+      pickStar: (x, y) => this.pickStar(x, y),
+      starToCluster: (idx) => clusterIndexFor(idx),
+      hudHandleClick: (x, y) => this.hud.handleClick(x, y),
+      hudHitTest: (x, y) => this.hud.hitTest(x, y),
+      hudHandlePointerMove: (x, y) => this.hud.handlePointerMove(x, y),
+      applyOrbitDelta: (dx, dy) => this.applyOrbitDelta(dx, dy),
+      applyTouchPan: (dx, dy) => this.applyTouchPan(dx, dy),
+      zoomBy: (factor) => this.setZoom(this.view.distance * factor),
+      onClickStar: (clusterIdx, button) => {
+        if (button === 2) {
+          // Right-click hook. Logs so the wiring is observable in DevTools;
+          // body becomes a real game action when right-click gets a binding.
+          console.info('[scene] right-click hook on cluster', clusterIdx, STARS[STAR_CLUSTERS[clusterIdx].primary].name);
+          return;
+        }
+        if (button === 0) this.selectAndFocusCluster(clusterIdx);
+      },
+      onDoubleClickStar: (clusterIdx) => this.onViewSystem(clusterIdx),
+      onLongPressStar: (clusterIdx) => {
+        // Long-press hook. Same shape as the right-click hook above —
+        // logs so the wiring is observable; body becomes a real action
+        // when touch long-press gets a binding.
+        console.info('[scene] long-press hook on cluster', clusterIdx, STARS[STAR_CLUSTERS[clusterIdx].primary].name);
+      },
+      onPointerHoverChanged: (x, y, has) => {
+        if (has) {
+          this.pointer.x = x;
+          this.pointer.y = y;
+          this.pointer.has = true;
+        } else {
+          this.pointer.has = false;
+        }
+      },
+      onEscape: () => this.deselect(),
+      onFocusSelection: () => {
+        if (this.selectedClusterIdx < 0) return;
+        const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
+        this.animateFocusTo(com.x, com.y, com.z);
+      },
+      cancelFocusAnimation: () => { this.focusAnimating = false; },
+    };
   }
 
   // Map a CSS-pixel client coord into HUD buffer coords (Y-up, origin at
@@ -414,175 +323,11 @@ export class StarmapScene {
     out.y = (this.cssH - clientY) * (this.bufferH / this.cssH);
   }
 
-  private onPointerDown(e: PointerEvent): void {
-    // HUD click intercepts orbit so dragging-on-button doesn't move the camera.
-    // HUD-claimed taps never enter the pointers map, so a follow-up second
-    // finger won't trigger pinch from a half-tracked first finger.
-    this.clientToHud(e.clientX, e.clientY, this._hudPt);
-    if (this.hud.handleClick(this._hudPt.x, this._hudPt.y)) return;
-
-    // Snapshot pre-add size so we can tell whether THIS pointerdown is
-    // the 1→2 transition that starts a pinch, vs an extraneous third+
-    // finger landing on top of an already-active pinch.
-    const wasMulti = this.pointers.size >= 2;
-    this.canvas.setPointerCapture(e.pointerId);
-    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-
-    // Third (or later) finger landing mid-pinch — palm contact, accidental
-    // tap, etc. Track the pointer so it gets cleaned up on lift, but do
-    // NOT resnapshot or reset pinchMode; the user's locked mode and
-    // gesture-start anchor must survive the brush.
-    if (wasMulti) return;
-
-    if (this.pointers.size >= 2) {
-      // Second finger landed mid-drag → enter pinch and abandon the orbit
-      // gesture. Without this hand-off, the first finger's pointermoves would
-      // keep yawing/pitching the camera while the pinch is zooming.
-      this.cancelLongPress();
-      this.dragging = false;
-      document.body.classList.remove('grabbing');
-      this.pinching = true;
-      this.pinchMode = 'undecided';
-      this.pinchDist = this.measurePinch();
-      this.pinchStartDist = this.pinchDist;
-      this.capturePinchMid();
-      this.pinchStartMidX = this.pinchMidX;
-      this.pinchStartMidY = this.pinchMidY;
-      this.capturePinchStart();
-      return;
-    }
-
-    this.dragging = true;
-    this.dragButton = e.button;
-    this.lastX = e.clientX; this.lastY = e.clientY;
-    this.downX = e.clientX; this.downY = e.clientY;
-    document.body.classList.add('grabbing');
-
-    // Touch-only long-press hook: hold a finger still on a star for
-    // LONG_PRESS_MS and fireLongPress runs. Currently a console.info
-    // placeholder; will be rebound to a real game action later. Mouse
-    // and pen are excluded so a regular click doesn't accidentally
-    // fire it. Cancelled by movement, second-finger entry, lift,
-    // OS-cancel, or scene stop.
-    if (e.pointerType === 'touch') {
-      this.longPressPointerId = e.pointerId;
-      this.longPressFired = false;
-      const x = e.clientX, y = e.clientY;
-      this.longPressTimer = window.setTimeout(() => this.fireLongPress(x, y), LONG_PRESS_MS);
-    }
-  }
-
-  private onPointerUp(e: PointerEvent): void {
-    const wasPinching = this.pinching;
-    this.pointers.delete(e.pointerId);
-    this.cancelLongPress();
-
-    if (wasPinching) {
-      // Stay in pinch mode while any pointer remains. Lifting one of two
-      // fingers shouldn't snap straight back to orbit drag — the user is
-      // mid-gesture and the lone finger may still be moving from the pinch.
-      if (this.pointers.size === 0) {
-        this.pinching = false;
-        this.pinchDist = 0;
-        this.pinchMode = 'undecided';
-      }
-      return;
-    }
-
-    // Long-press already fired its placeholder hook while the finger was
-    // still down. Swallow the trailing pointerup so the same hold doesn't
-    // also register as a tap-select-and-focus — preserves the original
-    // contract for when fireLongPress gets rebound to a real action.
-    if (this.longPressFired) {
-      this.longPressFired = false;
-      this.dragging = false;
-      document.body.classList.remove('grabbing');
-      return;
-    }
-
-    if (!this.dragging) return;
-    const moved = Math.hypot(e.clientX - this.downX, e.clientY - this.downY);
-    const isClick = moved < CLICK_DRAG_PX;
-    const wasLeftClick  = this.dragButton === 0 && isClick;
-    const wasRightClick = this.dragButton === 2 && isClick;
-    this.dragging = false;
-    document.body.classList.remove('grabbing');
-
-    if (!isClick) return;
-    const hit = this.pickStar(e.clientX, e.clientY);
-    if (hit < 0) return;
-    // Multi-star systems are selected as a unit: any member click resolves
-    // to the cluster, and the reticle/dropline/info-card all operate on
-    // the cluster rather than the clicked star. Empty-space clicks leave
-    // selection unchanged. Right-click is held alive as a placeholder hook
-    // (console.info) for a future game action; left-click selects AND
-    // animates the orbit pivot to the cluster's COM (not the clicked
-    // member's position), so a binary's two members both glide to the same
-    // vantage.
-    const clusterIdx = clusterIndexFor(hit);
-    if (wasRightClick) {
-      console.info('[scene] right-click hook on cluster', clusterIdx, STARS[STAR_CLUSTERS[clusterIdx].primary].name);
-      return;
-    }
-    if (!wasLeftClick) return;
-    this.selectAndFocusCluster(clusterIdx);
-    // Double-click on the same cluster → open the system view. Reset the
-    // window after firing so a triple-click doesn't fire twice. The first
-    // click's focus glide is in flight when the second click lands; the
-    // system-view transition disposes the starmap scene, killing the glide.
-    const now = performance.now();
-    if (now - this.lastClickAt < DOUBLE_CLICK_MS && this.lastClickClusterIdx === clusterIdx) {
-      this.onViewSystem(clusterIdx);
-      this.lastClickAt = 0;
-      this.lastClickClusterIdx = -1;
-    } else {
-      this.lastClickAt = now;
-      this.lastClickClusterIdx = clusterIdx;
-    }
-  }
-
-  private onPointerCancel(e: PointerEvent): void {
-    // Pointer cancelled by the OS (palm rejection, gesture stolen, etc).
-    // Drop it from tracking and reset gesture state so the next gesture
-    // starts clean.
-    this.pointers.delete(e.pointerId);
-    this.cancelLongPress();
-    if (this.pointers.size < 2) this.pinchDist = 0;
-    if (this.pointers.size === 0) {
-      this.pinching = false;
-      this.pinchMode = 'undecided';
-      this.dragging = false;
-      document.body.classList.remove('grabbing');
-    }
-  }
-
-  private cancelLongPress(): void {
-    if (this.longPressTimer !== null) {
-      clearTimeout(this.longPressTimer);
-      this.longPressTimer = null;
-    }
-  }
-
-  // Placeholder long-touch hook. Currently logs to the console so the wiring
-  // is observable in DevTools; rebind the body to a real game action when
-  // touch long-press has something to do (context menu, secondary command,
-  // etc). longPressFired is set so the trailing pointerup suppresses its
-  // own click path — preserves the original contract for when this gets
-  // rebound to something user-visible.
-  private fireLongPress(clientX: number, clientY: number): void {
-    this.longPressTimer = null;
-    const hit = this.pickStar(clientX, clientY);
-    if (hit < 0) return;
-    const clusterIdx = clusterIndexFor(hit);
-    console.info('[scene] long-press hook on cluster', clusterIdx, STARS[STAR_CLUSTERS[clusterIdx].primary].name);
-    this.longPressFired = true;
-  }
-
   // Shared select-and-focus action: binds the selection to the given cluster
   // and glides the orbit pivot onto its COM (not any one member's position),
   // so a binary's two members both glide to the same vantage. Called from
-  // single-click in onPointerUp; future hooks (right-click, long-press,
-  // context menu) can route through here when they need the same behavior.
+  // the InputController's onClickStar handler and any future hook (context
+  // menu, keyboard select) that wants the same behavior.
   private selectAndFocusCluster(clusterIdx: number): void {
     this.selectedClusterIdx = clusterIdx;
     this.labels.setSelectedCluster(clusterIdx);
@@ -598,158 +343,7 @@ export class StarmapScene {
     this.animateFocusTo(com.x, com.y, com.z);
   }
 
-  private onPointerMove(e: PointerEvent): void {
-    // Hit-test the HUD layer first. Touch input has no hover semantics
-    // (drop pointer regardless); mouse/pen leak to the world only when
-    // the HUD is fully transparent at the cursor — anything 'opaque' or
-    // 'interactive' must occlude scene picking, otherwise a star behind
-    // a panel/button would still light up its hover label.
-    this.clientToHud(e.clientX, e.clientY, this._hudPt);
-    const hudHit = this.hud.hitTest(this._hudPt.x, this._hudPt.y);
-    if (e.pointerType === 'touch' || hudHit !== 'transparent') {
-      this.pointer.has = false;
-    } else {
-      this.pointer.x = e.clientX; this.pointer.y = e.clientY; this.pointer.has = true;
-    }
-    if (this.pointers.has(e.pointerId)) {
-      this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    }
-
-    // Cancel a pending long-press the moment the holding finger drifts
-    // beyond LONG_PRESS_MOVE_PX from its press position — we'd rather
-    // commit to orbit/pan than fire the hook under a moving finger.
-    if (this.longPressTimer !== null && e.pointerId === this.longPressPointerId) {
-      const moved = Math.hypot(e.clientX - this.downX, e.clientY - this.downY);
-      if (moved > LONG_PRESS_MOVE_PX) this.cancelLongPress();
-    }
-
-    if (this.pinching) {
-      // Two-finger gesture stays 'undecided' (nothing applied) until
-      // either sepDelta exceeds GESTURE_COMMIT_ZOOM_PX or midDelta
-      // exceeds GESTURE_COMMIT_PAN_PX. The signal that overshoots its
-      // own threshold by more locks the mode for the rest of the
-      // gesture — they don't overlap, and a slight separation drift
-      // mid-pan can't yank the zoom (and vice versa).
-      if (this.pointers.size >= 2) {
-        const d = this.measurePinch();
-        const oldMidX = this.pinchMidX;
-        const oldMidY = this.pinchMidY;
-        this.capturePinchMid();
-
-        if (this.pinchMode === 'undecided') {
-          // Pan signal: Euclidean distance the midpoint has traveled.
-          const midDelta = Math.hypot(
-            this.pinchMidX - this.pinchStartMidX,
-            this.pinchMidY - this.pinchStartMidY,
-          );
-          // Pinch signal: scalar change in finger separation. Gated by
-          // the per-finger projections onto the start separation axis u
-          // so that an asymmetric pan ALONG u (both fingers moving the
-          // same way at different speeds) doesn't fake a separation
-          // change. Three regimes:
-          //   - opposite-sign projections → symmetric pinch, count it.
-          //   - one finger below ACTIVE_PROJ_PX → anchor pinch (thumb
-          //     fixed, index splays); the still finger's sign is just
-          //     noise so count it regardless.
-          //   - both above ACTIVE_PROJ_PX with matching sign → asymmetric
-          //     pan along u, force sepDelta to 0.
-          let sepDelta = 0;
-          if (this.pinchStartDist > 0) {
-            const it = this.pointers.values();
-            const a = it.next().value!;
-            const b = it.next().value!;
-            const ux = (this.pinchStartBx - this.pinchStartAx) / this.pinchStartDist;
-            const uy = (this.pinchStartBy - this.pinchStartAy) / this.pinchStartDist;
-            const projA = (a.x - this.pinchStartAx) * ux + (a.y - this.pinchStartAy) * uy;
-            const projB = (b.x - this.pinchStartBx) * ux + (b.y - this.pinchStartBy) * uy;
-            const bothActive = Math.abs(projA) > ACTIVE_PROJ_PX && Math.abs(projB) > ACTIVE_PROJ_PX;
-            const sameDirection = bothActive && projA * projB > 0;
-            if (!sameDirection) sepDelta = Math.abs(d - this.pinchStartDist);
-          }
-          // Independent thresholds (zoom doubled because both fingers
-          // contribute to separation change). Compare ratios so the
-          // signal that overshoots its own threshold by more wins when
-          // both cross in the same frame.
-          const sepRatio = sepDelta / GESTURE_COMMIT_ZOOM_PX;
-          const midRatio = midDelta / GESTURE_COMMIT_PAN_PX;
-          if (Math.max(sepRatio, midRatio) >= 1) {
-            this.pinchMode = sepRatio > midRatio ? 'zoom' : 'pan';
-          }
-        }
-
-        if (this.pinchMode === 'zoom') {
-          if (d > 0 && this.pinchDist > 0) this.setZoom(this.view.distance * (this.pinchDist / d));
-          this.focusAnimating = false;
-        } else if (this.pinchMode === 'pan') {
-          const ddx = this.pinchMidX - oldMidX;
-          const ddy = this.pinchMidY - oldMidY;
-          if (ddx !== 0 || ddy !== 0) {
-            // singleTouchAction = 'pan' swaps the camera-control mapping:
-            // single touch becomes the panner, and the two-finger pan
-            // gesture drives orbit. The disambiguator (pinch vs pan)
-            // doesn't change — only what the 'pan' commit *does*.
-            if (getSettings().singleTouchAction === 'pan') {
-              this.applyOrbitDelta(ddx, ddy);
-            } else {
-              this.applyTouchPan(ddx, ddy);
-            }
-          }
-          this.focusAnimating = false;
-        }
-        this.pinchDist = d;
-      }
-      return;
-    }
-
-    // Update HUD hover state. While actively dragging the camera we skip the
-    // HUD hover update so the cursor doesn't lose its grabbing affordance.
-    // Cursor follows hudHit so it only switches to pointer over an
-    // interactive element — opaque chrome (panel bg, info card body)
-    // keeps the default cursor.
-    if (!this.dragging) {
-      this.hud.handlePointerMove(this._hudPt.x, this._hudPt.y);
-      this.canvas.style.cursor = hudHit === 'interactive' ? 'pointer' : '';
-      return;
-    }
-    const dx = e.clientX - this.lastX, dy = e.clientY - this.lastY;
-    this.lastX = e.clientX; this.lastY = e.clientY;
-    // Single-touch behavior is configurable: 'orbit' (default) yaws/pitches
-    // the camera; 'pan' translates view.target along the camera's
-    // screen-aligned axes, leaving orbit to the two-finger gesture. Mouse
-    // and pen drags ignore the setting and always orbit — mice are
-    // single-button by definition and 2-button "two-finger pan" doesn't
-    // map cleanly to non-touch input.
-    if (e.pointerType === 'touch' && getSettings().singleTouchAction === 'pan') {
-      this.applyTouchPan(dx, dy);
-    } else {
-      this.applyOrbitDelta(dx, dy);
-    }
-  }
-
-  private measurePinch(): number {
-    const it = this.pointers.values();
-    const a = it.next().value!;
-    const b = it.next().value!;
-    return Math.hypot(a.x - b.x, a.y - b.y);
-  }
-
-  private capturePinchMid(): void {
-    const it = this.pointers.values();
-    const a = it.next().value!;
-    const b = it.next().value!;
-    this.pinchMidX = (a.x + b.x) * 0.5;
-    this.pinchMidY = (a.y + b.y) * 0.5;
-  }
-
-  private capturePinchStart(): void {
-    const it = this.pointers.values();
-    const a = it.next().value!;
-    const b = it.next().value!;
-    this.pinchStartAx = a.x; this.pinchStartAy = a.y;
-    this.pinchStartBx = b.x; this.pinchStartBy = b.y;
-  }
-
-  // Two-finger pan: midpoint translation drives view.target along the
+  // Touch-pan: midpoint translation drives view.target along the
   // camera's screen-aligned right/up axes (NOT the galactic-plane basis
   // WASD uses). Camera has zero roll, so screen-right stays in the plane
   // and is independent of pitch; screen-up tilts with pitch, so a
@@ -783,58 +377,17 @@ export class StarmapScene {
     this.view.pitch = Math.max(0.05, Math.min(Math.PI - 0.05, this.view.pitch));
   }
 
-  // Keyboard: ESC dismisses selection; SPACE / F focus the camera on
-  // the current selection (re-runs the same focus glide that single-click
-  // already performs on a star); WASD pans the orbit pivot parallel to
-  // the galactic plane (camera follows by the same vector, distance
-  // preserved); QE orbits around the pivot. Listening on window so it
-  // fires regardless of focus, since the canvas itself isn't focusable.
-  private onKeyDown(e: KeyboardEvent): void {
-    if (e.key === 'Escape') {
-      this.deselect();
-      return;
-    }
-    if (e.key === ' ' || e.key === 'f' || e.key === 'F') {
-      // Skip Cmd/Ctrl/Alt+F so the browser's find shortcut still works.
-      // Spacebar has no such conflict.
-      if (e.key !== ' ' && (e.ctrlKey || e.metaKey || e.altKey)) return;
-      if (this.selectedClusterIdx >= 0) {
-        const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
-        this.animateFocusTo(com.x, com.y, com.z);
-      }
-      // preventDefault even on no-op — spacebar would otherwise scroll
-      // the page (visible if the canvas is shorter than the viewport
-      // after the multiple-of-N rounding in resize).
-      e.preventDefault();
-      return;
-    }
-    const k = e.key.toLowerCase();
-    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e' || k === 'z' || k === 'x') {
-      // Skip when a browser-shortcut modifier is held (Cmd+W close tab,
-      // Ctrl+S save, Alt+D address-bar focus, etc.) — let the browser have
-      // those. Shift stays live so it remains available for future tuning
-      // (e.g. boost) without breaking shortcuts.
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      this.heldKeys.add(k);
-      // User taking manual control cancels any in-flight focus glide,
-      // otherwise the lerp would fight the WASD translation.
-      this.focusAnimating = false;
-      e.preventDefault();
-    }
-  }
-
-  private onKeyUp(e: KeyboardEvent): void {
-    this.heldKeys.delete(e.key.toLowerCase());
-  }
-
-  // Per-frame WASD/QE/ZX update. Forward and right are derived from yaw alone
-  // (no pitch term) so WASD pans parallel to the galactic plane regardless
-  // of camera tilt — looking down at a star and pressing W glides across
-  // the plane instead of plunging into it. Pitch is clamped < π so the
-  // camera always has a well-defined yaw direction. Z/X translate along
-  // world up (galactic plane normal) so they sink/lift the view.
+  // Per-frame WASD/QE/ZX update. Held-key set is owned by the input
+  // controller; this method reads it each tick and integrates camera-pan
+  // physics. Forward and right are derived from yaw alone (no pitch term)
+  // so WASD pans parallel to the galactic plane regardless of camera tilt
+  // — looking down at a star and pressing W glides across the plane
+  // instead of plunging into it. Pitch is clamped < π so the camera always
+  // has a well-defined yaw direction. Z/X translate along world up
+  // (galactic plane normal) so they sink/lift the view.
   private applyHeldKeys(dt: number): void {
-    if (this.heldKeys.size === 0) return;
+    const keys = this.input.getHeldKeys();
+    if (keys.size === 0) return;
 
     const sy = Math.sin(this.view.yaw);
     const cy = Math.cos(this.view.yaw);
@@ -844,19 +397,19 @@ export class StarmapScene {
     this._right.crossVectors(this._forward, StarmapScene.WORLD_UP).normalize();
 
     this._step.set(0, 0, 0);
-    if (this.heldKeys.has('w')) this._step.add(this._forward);
-    if (this.heldKeys.has('s')) this._step.sub(this._forward);
-    if (this.heldKeys.has('d')) this._step.add(this._right);
-    if (this.heldKeys.has('a')) this._step.sub(this._right);
-    if (this.heldKeys.has('x')) this._step.add(StarmapScene.WORLD_UP);
-    if (this.heldKeys.has('z')) this._step.sub(StarmapScene.WORLD_UP);
+    if (keys.has('w')) this._step.add(this._forward);
+    if (keys.has('s')) this._step.sub(this._forward);
+    if (keys.has('d')) this._step.add(this._right);
+    if (keys.has('a')) this._step.sub(this._right);
+    if (keys.has('x')) this._step.add(StarmapScene.WORLD_UP);
+    if (keys.has('z')) this._step.sub(StarmapScene.WORLD_UP);
     if (this._step.lengthSq() > 0) {
       this._step.normalize().multiplyScalar(this.view.distance * PAN_RATE_PER_DISTANCE * dt);
       this.view.target.add(this._step);
     }
 
-    if (this.heldKeys.has('q')) this.view.yaw += ORBIT_RATE_RAD * dt;
-    if (this.heldKeys.has('e')) this.view.yaw -= ORBIT_RATE_RAD * dt;
+    if (keys.has('q')) this.view.yaw += ORBIT_RATE_RAD * dt;
+    if (keys.has('e')) this.view.yaw -= ORBIT_RATE_RAD * dt;
   }
 
   private deselect(): void {
@@ -987,11 +540,6 @@ export class StarmapScene {
     const dz = this.view.target.z - com.z;
     const focused = (dx * dx + dy * dy + dz * dz) < FOCUS_EPSILON_SQ;
     this.hud.setSelectedFocused(focused);
-  }
-
-  private onWheel(e: WheelEvent): void {
-    e.preventDefault();
-    this.setZoom(this.view.distance * Math.pow(1.0015, e.deltaY));
   }
 
   // -- camera + zoom -----------------------------------------------------
