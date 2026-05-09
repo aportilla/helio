@@ -83,6 +83,13 @@ interface Drop {
 // selected cluster's own pin collapses onto the plane (dz=0) and is
 // hidden by the degeneracy check.
 //
+// On selection change, drop-lines cross-fade in lockstep with the rings:
+// scene.ts drives globalFade via setFade() and defers setSelectedCluster()
+// until the fade-out completes, so pins stay anchored to the OLD plane
+// while fading down, then snap to the NEW plane and ramp back up. The
+// rings + drop-lines read as one "selection frame" that comes and goes
+// together, not two subsystems flipping independently.
+//
 // Each pin renders as EITHER a solid Line (same-side as camera relative
 // to the focus plane) or a dotted Points (far-side), driven per frame by
 // the camera's z relative to the selected cluster's COM.z. Materials are
@@ -99,6 +106,12 @@ export class Droplines {
   private masterVisible: boolean;
   private selectedCluster = -1;
   private hoveredCluster = -1;
+  // Global multiplier driven by the scene's selection cross-fade. Scales
+  // every per-drop opacity (including hover/selection bypasses) so the
+  // drop-line subsystem fades in/out in lockstep with the range rings —
+  // they read as one "selection frame" rather than rings fading while
+  // pins pop. 0 = entire subsystem hidden, 1 = per-drop ramps run normally.
+  private globalFade = 0;
 
   // Last selection-plane Z we baked geometry against. NaN sentinel so the
   // first update() call after a selection always regenerates (the constructor
@@ -170,13 +183,21 @@ export class Droplines {
     this.masterVisible = visible;
   }
 
-  // Pass a cluster index, or -1 to clear.
+  // Pass a cluster index, or -1 to clear. The scene defers calling this
+  // until the cross-fade fade-out completes (so pins stay anchored to the
+  // *old* selection's plane while fading out, then snap to the new plane
+  // for fade-in) — see updateGridFade in scene.ts.
   setSelectedCluster(clusterIdx: number): void {
     this.selectedCluster = clusterIdx;
   }
 
   setHovered(clusterIdx: number): void {
     this.hoveredCluster = clusterIdx;
+  }
+
+  // Global cross-fade multiplier from the scene. See globalFade comment.
+  setFade(t: number): void {
+    this.globalFade = t;
   }
 
   // Rewrite a pin's geometry to terminate at z = planeZ. Cheap: 1 vertex
@@ -213,6 +234,9 @@ export class Droplines {
   // Per-drop visibility + opacity:
   //   - selection gates the whole subsystem: with nothing selected, every
   //     drop is hidden and the range rings disappear too (see scene.ts).
+  //   - globalFade gates the cross-fade: if 0, also hide everything (rings
+  //     and pins fade in/out as one "selection frame"). Otherwise it
+  //     multiplies the per-drop opacity below as a final scale.
   //   - otherwise plane Z = selected cluster's COM.z; bottom endpoints +
   //     dot positions are regenerated when that plane shifts.
   //   - render a non-selected drop only if masterVisible OR it's hovered.
@@ -227,7 +251,7 @@ export class Droplines {
   //     when COM is on the same side as camera, dotted on the far side).
   //   - hide pins whose COM has collapsed onto the plane.
   update(camera: Camera, viewTarget: Vector3): void {
-    if (this.selectedCluster < 0) {
+    if (this.selectedCluster < 0 || this.globalFade <= 0) {
       for (const d of this.drops) {
         d.solid.visible = false;
         d.dots.visible = false;
@@ -280,8 +304,9 @@ export class Droplines {
       const sameSide = (dz >= 0) === camAbove;
       d.solid.visible = sameSide;
       d.dots.visible  = !sameSide;
-      d.solidMat.uniforms.uOpacity.value = opacity;
-      d.dotsMat.uniforms.uOpacity.value  = opacity;
+      const finalOpacity = opacity * this.globalFade;
+      d.solidMat.uniforms.uOpacity.value = finalOpacity;
+      d.dotsMat.uniforms.uOpacity.value  = finalOpacity;
     }
   }
 }

@@ -63,6 +63,18 @@ const ACTIVE_PROJ_PX = 2;
 // the camera glides over to the new orbital pivot rather than swinging.
 const FOCUS_ANIM_MS = 400;
 
+// Range-ring cross-fade timings. Hand-tuned for a deliberate "the rings
+// settle into the new place" beat rather than racing the focus glide. Each
+// fade-out leads with a brief DELAY where the rings stay at full opacity —
+// gives the user a moment to register which cluster they just clicked
+// before the old rings dissolve. After fade-out completes, position snaps
+// and fade-in begins immediately (no second delay). Total beat is well
+// longer than FOCUS_ANIM_MS, which is fine — the rings are a settling cue,
+// not a motion cue, and the camera arrives ahead of them on purpose.
+const GRID_FADE_OUT_DELAY_MS = 250;
+const GRID_FADE_OUT_MS = 250;
+const GRID_FADE_IN_MS  = 250;
+
 // WASD/QE keyboard fly. Pan rate scales with view.distance so the visual
 // movement speed stays consistent at any zoom level (zoom in → smaller world
 // step per second, but the same screen-space rate). QE orbit is in radians
@@ -181,6 +193,34 @@ export class StarmapScene {
   private focusAnimStart = 0;
   private focusAnimating = false;
 
+  // Selection-frame cross-fade state — drives both the range rings (via
+  // Grid.setFade) and the drop-lines (via Droplines.setFade) in lockstep
+  // so the two subsystems come and go as one frame around the selection.
+  // Drop-lines additionally have their selectedCluster setter deferred to
+  // the snap moment in updateGridFade, so pins stay anchored to the OLD
+  // plane during fade-out and re-anchor at the NEW plane for fade-in.
+  // Field semantics:
+  //   gridFadePhase    'none' = static, 'out' = fading down, 'in' = fading up
+  //   gridFadeFrom/To  endpoints of the current ramp (captured each retrigger
+  //                    so a click mid-fade picks up from current opacity, not 1)
+  //   gridCurrentOpacity  last value pushed to Grid.setFade — also the source
+  //                    of `from` on the next retrigger, and the multiplier
+  //                    sent to Droplines.setFade each tick
+  //   gridPendingCom   set at fade-out start; consumed when fade-out ends to
+  //                    snap the grid before fade-in
+  //   gridPendingHide  deselect path — set the group invisible when fade-out
+  //                    ends instead of starting a fade-in
+  // "Newest call wins": every updateGridForSelection call overwrites pending*,
+  // so a flurry of clicks resolves cleanly to whatever the user landed on.
+  private gridFadePhase: 'none' | 'out' | 'in' = 'none';
+  private gridFadeStartMs = 0;
+  private gridFadeFrom = 0;
+  private gridFadeTo = 0;
+  private gridFadeDurationMs = 0;
+  private gridCurrentOpacity = 0;
+  private gridPendingCom: Vector3 | null = null;
+  private gridPendingHide = false;
+
   private rafId = 0;
   private running = false;
 
@@ -263,10 +303,12 @@ export class StarmapScene {
     this.raycaster.params.Points = { threshold: 0.6 };
 
     this.grid = new Grid();
-    // Grid (rings + axes + arrow) is selection-driven — hidden until the
-    // user picks a cluster. updateGridForSelection() drives visibility +
-    // anchor on every selection change.
+    // Grid (rings + axes + arrow) is selection-driven — hidden + at zero
+    // opacity until the user picks a cluster. updateGridForSelection()
+    // drives the cross-fade state machine on every selection change;
+    // updateGridFade() runs the per-frame ramp.
     this.grid.group.visible = false;
+    this.grid.setFade(0);
     this.scene.add(this.grid.group);
 
     this.starPoints = new StarPoints(window.innerHeight / 2);
@@ -545,7 +587,9 @@ export class StarmapScene {
     this.selectedClusterIdx = clusterIdx;
     this.labels.setSelectedCluster(clusterIdx);
     this.hud.setSelectedCluster(clusterIdx);
-    this.droplines.setSelectedCluster(clusterIdx);
+    // droplines.setSelectedCluster is deferred into updateGridForSelection /
+    // updateGridFade so pins stay anchored to the OLD plane while fading
+    // out, then snap to the new plane in lockstep with the rings.
     this.updateGridForSelection();
     // Focus button starts in the right state for the new selection
     // (without waiting for the next tick to repaint).
@@ -819,23 +863,114 @@ export class StarmapScene {
     this.selectedClusterIdx = -1;
     this.labels.setSelectedCluster(-1);
     this.hud.setSelectedCluster(-1);
-    this.droplines.setSelectedCluster(-1);
+    // droplines.setSelectedCluster(-1) is deferred to fade-out completion
+    // so pins fade out at the OLD plane before the subsystem clears.
     this.updateGridForSelection();
   }
 
   // Range rings + axes + galactic-centre arrow are locked to the currently
   // selected cluster, not the orbital pivot — they're a "this is the system
   // you're inspecting" landmark, not a HUD chrome that follows the camera.
-  // No selection → grid hidden entirely (the catalog read as plain stars
-  // until the user picks one to explore). Droplines mirror this gating in
-  // Droplines.update() and drop to the selected cluster's COM.z plane.
+  // Selection changes cross-fade: fade-out at the old position parallel to
+  // the focus glide, snap to the new COM, fade-in. Droplines mirror this
+  // gating in Droplines.update() and drop to the selected cluster's COM.z.
+  //
+  // Six-branch decision tree, in order:
+  //   1. Selection cleared, grid hidden                → no-op
+  //   2. Selection cleared, grid visible (deselect)    → fade-out, then hide
+  //   3. Selection set, grid hidden (initial show)     → snap, fade-in
+  //   4. Selection set, COM differs from current pos   → fade-out, queue snap+fade-in
+  //   5. Selection set, same COM, mid-fade-out         → cancel pending hide, fade back in
+  //   6. Selection set, same COM, idle or mid-fade-in  → no-op
   private updateGridForSelection(): void {
-    if (this.selectedClusterIdx >= 0) {
-      const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
+    if (this.selectedClusterIdx < 0) {
+      if (!this.grid.group.visible) return;                                  // 1
+      this.gridPendingCom = null;                                            // 2
+      this.gridPendingHide = true;
+      this.startGridFade(0, GRID_FADE_OUT_MS, GRID_FADE_OUT_DELAY_MS);
+      return;
+    }
+
+    const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
+    if (!this.grid.group.visible) {                                          // 3
       this.grid.group.position.set(com.x, com.y, com.z);
       this.grid.group.visible = true;
-    } else {
+      this.gridCurrentOpacity = 0;
+      this.grid.setFade(0);
+      // Drop-lines snap to the new plane *before* fade-in begins so they
+      // ramp up at the correct altitude alongside the rings.
+      this.droplines.setSelectedCluster(this.selectedClusterIdx);
+      this.gridPendingCom = null;
+      this.gridPendingHide = false;
+      this.startGridFade(1, GRID_FADE_IN_MS);
+      return;
+    }
+
+    const samePos =
+      this.grid.group.position.x === com.x &&
+      this.grid.group.position.y === com.y &&
+      this.grid.group.position.z === com.z;
+
+    if (!samePos) {                                                          // 4
+      this.gridPendingCom = new Vector3(com.x, com.y, com.z);
+      this.gridPendingHide = false;
+      this.startGridFade(0, GRID_FADE_OUT_MS, GRID_FADE_OUT_DELAY_MS);
+      return;
+    }
+
+    if (this.gridFadePhase === 'out') {                                      // 5
+      this.gridPendingCom = null;
+      this.gridPendingHide = false;
+      this.startGridFade(1, GRID_FADE_IN_MS);
+      return;
+    }
+    // 6: same COM, idle or already fading in — leave it alone.
+  }
+
+  // Capture current opacity as the starting point of the new ramp so a
+  // re-trigger mid-fade picks up where it is rather than snapping to a
+  // canonical 0/1. Direction is inferred from `to` vs current. Optional
+  // delayMs offsets the start time forward — opacity holds at `from` until
+  // the delay elapses, then ramps over durationMs.
+  private startGridFade(toOpacity: number, durationMs: number, delayMs = 0): void {
+    this.gridFadePhase = toOpacity < this.gridCurrentOpacity ? 'out' : 'in';
+    this.gridFadeFrom = this.gridCurrentOpacity;
+    this.gridFadeTo = toOpacity;
+    this.gridFadeDurationMs = durationMs;
+    this.gridFadeStartMs = performance.now() + delayMs;
+  }
+
+  // Per-frame ramp + transition. Ease-in-out cubic on both directions for
+  // symmetric tail behavior — a linear ramp looked twitchy on the way in.
+  // t is floored at 0 so a delayed-start fade holds at `from` opacity until
+  // the delay elapses (negative t would otherwise make the cubic shoot past
+  // the endpoints).
+  private updateGridFade(now: number): void {
+    if (this.gridFadePhase === 'none') return;
+    const t = Math.max(0, Math.min(1, (now - this.gridFadeStartMs) / this.gridFadeDurationMs));
+    const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    this.gridCurrentOpacity = this.gridFadeFrom + (this.gridFadeTo - this.gridFadeFrom) * e;
+    this.grid.setFade(this.gridCurrentOpacity);
+    if (t < 1) return;
+
+    // Ramp finished — snap to terminal value and dispatch follow-up.
+    this.gridCurrentOpacity = this.gridFadeTo;
+    this.grid.setFade(this.gridCurrentOpacity);
+    const wasOut = this.gridFadePhase === 'out';
+    this.gridFadePhase = 'none';
+    if (!wasOut) return;
+    // Drop-lines re-anchor at the same instant the rings snap (swap path)
+    // or clear when the rings hide (deselect path). Both routes use the
+    // current selectedClusterIdx — for swap that's the new cluster, for
+    // deselect it's -1.
+    this.droplines.setSelectedCluster(this.selectedClusterIdx);
+    if (this.gridPendingCom) {
+      this.grid.group.position.copy(this.gridPendingCom);
+      this.gridPendingCom = null;
+      this.startGridFade(1, GRID_FADE_IN_MS);
+    } else if (this.gridPendingHide) {
       this.grid.group.visible = false;
+      this.gridPendingHide = false;
     }
   }
 
@@ -992,6 +1127,10 @@ export class StarmapScene {
 
     this.updateCamera();
     this.updateSelectedFocusedState();
+    this.updateGridFade(now);
+    // Drop-lines share the cross-fade with the rings — same multiplier so
+    // the entire "selection frame" fades together.
+    this.droplines.setFade(this.gridCurrentOpacity);
 
     this.starPoints.setFocus(this.view.target);
 
