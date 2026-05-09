@@ -64,13 +64,22 @@ src/
     app-controller.ts       AppController: owns the WebGLRenderer + swaps which
                             view-mode scene is currently driving the canvas
                             (StarmapScene ↔ SystemScene)
-    scene.ts                StarmapScene (galaxy view): camera, input, render loop
+    scene.ts                StarmapScene (galaxy view): camera, view-state
+                            mutation, render loop, selection routing
+    input-controller.ts     InputController: pinch classifier, drag-vs-click
+                            discrimination, touch long-press, double-click
+                            window, held-key set; dispatches gesture intents
+                            back to the scene through an InputHandlers bundle
     system-scene.ts         SystemScene (close-up of one cluster): peer of
                             StarmapScene, lazily constructed on entry, disposed
                             on exit
     grid.ts                 Concentric range rings + cross axes + galactic-
                             centre arrow, group-translated to the selected
-                            cluster's COM (hidden when nothing is selected)
+                            cluster's COM (hidden when nothing is selected).
+                            Owns its own selection-driven animation —
+                            sequential per-ring expand/collapse, two internal
+                            frames so an old selection's collapse can run
+                            concurrently with a new selection's expand
     droplines.ts            Vertical pin from each cluster to the selected
                             cluster's COM.z plane (hidden when nothing is
                             selected). Geometry rewritten on selection
@@ -335,16 +344,18 @@ Both the rings (in `Grid`) and the per-cluster drop-lines (`Droplines`) are gate
 
 Deselect (info-card close-X, ESC, or click off in empty space) → everything fades out and hides again.
 
-#### Cross-fade on selection change
+#### Sequential per-ring expand/collapse on selection change
 
-Selection changes don't pop — both the rings and the drop-lines cross-fade as one "selection frame":
+Selection changes don't pop — the grid choreographs ring visibility so the frame settles into the new position rather than appearing all at once:
 
-1. **Beat** — `GRID_FADE_OUT_DELAY_MS` of holding at full opacity at the OLD position. Gives the user a moment to register what they clicked before the old frame starts dissolving.
-2. **Fade-out** — rings + drop-lines ramp down together at the OLD plane over `GRID_FADE_OUT_MS` (ease-in-out cubic). Drop-lines stay anchored to the OLD plane during this phase — `Droplines.setSelectedCluster()` is *deferred* by the scene; only the global `Droplines.setFade()` multiplier scales each frame.
-3. **Snap** — at fade-out completion, `grid.group.position` snaps to the new cluster's COM and `Droplines.setSelectedCluster(newIdx)` fires, regenerating each pin's bottom endpoint + dot vertices for the new plane.
-4. **Fade-in** — rings + drop-lines ramp up together at the NEW plane over `GRID_FADE_IN_MS`.
+- **Expand** — innermost ring fires first, then the next two rings step outward, and the outermost ring + cross axes + galactic-centre arrow share the final step so the +X arrow caps the frame at full extent. Stagger is `RING_STAGGER_EXPAND_MS = 100` per step; total ~300 ms across 4 steps. Each ring (and the axes/arrow group) is a discrete on/off visibility flip — no per-element opacity ramp.
+- **Collapse** — reverses the order so the outermost ring (paired with axes + arrow) is the first thing to disappear, working back to the innermost. Faster stagger (`RING_STAGGER_COLLAPSE_MS = 80`) because the user has already moved their attention elsewhere.
 
-The state machine lives entirely in `scene.ts` (`updateGridForSelection` decision tree + `updateGridFade` per-tick) — `Grid` and `Droplines` just expose `setFade(t)` (a global opacity scalar) and follow orders. Re-trigger semantics: every `updateGridForSelection` call captures the current rendered opacity as the new ramp's `from`, so a click mid-fade picks up where it is rather than snapping. Newest call wins — `gridPendingCom` and `gridPendingHide` are overwritten on each call, so a flurry of clicks resolves cleanly to whatever the user landed on. The total beat (~750 ms) is intentionally well longer than the focus glide (`FOCUS_ANIM_MS`) — the camera arrives at the new cluster ahead of the rings, which act as a settling cue trailing the motion.
+`Grid` owns the choreography end-to-end. Public surface is `setSelection(com | null)` + `update(now)`; the scene routes selection but doesn't drive any per-tick animation state.
+
+Two internal frames (A/B) let an old selection's collapse run concurrently with a new selection's expand on a swap — both render together for the overlap window. On a rapid third-click while both frames are mid-animation, the older frame is snapped to its terminal state and reused for the fresh expand; the newest selection always gets a clean expand from step 0 while the most-recent previous selection keeps its collapse running. Re-passing the active selection's exact COM is a no-op (avoids restarting the animation on a re-click).
+
+Drop-lines currently snap on/off with selection state (`setFade(0)` on deselect, `setFade(1)` on select) rather than ramping in lockstep with the rings — the cross-fade state machine that previously coupled them lived in `scene.ts` and was retired with this split. Restoring grid/dropline lockstep is a follow-up.
 
 #### Per-drop visibility
 
@@ -352,7 +363,7 @@ The state machine lives entirely in `scene.ts` (`updateGridForSelection` decisio
 
 Visibility is per-drop, not via `group.visible`. Composed gating, in this order:
 - **Selection gate** (the outer one): no selection → every drop hidden, early return.
-- **Cross-fade gate**: `globalFade <= 0` → every drop hidden. Otherwise `globalFade` becomes a final scale on each pin's computed opacity (applies to hover/selection bypasses too — the whole frame fades as a unit).
+- **Global fade gate**: `globalFade <= 0` → every drop hidden. Today the scene snaps `globalFade` between 0 and 1 with selection state, so this is effectively a redundant guard alongside the selection gate; the multiplier is preserved for the planned restoration of grid/dropline lockstep, where it will once again ramp.
 - **Master HUD toggle** sets `masterVisible`. When off, only the hovered cluster renders its pin (the selected cluster's own pin is degenerate, hidden anyway).
 - **Hover** (pointer over any star in the cluster) **always** shows that cluster's pin at full opacity, bypassing the master toggle and fade ramps (still subject to `globalFade`).
 - **Pivot + camera distance fades** apply to every other rendered pin, keyed to the cluster *primary's* position (not the COM, so the pin and its label flip in/out together at the same camera distance). Thresholds live in `src/scene/cluster-fade.ts` (shared with labels) — fade is keyed to `view.target` (the orbit pivot), not the locked rings, so "what's near where the camera is currently looking" still applies even after the user pans the pivot away from the selection.
@@ -367,7 +378,9 @@ Stars themselves are also rendered opaque (`transparent: false, depthWrite: true
 
 ### Input
 
-All input lives in `StarmapScene`.
+Input is split between two modules. `InputController` (`src/scene/input-controller.ts`) owns every pointer/keyboard listener, classifies the gesture (orbit drag, pinch zoom vs pinch pan, click vs drag, double-click, touch long-press, held-key set), and dispatches high-level intents through an `InputHandlers` callback bundle. `StarmapScene` implements those handlers — view-state mutation (orbit/pan/zoom/held-key physics), selection logic, focus-glide, and the per-tick raycast for hover. Pure camera math (`applyOrbitDelta`, `applyTouchPan`, `zoomBy`) and selection routing stay in the scene; the controller never reads or mutates view state directly.
+
+The behaviors below describe the user-facing intent — which gesture maps to which camera/selection action.
 - **Mouse / pen drag** (any button) = orbit (yaw/pitch). Always orbits regardless of the touch-input setting — single-button mice don't have a clean equivalent of two-finger gestures.
 - **Single-finger touch drag** = orbit by default; pans the camera target along the camera's screen-aligned right/up axes when "Pan with single touch" is enabled in the settings panel. The setting is persisted via `localStorage` (see `src/settings.ts`) and read fresh per gesture, so toggling takes effect on the next pointer event.
 - **WASD** = pan the orbit pivot parallel to the galactic plane (z=0). W/S move along the yaw heading (the camera's view direction projected onto the plane), A/D strafe perpendicular to it. Pitch is ignored on purpose: looking down at a star and pressing W glides over it instead of plunging into it. Camera and target translate together so the orbit radius is preserved. Pan rate scales with `view.distance` so the screen-space movement rate is consistent across zooms.
