@@ -140,6 +140,116 @@ export function findStar(index, query) {
   return null;
 }
 
+// ---------- detail-page component sections ----------
+//
+// A catalog detail page (e.g. https://www.stellarcatalog.com/stars/fomalhaut-a)
+// has one <h2 class='title'> section per stellar component:
+//   <h2 class='title'>Fomalhaut</h2>
+//   <h2 class='title'>Fomalhaut B</h2>
+//   <h2 class='title'>Fomalhaut C</h2>
+// Each section's body carries spectral class, mass (as a percentage of solar
+// mass), and V-band magnitudes. Catalog index entries are one-per-system so
+// sibling rows in our CSVs (fomalhaut-b, fomalhaut-c) all resolve to the
+// primary's slug — we MUST scope per-component reads to the right section,
+// or every sibling inherits the primary's values.
+//
+// Sibling rows in our CSVs encode their component letter in the `id` column:
+//   gamma-leporis-b → letter "B"
+// `parseComponentSections` returns one block per section with a resolved
+// `letter`, so the caller can pair `id`-letter ↔ section-letter directly
+// without name-matching heuristics. Letter resolution mirrors the canonical
+// slug convention so a row's id-letter and its section's letter agree even
+// when the section uses a non-suffixed display name (Gamma Leporis B is
+// listed as "AK Leporis" — its variable-star designation — and gets letter
+// B by exclusion of A).
+
+const SPECTRAL_RE = /Spectral class:\s*<span[^>]*>\s*([^<]+?)\s*<\/span>/;
+const MASS_PCT_RE = /Mass:\s*<span[^>]*>\s*([\d.]+)\s*%\s*<\/span>/;
+const APP_MAG_V_RE = /Apparent magnitude \(V\):\s*<span[^>]*>\s*([-−–\d.]+)\s*</;
+const ABS_MAG_V_RE = /Absolute magnitude \(V\):\s*<span[^>]*>\s*([-−–\d.]+)\s*</;
+
+function numFromMag(s) {
+  if (s == null) return null;
+  const v = Number(s.replace(/[−–]/g, '-'));
+  return Number.isFinite(v) ? v : null;
+}
+
+export function parseComponentSections(html, primaryName, primarySlug) {
+  // Stop at "Other neighborhood stars" — that section also uses h2.title for
+  // unrelated nearby stars, which would otherwise look like extra components.
+  const stopIdx = html.search(/Other neighborhood stars|<h1 class='title'/);
+  const slice = stopIdx > 0 ? html.slice(0, stopIdx) : html;
+  const matches = [...slice.matchAll(/<h2 class='title'>([^<]+)<\/h2>/g)];
+  if (!matches.length) return [];
+
+  const blocks = matches.map((m, i) => {
+    const start = m.index + m[0].length;
+    const end = i + 1 < matches.length ? matches[i + 1].index : slice.length;
+    return { name: m[1].trim(), body: slice.slice(start, end) };
+  });
+
+  // Resolve component letters. Two passes:
+  //   1. Try to extract the letter from each section's display name —
+  //      either as a suffix relative to the primary name ("Fomalhaut B"
+  //      → "B") or as a trailing single/double-letter group ("V1054
+  //      Ophiuchi Ba" → "Ba").
+  //   2. Any block we couldn't extract a letter from gets the next unused
+  //      single letter — handles the case where the catalog uses an IAU
+  //      proper name in lieu of a component letter ("AK Leporis" for
+  //      Gamma Leporis B; "Proxima Centauri" for Alpha Centauri C).
+  // Subcomponent letters (Ba, Bb, Aa, Ab) implicitly claim their parent
+  // letter — "B" can't be a separate slot if "Ba" + "Bb" already split it.
+  const slugLetterMatch = /-([a-z]{1,2})$/.exec(primarySlug ?? '');
+  const primaryLetter = slugLetterMatch
+    ? slugLetterMatch[1].charAt(0).toUpperCase() + slugLetterMatch[1].slice(1)
+    : 'A';
+  const claimed = new Set();
+  for (const b of blocks) {
+    let letter = '';
+    if (b.name === primaryName) letter = primaryLetter;
+    else if (primaryName && b.name.startsWith(primaryName + ' ')) {
+      letter = b.name.slice(primaryName.length + 1).trim();
+    } else {
+      const m = /\s+([A-Z][a-z]?)$/.exec(b.name);
+      if (m) letter = m[1];
+    }
+    if (letter) claimed.add(letter);
+    b.letter = letter;
+  }
+  for (const c of [...claimed]) if (c.length === 2) claimed.add(c[0]);
+  for (const b of blocks) {
+    if (b.letter) continue;
+    for (const c of 'BCDEFGHIJKLMNOPQRSTUVWXYZ') {
+      if (!claimed.has(c)) { b.letter = c; claimed.add(c); break; }
+    }
+  }
+
+  // Per-section fields. Mass is parsed from the "X %" display (correct
+  // per-component); the catalog's prose narrative ("Mass of the star X is
+  // N.NN solar masses") is buggy — it copies the prior section's mass into
+  // each subsequent section. The percentage display is reliable.
+  for (const b of blocks) {
+    const cls = SPECTRAL_RE.exec(b.body);
+    const massPct = MASS_PCT_RE.exec(b.body);
+    const appV = APP_MAG_V_RE.exec(b.body);
+    const absV = ABS_MAG_V_RE.exec(b.body);
+    b.spectralClass = cls ? cls[1].trim() : null;
+    b.mass = massPct && Number.isFinite(Number(massPct[1])) ? Number(massPct[1]) / 100 : null;
+    b.appMagV = numFromMag(appV ? appV[1] : null);
+    b.absMagV = numFromMag(absV ? absV[1] : null);
+  }
+  return blocks;
+}
+
+// Extract the trailing component letter from a canonical id (e.g.
+// "fomalhaut-b" → "B", "v1054-ophiuchi-ba" → "Ba"). Returns null if the id
+// has no letter suffix (single-star slug like "vega").
+export function letterFromId(id) {
+  const m = /-([a-z]{1,2})$/.exec(id ?? '');
+  if (!m) return null;
+  return m[1].charAt(0).toUpperCase() + m[1].slice(1);
+}
+
 // Minimal CSV parser — RFC-4180-ish. We control the upstream format so we
 // don't worry about exotic quoting or BOMs.
 export function parseCsv(text) {

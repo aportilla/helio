@@ -71,9 +71,15 @@ async function fetchCached(url, slug) {
 //   <h2 class='title'>NAME</h2>
 //   <div class='noteBig'>...category descriptor...</div>
 //   <div class='noteBig'>Spectral class: <span class='value'>K5Vp</span></div>
-//   <div>Mass of the star NAME is N.NN solar masses.</div>
+//   <div>Mass: <span class='value'>72.5 %</span> M<span class='lowerIndex'> Sun</span></div>
 // We extract name, spectral class, mass. Other fields the page exposes
 // (radius, temperature, age) aren't part of the CSV schema, ignored.
+//
+// Mass is parsed from the percentage display, NOT from the prose
+// ("Mass of the star NAME is N.NN solar masses.") on the same page —
+// the catalog's prose narrative is buggy: it copies the previous
+// component's mass into each subsequent section's text. The "%" display
+// is reliable per-component.
 function parseComponents(html) {
   const blocks = [];
   // Walk h2 sentinels manually; the prose-tail before the next h2 is the
@@ -88,14 +94,12 @@ function parseComponents(html) {
     const end = i + 1 < matches.length ? matches[i + 1].index : slice.length;
     const body = slice.slice(start, end);
     const clsMatch = /Spectral class:\s*<span[^>]*>([^<]+)<\/span>/.exec(body);
-    // Mass line embeds the literal name; escape for safe regex.
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const massRe = new RegExp(`Mass of the star ${escaped} is ([\\d.]+) solar masses`);
-    const massMatch = massRe.exec(body);
+    const massPctMatch = /Mass:\s*<span[^>]*>\s*([\d.]+)\s*%\s*<\/span>/.exec(body);
+    const massMsun = massPctMatch ? (Number(massPctMatch[1]) / 100).toString() : '';
     blocks.push({
       name,
       cls: clsMatch ? clsMatch[1].trim() : '',
-      mass: massMatch ? massMatch[1] : '',
+      mass: massMsun,
     });
   }
   return blocks;
