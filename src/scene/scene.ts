@@ -554,7 +554,7 @@ export class StarmapScene {
     this.labels.setHovered(hovered);
     this.droplines.setHovered(hoveredCluster);
     this.droplines.update(this.camera, this.view.target);
-    this.focusMarker.update(this.view.target, this.camera);
+    this.focusMarker.update(this.view.target, this.camera, this.focusAnimating);
     this.labels.update(this.camera, this.view.target);
 
     this.renderer.render(this.scene, this.camera);

@@ -117,7 +117,15 @@ export class FocusMarker {
     this.selectedCluster = clusterIdx;
   }
 
-  update(viewTarget: Vector3, camera: Camera): void {
+  update(viewTarget: Vector3, camera: Camera, focusAnimating: boolean): void {
+    // Suppress during the focus glide — the pivot is in transit toward a
+    // new COM, not parked off a star, so the "where am I looking" hint
+    // would just trail the camera as it zooms in and read as noise.
+    if (focusAnimating) {
+      this.group.visible = false;
+      return;
+    }
+
     // Anchor distance — selection COM when selected, otherwise nearest
     // cluster COM. The latter keeps the marker hidden while view.target
     // sits on/near any star (Sol on initial load, or any star the camera
