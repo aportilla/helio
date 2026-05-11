@@ -86,6 +86,11 @@ src/
                             change, not per-frame
     cluster-fade.ts         Pivot + camera fade thresholds shared by labels
                             and droplines so they flip in/out together
+    focus-marker.ts         Small ring at view.target + optional dropline
+                            down to the selection plane. Fades in once the
+                            pivot is panned past a small lateral threshold
+                            off the nearest anchor cluster (selected COM,
+                            or nearest cluster COM when nothing's selected)
     stars.ts                gl.POINTS starfield with per-star size + color
     labels.ts               Bitmap-font overlay pass: star names, axis ticks, selection reticle
     materials.ts            Pixel-snapped line ShaderMaterial + the stars shader
@@ -375,6 +380,14 @@ The choice of `Points` over `LineSegments` for the dotted variant is a deliberat
 Materials are cloned **per drop** (~70 ShaderMaterial instances total) so each pin can carry its own `uOpacity` for the fade ramps. Both solid and dotted are alpha-blended; with one pin per cluster and clusters at non-coincident COMs there's no opacity-stacking concern in practice.
 
 Stars themselves are also rendered opaque (`transparent: false, depthWrite: true`) so closer stars correctly occlude further ones — without `depthWrite`, stars in a single `Points` geometry would render in attribute (catalog) order, ignoring camera-relative distance.
+
+### Focus-point marker
+
+A small ring at `view.target` plus an optional dropline down to the selection plane (`FocusMarker` in `src/scene/focus-marker.ts`). Renders whenever the pivot has been panned past a small lateral threshold off the nearest "anchor" cluster — the selection COM when a cluster is selected, the nearest cluster COM otherwise. Hidden by default on initial load (pivot on Sol) and whenever the pivot sits on/near a star; fades in linearly as the user pans into empty space between systems. The ramp is a pure function of `|view.target − anchor COM|`, so the marker tracks frame-by-frame with no animation state.
+
+The dropline portion exists only when a cluster is selected (that's the only state where a plane exists to drop to); the ring renders alone otherwise. The dropline reuses the same `DOT_PERIOD_LY` spacing and same camera-side-of-plane solid/dotted swap as the per-cluster drop-lines (`droplines.ts`) so the depth language stays uniform across the scene. The ring is colored to match the grid rings so it reads as a small companion to them rather than a different element class.
+
+Suppressed entirely during the focus glide — while `view.target` is in transit toward a newly-selected cluster's COM, the "where am I looking" hint would just trail the camera as it zooms in and read as noise. `StarmapScene` threads its `focusAnimating` flag into `FocusMarker.update()` for this check.
 
 ### Input
 
