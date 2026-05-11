@@ -97,6 +97,14 @@ export interface InputHandlers {
   // target). x/y are ignored when has=false.
   onPointerHoverChanged(clientX: number, clientY: number, has: boolean): void;
   onEscape(): void;
+  // Spacebar: act on the candidate. If a candidate cluster is shown,
+  // promote it to selection + glide the pivot to its COM. Otherwise fall
+  // back to re-focusing the current selection (or no-op if nothing is
+  // selected).
+  onFocusCandidate(): void;
+  // F key + the Focus pill button: always re-focus the currently-selected
+  // cluster's COM. Ignores any candidate — F is "go home", not "advance".
+  // No-op when nothing is selected.
   onFocusSelection(): void;
 
   // Cancel any in-flight focus-glide animation when the user takes manual
@@ -487,14 +495,23 @@ export class InputController {
       this.handlers.onEscape();
       return;
     }
-    if (e.key === ' ' || e.key === 'f' || e.key === 'F') {
-      // Skip Cmd/Ctrl/Alt+F so the browser's find shortcut still works.
-      // Spacebar has no such conflict.
-      if (e.key !== ' ' && (e.ctrlKey || e.metaKey || e.altKey)) return;
-      this.handlers.onFocusSelection();
+    if (e.key === ' ') {
+      // Spacebar = act on the candidate (or fall back to re-focusing the
+      // current selection).
+      this.handlers.onFocusCandidate();
       // preventDefault even on no-op — spacebar would otherwise scroll
       // the page (visible if the canvas is shorter than the viewport
       // after the multiple-of-N rounding in scene resize).
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'f' || e.key === 'F') {
+      // F = re-focus the current selection only. Ignores candidate so
+      // there's always a dedicated "back to selection" key separate from
+      // the candidate-advance key. Skip Cmd/Ctrl/Alt+F so the browser's
+      // find shortcut still works.
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      this.handlers.onFocusSelection();
       e.preventDefault();
       return;
     }

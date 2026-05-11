@@ -70,9 +70,9 @@ export class StarmapScene {
   private readonly labels: Labels;
   // Yellow corner-bracket indicators around clusters. Two instances render
   // simultaneously into the labels overlay scene: arms-style for the active
-  // selection, dots-style for the candidate (nearest cluster to view.target
-  // when the user has panned off the selected cluster — spacebar / F
-  // switches selection to it).
+  // selection, dots-style for the candidate (hovered cluster, or nearest
+  // to view.target when the user has panned off the selected cluster —
+  // spacebar switches selection to the candidate).
   private readonly selectionBrackets: ClusterBrackets;
   private readonly candidateBrackets: ClusterBrackets;
   private readonly starPoints: StarPoints;
@@ -94,10 +94,12 @@ export class StarmapScene {
   // actions on the selection — can read it without coupling to any one of
   // those owners' internals.
   private selectedClusterIdx = -1;
-  // Candidate cluster — nearest cluster COM to view.target, gated to "panned
-  // far enough off the selection that another cluster is now closer".
-  // Written each tick, read by onFocusSelection (spacebar / F) to switch
-  // selection to it. -1 when no candidate is currently shown.
+  // Candidate cluster — hovered cluster (priority), else nearest cluster
+  // COM to view.target gated to "panned far enough off the selection that
+  // another cluster is now closer". Written each tick, read by
+  // onFocusCandidate (spacebar) to switch selection to it. -1 when no
+  // candidate is currently shown. F ignores this — it always re-focuses
+  // the current selection.
   private candidateClusterIdx = -1;
 
   // Focus animation: view.target lerps from focusFrom → focusTo over
@@ -295,17 +297,25 @@ export class StarmapScene {
         }
       },
       onEscape: () => this.deselect(),
-      onFocusSelection: () => {
-        // Candidate beats selection: pressing space/F while panned off the
-        // current selection (so a candidate is visible) switches selection
-        // to the candidate. Falls through to "re-focus current selection"
-        // when no candidate is visible — works whether or not anything was
-        // selected before, so spacebar/F is a universal "act on what the
-        // brackets are pointing at" key.
+      onFocusCandidate: () => {
+        // Spacebar: candidate beats selection. Pressing space while panned
+        // off the current selection (so a candidate is visible) switches
+        // selection to the candidate and glides the pivot to it. Falls
+        // through to "re-focus current selection" when no candidate is
+        // visible.
         if (this.candidateClusterIdx >= 0) {
           this.selectAndFocusCluster(this.candidateClusterIdx);
           return;
         }
+        if (this.selectedClusterIdx < 0) return;
+        const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
+        this.animateFocusTo(com.x, com.y, com.z);
+      },
+      onFocusSelection: () => {
+        // F: always re-focus the current selection. Ignores any candidate
+        // so F is a dedicated "back to selection" key, separate from
+        // spacebar's "advance to candidate". Mirrors the Focus pill button
+        // on the info card.
         if (this.selectedClusterIdx < 0) return;
         const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
         this.animateFocusTo(com.x, com.y, com.z);
@@ -620,7 +630,7 @@ export class StarmapScene {
     //
     // Snap visibility, no fade ramp — candidate is a discrete state. The
     // unified index is pushed to brackets, labels (yellow promotion +
-    // fade-bypass), and stashed for the spacebar/F handler.
+    // fade-bypass), and stashed for the spacebar handler.
     let candidate = -1;
     if (hoveredCluster >= 0 && hoveredCluster !== this.selectedClusterIdx) {
       candidate = hoveredCluster;

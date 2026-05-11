@@ -3,7 +3,7 @@
 //   - 'arms': full L-corner reticle (the selected cluster's "active" indicator)
 //   - 'dots': single-pixel corners (the candidate cluster's "potential
 //     selection" indicator — pan the pivot away and the nearest cluster
-//     gets bracketed; spacebar/F switches selection to it)
+//     gets bracketed; spacebar switches selection to it)
 //
 // Both styles share the bbox-of-members projection math, the corner
 // positions, and the color (matches colors.starName so brackets read as

@@ -227,7 +227,7 @@ export class Labels {
     //   - yellow (selected OR candidate): same glyphs recolored to reticle
     //     yellow. Always visible — bypasses both the fade ramps and the
     //     master showLabels toggle, since "what's selected" and "what
-    //     spacebar/F would select" are first-class focus state, not
+    //     spacebar would select" are first-class focus state, not
     //     environmental decoration. Same anchor offset as plain (the two
     //     textures are dimensionally identical), so the swap is positionally
     //     invisible.
