@@ -409,7 +409,7 @@ When hover ends, the candidate falls back to whatever the focus-proximity branch
 
 The same candidate index drives **three** consumers each tick: candidate brackets (dot corners), labels (yellow text promotion + fade-bypass — see "Cluster label visibility"), and the spacebar handler (F is bound separately — see "Input").
 
-Nearest-cluster lookup is centralized in `nearestClusterIdxTo(x, y, z)` in `src/data/stars.ts`, currently a linear scan over `STAR_CLUSTERS` (~microseconds per call at catalog scale). `StarmapScene.tick()` runs it once per frame and shares the result with `FocusMarker` (anchor when nothing is selected) and the candidate-bracket gating. A spatial index (kd-tree) is the eventual home for nearest / range queries; deferred until a third consumer or a perf signal forces it.
+Nearest-cluster lookup is centralized in `nearestClusterIdxTo(x, y, z)` in `src/data/stars.ts`, backed by a static 3D k-d tree over `STAR_CLUSTERS` keyed on COM (`src/data/kdtree.ts`). `StarmapScene.tick()` runs it once per frame and shares the result with `FocusMarker` (anchor when nothing is selected) and the candidate-bracket gating. The same tree class also backs the load-time pair scans in `buildClusters` (over post-expansion `STARS`) and `expandCoincidentSets` (over pre-expansion star positions) via `pairsWithin`, so the spatial work at module load scales O(n log n) with the catalog.
 
 ### Input
 

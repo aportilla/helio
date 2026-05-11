@@ -1,4 +1,5 @@
 import { Color } from 'three';
+import { KDTree3 } from './kdtree';
 import nearestCsv from './nearest-stars.csv?raw';
 import twentyTwentyFiveCsv from './stars-20-25ly.csv?raw';
 import twentyFiveThirtyCsv from './stars-25-30ly.csv?raw';
@@ -410,22 +411,31 @@ const COINCIDENT_EPS_LY = 0.001;
 
 function expandCoincidentSets(stars: readonly Star[]): Star[] {
   const out: Star[] = stars.map(s => ({ ...s }));
-  const visited = new Set<number>();
-  const eps2 = COINCIDENT_EPS_LY * COINCIDENT_EPS_LY;
-  for (let i = 0; i < stars.length; i++) {
-    if (visited.has(i)) continue;
-    const set: number[] = [i];
-    visited.add(i);
-    for (let j = i + 1; j < stars.length; j++) {
-      if (visited.has(j)) continue;
-      const dx = stars[i].x - stars[j].x;
-      const dy = stars[i].y - stars[j].y;
-      const dz = stars[i].z - stars[j].z;
-      if (dx * dx + dy * dy + dz * dz < eps2) {
-        set.push(j);
-        visited.add(j);
-      }
+  const n = stars.length;
+  // Throwaway tree over the pre-expansion positions — can't reuse the
+  // module-scope STAR_TREE because this pass produces it. Union-find then
+  // collects the connected components from the within-eps pairs.
+  const tree = new KDTree3(stars, s => s);
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x: number): number => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
     }
+    return x;
+  };
+  tree.pairsWithin(COINCIDENT_EPS_LY, (i, j) => {
+    const ri = find(i), rj = find(j);
+    if (ri !== rj) parent[ri] = rj;
+  });
+  const sets = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    let g = sets.get(r);
+    if (!g) { g = []; sets.set(r, g); }
+    g.push(i);
+  }
+  for (const set of sets.values()) {
     if (set.length < 2) continue;
     // Mass-sort the set so the heaviest member becomes the cluster primary
     // downstream — labels and droplines anchor on it. The angle assignment
@@ -535,6 +545,10 @@ export function radiusToPxSize(radiusSolar: number): number {
 
 export const STARS: readonly Star[] = expandCoincidentSets(loadCatalog());
 
+// Spatial index over STARS. Used by buildClusters' within-threshold pair scan;
+// kept module-private until a second consumer needs per-star queries.
+const STAR_TREE = new KDTree3(STARS, s => s);
+
 // =============================================================================
 // Cluster detection
 // =============================================================================
@@ -571,18 +585,10 @@ function buildClusters(): readonly StarCluster[] {
     }
     return x;
   };
-  const t2 = CLUSTER_THRESHOLD_LY * CLUSTER_THRESHOLD_LY;
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      const dx = STARS[i].x - STARS[j].x;
-      const dy = STARS[i].y - STARS[j].y;
-      const dz = STARS[i].z - STARS[j].z;
-      if (dx * dx + dy * dy + dz * dz <= t2) {
-        const ri = find(i), rj = find(j);
-        if (ri !== rj) parent[ri] = rj;
-      }
-    }
-  }
+  STAR_TREE.pairsWithin(CLUSTER_THRESHOLD_LY, (i, j) => {
+    const ri = find(i), rj = find(j);
+    if (ri !== rj) parent[ri] = rj;
+  });
   const groups = new Map<number, number[]>();
   for (let i = 0; i < n; i++) {
     const r = find(i);
@@ -622,6 +628,11 @@ function buildClusters(): readonly StarCluster[] {
 
 export const STAR_CLUSTERS: readonly StarCluster[] = buildClusters();
 
+// Spatial index over STAR_CLUSTERS keyed by COM. Backs nearestClusterIdxTo
+// (called per-frame from scene.tick) and is the eventual home for any
+// future range queries on clusters.
+const CLUSTER_TREE = new KDTree3(STAR_CLUSTERS, c => c.com);
+
 const STAR_TO_CLUSTER = (() => {
   const m = new Int32Array(STARS.length);
   STAR_CLUSTERS.forEach((cluster, idx) => {
@@ -634,30 +645,10 @@ export function clusterIndexFor(starIdx: number): number {
   return STAR_TO_CLUSTER[starIdx];
 }
 
-// Linear scan over STAR_CLUSTERS returning the index of the cluster whose COM
-// is closest to (x, y, z). Allocation-free; comparison stays in squared
-// distance. Returns -1 only if STAR_CLUSTERS is empty (defensive — in practice
-// the catalog always has Sol).
-//
-// At ~1000-cluster catalog scale this is microseconds per call. A spatial
-// index (kd-tree) is the eventual home for nearest / range queries once a
-// third consumer or a perf signal forces it; today the helper centralizes
-// the math so consumers don't reimplement the loop.
+// Nearest cluster (by COM) to (x, y, z). Returns -1 only if STAR_CLUSTERS is
+// empty (defensive — in practice the catalog always has Sol).
 export function nearestClusterIdxTo(x: number, y: number, z: number): number {
-  let bestSq = Infinity;
-  let bestIdx = -1;
-  for (let i = 0; i < STAR_CLUSTERS.length; i++) {
-    const com = STAR_CLUSTERS[i].com;
-    const dx = x - com.x;
-    const dy = y - com.y;
-    const dz = z - com.z;
-    const d2 = dx * dx + dy * dy + dz * dz;
-    if (d2 < bestSq) {
-      bestSq = d2;
-      bestIdx = i;
-    }
-  }
-  return bestIdx;
+  return CLUSTER_TREE.nearest(x, y, z);
 }
 
 // Curated waypoint stars — bright, well-known anchors distributed across the
