@@ -7,16 +7,17 @@ import {
   WebGLRenderer,
 } from 'three';
 
+import { ClusterBrackets } from './cluster-brackets';
 import { Grid } from './grid';
 import { Droplines } from './droplines';
-import { FocusMarker } from './focus-marker';
+import { FocusMarker, FOCUS_MARKER_NEAR } from './focus-marker';
 import { InputController, type InputHandlers } from './input-controller';
 import { Labels } from './labels';
 import { StarPoints } from './stars';
 import { setSnappedLineViewport } from './materials';
 import { RenderScaleObserver, effectiveScale } from './render-scale';
 import { MapHud } from '../ui/map-hud';
-import { STARS, STAR_CLUSTERS, clusterIndexFor } from '../data/stars';
+import { STARS, STAR_CLUSTERS, clusterIndexFor, nearestClusterIdxTo } from '../data/stars';
 import { getSettings } from '../settings';
 
 // Orbit radius bounds (camera-to-target ly). Replaces the old ortho frustum
@@ -67,22 +68,37 @@ export class StarmapScene {
   private readonly droplines: Droplines;
   private readonly focusMarker: FocusMarker;
   private readonly labels: Labels;
+  // Yellow corner-bracket indicators around clusters. Two instances render
+  // simultaneously into the labels overlay scene: arms-style for the active
+  // selection, dots-style for the candidate (nearest cluster to view.target
+  // when the user has panned off the selected cluster — spacebar / F
+  // switches selection to it).
+  private readonly selectionBrackets: ClusterBrackets;
+  private readonly candidateBrackets: ClusterBrackets;
   private readonly starPoints: StarPoints;
   private readonly hud: MapHud;
   private readonly renderScale = new RenderScaleObserver();
   private readonly input: InputController;
 
   // Hover-pointer state, written by the input controller via the
-  // onPointerHoverChanged handler and read each tick to drive the boxed
-  // hover-label raycast. Touch input and mouse-over-HUD set has=false so
-  // chrome occlusion doesn't leak through to scene picking.
+  // onPointerHoverChanged handler and read each tick. Drives the per-tick
+  // raycast that feeds the candidate computation (hover beats focus-
+  // proximity for which cluster gets the yellow label + dot brackets) and
+  // the droplines hover-override. Touch input and mouse-over-HUD set
+  // has=false so chrome occlusion doesn't leak through to scene picking.
   private readonly pointer = { x: 0, y: 0, has: false };
-  // Currently-selected cluster, mirrored across Labels (reticle), MapHud
-  // (info card + View System button), and Droplines (selected pin). Scene
-  // tracks its own copy so non-routing logic — spacebar focus, future
-  // keyboard actions on the selection — can read it without coupling to
-  // any one of those owners' internals.
+  // Currently-selected cluster, mirrored across Labels (yellow text +
+  // fade-bypass), selectionBrackets (corner-arms reticle), MapHud (info
+  // card + View System button), and Droplines (selected pin). Scene tracks
+  // its own copy so non-routing logic — spacebar focus, future keyboard
+  // actions on the selection — can read it without coupling to any one of
+  // those owners' internals.
   private selectedClusterIdx = -1;
+  // Candidate cluster — nearest cluster COM to view.target, gated to "panned
+  // far enough off the selection that another cluster is now closer".
+  // Written each tick, read by onFocusSelection (spacebar / F) to switch
+  // selection to it. -1 when no candidate is currently shown.
+  private candidateClusterIdx = -1;
 
   // Focus animation: view.target lerps from focusFrom → focusTo over
   // FOCUS_ANIM_MS. view.distance also lerps from distanceFrom → distanceTo
@@ -168,6 +184,13 @@ export class StarmapScene {
     this.scene.add(this.focusMarker.group);
 
     this.labels = new Labels(initialSettings.showLabels);
+
+    // Brackets render in the labels overlay scene (1 unit = 1 buffer pixel
+    // ortho pass) so they share the labels' projection setup.
+    this.selectionBrackets = new ClusterBrackets('arms');
+    this.candidateBrackets = new ClusterBrackets('dots');
+    this.labels.scene.add(this.selectionBrackets.mesh);
+    this.labels.scene.add(this.candidateBrackets.mesh);
 
     this.hud = new MapHud(this.renderScale.scale);
     this.hud.onToggle = (id, on) => {
@@ -273,6 +296,16 @@ export class StarmapScene {
       },
       onEscape: () => this.deselect(),
       onFocusSelection: () => {
+        // Candidate beats selection: pressing space/F while panned off the
+        // current selection (so a candidate is visible) switches selection
+        // to the candidate. Falls through to "re-focus current selection"
+        // when no candidate is visible — works whether or not anything was
+        // selected before, so spacebar/F is a universal "act on what the
+        // brackets are pointing at" key.
+        if (this.candidateClusterIdx >= 0) {
+          this.selectAndFocusCluster(this.candidateClusterIdx);
+          return;
+        }
         if (this.selectedClusterIdx < 0) return;
         const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
         this.animateFocusTo(com.x, com.y, com.z);
@@ -297,6 +330,7 @@ export class StarmapScene {
   private selectAndFocusCluster(clusterIdx: number): void {
     this.selectedClusterIdx = clusterIdx;
     this.labels.setSelectedCluster(clusterIdx);
+    this.selectionBrackets.setCluster(clusterIdx);
     this.hud.setSelectedCluster(clusterIdx);
     const com = STAR_CLUSTERS[clusterIdx].com;
     // Grid runs its own sequential expand/collapse off this call.
@@ -384,6 +418,7 @@ export class StarmapScene {
   private deselect(): void {
     this.selectedClusterIdx = -1;
     this.labels.setSelectedCluster(-1);
+    this.selectionBrackets.setCluster(-1);
     this.hud.setSelectedCluster(-1);
     this.grid.setSelection(null);
     this.droplines.setSelectedCluster(-1);
@@ -502,10 +537,13 @@ export class StarmapScene {
     this.bufferW = this._buf.x;
     this.bufferH = this._buf.y;
     this.starPoints.setPxScale(this.bufferH / 2);
-    this.labels.setPxScale(this.bufferH / 2);
+    this.selectionBrackets.setPxScale(this.bufferH / 2);
+    this.candidateBrackets.setPxScale(this.bufferH / 2);
     setSnappedLineViewport(this.bufferW, this.bufferH);
     this.hud.resize(this.bufferW, this.bufferH);
     this.labels.resize(this.bufferW, this.bufferH);
+    this.selectionBrackets.resize(this.bufferW, this.bufferH);
+    this.candidateBrackets.resize(this.bufferW, this.bufferH);
   }
 
   // -- main loop ---------------------------------------------------------
@@ -546,16 +584,62 @@ export class StarmapScene {
 
     this.starPoints.setFocus(this.view.target);
 
+    // Nearest cluster to the orbit pivot — computed once per tick and shared
+    // by the focus marker (anchor when nothing selected) and (next commit)
+    // the candidate-selection brackets. Centralizing avoids two scans per
+    // frame for the same query.
+    const nearestClusterIdx = nearestClusterIdxTo(
+      this.view.target.x, this.view.target.y, this.view.target.z,
+    );
+
     // Hover detection — pick the star whose ray-distance is smallest, then
-    // share the cluster-mapped index with both the label overlay (boxed-hover
-    // variant) and the droplines (always-show-on-hover override).
+    // share the cluster-mapped index with the droplines (always-show-on-
+    // hover override) and the candidate computation below.
     const hovered = this.pointer.has ? this.pickStar(this.pointer.x, this.pointer.y) : -1;
     const hoveredCluster = hovered >= 0 ? clusterIndexFor(hovered) : -1;
-    this.labels.setHovered(hovered);
     this.droplines.setHovered(hoveredCluster);
     this.droplines.update(this.camera, this.view.target);
-    this.focusMarker.update(this.view.target, this.camera, this.focusAnimating);
+    this.focusMarker.update(this.view.target, this.camera, this.focusAnimating, nearestClusterIdx);
+
+    // Candidate cluster — only one at a time. Hover beats focus-proximity:
+    // when the user is pointing at a star, that's the immediate target;
+    // when they're not, the candidate falls back to the nearest cluster to
+    // view.target (so the brackets reappear on whatever the keyboard pan
+    // has drifted near). Both branches honor "candidate != selection" (no
+    // point bracketing what's already selected).
+    //
+    // Hover candidate is independent of focusAnimating — cursor location
+    // is real regardless of camera motion. Proximity is suppressed during
+    // the glide because the pivot is in transit, not parked off a star,
+    // and the brackets would just trail the camera into the new selection.
+    //
+    // The proximity branch additionally suppresses below FOCUS_MARKER_NEAR
+    // so the brackets don't appear on the cluster the pivot is sitting on
+    // (initial-load Sol case, or panning back onto a star). Same threshold
+    // as the focus marker so the two indicators turn on/off together.
+    //
+    // Snap visibility, no fade ramp — candidate is a discrete state. The
+    // unified index is pushed to brackets, labels (yellow promotion +
+    // fade-bypass), and stashed for the spacebar/F handler.
+    let candidate = -1;
+    if (hoveredCluster >= 0 && hoveredCluster !== this.selectedClusterIdx) {
+      candidate = hoveredCluster;
+    } else if (!this.focusAnimating && nearestClusterIdx >= 0 && nearestClusterIdx !== this.selectedClusterIdx) {
+      const com = STAR_CLUSTERS[nearestClusterIdx].com;
+      const dx = this.view.target.x - com.x;
+      const dy = this.view.target.y - com.y;
+      const dz = this.view.target.z - com.z;
+      if (dx * dx + dy * dy + dz * dz >= FOCUS_MARKER_NEAR * FOCUS_MARKER_NEAR) {
+        candidate = nearestClusterIdx;
+      }
+    }
+    this.candidateClusterIdx = candidate;
+    this.candidateBrackets.setCluster(candidate);
+    this.labels.setCandidateCluster(candidate);
+
     this.labels.update(this.camera, this.view.target);
+    this.selectionBrackets.update(this.camera);
+    this.candidateBrackets.update(this.camera);
 
     this.renderer.render(this.scene, this.camera);
     // Overlay passes — disable autoClear so the second/third renders don't

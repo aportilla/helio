@@ -52,7 +52,11 @@ const RING_SEGMENTS = 32;
 // hidden outright; above FAR it sits at full base opacity. Linear in
 // between — pure function of the current pan offset, no animation state,
 // so the marker tracks view.target frame-by-frame without lag.
-const FOCUS_MARKER_NEAR = 0.5;
+//
+// NEAR is exported so the candidate-brackets gate uses the same threshold:
+// "pivot is sitting on a star" reads identically for both the focus marker
+// and the candidate-target indicator.
+export const FOCUS_MARKER_NEAR = 0.5;
 const FOCUS_MARKER_FAR  = 1.5;
 
 // Same epsilon as droplines.ts: a dropline whose top is within this
@@ -117,7 +121,7 @@ export class FocusMarker {
     this.selectedCluster = clusterIdx;
   }
 
-  update(viewTarget: Vector3, camera: Camera, focusAnimating: boolean): void {
+  update(viewTarget: Vector3, camera: Camera, focusAnimating: boolean, nearestClusterIdx: number): void {
     // Suppress during the focus glide — the pivot is in transit toward a
     // new COM, not parked off a star, so the "where am I looking" hint
     // would just trail the camera as it zooms in and read as noise.
@@ -127,13 +131,18 @@ export class FocusMarker {
     }
 
     // Anchor distance — selection COM when selected, otherwise nearest
-    // cluster COM. The latter keeps the marker hidden while view.target
-    // sits on/near any star (Sol on initial load, or any star the camera
-    // happens to be lined up with) and fades it in as the user pans into
-    // empty space between stars.
-    const anchorDist = this.selectedCluster >= 0
-      ? this.distToCluster(viewTarget, this.selectedCluster)
-      : this.distToNearestCluster(viewTarget);
+    // cluster COM (precomputed by the scene; shared with the candidate
+    // marker so we only run the scan once per tick). The "nearest" anchor
+    // keeps the marker hidden while view.target sits on/near any star
+    // (Sol on initial load, or any star the camera happens to be lined
+    // up with) and fades it in as the user pans into empty space between
+    // stars.
+    const anchorIdx = this.selectedCluster >= 0 ? this.selectedCluster : nearestClusterIdx;
+    if (anchorIdx < 0) {
+      this.group.visible = false;
+      return;
+    }
+    const anchorDist = this.distToCluster(viewTarget, anchorIdx);
 
     if (anchorDist <= FOCUS_MARKER_NEAR) {
       this.group.visible = false;
@@ -210,22 +219,5 @@ export class FocusMarker {
     const dy = viewTarget.y - com.y;
     const dz = viewTarget.z - com.z;
     return Math.sqrt(dx * dx + dy * dy + dz * dz);
-  }
-
-  // Linear scan over all cluster COMs. ~70 clusters in the 50 ly catalog
-  // and no per-iteration allocation, so the cost is trivial at 60 fps.
-  // Returns the smallest distance; callers compare it to FOCUS_MARKER_NEAR
-  // / FAR to decide visibility and ramp.
-  private distToNearestCluster(viewTarget: Vector3): number {
-    let bestSq = Infinity;
-    for (let i = 0; i < STAR_CLUSTERS.length; i++) {
-      const com = STAR_CLUSTERS[i].com;
-      const dx = viewTarget.x - com.x;
-      const dy = viewTarget.y - com.y;
-      const dz = viewTarget.z - com.z;
-      const d2 = dx * dx + dy * dy + dz * dz;
-      if (d2 < bestSq) bestSq = d2;
-    }
-    return Math.sqrt(bestSq);
   }
 }

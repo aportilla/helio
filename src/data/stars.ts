@@ -634,6 +634,32 @@ export function clusterIndexFor(starIdx: number): number {
   return STAR_TO_CLUSTER[starIdx];
 }
 
+// Linear scan over STAR_CLUSTERS returning the index of the cluster whose COM
+// is closest to (x, y, z). Allocation-free; comparison stays in squared
+// distance. Returns -1 only if STAR_CLUSTERS is empty (defensive — in practice
+// the catalog always has Sol).
+//
+// At ~1000-cluster catalog scale this is microseconds per call. A spatial
+// index (kd-tree) is the eventual home for nearest / range queries once a
+// third consumer or a perf signal forces it; today the helper centralizes
+// the math so consumers don't reimplement the loop.
+export function nearestClusterIdxTo(x: number, y: number, z: number): number {
+  let bestSq = Infinity;
+  let bestIdx = -1;
+  for (let i = 0; i < STAR_CLUSTERS.length; i++) {
+    const com = STAR_CLUSTERS[i].com;
+    const dx = x - com.x;
+    const dy = y - com.y;
+    const dz = z - com.z;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 < bestSq) {
+      bestSq = d2;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
 // Curated waypoint stars — bright, well-known anchors distributed across the
 // catalog's 0–50 ly range. The galaxy view fades their cluster labels in as
 // the camera moves away from Sol, so the player has named landmarks to

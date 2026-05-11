@@ -92,7 +92,11 @@ src/
                             off the nearest anchor cluster (selected COM,
                             or nearest cluster COM when nothing's selected)
     stars.ts                gl.POINTS starfield with per-star size + color
-    labels.ts               Bitmap-font overlay pass: star names, axis ticks, selection reticle
+    labels.ts               Bitmap-font overlay pass: star names, axis ticks
+    cluster-brackets.ts     Yellow corner brackets enclosing a cluster's
+                            rendered-disc bbox. Two instances (selection
+                            arms + candidate dots) render into the labels
+                            overlay scene
     materials.ts            Pixel-snapped line ShaderMaterial + the stars shader
   ui/                       Pixel-art HUD widget toolkit + view-mode HUD
                             orchestrators. Each HUD renders in its own ortho
@@ -291,7 +295,7 @@ The HUD's font selections live in `src/ui/theme.ts` — EspySans 20 for the titl
 
 Options:
 - `font: FONTS.Family[size]` — pick the font; defaults to Monaco 11
-- `box: true` — draws a bordered surface frame around the text (used by the hovered cluster label)
+- `box: true` — draws a bordered surface frame around the text (general primitive; no current consumer in galaxy view, but kept available for HUD chrome)
 
 Also exports `drawPixelText(g2d, text, x, y, color, font?)` so the HUD can compose text into its own canvases alongside borders/fills without going through `makeLabelTexture`.
 
@@ -318,7 +322,7 @@ White dwarfs (`pxSize ≈ 3`) hit the size-2 floor first as their depth crosses 
 
 Stars within `CLUSTER_THRESHOLD_LY = 0.25` of each other (`buildClusters` in `src/data/stars.ts`) are grouped via union-find. Captures both ringed-out coincident binaries (e.g. Sirius A/B share Wikipedia's RA/Dec, post-processed onto a small ring) and hierarchical systems where Wikipedia gives one component a different RA/Dec (Alpha Centauri's Proxima ends up ~0.19 ly from the AB pair after the equatorial-to-galactic conversion, well inside the threshold). Each cluster has a **primary** (the heaviest member by `mass`, with `CLASS_SIZE` as a tie-breaker) and an ordered `members` list with the primary first.
 
-`Labels` (in `src/scene/labels.ts`) renders one visible label per cluster — anchored at the primary's position, suffixed with ` +N` (in dim cyan) when the cluster has additional members. Hovering any star in a cluster swaps that cluster's label for a bordered-box variant (same text, same anchor, styled like the other surface boxes) and bumps it to a renderOrder above the reticle so it always paints clear of every other overlay element. Anchored at the primary so the emphasis doesn't twitch as you move between near-coincident dots; ignores the `show labels` toggle so a hover always produces feedback.
+`Labels` (in `src/scene/labels.ts`) renders one visible label per cluster — anchored at the primary's position, suffixed with ` +N` (in dim cyan) when the cluster has additional members. Two textures per cluster are eagerly built at construction: a **plain** variant (cyan, warm-white for Sol) and a **yellow** variant (reticle yellow `#ffe98a`, matching the cluster brackets and the info-card star name). The yellow variant is shown when the cluster is selected OR is the active candidate (hover or focus-proximity — see "Cluster brackets"). Same dimensions, same anchor offset, so the swap is positionally invisible. Anchored at the primary so the emphasis doesn't twitch as you move between near-coincident dots.
 
 Lookup helpers exported alongside the catalog: `STAR_CLUSTERS: readonly StarCluster[]` and `clusterIndexFor(starIdx) => number`.
 
@@ -331,7 +335,7 @@ When the master `show labels` toggle is on, cluster labels are gated by **two in
 
 A third **waymarker ramp** runs in parallel for a curated list of bright, well-known stars (`WAYPOINT_STAR_IDS` in `data/stars.ts` — Sol, Rigil Kentaurus, Sirius A, Procyon A, Altair, Vega, Arcturus). Polarity is *reversed* from the two ramps above: keyed to **the camera's distance from Sol** (`camera.position.length()` — Sol sits at origin), waypoint labels stay invisible below `LABEL_WAYPOINT_HIDE_BELOW = 30` ly, fade in linearly, and are fully visible at `LABEL_WAYPOINT_SHOW_ABOVE = 90` ly. Camera-from-Sol — rather than orbit distance — surfaces waymarkers whether the user got "far from home" by zooming out *or* by panning the pivot far from Sol while still zoomed in. The waypoint and per-label opacities combine via `max()` each frame, so a waypoint inside the pivot bubble doesn't blink out between the regular `PIVOT_FADE_FAR` / `CAMERA_FADE_FAR` thresholds and HIDE_BELOW. Effect: as the camera leaves Sol's neighborhood, every label disappears *except* this small set of named anchors — navigation landmarks for orienting in unfamiliar territory.
 
-Hover and selection **bypass all three ramps** so pointing at or clicking a far star always lights its label. Hover additionally bypasses the master toggle (the boxed-hover state is the only feedback that pointing at a star did anything when labels are off). Waypoint stars still respect the master toggle — turning labels off hides everything, including waymarkers.
+Selection and candidate (which subsumes hover — see "Cluster brackets") **bypass all three ramps and the master `show labels` toggle**, so the yellow variant is always visible. Both states are first-class focus state — "what's selected" and "what spacebar/F would select" — not environmental decoration. With labels off, the yellow promotion is the only feedback that pointing at a star (or panning past it) registered. Waypoint stars still respect the master toggle when in their plain (non-candidate, non-selected) state — turning labels off hides everything plain, including waymarkers.
 
 ### Multi-star system layout (post-processing)
 
@@ -389,6 +393,24 @@ The dropline portion exists only when a cluster is selected (that's the only sta
 
 Suppressed entirely during the focus glide — while `view.target` is in transit toward a newly-selected cluster's COM, the "where am I looking" hint would just trail the camera as it zooms in and read as noise. `StarmapScene` threads its `focusAnimating` flag into `FocusMarker.update()` for this check.
 
+### Cluster brackets — selection + candidate
+
+Yellow corner brackets enclosing a cluster's rendered-disc bbox live in `src/scene/cluster-brackets.ts` (`ClusterBrackets`). Two instances render simultaneously into the labels overlay scene:
+
+- **Selection brackets** (`style: 'arms'`) — full L-corner reticle around the currently-selected cluster. Single-member clusters get a tight square; a tilted binary ring gets a rectangular bbox showing the system's screen orientation. Cleared when the selection clears.
+- **Candidate brackets** (`style: 'dots'`) — single-pixel corners (same color, same brightness, same corner positions as the selection arms) around the *candidate* cluster. The dot corners sit exactly where the arms would, so promoting a candidate to selection grows arms outward from the same dots with no positional shift.
+
+**Only one candidate at a time.** The candidate slot is filled by, in priority order:
+
+1. **Hover** — pointing at a star promotes its cluster to candidate. Independent of `focusAnimating` (cursor location is real regardless of camera motion).
+2. **Focus-proximity** — when nothing is being hovered, the nearest cluster to `view.target` fills the slot once the pivot has been panned past `FOCUS_MARKER_NEAR` off it. Suppressed during the focus glide (pivot is in transit, not parked off a star) and when the nearest cluster IS the current selection. `FOCUS_MARKER_NEAR` is shared with the focus marker so both indicators turn on/off together as the user pans off a star.
+
+When hover ends, the candidate falls back to whatever the focus-proximity branch yields (or nothing). Both branches honor "candidate != selection" — no point bracketing what's already selected. Visibility is binary — snap on / snap off, no fade ramp.
+
+The same candidate index drives **three** consumers each tick: candidate brackets (dot corners), labels (yellow text promotion + fade-bypass — see "Cluster label visibility"), and the spacebar/F handler.
+
+Nearest-cluster lookup is centralized in `nearestClusterIdxTo(x, y, z)` in `src/data/stars.ts`, currently a linear scan over `STAR_CLUSTERS` (~microseconds per call at catalog scale). `StarmapScene.tick()` runs it once per frame and shares the result with `FocusMarker` (anchor when nothing is selected) and the candidate-bracket gating. A spatial index (kd-tree) is the eventual home for nearest / range queries; deferred until a third consumer or a perf signal forces it.
+
 ### Input
 
 Input is split between two modules. `InputController` (`src/scene/input-controller.ts`) owns every pointer/keyboard listener, classifies the gesture (orbit drag, pinch zoom vs pinch pan, click vs drag, double-click, touch long-press, held-key set), and dispatches high-level intents through an `InputHandlers` callback bundle. `StarmapScene` implements those handlers — view-state mutation (orbit/pan/zoom/held-key physics), selection logic, focus-glide, and the per-tick raycast for hover. Pure camera math (`applyOrbitDelta`, `applyTouchPan`, `zoomBy`) and selection routing stay in the scene; the controller never reads or mutates view state directly.
@@ -410,8 +432,8 @@ Touch input is unified through Pointer Events, not a separate `touchmove` path. 
 - **Left-click on a star** (no/minimal drag, < 4 px movement) = select that star's **system** (a multi-star cluster is one selectable unit) AND animate the orbit pivot to the cluster's center of mass — so clicking either component of a binary glides to the same vantage. Info card lists every member, reticle bracketing encloses every member's rendered disc. The shared action lives in `selectAndFocusCluster()` so future hooks can route through it.
 - **Double-left-click on a star** = open the system view (close-up `SystemScene` for the clicked cluster). A second left-click on the same cluster within the double-click window fires `onViewSystem`; clicks on a different cluster or a timed-out gap restart the window. The first click's focus glide is in flight when the second click lands, but the system-view transition disposes the starmap scene and kills the glide along with it.
 - **Right-click on a star** and **touch long-press on a star** (single finger held still for 500 ms, < 8 px drift) = **placeholder hooks** that currently `console.info` and otherwise do nothing. The wiring is held alive (contextmenu suppression, long-press timer with movement-cancel + suppression of the trailing tap) so a future game action can be slotted in by editing the body of `fireLongPress` or the right-click branch in `onPointerUp` — no need to rebuild the timer state machine or button-discrimination logic.
-- **Spacebar** / **F** = glide the orbit pivot to the selected cluster's COM. No-op when nothing is selected (Spacebar still calls `preventDefault` so the page doesn't scroll). `Cmd/Ctrl/Alt+F` is left alone so the browser's find shortcut still works.
-- **Hover** uses the same `Raycaster` against `gl.POINTS` (threshold 0.6 ly) as the click handlers — the hovered star promotes its cluster's label to the boxed hover variant in the label overlay.
+- **Spacebar** / **F** = "act on what the brackets are pointing at." If candidate brackets are visible (pivot panned off the current selection, dots showing on the nearest cluster — see "Cluster brackets"), switches selection to that cluster and glides the pivot to its COM. Otherwise glides the pivot to the currently-selected cluster's COM (re-center after a pan). No-op when neither applies — Spacebar still calls `preventDefault` so the page doesn't scroll. `Cmd/Ctrl/Alt+F` is left alone so the browser's find shortcut still works.
+- **Hover** uses the same `Raycaster` against `gl.POINTS` (threshold 0.6 ly) as the click handlers — the hovered star promotes its cluster to **candidate** state, which paints dot-corner brackets around it (see "Cluster brackets") and swaps its label to the yellow variant. Hover wins over focus-proximity for the candidate slot, so pointing at a star always overrides whatever the keyboard pan happened to drift near.
 - The info card's close-X (top-right corner) clears the selection. The card sits in the bottom-right; the **View System** and **Focus** pill buttons sit in a fixed row beneath it, anchored to the screen edge so their position holds even as the card grows or shrinks with cluster size. View System opens the system view for the selected cluster (alternative to double-clicking). Focus mirrors spacebar / F — glides the orbit pivot to the selected cluster's COM, and is disabled (dim border + dim text, click absorbed but not dispatched) while the pivot already sits there. The settings panel's close-X sits at the burger trigger's exact footprint (top-right corner), so clicking the same screen position closes the panel just like clicking the burger opened it.
 
 **ESC** dismisses the current selection in galaxy view (info card + reticle), the same as clicking the card's close-X. In system view, ESC exits back to the galaxy view (same as the back button in the header). "Reset view" in the settings panel snaps focus back to the Sun + default yaw/pitch/distance. Held-key state is cleared on `window.blur` so a key whose keyup got swallowed by alt-tab doesn't leave the camera drifting.

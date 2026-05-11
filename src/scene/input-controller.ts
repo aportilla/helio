@@ -92,8 +92,9 @@ export interface InputHandlers {
   onClickStar(clusterIdx: number, button: number): void;
   onDoubleClickStar(clusterIdx: number): void;
   onLongPressStar(clusterIdx: number): void;
-  // Hover-pointer state for the scene's per-tick raycast (drives the boxed
-  // hover label). x/y are ignored when has=false.
+  // Hover-pointer state for the scene's per-tick raycast (drives candidate
+  // promotion: hovered cluster becomes the yellow-label / dot-bracketed
+  // target). x/y are ignored when has=false.
   onPointerHoverChanged(clientX: number, clientY: number, has: boolean): void;
   onEscape(): void;
   onFocusSelection(): void;
