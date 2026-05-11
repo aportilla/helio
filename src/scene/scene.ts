@@ -9,6 +9,7 @@ import {
 
 import { Grid } from './grid';
 import { Droplines } from './droplines';
+import { FocusMarker } from './focus-marker';
 import { InputController, type InputHandlers } from './input-controller';
 import { Labels } from './labels';
 import { StarPoints } from './stars';
@@ -64,6 +65,7 @@ export class StarmapScene {
   private readonly raycaster = new Raycaster();
   private readonly grid: Grid;
   private readonly droplines: Droplines;
+  private readonly focusMarker: FocusMarker;
   private readonly labels: Labels;
   private readonly starPoints: StarPoints;
   private readonly hud: MapHud;
@@ -161,6 +163,9 @@ export class StarmapScene {
     const initialSettings = getSettings();
     this.droplines = new Droplines(initialSettings.showDroplines);
     this.scene.add(this.droplines.group);
+
+    this.focusMarker = new FocusMarker();
+    this.scene.add(this.focusMarker.group);
 
     this.labels = new Labels(initialSettings.showLabels);
 
@@ -300,6 +305,7 @@ export class StarmapScene {
     this.grid.setSelection(this._comScratch.set(com.x, com.y, com.z));
     this.droplines.setSelectedCluster(clusterIdx);
     this.droplines.setFade(1);
+    this.focusMarker.setSelectedCluster(clusterIdx);
     // Focus button starts in the right state for the new selection
     // (without waiting for the next tick to repaint).
     this.updateSelectedFocusedState();
@@ -382,6 +388,7 @@ export class StarmapScene {
     this.grid.setSelection(null);
     this.droplines.setSelectedCluster(-1);
     this.droplines.setFade(0);
+    this.focusMarker.setSelectedCluster(-1);
   }
 
   // Push the Focus button's enabled/disabled state to the HUD. Disabled
@@ -547,6 +554,7 @@ export class StarmapScene {
     this.labels.setHovered(hovered);
     this.droplines.setHovered(hoveredCluster);
     this.droplines.update(this.camera, this.view.target);
+    this.focusMarker.update(this.view.target, this.camera);
     this.labels.update(this.camera, this.view.target);
 
     this.renderer.render(this.scene, this.camera);
