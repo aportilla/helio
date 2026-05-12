@@ -25,159 +25,69 @@ npm run typecheck  # tsc --noEmit
 
 ## Project layout
 
+One line per file — what it owns. Depth lives in the Architecture notes below; behavior overlaps (`grid.ts` choreography, `panel.ts` row kinds, etc.) are documented there, not here.
+
 ```
-index.html                  Vite entry — single <script> tag pointing at main.ts
-scripts/
-  README.md                 Workflow guide — how to bootstrap a new bracket,
-                            repair a corrupted CSV, fill missing fields, find
-                            stars present in the catalog but missing from our
-                            CSVs. Read this first if you're touching star data.
-  scrape-wiki-stars.mjs     Initial-seeding Wikipedia → CSV scraper.
-  find-missing-stars.mjs    Compare a CSV against the local stellarcatalog
-                            listing; report or --add stars we're missing.
-  fill-from-stellarcatalog.mjs
-                            Fetch stellarcatalog detail pages to fill empty
-                            fields (RA/Dec, mass, magnitudes, parallax, class).
-                            Cached on disk; only ever fills empty cells.
-  sync-with-catalog.mjs     Sweep all CSVs: assign each row a stable `id`
-                            (catalog slug) and rewrite `name` to the catalog's
-                            primary, with a hardcoded skip-list for known
-                            regressions (Barnard's Star, Keid, Rigil Kentaurus…).
-  expand-systems-from-catalog.mjs
-                            For each catalog primary in our CSVs, fetch its
-                            detail page, parse <h2> sibling sections, and
-                            either bind existing sibling rows to the canonical
-                            id or add missing siblings.
-  audit-unresolved.mjs      Read-only: categorize rows whose id isn't a
-                            literal catalog slug as OVERLAP / NEAR / DISTINCT
-                            by 3D distance to the nearest catalog-matched row.
-  lookup-star.mjs           Ad-hoc: resolve a star name (or distance range)
-                            to a stellarcatalog URL.
-  lib/catalog-index.mjs     Shared helpers (catalog parsing, name matching,
-                            CSV serialization, stale-slug redirects).
+index.html                  Vite entry: single <script> → main.ts
+scripts/                    Star-data tooling — read scripts/README.md first
+  README.md                 Workflow guide for star-data tasks
+  scrape-wiki-stars.mjs     Initial-seeding Wikipedia → CSV scraper
+  find-missing-stars.mjs    Diff a CSV against the catalog; --add inserts missing rows
+  fill-from-stellarcatalog.mjs   Backfill empty cells from cached catalog detail pages
+  sync-with-catalog.mjs     Assign stable id (catalog slug) + canonical name to every row
+  expand-systems-from-catalog.mjs   Bind/add sibling rows from catalog <h2> sections
+  import-system-from-catalog.mjs    Idempotent full rewrite of one system from its catalog page
+  audit-unresolved.mjs      Categorize non-catalog rows as OVERLAP / NEAR / DISTINCT
+  lookup-star.mjs           Ad-hoc: name (or distance range) → catalog URL
+  lib/catalog-index.mjs     Shared catalog parsing, name matching, CSV, redirects
 src/
-  main.ts                   Imports global styles, calls initFonts() (eagerly
-                            parses UI fonts + injects custom ► glyph), mounts
-                            the canvas + boot splash, instantiates AppController
-  styles.css                Body reset + canvas + boot-splash styles
-  scene/                    Three.js code — no DOM coupling beyond the canvas
-    app-controller.ts       AppController: owns the WebGLRenderer + swaps which
-                            view-mode scene is currently driving the canvas
-                            (StarmapScene ↔ SystemScene)
-    scene.ts                StarmapScene (galaxy view): camera, view-state
-                            mutation, render loop, selection routing
-    input-controller.ts     InputController: pinch classifier, drag-vs-click
-                            discrimination, touch long-press, double-click
-                            window, held-key set; dispatches gesture intents
-                            back to the scene through an InputHandlers bundle
-    system-scene.ts         SystemScene (close-up of one cluster): peer of
-                            StarmapScene, lazily constructed on entry, disposed
-                            on exit
-    grid.ts                 Concentric range rings + cross axes + galactic-
-                            centre arrow, group-translated to the selected
-                            cluster's COM (hidden when nothing is selected).
-                            Owns its own selection-driven animation —
-                            sequential per-ring expand/collapse, two internal
-                            frames so an old selection's collapse can run
-                            concurrently with a new selection's expand
-    droplines.ts            Vertical pin from each cluster to the selected
-                            cluster's COM.z plane (hidden when nothing is
-                            selected). Geometry rewritten on selection
-                            change, not per-frame
-    cluster-fade.ts         Pivot + camera fade thresholds shared by labels
-                            and droplines so they flip in/out together
-    focus-marker.ts         Small ring at view.target + optional dropline
-                            down to the selection plane. Fades in once the
-                            pivot is panned past a small lateral threshold
-                            off the nearest anchor cluster (selected COM,
-                            or nearest cluster COM when nothing's selected)
+  main.ts                   Bootstrap: fonts, canvas, splash, AppController
+  styles.css                Body reset + canvas + boot-splash
+  settings.ts               Persisted user preferences (versioned localStorage blob)
+  scene/                    Three.js — no DOM coupling beyond the canvas
+    app-controller.ts       AppController: owns shared WebGLRenderer; swaps active scene
+    scene.ts                StarmapScene: galaxy view, tick loop, selection routing
+    system-scene.ts         SystemScene: cluster close-up, lazily built/disposed
+    input-controller.ts     InputController: classifies pointer/keyboard gestures into intents
+    grid.ts                 Range rings + axes + galactic-centre arrow; ring expand/collapse choreography
+    droplines.ts            Per-cluster vertical pins to the selected COM.z plane
+    cluster-fade.ts         Distance fade thresholds shared by labels and droplines
+    focus-marker.ts         view.target ring + dropline; fades in when pivot pans off anchors
+    cluster-brackets.ts     Yellow corner brackets — selection arms + candidate dots
     stars.ts                gl.POINTS starfield with per-star size + color
-    labels.ts               Bitmap-font overlay pass: star names, axis ticks
-    cluster-brackets.ts     Yellow corner brackets enclosing a cluster's
-                            rendered-disc bbox. Two instances (selection
-                            arms + candidate dots) render into the labels
-                            overlay scene
-    materials.ts            Pixel-snapped line ShaderMaterial + the stars shader
-  ui/                       Pixel-art HUD widget toolkit + view-mode HUD
-                            orchestrators. Each HUD renders in its own ortho
-                            pass at 1 unit = 1 buffer pixel.
-    widget.ts               Widget base: Mesh + PlaneGeometry + MeshBasicMaterial
-                            + (optional) CanvasTexture + Bounds rect; one
-                            owned-texture lifecycle for subclasses
+    labels.ts               Bitmap-font overlay pass: star names + axis ticks
+    materials.ts            Pixel-snapped line/dot ShaderMaterials + stars shader
+    render-scale.ts         RenderScaleObserver: picks integer N for setPixelRatio(DPR/N)
+  ui/                       Pixel-art widget toolkit + per-screen HUD orchestrators.
+                            Each HUD renders its own ortho pass at 1 unit = 1 buffer pixel.
+    widget.ts               Widget base: Mesh + plane + optional CanvasTexture lifecycle
     base-panel.ts           Repaint-on-state-change canvas-texture panel base
-    panel.ts                Tabbed popover: title + tab strip + active tab's
-                            sections. Four row kinds — toggle, action,
-                            keybinding (read-only), and radio (segmented-pill
-                            chooser, supports per-pill disabled state)
-    icon-button.ts          Pre-built texture-pool button (off/hover/on/onHover)
-    action-button.ts        Text pill button (off/hover/disabled), used for
-                            "View System" and "Focus"
-    painter.ts              Shared 2D primitives: surfaces, glyphs, close-X,
-                            hamburger, left-arrow, plus paintPillButton
-                            (action) and paintSegmentedPill (tabs + radios)
-    theme.ts                colors / sizes / fonts shared across widgets
-    hit-test.ts             HitResult type — the three-way 'interactive' /
-                            'opaque' / 'transparent' contract HUDs expose
-                            for pointer-event routing
+    panel.ts                Tabbed popover; toggle / action / keybinding / radio rows
+    icon-button.ts          Texture-pool button (off / hover / on / onHover)
+    action-button.ts        Text-pill button (off / hover / disabled)
+    painter.ts              Shared 2D primitives: surfaces, glyphs, pill + segmented-pill buttons
+    theme.ts                Colors, sizes, fonts shared across widgets
+    hit-test.ts             'interactive' | 'opaque' | 'transparent' pointer-routing contract
     map-hud/
-      index.ts              MapHud: settings trigger + tabbed settings
-                            panel, info card with close-X, "View System"
-                            pill, and disable-when-focused "Focus" pill.
-                            Routes pointer events through
-                            hitTab → probeRadio → hitRow → hitsBackground.
-      info-card.ts          Bottom-right cluster info card (stacks
-                            above fixed-position action buttons)
+      index.ts              MapHud: settings trigger, panel, info card, action pills
+      info-card.ts          Bottom-right cluster info card
     system-hud/
       index.ts              SystemHud: header bar + back button + reused InfoCard
-      header-bar.ts         Full-width top bar with system name centered
-  settings.ts               Persisted user preferences (localStorage, versioned
-                            JSON blob, default-merging on read so the schema
-                            can grow without invalidating old saves)
-  data/                     # adding/repairing star data → see scripts/README.md
-                            # for the workflow guide.
-    nearest-stars.csv       Source-of-truth catalog covering 0–20 ly. Initially
-                            seeded from the Wikipedia "List of nearest stars"
-                            main table by scripts/scrape-wiki-stars.mjs, then
-                            hand-tunable thereafter. Once committed, this CSV
-                            is the truth — Wikipedia drift is consulted but
-                            not auto-merged. The scraper refuses to overwrite
-                            unless --force=1 is passed.
-    stars-20-25ly.csv       Same idea for the next distance bracket, seeded
-                            from "List of star systems within 20-25 light-years".
-                            Same column schema (mass / abs_mag empty for these
-                            rows since the upstream table doesn't carry them).
-    stars-25-30ly.csv       Next bracket out, seeded from "List of star systems
-                            within 25-30 light-years". Same schema as 20-25.
-    stars-30-35ly.csv       And the next, from "List of star systems within
-                            30-35 light-years".
-    stars-35-40ly.csv       Bootstrapped directly from the local stellarcatalog
-                            listing (no Wikipedia source — the upstream
-                            "35-40 ly" Wikipedia table is patchier than the
-                            catalog at this distance). Generated by
-                            `find-missing-stars --add` against an empty CSV +
-                            `fill-from-stellarcatalog --needs=any`.
-    stars-40-45ly.csv       Same bootstrap path as 35-40 (catalog-seeded, no
-                            Wikipedia source).
-    stars-45-50ly.csv       Same bootstrap path as 35-40 (catalog-seeded, no
-                            Wikipedia source).
-    stars.ts                Reads all seven CSVs at module load, prepends Sol,
-                            normalizes spectral class, rotates ICRS RA/Dec
-                            into galactic Cartesian, derives mass via priority
-                            chain (real Wikipedia mass > M-L computation from
-                            class+app_mag+distance > position-seeded
-                            procedural jitter within the class range), then
-                            radius from class + mass; dedupes by stable id
-                            (catalog slug; closer CSV wins on conflict); also
-                            computes star clusters
-                            and lookup.
-    BDF/<Family>/<n>.bdf    Bundled bitmap fonts — three Mac-classic families
-                            (Monaco, EspySans, EspySansBold) shipped as raw
-                            .bdf text and discovered at build time
-    bdf-font.ts             Minimal BDF parser + per-font canvas atlas renderer
-    font-provider.ts        Typed FONTS catalog, lazy registration, DEV-mode
-                            drift check between FONTS and on-disk .bdf files
-    pixel-font.ts           makeLabelTexture / drawPixelText — composition
-                            helpers over font-provider for the rest of the app
+      header-bar.ts         Full-width top bar with centered system name
+  data/                     Star catalog + bitmap fonts. For data tasks see scripts/README.md.
+    nearest-stars.csv       0–20 ly bracket; Wikipedia-seeded, hand-tunable
+    stars-20-25ly.csv       20–25 ly bracket
+    stars-25-30ly.csv       25–30 ly bracket
+    stars-30-35ly.csv       30–35 ly bracket
+    stars-35-40ly.csv       35–40 ly bracket; catalog-seeded (no Wikipedia source)
+    stars-40-45ly.csv       40–45 ly bracket; catalog-seeded
+    stars-45-50ly.csv       45–50 ly bracket; catalog-seeded
+    stars.ts                Loads CSVs, derives positions/mass/radius, builds clusters + lookup
+    kdtree.ts               Static 3D k-d tree backing nearest-cluster queries + pair scans
+    BDF/<Family>/<n>.bdf    Bundled bitmap fonts (Monaco, EspySans, EspySansBold)
+    bdf-font.ts             BDF parser + per-font canvas atlas renderer
+    font-provider.ts        Typed FONTS catalog; lazy registration + DEV drift check
+    pixel-font.ts           makeLabelTexture / drawPixelText composition helpers
 ```
 
 ## Architecture notes
