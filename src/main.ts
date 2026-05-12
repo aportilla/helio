@@ -9,16 +9,15 @@ initFonts();
 const canvas = document.createElement('canvas');
 document.body.appendChild(canvas);
 
-const splash = document.createElement('div');
-splash.className = 'boot-splash';
-splash.innerHTML = '<div class="dot"></div><div class="ring"></div><div class="ring delay"></div>';
-document.body.appendChild(splash);
-
 const controller = new AppController(canvas);
 controller.start();
 
-// Hold the splash briefly, fade, then unmount.
-setTimeout(() => {
-  splash.classList.add('fading');
-  setTimeout(() => splash.remove(), 600);
-}, 350);
+// Splash markup is inlined in index.html so it paints before the bundle
+// loads; we just dismiss it once the scene is up.
+const splash = document.getElementById('boot-splash');
+if (splash) {
+  setTimeout(() => {
+    splash.classList.add('fading');
+    setTimeout(() => splash.remove(), 600);
+  }, 350);
+}

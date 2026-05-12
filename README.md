@@ -28,7 +28,7 @@ npm run typecheck  # tsc --noEmit
 One line per file — what it owns. Depth lives in the Architecture notes below; behavior overlaps (`grid.ts` choreography, `panel.ts` row kinds, etc.) are documented there, not here.
 
 ```
-index.html                  Vite entry: single <script> → main.ts
+index.html                  Vite entry: inline splash markup + critical CSS, single <script> → main.ts
 scripts/                    Star-data tooling — read scripts/README.md first
   README.md                 Workflow guide for star-data tasks
   scrape-wiki-stars.mjs     Initial-seeding Wikipedia → CSV scraper
@@ -41,8 +41,8 @@ scripts/                    Star-data tooling — read scripts/README.md first
   lookup-star.mjs           Ad-hoc: name (or distance range) → catalog URL
   lib/catalog-index.mjs     Shared catalog parsing, name matching, CSV, redirects
 src/
-  main.ts                   Bootstrap: fonts, canvas, splash, AppController
-  styles.css                Body reset + canvas + boot-splash
+  main.ts                   Bootstrap: fonts, canvas, AppController, splash dismissal
+  styles.css                Body reset + canvas (splash CSS is inline in index.html)
   settings.ts               Persisted user preferences (versioned localStorage blob)
   scene/                    Three.js — no DOM coupling beyond the canvas
     app-controller.ts       AppController: owns shared WebGLRenderer; swaps active scene
@@ -94,7 +94,9 @@ src/
 
 ### Bootstrap / scene split
 
-`main.ts` is minimal — it imports the global stylesheet, parses the bundled BDF fonts, creates the canvas + boot splash directly via `document.createElement`, and instantiates an `AppController`. The controller owns the shared `WebGLRenderer` and decides which view-mode scene's `tick()` loop is currently driving the canvas. Two peer scenes share the renderer: `StarmapScene` (galaxy view, the default) and `SystemScene` (close-up of one cluster, lazily constructed on entry, disposed on exit). Only one is running at a time.
+`main.ts` is minimal — it imports the global stylesheet, parses the bundled BDF fonts, creates the canvas, instantiates an `AppController`, and dismisses the boot splash (held 350 ms, faded 600 ms). The controller owns the shared `WebGLRenderer` and decides which view-mode scene's `tick()` loop is currently driving the canvas. Two peer scenes share the renderer: `StarmapScene` (galaxy view, the default) and `SystemScene` (close-up of one cluster, lazily constructed on entry, disposed on exit). Only one is running at a time.
+
+The boot splash itself (cyan dot + two pinging range rings) is **inlined in `index.html`** — markup in `<body>`, critical CSS in a `<head>` `<style>` block — so it paints on the first frame, before the JS bundle is fetched and parsed. The splash isn't waiting on `main.ts`; `main.ts` is just responsible for removing it once the scene is up.
 
 There's no UI plumbing between the bootstrap and the scenes: each scene owns its own HUD orchestrator (`MapHud` for galaxy view, `SystemHud` for system view), each with its own ortho pass at 1 unit = 1 buffer pixel. HUD widgets are built on `Widget` (Mesh + PlaneGeometry + MeshBasicMaterial + optional CanvasTexture) so HUD geometry shares the rest of the scene's pixel grid.
 

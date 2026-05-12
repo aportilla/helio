@@ -4,8 +4,40 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>H • E • L • I • O</title>
+  <style>
+    /* Critical CSS: paints the dark bg + boot splash on the first frame,
+       before the JS bundle is fetched. Everything else lives in styles.css
+       and arrives with the bundle. */
+    :root { --bg: #000008; --label: #5ec8ff; }
+    html, body { height: 100%; margin: 0; background: var(--bg); overflow: hidden; }
+    .boot-splash {
+      position: fixed; inset: 0;
+      display: grid; place-items: center;
+      background: var(--bg);
+      z-index: 10;
+      transition: opacity 0.5s;
+    }
+    .boot-splash.fading { opacity: 0; }
+    .boot-splash > * { grid-area: 1 / 1; align-self: center; justify-self: center; }
+    .boot-splash .dot { width: 4px; height: 4px; background: var(--label); }
+    .boot-splash .ring {
+      width: 4px; height: 4px;
+      border: 1px solid var(--label);
+      animation: boot-ping 1.2s steps(7) infinite;
+    }
+    .boot-splash .ring.delay { animation-delay: 0.6s; }
+    @keyframes boot-ping {
+      0%   { width: 4px;  height: 4px;  opacity: 1; }
+      100% { width: 32px; height: 32px; opacity: 0; }
+    }
+  </style>
 </head>
 <body>
+  <div class="boot-splash" id="boot-splash">
+    <div class="dot"></div>
+    <div class="ring"></div>
+    <div class="ring delay"></div>
+  </div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

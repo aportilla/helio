@@ -1,15 +1,10 @@
-/* The boot splash and document use these; the in-scene HUD owns its own colors. */
-:root {
-  --bg: #000008;
-  --label: #5ec8ff;
-}
+/* The boot splash + dark bg are inlined in index.html so they paint before
+   this stylesheet (and the JS bundle) arrives. Anything here applies only
+   once the bundle is up. */
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body {
-  height: 100%;
-  overflow: hidden;
-  background: var(--bg);
   -webkit-user-select: none;
   user-select: none;
 }
@@ -39,40 +34,4 @@ canvas {
      menu from racing the in-app long-press timer. */
   -webkit-tap-highlight-color: transparent;
   -webkit-touch-callout: none;
-}
-
-.boot-splash {
-  position: fixed;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: var(--bg);
-  z-index: 10;
-  transition: opacity 0.5s;
-}
-.boot-splash.fading { opacity: 0; }
-
-/* Stack the dot and rings in a single grid cell so they share screen center. */
-.boot-splash > * { grid-area: 1 / 1; align-self: center; justify-self: center; }
-
-.boot-splash .dot {
-  width: 4px;
-  height: 4px;
-  background: var(--label);
-}
-
-/* Concentric range-ring vocabulary borrowed from the map. steps() jumps the
-   size in integer-pixel increments per frame so the 1-px border stays crisp
-   instead of softening through a sub-pixel scale interpolation. */
-.boot-splash .ring {
-  width: 4px;
-  height: 4px;
-  border: 1px solid var(--label);
-  animation: boot-ping 1.2s steps(7) infinite;
-}
-.boot-splash .ring.delay { animation-delay: 0.6s; }
-
-@keyframes boot-ping {
-  0%   { width: 4px;  height: 4px;  opacity: 1; }
-  100% { width: 32px; height: 32px; opacity: 0; }
 }
