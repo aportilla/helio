@@ -171,6 +171,18 @@ export class InputController {
   // getHeldKeys() in its tick loop.
   private readonly heldKeys = new Set<string>();
 
+  // Input-source preemption. The OS keeps reporting the cursor's last known
+  // position forever, but once the user starts driving with the keyboard
+  // (WASDQEZX) that position is stale data — in a dense starfield it would
+  // otherwise pin the hover candidate on whatever the cursor happens to be
+  // parked over, flickering against the keyboard-driven focus-proximity
+  // candidate. Pressing any nav key marks the pointer stale and emits a
+  // one-shot has=false to clear hover; the next pointermove flips it back
+  // to fresh. Releasing keys does NOT unstale — only actual cursor motion
+  // does — so the candidate can't snap back onto a static cursor after the
+  // user stops keying.
+  private pointerStale = false;
+
   // Long-press timer state. Armed in onPointerDown for touch pointers only,
   // cancelled by movement / second finger / lift / OS-cancel / stop().
   // longPressFired suppresses the trailing pointerup's click path so a hold
@@ -367,6 +379,11 @@ export class InputController {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    // Cursor moved → pointer is fresh again, hover takes over from any
+    // prior keyboard-nav suppression. The existing has=true emit below
+    // re-enables hover the same tick (unless gated by touch/HUD).
+    this.pointerStale = false;
+
     // Hit-test the HUD layer first. Touch input has no hover semantics
     // (drop pointer regardless); mouse/pen leak to the world only when
     // the HUD is fully transparent at the cursor — anything 'opaque' or
@@ -523,6 +540,14 @@ export class InputController {
       // (e.g. boost) without breaking shortcuts.
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       this.heldKeys.add(k);
+      // Keyboard is now driving — gate off hover until the cursor moves
+      // again (see pointerStale). One-shot the has=false emit on the
+      // fresh→stale transition so the candidate clears this tick; auto-
+      // repeated keydowns then short-circuit.
+      if (!this.pointerStale) {
+        this.pointerStale = true;
+        this.handlers.onPointerHoverChanged(0, 0, false);
+      }
       // User taking manual control cancels any in-flight focus glide,
       // otherwise the lerp would fight the WASD translation.
       this.handlers.cancelFocusAnimation();
