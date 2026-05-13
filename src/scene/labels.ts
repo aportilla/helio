@@ -178,13 +178,30 @@ export class Labels {
   // bottom-left). Returns false if the point sits behind the near plane or
   // beyond the far plane — caller should hide the mesh in that case.
   //
-  // Special-cases the camera's orbit target: by construction it projects to
-  // NDC (0,0), but the matrix math doesn't cancel exactly under FP and the
-  // result oscillates by ~1e-7 NDC as yaw/pitch rotate. That sub-pixel noise
-  // crosses the integer/half-integer threshold in placeAt() and produces a
-  // 1px x/y twitch on the focused star's label every orbit frame. Other
-  // labels see the same noise but it's swamped by their legitimate per-frame
-  // motion, so we only short-circuit the equality case.
+  // Two stability gates layered on top of the raw projection:
+  //
+  // 1. **viewTarget short-circuit.** When the world point is bit-exactly
+  //    the camera's orbit target, the projection should land at NDC (0,0)
+  //    by construction; the matrix math gets it almost-right with a tiny
+  //    residue that varies with yaw. Skipping the math nails the focused
+  //    star to exact buffer center every frame. Only fires when
+  //    Vector3.equals returns true — which means the focused star itself
+  //    for any cluster where view.target was set from the primary, but
+  //    NOT a single-member cluster whose COM differs from the primary's
+  //    position by 1 ULP because (mass * x) / mass ≠ x in FP for most
+  //    non-power-of-2 masses.
+  //
+  // 2. **Pre-snap to nearest 0.5 buffer px.** Catches the cases the
+  //    short-circuit doesn't. placeAt() rounds the label corner with
+  //    Math.round, whose discontinuity sits at X.5. For unlucky
+  //    bufferW/label-width parity combinations (e.g. bufferW odd and
+  //    L.w even) the projected position lands EXACTLY on that
+  //    discontinuity for a focused star, and any sign-flipping FP noise
+  //    in the projection — however microscopic — flips the rounded
+  //    corner by 1 px. Snapping screen.x/y to a multiple of 0.5 here
+  //    moves the discontinuity to X.25 / X.75, which the projection
+  //    essentially never lands on, so the downstream round is
+  //    deterministic regardless of noise magnitude or sign.
   private projectToBuffer(world: Vector3, camera: Camera): boolean {
     if (this.viewTarget && world.equals(this.viewTarget)) {
       this._screen.x = this.bufferW * 0.5;
@@ -193,8 +210,8 @@ export class Labels {
     }
     this._proj.copy(world).project(camera);
     if (this._proj.z < -1 || this._proj.z > 1) return false;
-    this._screen.x = (this._proj.x * 0.5 + 0.5) * this.bufferW;
-    this._screen.y = (this._proj.y * 0.5 + 0.5) * this.bufferH;
+    this._screen.x = Math.round((this._proj.x * 0.5 + 0.5) * this.bufferW * 2) / 2;
+    this._screen.y = Math.round((this._proj.y * 0.5 + 0.5) * this.bufferH * 2) / 2;
     return true;
   }
 
