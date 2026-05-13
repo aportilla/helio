@@ -51,7 +51,7 @@ src/
     input-controller.ts     InputController: classifies pointer/keyboard gestures into intents
     grid.ts                 Range rings + axes + galactic-centre arrow; ring expand/collapse choreography
     droplines.ts            Per-cluster vertical pins to the selected COM.z plane
-    cluster-fade.ts         Distance fade thresholds shared by labels and droplines
+    cluster-fade.ts         Distance fade thresholds shared by labels, droplines, and the star pivot-dim
     focus-marker.ts         view.target ring + dropline; fades in when pivot pans off anchors
     cluster-brackets.ts     Yellow corner brackets — selection arms + candidate dots
     stars.ts                gl.POINTS starfield with per-star size + color
@@ -229,6 +229,22 @@ Under perspective, the stars vertex shader scales each disc by a depth factor de
 - Computed per-vertex from `modelViewMatrix * position`, so it picks up both camera-to-target distance and each star's offset from the focus naturally.
 
 White dwarfs (`pxSize ≈ 3`) hit the size-2 floor first as their depth crosses ~1.5 × `REF_DIST`.
+
+### Star pivot-dim (local-focus brightness)
+
+Stars outside the user's current point of interest are dimmed toward `FADE_MIN = 0.25` brightness so dense starfields read as a focused local volume rather than a wall of equally-bright dots. The dim is computed per-vertex in the stars shader and applied by multiplying `vColor` toward black — **not via alpha**, because stars render `transparent: false, depthWrite: true` for the "closer stars occlude farther ones" guarantee, and going transparent would break attribute-order rendering in dense fields.
+
+Three signals combine:
+
+- **Pivot ramp.** Per-star world-distance to `view.target` (the orbit pivot), keyed to `PIVOT_FADE_NEAR / PIVOT_FADE_FAR` from `cluster-fade.ts` — the same thresholds the cluster label fade uses, so a star and its label dim together at the same distance. (The cluster-fade module's `CAMERA_FADE_*` thresholds are intentionally NOT consulted here; see below.)
+- **Zoom-distance scaling.** A per-frame `uDimAmount` uniform driven CPU-side from `view.distance`: full effect when zoomed in, smoothly off when zoomed out. Bounds are `STAR_DIM_FULL_BELOW = 40` and `STAR_DIM_OFF_ABOVE = 100` (also in `cluster-fade.ts`). At default zoom (`view.distance = 30`) the effect is at full strength; past 100 ly orbit radius the dim is gone entirely so a zoomed-out player sees every star at its natural brightness — the galaxy "opens up."
+- **Selection / candidate bypass.** A per-star `aClusterIdx` attribute lets the shader compare against `uSelectedCluster` and `uCandidateCluster` uniforms; matching stars render at full brightness regardless of pivot distance. Mirrors the yellow-label promotion in labels.ts so hovering a far-away star isn't an awkward "the dot dims while the bracket and label pop on top." Hover wins via the same candidate slot the brackets read.
+
+**Why orbit-distance scaling and not a per-star camera ramp** like the labels use: when zoomed all the way out, every star is far from the camera, so a per-star camera ramp would never re-brighten on zoom-out — it would pin even the nearby stars dim. The label fade tolerates this because hiding distant labels at zoom-out is desirable (the waymarker ramp brings back a curated few); for stars the desired behavior is the opposite, so the camera signal is reinterpreted as an orbit-radius "is the effect even active" gate.
+
+`makeStarsMaterial` injects `PIVOT_FADE_*` and `FADE_MIN` as `const float`s baked from the JS imports at material construction; `uPivotWorld`, `uSelectedCluster`, `uCandidateCluster`, and `uDimAmount` are updated each tick by `StarPoints.setPivot / setSelectedCluster / setCandidateCluster / setDimAmount` called from `StarmapScene.tick`. The pivot uniform is kept distinct from `uFocusWorld` (which doubles as the "snap to NDC zero" key for the focused-vertex pixel-snap fix) so the two semantics don't get accidentally coupled if either gets retuned.
+
+The effect is starmap-only; `SystemScene` doesn't apply it.
 
 ### Star clusters
 

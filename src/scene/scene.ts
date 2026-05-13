@@ -15,6 +15,7 @@ import { InputController, type InputHandlers } from './input-controller';
 import { Labels } from './labels';
 import { StarPoints } from './stars';
 import { setSnappedLineViewport } from './materials';
+import { STAR_DIM_FULL_BELOW, STAR_DIM_OFF_ABOVE } from './cluster-fade';
 import { RenderScaleObserver, effectiveScale } from './render-scale';
 import { MapHud } from '../ui/map-hud';
 import { STARS, STAR_CLUSTERS, clusterIndexFor, nearestClusterIdxTo } from '../data/stars';
@@ -340,6 +341,7 @@ export class StarmapScene {
   private selectAndFocusCluster(clusterIdx: number): void {
     this.selectedClusterIdx = clusterIdx;
     this.labels.setSelectedCluster(clusterIdx);
+    this.starPoints.setSelectedCluster(clusterIdx);
     this.selectionBrackets.setCluster(clusterIdx);
     this.hud.setSelectedCluster(clusterIdx);
     const com = STAR_CLUSTERS[clusterIdx].com;
@@ -428,6 +430,7 @@ export class StarmapScene {
   private deselect(): void {
     this.selectedClusterIdx = -1;
     this.labels.setSelectedCluster(-1);
+    this.starPoints.setSelectedCluster(-1);
     this.selectionBrackets.setCluster(-1);
     this.hud.setSelectedCluster(-1);
     this.grid.setSelection(null);
@@ -593,6 +596,18 @@ export class StarmapScene {
     this.grid.update(now);
 
     this.starPoints.setFocus(this.view.target);
+    this.starPoints.setPivot(this.view.target);
+    // Scale the local-focus dim by orbit distance: full effect when zoomed
+    // in, smoothly off when zoomed out. Keying to view.distance (camera-to-
+    // pivot) rather than a per-star camera ramp is what lets zoom-out
+    // restore every star to full brightness — at large orbit radii every
+    // star is far from the camera, so a per-star ramp would pin everything
+    // dim no matter how far the user zooms out.
+    const orbit = this.view.distance;
+    const dimAmount = orbit <= STAR_DIM_FULL_BELOW ? 1
+      : orbit >= STAR_DIM_OFF_ABOVE ? 0
+      : 1 - (orbit - STAR_DIM_FULL_BELOW) / (STAR_DIM_OFF_ABOVE - STAR_DIM_FULL_BELOW);
+    this.starPoints.setDimAmount(dimAmount);
 
     // Nearest cluster to the orbit pivot — computed once per tick and shared
     // by the focus marker (anchor when nothing selected) and (next commit)
@@ -646,6 +661,7 @@ export class StarmapScene {
     this.candidateClusterIdx = candidate;
     this.candidateBrackets.setCluster(candidate);
     this.labels.setCandidateCluster(candidate);
+    this.starPoints.setCandidateCluster(candidate);
 
     this.labels.update(this.camera, this.view.target);
     this.selectionBrackets.update(this.camera, this.view.target);
