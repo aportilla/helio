@@ -129,11 +129,27 @@ export class ClusterBrackets {
   // bottom-left). Returns false if the point sits behind the near plane or
   // beyond the far plane — caller skips it from the bbox.
   //
-  // Same NDC-(0,0) jitter trick as Labels.projectToBuffer: when the world
-  // point is the camera's orbit target, it should project to screen center
-  // by construction but FP noise in the matrix math oscillates the result
-  // by ~1e-7 NDC every frame. Caller sets viewTarget on this instance so we
-  // can short-circuit the equality case.
+  // Two stability gates, same shape as Labels.projectToBuffer:
+  //
+  // 1. **viewTarget short-circuit.** When the world point is bit-exactly
+  //    the camera's orbit target, the projection is NDC (0,0) by
+  //    construction; skipping the matrix math pins the result to exact
+  //    buffer center. Fires for the COM-anchor on every selected cluster
+  //    and additionally for the member projection on any cluster where
+  //    (mass * x) / mass round-trips to the primary's coordinates bit-
+  //    exact (Sol, YZ Ceti, every power-of-2 mass).
+  //
+  // 2. **Pre-snap to nearest 0.5 buffer px.** Catches the cases where
+  //    the short-circuit silently misses by 1 ULP — e.g. Tau Ceti's
+  //    (mass=0.783, x=10.293…) round-trips with a single-bit error on x.
+  //    Without this snap, the member's screen.x lands at `cx + ε` with
+  //    ε non-zero but tiny, `dx = r + |ε|`, and
+  //    `Math.ceil(2 * (r + 4 + |ε|))` flips between `2r+8` and `2r+9`
+  //    as ε's magnitude crosses the ULP threshold of the addition.
+  //    Snapping screen.x/y to a multiple of 0.5 here zeroes |screen − cx|
+  //    when the projection lands within ¼ px of the snapped anchor (which
+  //    a focused star always does), so the ceil input is an exact
+  //    integer and the size is deterministic.
   private projectToBuffer(world: Vector3, camera: Camera): boolean {
     if (this.viewTarget && world.equals(this.viewTarget)) {
       this._screen.x = this.bufferW * 0.5;
@@ -142,8 +158,8 @@ export class ClusterBrackets {
     }
     this._proj.copy(world).project(camera);
     if (this._proj.z < -1 || this._proj.z > 1) return false;
-    this._screen.x = (this._proj.x * 0.5 + 0.5) * this.bufferW;
-    this._screen.y = (this._proj.y * 0.5 + 0.5) * this.bufferH;
+    this._screen.x = Math.round((this._proj.x * 0.5 + 0.5) * this.bufferW * 2) / 2;
+    this._screen.y = Math.round((this._proj.y * 0.5 + 0.5) * this.bufferH * 2) / 2;
     return true;
   }
 
