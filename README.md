@@ -309,7 +309,7 @@ Suppressed entirely during the focus glide — while `view.target` is in transit
 
 Yellow corner brackets enclosing a cluster's rendered-disc bbox live in `src/scene/cluster-brackets.ts` (`ClusterBrackets`). Two instances render simultaneously into the labels overlay scene:
 
-- **Selection brackets** (`style: 'arms'`) — full L-corner reticle around the currently-selected cluster. Single-member clusters get a tight square; a tilted binary ring gets a rectangular bbox showing the system's screen orientation. Cleared when the selection clears.
+- **Selection brackets** (`style: 'arms'`) — full L-corner reticle around the currently-selected cluster. Anchored on the cluster's COM (which is exactly where `view.target` parks after focus completes) and sized as a square large enough to enclose every member's rendered disc — single-member clusters collapse to a tight box, binaries/triples grow symmetrically around the COM. Anchoring on the COM rather than the per-frame member bbox midpoint pins the bracket to the same NDC-(0,0) short-circuit `Labels.projectToBuffer` uses, so sub-pixel FP noise in the matrix math can't twitch the reticle 1 px laterally while the camera orbits. Cleared when the selection clears.
 - **Candidate brackets** (`style: 'dots'`) — single-pixel corners (same color, same brightness, same corner positions as the selection arms) around the *candidate* cluster. The dot corners sit exactly where the arms would, so promoting a candidate to selection grows arms outward from the same dots with no positional shift.
 
 **Only one candidate at a time.** The candidate slot is filled by, in priority order:

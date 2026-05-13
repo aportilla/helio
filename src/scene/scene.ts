@@ -648,8 +648,8 @@ export class StarmapScene {
     this.labels.setCandidateCluster(candidate);
 
     this.labels.update(this.camera, this.view.target);
-    this.selectionBrackets.update(this.camera);
-    this.candidateBrackets.update(this.camera);
+    this.selectionBrackets.update(this.camera, this.view.target);
+    this.candidateBrackets.update(this.camera, this.view.target);
 
     this.renderer.render(this.scene, this.camera);
     // Overlay passes — disable autoClear so the second/third renders don't

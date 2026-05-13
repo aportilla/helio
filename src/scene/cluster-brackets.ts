@@ -94,6 +94,10 @@ export class ClusterBrackets {
   private readonly _view = new Vector3();
   private readonly _screen = { x: 0, y: 0 };
 
+  // Set per-frame from scene.ts so projectToBuffer can short-circuit the
+  // orbit-target equality case (see projectToBuffer).
+  private viewTarget: Vector3 | null = null;
+
   constructor(style: BracketStyle) {
     this.style = style;
     const mat = new MeshBasicMaterial({
@@ -124,7 +128,18 @@ export class ClusterBrackets {
   // Project a world position into buffer-pixel coords (Y-up, origin at
   // bottom-left). Returns false if the point sits behind the near plane or
   // beyond the far plane — caller skips it from the bbox.
+  //
+  // Same NDC-(0,0) jitter trick as Labels.projectToBuffer: when the world
+  // point is the camera's orbit target, it should project to screen center
+  // by construction but FP noise in the matrix math oscillates the result
+  // by ~1e-7 NDC every frame. Caller sets viewTarget on this instance so we
+  // can short-circuit the equality case.
   private projectToBuffer(world: Vector3, camera: Camera): boolean {
+    if (this.viewTarget && world.equals(this.viewTarget)) {
+      this._screen.x = this.bufferW * 0.5;
+      this._screen.y = this.bufferH * 0.5;
+      return true;
+    }
     this._proj.copy(world).project(camera);
     if (this._proj.z < -1 || this._proj.z > 1) return false;
     this._screen.x = (this._proj.x * 0.5 + 0.5) * this.bufferW;
@@ -174,45 +189,55 @@ export class ClusterBrackets {
     this.mesh.position.set(cornerX + size * 0.5, cornerY + size * 0.5, 0);
   }
 
-  update(camera: Camera): void {
+  update(camera: Camera, viewTarget: Vector3): void {
+    this.viewTarget = viewTarget;
     if (this.clusterIdx < 0) {
       this.mesh.visible = false;
       return;
     }
-    // Bbox of every cluster member's rendered disc, so a binary/triple
-    // reads as a single bracketed system whose corners describe its current
-    // screen orientation. Single-member clusters collapse to the previous
-    // square-around-one-disc behavior. If a member is behind the camera
+    const cluster = STAR_CLUSTERS[this.clusterIdx];
+
+    // Anchor the bracket on the cluster COM rather than the bbox midpoint
+    // of projected members. When view.target sits on this COM (i.e. the
+    // camera is orbiting the selected cluster), projectToBuffer's NDC-(0,0)
+    // short-circuit pins the anchor to exact buffer center — otherwise the
+    // bbox midpoint inherits the matrix's ~1e-7 NDC FP noise and the
+    // bracket twitches 1px laterally every orbit frame as placeAt()'s
+    // Math.round crosses pixel boundaries. Routing the anchor through
+    // projectToBuffer (rather than through the per-member bbox midpoint)
+    // is what lets the trick apply: view.target only ever equals the COM,
+    // never an arbitrary member.
+    this._world.set(cluster.com.x, cluster.com.y, cluster.com.z);
+    if (!this.projectToBuffer(this._world, camera)) {
+      this.mesh.visible = false;
+      return;
+    }
+    const cx = this._screen.x;
+    const cy = this._screen.y;
+
+    // Bracket size: max offset of any member's rendered disc from the
+    // anchor, so the bracket grows symmetrically around the stable COM.
+    // Tilted binaries / triples expand the radius to cover both members;
+    // single-member clusters collapse to a tight square around the disc.
+    // Per-member FP noise now only nudges this radius (one Math.ceil hop),
+    // never the position. If a member is behind the camera
     // (projectToBuffer false) we still draw brackets around the visible
     // ones rather than hiding the whole bracket.
-    const cluster = STAR_CLUSTERS[this.clusterIdx];
-    let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+    let radius = 0;
     for (const memIdx of cluster.members) {
       const s = STARS[memIdx];
       this._world.set(s.x, s.y, s.z);
       if (!this.projectToBuffer(this._world, camera)) continue;
       const r = this.computeRenderedStarSize(memIdx, camera) * 0.5;
-      if (this._screen.x - r < xmin) xmin = this._screen.x - r;
-      if (this._screen.x + r > xmax) xmax = this._screen.x + r;
-      if (this._screen.y - r < ymin) ymin = this._screen.y - r;
-      if (this._screen.y + r > ymax) ymax = this._screen.y + r;
+      const dx = Math.abs(this._screen.x - cx) + r;
+      const dy = Math.abs(this._screen.y - cy) + r;
+      if (dx > radius) radius = dx;
+      if (dy > radius) radius = dy;
     }
-    if (xmin === Infinity) {
-      this.mesh.visible = false;
-      return;
-    }
-    // Square bracket, sized to enclose the larger of the two bbox
-    // dimensions (so a tilted binary's corners fully contain both members
-    // on either axis), centered on the bbox midpoint. Keeps the visual
-    // identity consistent across single-star and multi-star selections —
-    // only the size scales with the system.
-    const padded = 2 * BRACKET_GAP_PX;
-    const span = Math.max(xmax - xmin, ymax - ymin);
-    const size = Math.max(BRACKET_MIN_SIZE, Math.ceil(span + padded));
+
+    const size = Math.max(BRACKET_MIN_SIZE, Math.ceil(2 * (radius + BRACKET_GAP_PX)));
     this.ensureSize(size);
     this.mesh.visible = true;
-    const cx = (xmin + xmax) * 0.5;
-    const cy = (ymin + ymax) * 0.5;
     this.placeAt(cx, cy, size);
   }
 }
