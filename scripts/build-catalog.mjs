@@ -15,6 +15,9 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hash32, mulberry32 } from './lib/prng.mjs';
+import { fillBodies } from './lib/procgen.mjs';
+import { generateSystem } from './lib/procgen-architect.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
@@ -65,23 +68,6 @@ function normalizeSpectralClass(raw) {
   const c = m[0];
   if (c === 'L' || c === 'T' || c === 'Y') return 'BD';
   return c;
-}
-
-function hash32(s) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
-  return h >>> 0;
-}
-
-function mulberry32(seed) {
-  let t = seed >>> 0;
-  return () => {
-    t = (t + 0x6D2B79F5) >>> 0;
-    let r = t;
-    r = Math.imul(r ^ (r >>> 15), r | 1);
-    r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 const CLASS_MASS_RANGE = {
@@ -576,11 +562,24 @@ function parseCsvBodies(text, label) {
     if (!BODY_KINDS.has(kind)) throw new Error(`${label}: ${id} invalid kind=${kind}`);
     const source = (row[ix.source] ?? '').trim();
     if (!BODY_SOURCES.has(source)) throw new Error(`${label}: ${id} invalid source=${source}`);
-    const worldClass = cellOrNull(row[ix.world_class]);
+
+    // Per-row tracking of which fields were literally blank in the CSV
+    // (procgen targets), as distinct from cells marked 'n/a' which stay
+    // null forever. Both still parse to null on the body object; the
+    // unknowns list is the build-time signal that the Filler reads.
+    const unknowns = [];
+    const trackedCell = (csvName, jsName) => {
+      const raw = (row[ix[csvName]] ?? '').trim();
+      if (raw === '') { unknowns.push(jsName); return null; }
+      if (raw === 'n/a') return null;
+      return raw;
+    };
+
+    const worldClass = trackedCell('world_class', 'worldClass');
     if (worldClass !== null && !WORLD_CLASSES.has(worldClass)) {
       throw new Error(`${label}: ${id} invalid world_class=${worldClass}`);
     }
-    const biosphere = cellOrNull(row[ix.biosphere]);
+    const biosphere = trackedCell('biosphere', 'biosphere');
     if (biosphere !== null && !BIOSPHERES.has(biosphere)) {
       throw new Error(`${label}: ${id} invalid biosphere=${biosphere}`);
     }
@@ -599,7 +598,7 @@ function parseCsvBodies(text, label) {
       moons: [],
     };
     for (const [csvName, jsName] of BODY_NUMERIC_FIELDS) {
-      const c = cellOrNull(row[ix[csvName]]);
+      const c = trackedCell(csvName, jsName);
       if (c === null) { body[jsName] = null; continue; }
       const n = Number(c);
       if (!Number.isFinite(n)) {
@@ -610,8 +609,9 @@ function parseCsvBodies(text, label) {
       body[jsName] = n;
     }
     for (const [csvName, jsName] of BODY_STRING_FIELDS) {
-      body[jsName] = cellOrNull(row[ix[csvName]]);
+      body[jsName] = trackedCell(csvName, jsName);
     }
+    body._unknowns = unknowns;
     out.push(body);
   }
   return out;
@@ -711,7 +711,24 @@ async function main() {
 
   const bodiesText = await readFile(resolve(DATA_DIR, BODIES_FILE), 'utf8');
   const rawBodies = parseCsvBodies(bodiesText, BODIES_FILE);
-  const { stars, bodies } = attachBodies(placedStars, rawBodies);
+
+  // Architect — generate procgen systems for stars with no catalog planets.
+  // v1 skips augmenting partially-observed stars (those with at least one
+  // catalog planet); Phase 4 will overlay procgen extras on those too.
+  const catalogPlanetHosts = new Set(rawBodies.filter(b => b.kind === 'planet').map(b => b.hostId));
+  const procgenBodies = [];
+  for (const star of placedStars) {
+    if (catalogPlanetHosts.has(star.id)) continue;
+    procgenBodies.push(...generateSystem(star));
+  }
+  const allBodies = [...rawBodies, ...procgenBodies];
+
+  const { stars, bodies: resolvedBodies } = attachBodies(placedStars, allBodies);
+  // Body Filler — fills `_unknowns` cells from physics + seeded PRNG;
+  // strips the marker before the JSON write. Bodies whose anchors don't
+  // support filling (no host star resolved, missing mass/radius) keep
+  // their nulls.
+  const bodies = fillBodies(resolvedBodies, stars);
 
   await mkdir(dirname(OUT_PATH), { recursive: true });
   await writeFile(OUT_PATH, JSON.stringify({ stars, clusters, bodies }));
