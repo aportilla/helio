@@ -593,7 +593,7 @@ export class StarmapScene {
     // Grid runs its own per-frame animation off this driver call.
     // Droplines fade is binary (set in selectAndFocusCluster / deselect),
     // so no per-tick scaling is needed here.
-    this.grid.update(now);
+    this.grid.update(now, this.camera.position);
 
     this.starPoints.setFocus(this.view.target);
     this.starPoints.setPivot(this.view.target);

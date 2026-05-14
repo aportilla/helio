@@ -24,6 +24,14 @@ export const PIVOT_FADE_FAR   = 20;
 export const CAMERA_FADE_NEAR = 30;
 export const CAMERA_FADE_FAR  = 60;
 
+// Range-ring chrome (Grid: rings + axes + galactic-centre arrow) gets its
+// own zoom-fade ramp keyed to camera-to-selection-COM distance. Decoupled
+// from CAMERA_FADE_* so the rings can reach full opacity slightly sooner
+// on zoom-in than star labels do — the chrome is a wider on-screen feature
+// (outermost ring is 20 ly across) that earns its full presence earlier.
+export const GRID_FADE_NEAR = 40;
+export const GRID_FADE_FAR  = 60;
+
 // Stars-only: when to enable / disable the per-star pivot-dim local-focus
 // effect (see stars shader in materials.ts). Keyed to ORBIT DISTANCE
 // (view.distance = camera ↔ pivot), not per-star camera distance, because

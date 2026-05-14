@@ -11,6 +11,7 @@
 
 import { BufferGeometry, Group, Line, LineSegments, Object3D, ShaderMaterial, Vector3 } from 'three';
 import { snappedLineMat } from './materials';
+import { GRID_FADE_NEAR, GRID_FADE_FAR } from './cluster-fade';
 
 const GRID_OPACITY  = 0.32;
 const ARROW_OPACITY = 0.45;
@@ -39,6 +40,12 @@ interface Frame {
   // World position the frame is anchored at — mirrors group.position.
   // Compared against incoming COMs to detect re-clicks on the same selection.
   position: Vector3;
+  // Per-frame materials so each frame's uOpacity can ramp independently
+  // off its own COM's camera distance. During a selection swap the OLD
+  // (collapsing) frame and the NEW (expanding) frame sit at different
+  // COMs and would otherwise share one fade value.
+  lineMat: ShaderMaterial;
+  arrowMat: ShaderMaterial;
 }
 
 function ringPoints(radius: number, segments: number): Vector3[] {
@@ -50,7 +57,9 @@ function ringPoints(radius: number, segments: number): Vector3[] {
   return pts;
 }
 
-function buildFrame(lineMat: ShaderMaterial, arrowMat: ShaderMaterial): Frame {
+function buildFrame(): Frame {
+  const lineMat  = snappedLineMat({ color: 0x1e6fc4, opacity: GRID_OPACITY });
+  const arrowMat = snappedLineMat({ color: 0x1e6fc4, opacity: ARROW_OPACITY });
   const group = new Group();
   group.visible = false;
 
@@ -109,6 +118,8 @@ function buildFrame(lineMat: ShaderMaterial, arrowMat: ShaderMaterial): Frame {
     state: 'idle',
     animStartMs: 0,
     position: new Vector3(),
+    lineMat,
+    arrowMat,
   };
 }
 
@@ -125,12 +136,10 @@ export class Grid {
   private activeIdx = -1;
 
   constructor() {
-    // Both frames share the same two materials. With element visibility
-    // toggled discretely (no per-tick opacity ramp), there's no per-frame
-    // material state to vary.
-    const lineMat = snappedLineMat({ color: 0x1e6fc4, opacity: GRID_OPACITY });
-    const arrowMat = snappedLineMat({ color: 0x1e6fc4, opacity: ARROW_OPACITY });
-    this.frames = [buildFrame(lineMat, arrowMat), buildFrame(lineMat, arrowMat)];
+    // Per-frame materials let each frame's zoom-fade opacity ramp track its
+    // own COM during a selection swap (collapsing OLD frame and expanding
+    // NEW frame typically sit at different camera distances).
+    this.frames = [buildFrame(), buildFrame()];
     for (const f of this.frames) this.group.add(f.group);
   }
 
@@ -159,9 +168,16 @@ export class Grid {
   }
 
   // Per-tick driver. Cheap when no animations are running (idle/holding
-  // frames bail immediately).
-  update(now: number): void {
-    for (const f of this.frames) this.tickFrame(f, now);
+  // frames bail immediately). Camera position drives the zoom-fade ramp
+  // applied to each non-idle frame's materials, so the ring chrome dims
+  // out as the camera retreats from the selection. Uses GRID_FADE_*
+  // (slightly tighter than the labels' CAMERA_FADE_*) so the chrome
+  // reaches full opacity a touch sooner on zoom-in.
+  update(now: number, cameraPos: Vector3): void {
+    for (const f of this.frames) {
+      this.tickFrame(f, now);
+      this.applyZoomFade(f, cameraPos);
+    }
   }
 
   // -- internal --------------------------------------------------------
@@ -240,5 +256,19 @@ export class Grid {
       f.group.visible = false;
       f.state = 'idle';
     }
+  }
+
+  // Zoom-fade: ramp each non-idle frame's material opacity off the camera's
+  // distance to that frame's COM. Idle frames are invisible already — skip
+  // the uniform write.
+  private applyZoomFade(f: Frame, cameraPos: Vector3): void {
+    if (f.state === 'idle') return;
+    const dCam = cameraPos.distanceTo(f.position);
+    let ramp: number;
+    if (dCam <= GRID_FADE_NEAR) ramp = 1;
+    else if (dCam >= GRID_FADE_FAR) ramp = 0;
+    else ramp = 1 - (dCam - GRID_FADE_NEAR) / (GRID_FADE_FAR - GRID_FADE_NEAR);
+    f.lineMat.uniforms.uOpacity.value  = ramp * GRID_OPACITY;
+    f.arrowMat.uniforms.uOpacity.value = ramp * ARROW_OPACITY;
   }
 }
