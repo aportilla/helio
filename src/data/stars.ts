@@ -64,6 +64,82 @@ export interface Star {
   // applies depth-attenuation on top of this). Derived from radiusSolar
   // via a cube-root mapping in build-catalog.mjs.
   readonly pxSize: number;
+  // Indices into BODIES of every planet that directly orbits this star,
+  // sorted by semi-major axis ascending. Empty for stars with no known or
+  // procgen-assigned planets. Moons of those planets are not in this list —
+  // they live on each planet's own `moons` array.
+  readonly planets: readonly number[];
+}
+
+export type WorldClass =
+  | 'rocky' | 'ocean' | 'ice' | 'desert' | 'lava'
+  | 'gas_dwarf' | 'gas_giant' | 'ice_giant';
+export type Biosphere = 'none' | 'microbial' | 'simple' | 'complex' | 'civilized';
+export type BodyKind = 'planet' | 'moon';
+export type BodySource = 'catalog' | 'procgen';
+
+// One planet or moon. Catalog-sourced rows come from
+// scripts/scrape-planets-from-stellarcatalog.mjs; hand-seeded Sol bodies and
+// (later) procgen output share the same shape. `kind` discriminates whether
+// `hostStarIdx` or `hostBodyIdx` is populated — never both — and whether
+// `moons` is meaningful (only planets have moons).
+//
+// Nullable fields encode two CSV-side states that collapse here: an empty
+// cell ("unknown, fill at build-time procgen") and `n/a` ("not applicable,
+// never has a value"). Once procgen ships, empties get synthesized and only
+// genuine n/a values remain null at runtime.
+export interface Body {
+  readonly id: string;
+  readonly hostId: string;
+  readonly kind: BodyKind;
+  readonly formalName: string;
+  readonly name: string;
+  readonly source: BodySource;
+  // Discriminated by `kind`: planet bodies set `hostStarIdx`, moon bodies set
+  // `hostBodyIdx`. The other is always null.
+  readonly hostStarIdx: number | null;
+  readonly hostBodyIdx: number | null;
+  // Orbit (around the host star for planets; around the host planet for moons)
+  readonly semiMajorAu: number | null;
+  readonly eccentricity: number | null;
+  readonly inclinationDeg: number | null;
+  readonly periodDays: number | null;
+  readonly orbitalPhaseDeg: number | null;
+  readonly rotationPeriodHours: number | null;
+  readonly axialTiltDeg: number | null;
+  // Physical
+  readonly massEarth: number | null;
+  readonly radiusEarth: number | null;
+  // Surface character
+  readonly worldClass: WorldClass | null;
+  readonly avgSurfaceTempK: number | null;
+  readonly surfaceTempMinK: number | null;
+  readonly surfaceTempMaxK: number | null;
+  readonly waterFraction: number | null;
+  readonly iceFraction: number | null;
+  readonly albedo: number | null;
+  readonly magneticFieldGauss: number | null;
+  readonly tectonicActivity: number | null;
+  // Atmosphere — top three gases by fraction. atm1 is the dominant species.
+  readonly surfacePressureBar: number | null;
+  readonly atm1: string | null;
+  readonly atm1Frac: number | null;
+  readonly atm2: string | null;
+  readonly atm2Frac: number | null;
+  readonly atm3: string | null;
+  readonly atm3Frac: number | null;
+  // Resources — 0..10 indices, calibrated against Earth (5/6/7/5/4/0).
+  readonly resMetals: number | null;
+  readonly resSilicates: number | null;
+  readonly resVolatiles: number | null;
+  readonly resRareEarths: number | null;
+  readonly resRadioactives: number | null;
+  readonly resExotics: number | null;
+  // Life
+  readonly biosphere: Biosphere | null;
+  // Indices into BODIES of moons orbiting this body, sorted by semi-major
+  // axis ascending. Always empty when `kind === 'moon'` (no sub-moons modeled).
+  readonly moons: readonly number[];
 }
 
 export interface StarCluster {
@@ -84,6 +160,7 @@ export interface StarCluster {
 // and these interfaces shows up at usage sites, not here.
 export const STARS: readonly Star[] = catalog.stars as readonly Star[];
 export const STAR_CLUSTERS: readonly StarCluster[] = catalog.clusters as readonly StarCluster[];
+export const BODIES: readonly Body[] = catalog.bodies as readonly Body[];
 
 // =============================================================================
 // Visual properties
@@ -105,6 +182,23 @@ export const CLASS_COLOR: Record<SpectralClass, Color> = {
   WD: new Color(0xc8d2ff),
   BD: new Color(0xa64633),
 };
+
+// Diagrammatic disc color per WorldClass. Used by SystemDiagram (and any
+// future planet-rendering consumer). Bodies whose worldClass is still null
+// (catalog rows the scraper couldn't classify, awaiting build-time procgen)
+// render in WORLD_CLASS_UNKNOWN_COLOR so they read as "TBD" rather than
+// ambiguously slotting into one of the real classes.
+export const WORLD_CLASS_COLOR: Record<WorldClass, Color> = {
+  rocky:     new Color(0xc4956a),
+  ocean:     new Color(0x4a9fd9),
+  ice:       new Color(0xd6e8f0),
+  desert:    new Color(0xe4a854),
+  lava:      new Color(0xd64a3a),
+  gas_dwarf: new Color(0xa090c8),
+  gas_giant: new Color(0xc4a878),
+  ice_giant: new Color(0x5a9ad6),
+};
+export const WORLD_CLASS_UNKNOWN_COLOR = new Color(0x808080);
 
 // =============================================================================
 // Runtime spatial indices

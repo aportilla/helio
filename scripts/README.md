@@ -24,6 +24,7 @@ If a CSV gets corrupted (e.g. by a scraper bug), the recovery path is to clear t
 | `import-system-from-catalog.mjs` | Take a primary catalog slug and rewrite all CSV rows for that system from the catalog's detail page. The catalog is the source of truth for everything: per-component display names, spectral_class, mass, V magnitudes from each `<h2 class='title'>` section; position fields (distance/RA/Dec/parallax) from the primary's section, inherited by all siblings (so the renderer's `expandCoincidentSets` rings them as one cluster). Hand-curated names (Toliman, Guniibuu) and existing field values are preserved when the catalog is silent or wrong. Default dry-run; `--apply` to write. |
 | `audit-unresolved.mjs` | Read-only report. Categorize every row whose id isn't a literal catalog slug as OVERLAP / NEAR / DISTINCT based on 3D distance to the nearest catalog-matched row. Useful for spotting truly orphaned rows after sync + expand. |
 | `lookup-star.mjs` | Resolve a star name (or distance range) to a stellarcatalog URL. Useful for ad-hoc poking. |
+| `scrape-planets-from-stellarcatalog.mjs` | Read-only walk over the cached star detail pages; write `src/data/bodies.csv` with one row per exoplanet listed in each system-structure table (semi-major axis, mass M⊕, radius R⊕, period days). Resolves the host star from the planet's catalog name (so Proxima's planets land on `alpha-centauri-c`, not on Alpha Cen A's page slug). Default dry-run; `--apply` to write, `--force` to overwrite. |
 | `lib/catalog-index.mjs` | Shared helpers: catalog HTML parsing, name normalization + variant generation, per-component section parsing for detail pages, CSV (de)serialization. Imported by the other scripts. |
 
 The local stellarcatalog listing defaults to `~/Documents/catalog.html` (override with `--catalog=PATH` on any script that uses it). The cache for fetched detail pages lives at `.cache/stellarcatalog/` (gitignored).
@@ -185,6 +186,22 @@ node scripts/lookup-star.mjs --range=6,8
 # Diff: which rows in a CSV are missing some field?
 node scripts/lookup-star.mjs --csv=src/data/stars-25-30ly.csv --missing=class
 ```
+
+### Bootstrap planet data
+
+Separate data axis from the star CSVs: `src/data/bodies.csv` holds one row per planet (and later, per moon) with `host_id` joining back to a star id. The cached stellarcatalog star pages already carry a system-structure table with semi-major axis, mass (M⊕), radius (R⊕), and period (days), so the bootstrap doesn't fetch anything — it reads the cache.
+
+```bash
+# Dry-run: print every parsed planet with its resolved host and stats
+node scripts/scrape-planets-from-stellarcatalog.mjs
+
+# Write src/data/bodies.csv (refuses to overwrite without --force)
+node scripts/scrape-planets-from-stellarcatalog.mjs --apply --force
+```
+
+Disks and belts are filtered out (they share the `exoplanet.php` link but use a different icon). Hosts are resolved from the planet's catalog name, not the cache filename, so a planet listed under Alpha Centauri A's page that actually orbits Proxima lands on `alpha-centauri-c`. Slug-derived candidates win over display-name lookup because the CSV carries duplicate display names ("Gliese 49" appears as the name of two different stars) but ids are unique.
+
+Hand-curated rows (Sol's planets and moons, future procgen output) live in `bodies.csv` alongside the scraper output. **Re-running the scraper overwrites the whole file** — a merge story doesn't exist yet, so don't re-run --apply if you've hand-edited rows since the last scrape. Recovery is `git checkout` on the file.
 
 ## Notes
 

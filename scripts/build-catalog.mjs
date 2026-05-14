@@ -479,6 +479,223 @@ function buildClusters(stars) {
 }
 
 // =============================================================================
+// Body catalog (planets + moons)
+// =============================================================================
+//
+// bodies.csv is a separate authoring surface from the star CSVs — one row per
+// planet OR moon, with `host_id` pointing to either a Star.id (planets) or
+// another Body.id (moons). The build script joins them into a tree:
+// Star.planets[] holds indices into BODIES of direct orbiters; Body.moons[]
+// holds the same for a planet's satellites.
+//
+// Three cell states from the CSV collapse into two in the runtime JSON:
+//   - empty cell → null (placeholder for procgen to fill in a later pass)
+//   - 'n/a'      → null (not applicable — gas giants have no water_fraction,
+//                        airless bodies have no atmosphere)
+//   - value      → typed value
+// Once procgen ships, empties become synthesized values at build time. The
+// runtime API is uniform `T | null` and consumers don't need to distinguish.
+
+const BODIES_FILE = 'bodies.csv';
+const WORLD_CLASSES = new Set(['rocky', 'ocean', 'ice', 'desert', 'lava', 'gas_dwarf', 'gas_giant', 'ice_giant']);
+const BIOSPHERES = new Set(['none', 'microbial', 'simple', 'complex', 'civilized']);
+const BODY_KINDS = new Set(['planet', 'moon']);
+const BODY_SOURCES = new Set(['catalog', 'procgen']);
+
+// Columns split by handling: numeric cells get parsed via Number(), value
+// cells stay as strings (or null). Both paths fold empty + 'n/a' to null.
+const BODY_NUMERIC_FIELDS = [
+  ['semi_major_au',          'semiMajorAu'],
+  ['eccentricity',           'eccentricity'],
+  ['inclination_deg',        'inclinationDeg'],
+  ['period_days',            'periodDays'],
+  ['orbital_phase_deg',      'orbitalPhaseDeg'],
+  ['rotation_period_hours',  'rotationPeriodHours'],
+  ['axial_tilt_deg',         'axialTiltDeg'],
+  ['mass_earth',             'massEarth'],
+  ['radius_earth',           'radiusEarth'],
+  ['avg_surface_temp_k',     'avgSurfaceTempK'],
+  ['surface_temp_min_k',     'surfaceTempMinK'],
+  ['surface_temp_max_k',     'surfaceTempMaxK'],
+  ['water_fraction',         'waterFraction'],
+  ['ice_fraction',           'iceFraction'],
+  ['albedo',                 'albedo'],
+  ['magnetic_field_gauss',   'magneticFieldGauss'],
+  ['tectonic_activity',      'tectonicActivity'],
+  ['surface_pressure_bar',   'surfacePressureBar'],
+  ['atm1_frac',              'atm1Frac'],
+  ['atm2_frac',              'atm2Frac'],
+  ['atm3_frac',              'atm3Frac'],
+  ['res_metals',             'resMetals'],
+  ['res_silicates',          'resSilicates'],
+  ['res_volatiles',          'resVolatiles'],
+  ['res_rare_earths',        'resRareEarths'],
+  ['res_radioactives',       'resRadioactives'],
+  ['res_exotics',            'resExotics'],
+];
+const BODY_STRING_FIELDS = [
+  ['atm1', 'atm1'],
+  ['atm2', 'atm2'],
+  ['atm3', 'atm3'],
+];
+
+function cellOrNull(raw) {
+  const t = (raw ?? '').trim();
+  return t === '' || t === 'n/a' ? null : t;
+}
+
+function parseCsvBodies(text, label) {
+  const rows = parseCsv(text);
+  const header = rows.shift();
+  if (!header) throw new Error(`${label}: empty CSV`);
+  const colIdx = (name) => {
+    const i = header.indexOf(name);
+    if (i < 0) throw new Error(`${label}: missing column ${name}`);
+    return i;
+  };
+  const ix = {
+    id: colIdx('id'),
+    host_id: colIdx('host_id'),
+    kind: colIdx('kind'),
+    formal_name: colIdx('formal_name'),
+    name: colIdx('name'),
+    source: colIdx('source'),
+    world_class: colIdx('world_class'),
+    biosphere: colIdx('biosphere'),
+  };
+  for (const [csvName] of BODY_NUMERIC_FIELDS) ix[csvName] = colIdx(csvName);
+  for (const [csvName] of BODY_STRING_FIELDS)  ix[csvName] = colIdx(csvName);
+
+  const out = [];
+  for (const row of rows) {
+    if (!row.length || (row.length === 1 && !row[0])) continue;
+    const id = (row[ix.id] ?? '').trim();
+    if (!id) continue;
+
+    const kind = (row[ix.kind] ?? '').trim();
+    if (!BODY_KINDS.has(kind)) throw new Error(`${label}: ${id} invalid kind=${kind}`);
+    const source = (row[ix.source] ?? '').trim();
+    if (!BODY_SOURCES.has(source)) throw new Error(`${label}: ${id} invalid source=${source}`);
+    const worldClass = cellOrNull(row[ix.world_class]);
+    if (worldClass !== null && !WORLD_CLASSES.has(worldClass)) {
+      throw new Error(`${label}: ${id} invalid world_class=${worldClass}`);
+    }
+    const biosphere = cellOrNull(row[ix.biosphere]);
+    if (biosphere !== null && !BIOSPHERES.has(biosphere)) {
+      throw new Error(`${label}: ${id} invalid biosphere=${biosphere}`);
+    }
+
+    const body = {
+      id,
+      hostId: (row[ix.host_id] ?? '').trim(),
+      kind,
+      formalName: (row[ix.formal_name] ?? '').trim(),
+      name: (row[ix.name] ?? '').trim(),
+      source,
+      hostStarIdx: null,
+      hostBodyIdx: null,
+      worldClass,
+      biosphere,
+      moons: [],
+    };
+    for (const [csvName, jsName] of BODY_NUMERIC_FIELDS) {
+      const c = cellOrNull(row[ix[csvName]]);
+      if (c === null) { body[jsName] = null; continue; }
+      const n = Number(c);
+      if (!Number.isFinite(n)) {
+        console.warn(`${label}: ${id} non-numeric ${csvName}=${JSON.stringify(c)}; null`);
+        body[jsName] = null;
+        continue;
+      }
+      body[jsName] = n;
+    }
+    for (const [csvName, jsName] of BODY_STRING_FIELDS) {
+      body[jsName] = cellOrNull(row[ix[csvName]]);
+    }
+    out.push(body);
+  }
+  return out;
+}
+
+// Resolves each body's host and builds parent → children index lists. Planets
+// must host on a star; moons must host on a planet. Cycles impossible by those
+// rules. Each parent's child list is sorted by semi_major_au ascending (nulls
+// last) so renderers iterate in orbit order without re-sorting.
+//
+// Unresolvable hosts → warn and drop the body. The star pipeline already drops
+// rows with missing spectral_class (e.g. TOI-540), and the scraper can't know
+// in advance that a CSV id will be filtered out, so we mirror that posture
+// here rather than failing the build on a data-quality issue downstream.
+// Moons orphaned by a dropped planet are dropped in the same pass.
+function attachBodies(stars, rawBodies) {
+  const starIdToIdx = new Map();
+  stars.forEach((s, i) => starIdToIdx.set(s.id, i));
+  const planetById = new Map();
+  for (const b of rawBodies) {
+    if (planetById.has(b.id)) throw new Error(`bodies.csv: duplicate id ${b.id}`);
+    if (b.kind === 'planet') planetById.set(b.id, b);
+  }
+
+  // Pass 1: resolve planet hosts against the survivor star set.
+  const planets = [];
+  for (const b of rawBodies) {
+    if (b.kind !== 'planet') continue;
+    const idx = starIdToIdx.get(b.hostId);
+    if (idx === undefined) {
+      console.warn(`${BODIES_FILE}: dropping ${b.id} (host star ${b.hostId} not in catalog)`);
+      planetById.delete(b.id);
+      continue;
+    }
+    planets.push({ ...b, hostStarIdx: idx, hostBodyIdx: null });
+  }
+  const planetIdxById = new Map();
+  planets.forEach((p, i) => planetIdxById.set(p.id, i));
+
+  // Pass 2: resolve moon hosts against the surviving planets.
+  const moons = [];
+  for (const b of rawBodies) {
+    if (b.kind !== 'moon') continue;
+    const planetIdx = planetIdxById.get(b.hostId);
+    if (planetIdx === undefined) {
+      const host = planetById.get(b.hostId);
+      if (host && host.kind !== 'planet') {
+        throw new Error(`body ${b.id}: moon must host on a planet, got kind=${host.kind}`);
+      }
+      console.warn(`${BODIES_FILE}: dropping moon ${b.id} (host body ${b.hostId} not in catalog)`);
+      continue;
+    }
+    moons.push({ ...b, hostStarIdx: null, hostBodyIdx: planetIdx });
+  }
+
+  // Final BODIES order: planets first, moons after — keeps hostBodyIdx
+  // indices stable (they point into this combined array, with the moon
+  // offset = planets.length added back).
+  const bodies = [...planets, ...moons.map(m => ({ ...m, hostBodyIdx: m.hostBodyIdx }))];
+
+  const starChildren = stars.map(() => []);
+  const bodyMoons = bodies.map(() => []);
+  for (let i = 0; i < bodies.length; i++) {
+    const b = bodies[i];
+    if (b.kind === 'planet') starChildren[b.hostStarIdx].push(i);
+    else bodyMoons[b.hostBodyIdx].push(i);
+  }
+  const cmp = (a, b) => {
+    const aa = bodies[a].semiMajorAu;
+    const bb = bodies[b].semiMajorAu;
+    if (aa === null && bb === null) return 0;
+    if (aa === null) return 1;
+    if (bb === null) return -1;
+    return aa - bb;
+  };
+  for (const list of starChildren) list.sort(cmp);
+  for (const list of bodyMoons) list.sort(cmp);
+
+  const finalBodies = bodies.map((b, i) => ({ ...b, moons: bodyMoons[i] }));
+  const finalStars = stars.map((s, i) => ({ ...s, planets: starChildren[i] }));
+  return { stars: finalStars, bodies: finalBodies };
+}
+
+// =============================================================================
 // Main
 // =============================================================================
 
@@ -489,12 +706,17 @@ async function main() {
     label: f,
   })));
   const raw = loadCatalog(sources);
-  const stars = expandCoincidentSets(raw);
-  const clusters = buildClusters(stars);
+  const placedStars = expandCoincidentSets(raw);
+  const clusters = buildClusters(placedStars);
+
+  const bodiesText = await readFile(resolve(DATA_DIR, BODIES_FILE), 'utf8');
+  const rawBodies = parseCsvBodies(bodiesText, BODIES_FILE);
+  const { stars, bodies } = attachBodies(placedStars, rawBodies);
+
   await mkdir(dirname(OUT_PATH), { recursive: true });
-  await writeFile(OUT_PATH, JSON.stringify({ stars, clusters }));
+  await writeFile(OUT_PATH, JSON.stringify({ stars, clusters, bodies }));
   const ms = (performance.now() - t0).toFixed(0);
-  console.log(`build-catalog: ${stars.length} stars, ${clusters.length} clusters → ${OUT_PATH} (${ms} ms)`);
+  console.log(`build-catalog: ${stars.length} stars, ${clusters.length} clusters, ${bodies.length} bodies → ${OUT_PATH} (${ms} ms)`);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

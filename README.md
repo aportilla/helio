@@ -87,8 +87,9 @@ src/
     stars-35-40ly.csv       35–40 ly bracket; catalog-seeded (no Wikipedia source)
     stars-40-45ly.csv       40–45 ly bracket; catalog-seeded
     stars-45-50ly.csv       45–50 ly bracket; catalog-seeded
-    catalog.generated.json  Build artifact (gitignored). Precomputed STARS + STAR_CLUSTERS.
-    stars.ts                Runtime catalog API — imports the JSON, exposes typed STARS/STAR_CLUSTERS, k-d tree, lookups
+    bodies.csv              Planets + moons; host_id joins to a Star.id (planets) or another Body.id (moons)
+    catalog.generated.json  Build artifact (gitignored). Precomputed STARS + STAR_CLUSTERS + BODIES.
+    stars.ts                Runtime catalog API — imports the JSON, exposes typed STARS/STAR_CLUSTERS/BODIES, k-d tree, lookups
     kdtree.ts               Static 3D k-d tree backing nearest-cluster queries
     BDF/<Family>/<n>.bdf    Bundled bitmap fonts (Monaco, EspySans, EspySansBold)
     bdf-font.ts             BDF parser + per-font canvas atlas renderer
@@ -103,11 +104,13 @@ src/
 `src/data/*.csv` is the authoring surface — hand-edited, scraper-output, the source of truth. The runtime sees a precomputed JSON snapshot produced by `scripts/build-catalog.mjs`:
 
 ```
-CSV (×7) ──► build-catalog.mjs ──► catalog.generated.json ──► stars.ts ──► consumers
-            (Node, no deps)        (gitignored)              (typed re-export)
+CSV (×7 stars + bodies.csv) ──► build-catalog.mjs ──► catalog.generated.json ──► stars.ts ──► consumers
+                                (Node, no deps)        (gitignored)              (typed re-export)
 ```
 
-The build script runs the full derivation pipeline that used to live in `src/data/stars.ts` at module load — CSV parsing, spectral-class normalization, mass priority chain (catalog value → mass-luminosity from V-mag → position-seeded jitter), radius-from-class-mass, pxSize mapping, hierarchical multi-star ring placement, cluster union-find + COM. It writes a single JSON object `{ stars, clusters }` to `src/data/catalog.generated.json`. The runtime `stars.ts` is now a thin wrapper: imports the JSON, casts it to `readonly Star[]` / `readonly StarCluster[]`, builds the cluster k-d tree, and re-exports.
+The build script runs the full derivation pipeline that used to live in `src/data/stars.ts` at module load — CSV parsing, spectral-class normalization, mass priority chain (catalog value → mass-luminosity from V-mag → position-seeded jitter), radius-from-class-mass, pxSize mapping, hierarchical multi-star ring placement, cluster union-find + COM. It also parses `bodies.csv` (planets + moons), validates enums (`world_class`, `kind`, `source`, `biosphere`), and joins each body to its host: planets to a `Star.id`, moons to another `Body.id` (which must be `kind=planet` — no sub-moons). Sorted child-index lists land on `Star.planets[]` and `Body.moons[]`, both ordered by semi-major axis. Bodies whose host doesn't survive the star pipeline (e.g. TOI-540 has no spectral class and gets dropped upstream) are warned-and-dropped rather than failing the build. It writes a single JSON object `{ stars, clusters, bodies }` to `src/data/catalog.generated.json`. The runtime `stars.ts` is now a thin wrapper: imports the JSON, casts it to `readonly Star[]` / `readonly StarCluster[]` / `readonly Body[]`, builds the cluster k-d tree, and re-exports.
+
+**Three-state cells in `bodies.csv`.** Empty cell = unknown (placeholder for the deferred build-time procgen pass to fill). `n/a` = not applicable (gas giants have no `water_fraction`, airless worlds have no atmosphere composition). A value (including `0`) = canonical/known. The build script collapses empty and `n/a` to `null` in the runtime JSON; consumers can't distinguish them today, but procgen (when it ships) reads the CSV directly and fills only empties — n/a cells stay null forever.
 
 **Why precompute.** The CSVs and parser ship to the browser today; precomputing replaces ~250 KB of CSV text + 200 lines of parser logic with a single derived JSON blob. The architectural payoff is bigger than the bytes: derivation logic stays in one Node-runnable file (no `?raw` imports, no `import.meta.env?.DEV` guards, no need for a Vite-aware test harness if we want to verify a derived value). The CSV is for authoring; the JSON is for runtime; they're connected by an explicit `npm run build:catalog` step.
 
