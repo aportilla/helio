@@ -280,3 +280,71 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
   snappedMaterials.push(m);
   return m;
 }
+
+// Flat 2D stars material — system-view variant. Strips every concept that
+// only makes sense in the perspective galaxy view: depth attenuation,
+// pivot-dim, selection/candidate bypass, focus-target snap. Keeps the
+// pixel-crisp disc rendering: integer-pixel size, parity-aware center
+// snap, fragment-shader disc discard from gl_FragCoord − vCenter.
+//
+// Designed to render under an OrthographicCamera at 1 unit = 1 buffer pixel
+// (vertex positions are buffer-pixel coords). aSize is the per-star pxSize
+// from data/stars.ts; uDiscScale is the global multiplier that takes those
+// galaxy-tuned values up to system-view diagram size.
+export function makeFlatStarsMaterial(initialDiscScale: number): ShaderMaterial {
+  const m = new ShaderMaterial({
+    uniforms: {
+      uDiscScale: { value: initialDiscScale },
+      uViewport:  { value: new Vector2(window.innerWidth, window.innerHeight) },
+    },
+    vertexShader: `
+      attribute float aSize;
+      varying vec3 vColor;
+      varying float vRadius;
+      varying vec2 vCenter;
+      uniform float uDiscScale;
+      uniform vec2 uViewport;
+      void main() {
+        vColor = color;
+        // Integer-pixel disc diameter. No depth attenuation — this is a
+        // flat diagram, every star renders at its table size scaled by the
+        // global knob. Floor + 0.5 → round-to-nearest.
+        float sz = floor(aSize * uDiscScale + 0.5);
+        // +2 rasterizer padding (matches makeStarsMaterial); the fragment
+        // shader's discard test does the real bounding.
+        gl_PointSize = sz + 2.0;
+        vRadius = sz * 0.5;
+
+        // Parity-aware snap of the projected center to the pixel grid:
+        // even sz → integer (pixel boundary), odd sz → integer + 0.5
+        // (pixel center). Identical algorithm to the perspective stars
+        // shader; under ortho the projection adds no FP noise, but the
+        // parity snap is still load-bearing so disc pixels land symmetric
+        // about the center.
+        float oddOff = mod(sz, 2.0) * 0.5;
+        vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        vec2 ndc = clip.xy / clip.w;
+        vec2 fp = (ndc * 0.5 + 0.5) * uViewport;
+        vec2 px = floor(fp - oddOff + 0.5) + oddOff;
+        vCenter = px;
+        ndc = (px / uViewport) * 2.0 - 1.0;
+        gl_Position = vec4(ndc * clip.w, clip.z, clip.w);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vColor;
+      varying float vRadius;
+      varying vec2 vCenter;
+      void main() {
+        vec2 d = gl_FragCoord.xy - vCenter;
+        if (length(d) > vRadius) discard;
+        gl_FragColor = vec4(vColor, 1.0);
+      }
+    `,
+    vertexColors: true,
+    transparent: false,
+    depthWrite: false,
+  });
+  snappedMaterials.push(m);
+  return m;
+}

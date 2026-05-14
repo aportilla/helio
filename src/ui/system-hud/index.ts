@@ -4,11 +4,9 @@
 // drawn after the main scene with autoClear off. Owns:
 //   - headerBar (top, full-width) — system name centered
 //   - backBtn   (left edge of header) — IconButton, fires onBack
-//   - infoCard  (top-left of content area) — same widget the galaxy view
-//                uses, listing every cluster member
 //
-// The InfoCard is reused as-is (no close-X — the system view's exit is
-// the back button in the header).
+// The diagram itself (stars + labels) is rendered by SystemDiagram into the
+// content area below the header — see system-diagram.ts.
 
 import {
   CanvasTexture,
@@ -20,7 +18,6 @@ import { paintLeftArrow, paintSurface } from '../painter';
 import { colors, sizes } from '../theme';
 import { paintToTexture } from '../widget';
 import { IconButton, type IconButtonStates } from '../icon-button';
-import { InfoCard } from '../map-hud/info-card';
 import { HEADER_HEIGHT, HeaderBar } from './header-bar';
 
 function buildBackBtnTexture(hover: boolean): CanvasTexture {
@@ -47,7 +44,6 @@ export class SystemHud {
 
   private readonly headerBar: HeaderBar;
   private readonly backBtn: IconButton;
-  private readonly infoCard: InfoCard;
   private readonly backBtnTextures: IconButtonStates;
 
   // Fired when the user clicks the back button. SystemScene wires this
@@ -67,10 +63,6 @@ export class SystemHud {
       hitPad: sizes.iconHitPad,
     });
     this.backBtn.addTo(this.scene);
-
-    this.infoCard = new InfoCard(100);
-    this.infoCard.addTo(this.scene);
-    this.infoCard.setCluster(clusterIdx);
   }
 
   resize(bufferW: number, bufferH: number): void {
@@ -90,10 +82,9 @@ export class SystemHud {
       this.onBack();
       return true;
     }
-    // Absorb clicks on opaque chrome (header bar background, info card
-    // body) so they don't start an orbit drag underneath.
+    // Absorb clicks on the header bar background so they don't fall
+    // through to whatever lives behind it.
     if (this.headerBar.visibleBounds.contains(bufX, bufY)) return true;
-    if (this.infoCard.visible && this.infoCard.visibleBounds.contains(bufX, bufY)) return true;
     return false;
   }
 
@@ -112,7 +103,6 @@ export class SystemHud {
   hitTest(bufX: number, bufY: number): HitResult {
     if (this.backBtn.bounds.contains(bufX, bufY)) return 'interactive';
     if (this.headerBar.visibleBounds.contains(bufX, bufY)) return 'opaque';
-    if (this.infoCard.visible && this.infoCard.visibleBounds.contains(bufX, bufY)) return 'opaque';
     return 'transparent';
   }
 
@@ -127,10 +117,6 @@ export class SystemHud {
     const innerH = HEADER_HEIGHT - 1;
     const btnBottom = headerBottom + Math.floor((innerH - sizes.iconBox) / 2) + 1;
     this.backBtn.placeAt(sizes.edgePad, btnBottom);
-
-    // Info card: top-left of the content area, just under the header.
-    const cardTop = headerBottom - sizes.cardMargin;
-    this.infoCard.placeAt(sizes.cardMargin, cardTop - this.infoCard.height);
   }
 
   dispose(): void {
@@ -139,6 +125,5 @@ export class SystemHud {
     }
     this.headerBar.dispose();
     this.backBtn.dispose();
-    this.infoCard.dispose();
   }
 }
