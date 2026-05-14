@@ -16,10 +16,22 @@ export interface Star {
   // edits, so consumers like WAYPOINT_STAR_IDS key on this rather than name.
   readonly id: string;
   readonly name: string;
+  // IAU canonical designation (e.g. "Alpha Centauri B" for the row whose
+  // display `name` is "Toliman"). Empty when it would duplicate `name` —
+  // the renderer treats empty as "no separate IAU line to draw," which is
+  // the case for ~95% of catalog rows where `name` already IS the IAU
+  // form (`Sirius A`, `Capella Aa`, `61 Cygni A`). Populated only for
+  // hand-curated colloquial entries.
+  readonly iauName: string;
   readonly x: number;
   readonly y: number;
   readonly z: number;
   readonly cls: SpectralClass;
+  // Raw spectral string from the CSV (e.g. "G2V", "M4.0Ve", "DA1.9"). Kept
+  // alongside the normalized single-letter `cls` because the raw form
+  // carries luminosity class + variability flags that the info card wants
+  // to surface; `cls` stays internal to color/font lookups.
+  readonly rawClass: string;
   // Catalog-stated distance from Sun in ly. The CSV's distance is the
   // upstream Wikipedia value (parallax-derived); √(x²+y²+z²) is computed
   // from the same distance × the unit RA/Dec direction, so the two agree by
@@ -289,6 +301,7 @@ function parseCsvCatalog(text: string, label: string): Star[] {
   const CLASS = required('spectral_class');
   const MASS = optional('mass_msun');
   const APP_MAG = optional('app_mag');
+  const IAU_NAME = optional('iau_name');
 
   const out: Star[] = [];
   // Number('') === 0, so a blanket `Number(cell)` on an empty CSV cell
@@ -313,7 +326,8 @@ function parseCsvCatalog(text: string, label: string): Star[] {
       if (import.meta.env?.DEV) console.warn(`${label}: skipping ${name} (incomplete RA/Dec/distance)`);
       continue;
     }
-    const cls = normalizeSpectralClass(row[CLASS]);
+    const rawClass = (row[CLASS] ?? '').trim();
+    const cls = normalizeSpectralClass(rawClass);
     if (cls === null) {
       // No usable spectral class — render-time defaults would mis-classify
       // the star as a brown dwarf. Skip with a DEV warning so the gap is
@@ -343,8 +357,9 @@ function parseCsvCatalog(text: string, label: string): Star[] {
     }
     const radiusSolar = radiusFromClassMass(cls, mass);
     const id = (row[ID] ?? '').trim();
+    const iauName = IAU_NAME >= 0 ? (row[IAU_NAME] ?? '').trim() : '';
     out.push({
-      id, name, ...pos, cls, distLy, mass, radiusSolar,
+      id, name, iauName, ...pos, cls, rawClass, distLy, mass, radiusSolar,
       pxSize: radiusToPxSize(radiusSolar),
     });
   }
@@ -363,8 +378,10 @@ function loadCatalog(): Star[] {
   const stars: Star[] = [{
     id: 'sol',
     name: 'Sol',
+    iauName: '',
     x: 0, y: 0, z: 0,
     cls: 'G',
+    rawClass: 'G2V',
     distLy: 0,
     mass: 1.0,
     radiusSolar: 1.0,
@@ -394,20 +411,215 @@ function loadCatalog(): Star[] {
 }
 
 // =============================================================================
-// Post-processor: ring out coincident sets so binary partners are visible
+// Post-processor: hierarchical layout of coincident sets
 // =============================================================================
 //
-// Minimum visible separation (ly) for coincident-coordinate members. Picked
-// so that at default zoom (orbit 50 ly) the displacement is ~1.5 px (visually
-// merged with the primary) and at close zoom (orbit 5 ly) it's ~10 px (clear
-// pair). Increase if binary partners feel too clumped at zoom-in; decrease
-// if they feel too separated at default zoom.
-const MIN_VIS_LY = 0.04;
+// Catalog rows for the components of a multi-star system share Wikipedia's
+// RA/Dec (real inter-member separations of 10–1000 AU are far below the
+// resolution of the table). After equatorial-to-galactic conversion they
+// land at the same point. expandCoincidentSets distributes them across two
+// concentric rings keyed off the IAU component letter encoded in each row's
+// `id` — top-level letters (A, B, C, …) on an outer ring; sub-components
+// (Aa, Ab; Ba, Bb) on a small inner ring centered on the parent's outer
+// slot. The component letter lives in `id` rather than `name` because the
+// colloquial `name` field is presentational ("Toliman", "Fomalhaut") and
+// often elides the letter — `id` is the canonical IAU-anchored slug.
+//
+// Falls back to even-ring distribution when the set's ids don't parse
+// cleanly (mixed conventions, non-letter suffixes). All-or-nothing so a
+// partial parse can't produce half-hierarchical placement.
+
+// Outer ring radius for top-level components (ly). Single-pair systems
+// (Sirius A/B) land at ±R_OUTER from COM. Tuned with R_INNER so the inner
+// pair reads as visibly tighter than the outer ring at close zoom.
+const R_OUTER = 0.05;
+// Inner ring radius for sub-components of a single top-level node (ly).
+// At ~⅓ of R_OUTER the tight pair clearly belongs to one outer slot but
+// remains resolvable as two stars when zoomed in.
+const R_INNER = 0.015;
 // Two stars within this distance (ly) are treated as coincident — i.e. the
 // catalog says "same place" within rounding. Has to be smaller than the
 // smallest curated hierarchical offset (0.08 ly) so curated layouts aren't
-// collapsed into the ring.
+// collapsed into the layout pass.
 const COINCIDENT_EPS_LY = 0.001;
+
+// Parse the trailing component-letter suffix from an id (everything after
+// the system's longest-common-prefix root) into a hierarchical path.
+// Examples:
+//   ''      → ['a']        bare primary, treat as implicit A
+//   'b'     → ['b']        top-level component
+//   'ab'    → ['a', 'b']   sub-component b under parent a
+//   'star'  → null         catalog word, not a component suffix
+//   '726-8' → null         numeric / mixed, definitely not a component
+// Anything that isn't empty or 1-2 lowercase letters returns null so the
+// caller can fall back to the unstructured layout for the whole set.
+function parseComponentPath(suffix: string): readonly string[] | null {
+  if (suffix === '') return ['a'];
+  if (!/^[a-z]{1,2}$/.test(suffix)) return null;
+  return suffix.length === 1 ? [suffix] : [suffix[0], suffix[1]];
+}
+
+function longestCommonPrefix(strs: readonly string[]): string {
+  if (strs.length === 0) return '';
+  let p = strs[0];
+  for (let i = 1; i < strs.length && p.length > 0; i++) {
+    while (!strs[i].startsWith(p)) p = p.slice(0, -1);
+  }
+  return p;
+}
+
+// Build the per-system orthonormal basis used by both rings. Returns the
+// in-plane axes (u, v) of a randomly-oriented plane in 3D, plus the rng
+// (already advanced past the basis draws) so the caller can keep
+// consuming deterministic randomness for ring start angles.
+function buildSystemBasis(rng: () => number): {
+  ux: number; uy: number; uz: number;
+  vx: number; vy: number; vz: number;
+} {
+  // Uniform unit normal on the sphere via inverse-CDF (cosPhi uniform in
+  // [-1,1] avoids pole bunching). Without this every coincident pair sat
+  // along +X in the galactic plane — a top-down view showed every binary
+  // as an identical horizontal "= =" pair.
+  const theta = rng() * Math.PI * 2;
+  const cosPhi = 2 * rng() - 1;
+  const sinPhi = Math.sqrt(Math.max(0, 1 - cosPhi * cosPhi));
+  const nx = sinPhi * Math.cos(theta);
+  const ny = sinPhi * Math.sin(theta);
+  const nz = cosPhi;
+  // Cross n with the world axis least parallel to it (avoids near-zero
+  // cross when the normal happens to align with our reference axis).
+  let rx = 1, ry = 0, rz = 0;
+  if (Math.abs(nx) > 0.9) { rx = 0; ry = 1; }
+  let ux = ry * nz - rz * ny;
+  let uy = rz * nx - rx * nz;
+  let uz = rx * ny - ry * nx;
+  const ulen = Math.hypot(ux, uy, uz);
+  ux /= ulen; uy /= ulen; uz /= ulen;
+  const vx = ny * uz - nz * uy;
+  const vy = nz * ux - nx * uz;
+  const vz = nx * uy - ny * ux;
+  return { ux, uy, uz, vx, vy, vz };
+}
+
+// Try to lay out a coincident set as a tree of (top-level slot → optional
+// inner sub-pair). Writes positions into `out` and returns true; returns
+// false if any member's id couldn't be parsed (caller falls back to the
+// even-ring layout for the whole set).
+function tryHierarchicalLayout(
+  stars: readonly Star[],
+  out: Star[],
+  setIndices: readonly number[],
+  cx: number, cy: number, cz: number,
+  rng: () => number,
+): boolean {
+  // System root = longest common id prefix, with any trailing '-' trimmed
+  // so suffixes are clean letters rather than '-aa'/'-b'.
+  const ids = setIndices.map(i => stars[i].id);
+  let lcp = longestCommonPrefix(ids);
+  if (lcp.endsWith('-')) lcp = lcp.slice(0, -1);
+
+  // Parse each member's suffix. Bail on first unparseable so the whole
+  // set falls back together — partial trees produce weird placement.
+  type Parsed = { idx: number; path: readonly string[] };
+  const parsed: Parsed[] = [];
+  for (const idx of setIndices) {
+    const after = stars[idx].id.slice(lcp.length).replace(/^-/, '');
+    const path = parseComponentPath(after);
+    if (path === null) return false;
+    parsed.push({ idx, path });
+  }
+
+  // Group by top-level letter. Each entry's children are sub-letters
+  // under that letter; `starIdx` is set when a member sits at the parent
+  // level itself (bare primary or top-level leaf).
+  type TopLevel = {
+    starIdx: number | null;
+    children: { letter: string; starIdx: number }[];
+  };
+  const topByLetter = new Map<string, TopLevel>();
+  for (const { idx, path } of parsed) {
+    let slot = topByLetter.get(path[0]);
+    if (!slot) { slot = { starIdx: null, children: [] }; topByLetter.set(path[0], slot); }
+    if (path.length === 1) slot.starIdx = idx;
+    else slot.children.push({ letter: path[1], starIdx: idx });
+  }
+
+  const basis = buildSystemBasis(rng);
+  const startOuter = rng() * Math.PI * 2;
+
+  // Deterministic ordering: alphabetic top-level letters so reloads
+  // produce identical positions and the per-system rng seed stays the
+  // sole source of variation.
+  const topLetters = Array.from(topByLetter.keys()).sort();
+  const numTop = topLetters.length;
+
+  for (let k = 0; k < numTop; k++) {
+    const slot = topByLetter.get(topLetters[k])!;
+    // A single top-level letter (whole "set" is one component with
+    // sub-children) collapses to a centered inner ring — no outer slot
+    // displacement to share between.
+    const slotR = numTop > 1 ? R_OUTER : 0;
+    const angle = startOuter + (k / Math.max(1, numTop)) * Math.PI * 2;
+    const ca = Math.cos(angle), sa = Math.sin(angle);
+    const ox = cx + (ca * basis.ux + sa * basis.vx) * slotR;
+    const oy = cy + (ca * basis.uy + sa * basis.vy) * slotR;
+    const oz = cz + (ca * basis.uz + sa * basis.vz) * slotR;
+
+    const hasChildren = slot.children.length > 0;
+    if (slot.starIdx !== null) {
+      // Bare/leaf member at this top-level letter. Sits at the outer
+      // slot center; any children orbit on the inner ring around it.
+      out[slot.starIdx] = { ...stars[slot.starIdx], x: ox, y: oy, z: oz };
+    }
+    if (hasChildren) {
+      // Same plane as outer ring (inner-plane decorrelation looks
+      // arbitrary — Capella's tight pair shouldn't appear edge-on while
+      // the wider components are face-on). Sub-letters sort alphabetic
+      // for determinism; start angle gets its own rng draw so different
+      // sub-pairs in one system rotate independently of one another.
+      slot.children.sort((a, b) => a.letter.localeCompare(b.letter));
+      const startInner = rng() * Math.PI * 2;
+      const numChildren = slot.children.length;
+      for (let j = 0; j < numChildren; j++) {
+        const childAngle = startInner + (j / numChildren) * Math.PI * 2;
+        const cc = Math.cos(childAngle), sc = Math.sin(childAngle);
+        const childIdx = slot.children[j].starIdx;
+        out[childIdx] = {
+          ...stars[childIdx],
+          x: ox + (cc * basis.ux + sc * basis.vx) * R_INNER,
+          y: oy + (cc * basis.uy + sc * basis.vy) * R_INNER,
+          z: oz + (cc * basis.uz + sc * basis.vz) * R_INNER,
+        };
+      }
+    }
+  }
+  return true;
+}
+
+// Fallback for sets whose ids don't parse — distribute every member evenly
+// on a single ring at R_OUTER. Preserved as a last resort so a malformed
+// id set still gets a visible spread instead of overlapping into one dot.
+function evenRingLayout(
+  stars: readonly Star[],
+  out: Star[],
+  setIndices: readonly number[],
+  cx: number, cy: number, cz: number,
+  rng: () => number,
+): void {
+  const basis = buildSystemBasis(rng);
+  const startAngle = rng() * Math.PI * 2;
+  const n = setIndices.length;
+  setIndices.forEach((idx, k) => {
+    const angle = startAngle + (k / n) * Math.PI * 2;
+    const ca = Math.cos(angle), sa = Math.sin(angle);
+    out[idx] = {
+      ...stars[idx],
+      x: cx + (ca * basis.ux + sa * basis.vx) * R_OUTER,
+      y: cy + (ca * basis.uy + sa * basis.vy) * R_OUTER,
+      z: cz + (ca * basis.uz + sa * basis.vz) * R_OUTER,
+    };
+  });
+}
 
 function expandCoincidentSets(stars: readonly Star[]): Star[] {
   const out: Star[] = stars.map(s => ({ ...s }));
@@ -437,56 +649,17 @@ function expandCoincidentSets(stars: readonly Star[]): Star[] {
   }
   for (const set of sets.values()) {
     if (set.length < 2) continue;
-    // Mass-sort the set so the heaviest member becomes the cluster primary
-    // downstream — labels and droplines anchor on it. The angle assignment
-    // below is randomized per system (not "primary at angle 0"), so the
-    // primary's screen position is no longer a stable reference direction.
+    // Mass-sort the set so the heaviest member's id seeds the rng below.
+    // Layout itself is keyed off the IAU component letter in each row's
+    // `id` (not the mass rank), but seeding off the heaviest gives the
+    // system a stable layout under CSV row reordering or new sub-component
+    // additions — only changing which star is heaviest re-rolls the seed.
     set.sort((a, b) => stars[b].mass - stars[a].mass);
     const cx = stars[set[0]].x, cy = stars[set[0]].y, cz = stars[set[0]].z;
-
-    // Per-system ring orientation. Without this, every coincident pair sat
-    // along +X in the galactic plane, so a top-down view showed every
-    // binary as an identical horizontal "= =" pair. Picking a random unit
-    // normal seeded by the primary's name gives each system its own
-    // tilt+phase, stable across reloads.
     const rng = mulberry32(hash32(stars[set[0]].id));
-    // Uniform random unit vector on the sphere — the ring lies in the
-    // plane perpendicular to this. Standard inverse-CDF method: theta is
-    // the azimuth, cosPhi is the latitude (uniform in cos to avoid pole
-    // bunching that comes from picking phi uniform in [0,π]).
-    const theta = rng() * Math.PI * 2;
-    const cosPhi = 2 * rng() - 1;
-    const sinPhi = Math.sqrt(Math.max(0, 1 - cosPhi * cosPhi));
-    const nx = sinPhi * Math.cos(theta);
-    const ny = sinPhi * Math.sin(theta);
-    const nz = cosPhi;
-    // Build an orthonormal basis (u, v) in the plane ⊥ n. Cross n with the
-    // world axis least parallel to it (avoids the degenerate near-zero
-    // cross when the normal happens to align with our reference axis), then
-    // v = n × u rounds out the basis.
-    let rx = 1, ry = 0, rz = 0;
-    if (Math.abs(nx) > 0.9) { rx = 0; ry = 1; }
-    let ux = ry * nz - rz * ny;
-    let uy = rz * nx - rx * nz;
-    let uz = rx * ny - ry * nx;
-    const ulen = Math.hypot(ux, uy, uz);
-    ux /= ulen; uy /= ulen; uz /= ulen;
-    const vx = ny * uz - nz * uy;
-    const vy = nz * ux - nx * uz;
-    const vz = nx * uy - ny * ux;
-    const startAngle = rng() * Math.PI * 2;
 
-    const n = set.length;
-    set.forEach((idx, k) => {
-      const angle = startAngle + (k / n) * Math.PI * 2;
-      const c = Math.cos(angle), s = Math.sin(angle);
-      out[idx] = {
-        ...stars[idx],
-        x: cx + (c * ux + s * vx) * MIN_VIS_LY,
-        y: cy + (c * uy + s * vy) * MIN_VIS_LY,
-        z: cz + (c * uz + s * vz) * MIN_VIS_LY,
-      };
-    });
+    const placed = tryHierarchicalLayout(stars, out, set, cx, cy, cz, rng);
+    if (!placed) evenRingLayout(stars, out, set, cx, cy, cz, rng);
   }
   return out;
 }

@@ -22,11 +22,22 @@ interface BodyRow { key: string; val: string; }
 function bodyForStar(starIdx: number): BodyRow[] {
   const s = STARS[starIdx];
   return [
-    { key: 'class    ', val: s.cls },
+    { key: 'class    ', val: s.rawClass },
     { key: 'distance ', val: `${s.distLy.toFixed(2)} ly` },
     { key: 'mass     ', val: `${s.mass.toFixed(2)} Msun` },
-    { key: 'diameter ', val: `${s.radiusSolar.toFixed(2)} Dsun` },
+    { key: 'radius   ', val: `${s.radiusSolar.toFixed(2)} Rsun` },
   ];
+}
+
+// True when the star carries a separate IAU canonical name worth surfacing
+// (Toliman → Alpha Centauri B). Empty iauName is the catalog's "same as
+// display name" signal; suppress the secondary line in that case so the
+// card doesn't carry redundant text for the ~95% of rows where the
+// colloquial name already IS the IAU form.
+function iauLineFor(starIdx: number): string | null {
+  const s = STARS[starIdx];
+  if (!s.iauName || s.iauName === s.name) return null;
+  return s.iauName;
 }
 
 // Vertical gap above each member sub-header (after the first). Visually
@@ -61,6 +72,17 @@ export class InfoCard extends BasePanel {
     const titleW = measurePixelText(titleText, fonts.cardName);
     let maxBodyW = 0;
     let bodyH = 0;
+    // Title-level IAU line surfaces the primary's canonical name when the
+    // colloquial display drops it ("Alpha Centauri" → "Alpha Centauri A").
+    // Suppressed in multi-member mode — each member sub-header gets its
+    // own IAU line below, and the primary's line would otherwise repeat
+    // the same text twice within a few rows.
+    const titleIau = !isMulti ? iauLineFor(cluster.primary) : null;
+    if (titleIau) {
+      const w = measurePixelText(titleIau);
+      if (w > maxBodyW) maxBodyW = w;
+      bodyH += bodyLineH;
+    }
     for (let i = 0; i < cluster.members.length; i++) {
       const memIdx = cluster.members[i];
       if (isMulti) {
@@ -69,6 +91,12 @@ export class InfoCard extends BasePanel {
         const nameW = measurePixelText(STARS[memIdx].name);
         if (nameW > maxBodyW) maxBodyW = nameW;
         bodyH += bodyLineH;
+        const memberIau = iauLineFor(memIdx);
+        if (memberIau) {
+          const w = measurePixelText(memberIau);
+          if (w > maxBodyW) maxBodyW = w;
+          bodyH += bodyLineH;
+        }
       }
       const body = bodyForStar(memIdx);
       for (const b of body) {
@@ -99,12 +127,22 @@ export class InfoCard extends BasePanel {
     drawPixelText(g, titleText, sizes.padX, sizes.padY, colors.starName, fonts.cardName);
 
     let cursorY = sizes.padY + titleLineH + sizes.cardNameGap;
+    const titleIau = !isMulti ? iauLineFor(cluster.primary) : null;
+    if (titleIau) {
+      drawPixelText(g, titleIau, sizes.padX, cursorY, colors.textKey);
+      cursorY += bodyLineH;
+    }
     for (let i = 0; i < cluster.members.length; i++) {
       const memIdx = cluster.members[i];
       if (isMulti) {
         if (i > 0) cursorY += MEMBER_BLOCK_GAP;
         drawPixelText(g, STARS[memIdx].name, sizes.padX, cursorY, colors.starName);
         cursorY += bodyLineH;
+        const memberIau = iauLineFor(memIdx);
+        if (memberIau) {
+          drawPixelText(g, memberIau, sizes.padX, cursorY, colors.textKey);
+          cursorY += bodyLineH;
+        }
       }
       for (const b of bodyForStar(memIdx)) {
         drawPixelText(g, b.key, sizes.padX, cursorY, colors.textKey);
