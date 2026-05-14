@@ -261,7 +261,7 @@ White dwarfs (`pxSize ≈ 3`) hit the size-2 floor first as their depth crosses 
 
 ### Star pivot-dim (local-focus brightness)
 
-Stars outside the user's current point of interest are dimmed toward `FADE_MIN = 0.25` brightness so dense starfields read as a focused local volume rather than a wall of equally-bright dots. The dim is computed per-vertex in the stars shader and applied by multiplying `vColor` toward black — **not via alpha**, because stars render `transparent: false, depthWrite: true` for the "closer stars occlude farther ones" guarantee, and going transparent would break attribute-order rendering in dense fields.
+Stars outside the user's current point of interest are dimmed toward `FADE_MIN = 0.1` brightness so dense starfields read as a focused local volume rather than a wall of equally-bright dots. The dim is computed per-vertex in the stars shader and applied by multiplying `vColor` toward black — **not via alpha**, because stars render `transparent: false, depthWrite: true` for the "closer stars occlude farther ones" guarantee, and going transparent would break attribute-order rendering in dense fields.
 
 Three signals combine:
 

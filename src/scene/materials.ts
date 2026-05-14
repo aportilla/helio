@@ -1,6 +1,56 @@
 import { Color, ShaderMaterial, Vector2, Vector3 } from 'three';
 import { PIVOT_FADE_NEAR, PIVOT_FADE_FAR } from './cluster-fade';
 
+// ─── Stars shader style constants ──────────────────────────────────────────
+// Tuning knobs hoisted out of the raw shader source so they sit at the top
+// of the file and can be adjusted without touching glsl strings. Each one
+// is interpolated into the vertex shaders below via `${glsl(NAME)}`.
+
+// Depth-attenuation anchor distance (perspective stars shader). A star at
+// this view-space distance renders at its per-class table size; closer
+// enlarges proportionally, farther shrinks. Decoupled from
+// DEFAULT_VIEW.distance so framing can be tweaked without rescaling discs.
+const REF_DIST = 50;
+
+// Floor for the local-focus dim ramp. Stars outside the pivot bubble fade
+// toward this brightness multiplier (color × FADE_MIN — not alpha, since
+// stars render opaque for correct occlusion). Low enough that distant
+// stars recede into a dim backdrop, high enough to stay just legible.
+const FADE_MIN = 0.1;
+
+// Cube-root compression on the close-up side of the depth-attenuation
+// curve (rawScale > 1). Per-class size ratio is preserved (any
+// positive-exponent pow is monotonic) but absolute growth is sharply
+// tamed: at orbit 5 ly a focused star is ~2.15x table size instead of
+// ~10x. Smaller exponent = flatter close-up; larger = more growth. The
+// zoom-out branch (rawScale ≤ 1) stays linear so distant fields shrink
+// at the natural rate.
+const CLOSE_UP_EXPONENT = 1 / 3;
+
+// Global star-size divisor. Raise to shrink every disc, lower to enlarge.
+// uPxScale is the renderer's pixel-density signal; 800 is the empirically
+// tuned reference that makes the per-class table sizes (data/stars.ts)
+// look right at DEFAULT_VIEW.distance.
+const PX_SCALE_DIVISOR = 800;
+
+// Minimum integer-pixel disc size for any star. Lower-bounded so stars
+// never disappear at extreme zoom-out. The upper end is intentionally
+// unclamped — a cap would collapse the relative size ratios between
+// classes O/B/A/F/G/K/M/BD/WD once the largest hit the ceiling.
+const MIN_STAR_PX = 2;
+
+// Rasterizer padding around the integer-pixel disc, shared by both the
+// perspective and flat stars shaders. Adding +2 (preserving parity) keeps
+// every fragment we care about safely inside the rasterized square so the
+// rasterizer never has to make a tie-breaking call at the bounding-box
+// edges that would drop a row/column on one side. Cost: a few extra
+// discarded fragments per disc.
+const RASTER_PAD = 2;
+
+// JS number → glsl float literal. Always emits a decimal point so 50
+// becomes "50.0", not the bare "50" that glsl rejects as an int literal.
+const glsl = (n: number): string => Number.isInteger(n) ? n.toFixed(1) : n.toString();
+
 // Tracked so resize() can push new viewport size into all snapped-line mats.
 const snappedMaterials: ShaderMaterial[] = [];
 
@@ -156,14 +206,15 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
       uniform float uSelectedCluster;
       uniform float uCandidateCluster;
       uniform float uDimAmount;
-      const float REF_DIST = 50.0;
-      // Pivot fade thresholds mirror the label + dropline fade in
-      // cluster-fade.ts — same numbers, same semantics, so the dot dims in
-      // lockstep with its label. FADE_MIN floors the dim at 0.25 so distant
-      // stars stay legible as a dim backdrop rather than vanishing.
-      const float PIVOT_FADE_NEAR = ${PIVOT_FADE_NEAR.toFixed(1)};
-      const float PIVOT_FADE_FAR  = ${PIVOT_FADE_FAR.toFixed(1)};
-      const float FADE_MIN = 0.25;
+      // All tuning constants below are hoisted JS values interpolated into
+      // the shader source — see the "Stars shader style constants" block
+      // at the top of materials.ts for full descriptions. PIVOT_FADE_*
+      // mirrors the label + dropline fade in cluster-fade.ts so a dot and
+      // its label dim in lockstep.
+      const float REF_DIST        = ${glsl(REF_DIST)};
+      const float FADE_MIN        = ${glsl(FADE_MIN)};
+      const float PIVOT_FADE_NEAR = ${glsl(PIVOT_FADE_NEAR)};
+      const float PIVOT_FADE_FAR  = ${glsl(PIVOT_FADE_FAR)};
       void main() {
         vColor = color;
         // Depth-attenuate by view-space distance so closer stars render
@@ -187,39 +238,25 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
                         abs(aClusterIdx - uCandidateCluster) < 0.5) ? 1.0 : 0.0;
         vBrightness = max(mix(FADE_MIN, 1.0, effPivotFade), bypass);
 
-        // Linear growth on the close-up side (rawScale > 1) feels too eager
-        // — at orbit 5 ly a focused class-G star ends up 10x its table size
-        // and dominates the screen. Cube-root-compress the close-up side
-        // only: the per-class ratio stays intact (any monotonic function
-        // preserves ordering, and pow with a positive exponent preserves
-        // the ratio shape) but absolute growth tames sharply — at orbit 5
-        // a focused star is ~2.15x table size, at orbit 4 it's ~2.32x. The
-        // exponent (1/3) is the tuning knob: smaller = flatter close-up,
-        // larger = more growth. The zoom-out branch stays linear so distant
-        // fields shrink at the natural rate.
+        // Cube-root compression on the close-up side only (rawScale > 1)
+        // so absolute growth tames sharply while the per-class ratio stays
+        // intact. Linear on the zoom-out branch so distant fields shrink
+        // at the natural rate. Tuning lives in CLOSE_UP_EXPONENT at the top
+        // of the file.
         float rawScale = REF_DIST / dist;
-        float depthScale = rawScale > 1.0 ? pow(rawScale, 1.0 / 3.0) : rawScale;
+        float depthScale = rawScale > 1.0 ? pow(rawScale, ${glsl(CLOSE_UP_EXPONENT)}) : rawScale;
         // Round to integer pixel count so zoom transitions step 2→3→4→5…
-        // Raise the divisor to shrink all stars globally. Lower-bounded at
-        // 2 px so stars never disappear at extreme zoom-out, but otherwise
-        // unclamped on the upper end — the previous 28-px cap collapsed the
-        // relative-size ratios between class O/B/A/F/G/K/M/BD/WD into a
-        // single flat blob whenever the camera got close enough to push the
-        // largest class past the cap. Without an upper bound, the ratio
-        // (28:22:18:14:12:10:8:6:3) survives all the way to the closest
-        // possible zoom and you can see Alpha Cen A, B, and Proxima as
-        // visibly different-sized discs at a 5-ly orbit.
-        float sz = max(aSize * (uPxScale / 800.0) * depthScale, 2.0);
+        // The upper end is intentionally unclamped — a cap would collapse
+        // the relative-size ratios between class O/B/A/F/G/K/M/BD/WD into
+        // a single flat blob whenever the camera got close enough to push
+        // the largest class past the cap. The (28:22:18:14:12:10:8:6:3)
+        // table ratio survives all the way to the closest zoom.
+        float sz = max(aSize * (uPxScale / ${glsl(PX_SCALE_DIVISOR)}) * depthScale, ${glsl(MIN_STAR_PX)});
         sz = floor(sz + 0.5);
         // Render a slightly larger square than the actual disc and let the
-        // fragment shader's discard test determine the real shape. Without
-        // this padding, the rasterizer's fill rule at the bounding-box
-        // edges can drop a row or column on the bottom/left side (visible
-        // as asymmetric clipping). Adding +2 (preserving parity) keeps every
-        // fragment we care about safely inside the rasterized square so the
-        // rasterizer never has to make a tie-breaking call. Cost is a few
-        // extra discarded fragments per disc.
-        gl_PointSize = sz + 2.0;
+        // fragment shader's discard test determine the real shape (see
+        // RASTER_PAD up top for the rationale).
+        gl_PointSize = sz + ${glsl(RASTER_PAD)};
         vRadius = sz * 0.5;
 
         // Parity-aware snap of the projected center to the pixel grid.
@@ -310,9 +347,10 @@ export function makeFlatStarsMaterial(initialDiscScale: number): ShaderMaterial 
         // flat diagram, every star renders at its table size scaled by the
         // global knob. Floor + 0.5 → round-to-nearest.
         float sz = floor(aSize * uDiscScale + 0.5);
-        // +2 rasterizer padding (matches makeStarsMaterial); the fragment
-        // shader's discard test does the real bounding.
-        gl_PointSize = sz + 2.0;
+        // Same rasterizer padding as the perspective stars shader (see
+        // RASTER_PAD at the top of materials.ts); the fragment shader's
+        // discard test does the real bounding.
+        gl_PointSize = sz + ${glsl(RASTER_PAD)};
         vRadius = sz * 0.5;
 
         // Parity-aware snap of the projected center to the pixel grid:
