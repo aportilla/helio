@@ -17,11 +17,14 @@ No CSS framework, no state library, no testing framework yet.
 ## Scripts
 
 ```
-npm run dev        # vite dev server, opens browser
-npm run build      # tsc + vite build → dist/   (tsconfig sets noEmit, so tsc just type-checks)
-npm run preview    # serve dist/
-npm run typecheck  # tsc --noEmit
+npm run dev            # vite dev server, opens browser (prebuilds catalog)
+npm run build          # tsc + vite build → dist/   (prebuilds catalog; tsconfig sets noEmit, so tsc just type-checks)
+npm run preview        # serve dist/
+npm run typecheck      # tsc --noEmit (prebuilds catalog)
+npm run build:catalog  # regenerate src/data/catalog.generated.json from src/data/*.csv
 ```
+
+`build:catalog` is auto-run by `predev` / `prebuild` / `pretypecheck` hooks, so you only invoke it directly when iterating on a CSV mid-session and want to refresh the runtime without restarting the dev server.
 
 ## Project layout
 
@@ -31,6 +34,7 @@ One line per file — what it owns. Depth lives in the Architecture notes below;
 index.html                  Vite entry: inline splash markup + critical CSS, single <script> → main.ts
 scripts/                    Star-data tooling — read scripts/README.md first
   README.md                 Workflow guide for star-data tasks
+  build-catalog.mjs         Build step: CSV → catalog.generated.json (full derivation pipeline)
   scrape-wiki-stars.mjs     Initial-seeding Wikipedia → CSV scraper
   find-missing-stars.mjs    Diff a CSV against the catalog; --add inserts missing rows
   fill-from-stellarcatalog.mjs   Backfill empty cells from cached catalog detail pages
@@ -83,8 +87,9 @@ src/
     stars-35-40ly.csv       35–40 ly bracket; catalog-seeded (no Wikipedia source)
     stars-40-45ly.csv       40–45 ly bracket; catalog-seeded
     stars-45-50ly.csv       45–50 ly bracket; catalog-seeded
-    stars.ts                Loads CSVs, derives positions/mass/radius, builds clusters + lookup
-    kdtree.ts               Static 3D k-d tree backing nearest-cluster queries + pair scans
+    catalog.generated.json  Build artifact (gitignored). Precomputed STARS + STAR_CLUSTERS.
+    stars.ts                Runtime catalog API — imports the JSON, exposes typed STARS/STAR_CLUSTERS, k-d tree, lookups
+    kdtree.ts               Static 3D k-d tree backing nearest-cluster queries
     BDF/<Family>/<n>.bdf    Bundled bitmap fonts (Monaco, EspySans, EspySansBold)
     bdf-font.ts             BDF parser + per-font canvas atlas renderer
     font-provider.ts        Typed FONTS catalog; lazy registration + DEV drift check
@@ -92,6 +97,27 @@ src/
 ```
 
 ## Architecture notes
+
+### Catalog build pipeline
+
+`src/data/*.csv` is the authoring surface — hand-edited, scraper-output, the source of truth. The runtime sees a precomputed JSON snapshot produced by `scripts/build-catalog.mjs`:
+
+```
+CSV (×7) ──► build-catalog.mjs ──► catalog.generated.json ──► stars.ts ──► consumers
+            (Node, no deps)        (gitignored)              (typed re-export)
+```
+
+The build script runs the full derivation pipeline that used to live in `src/data/stars.ts` at module load — CSV parsing, spectral-class normalization, mass priority chain (catalog value → mass-luminosity from V-mag → position-seeded jitter), radius-from-class-mass, pxSize mapping, hierarchical multi-star ring placement, cluster union-find + COM. It writes a single JSON object `{ stars, clusters }` to `src/data/catalog.generated.json`. The runtime `stars.ts` is now a thin wrapper: imports the JSON, casts it to `readonly Star[]` / `readonly StarCluster[]`, builds the cluster k-d tree, and re-exports.
+
+**Why precompute.** The CSVs and parser ship to the browser today; precomputing replaces ~250 KB of CSV text + 200 lines of parser logic with a single derived JSON blob. The architectural payoff is bigger than the bytes: derivation logic stays in one Node-runnable file (no `?raw` imports, no `import.meta.env?.DEV` guards, no need for a Vite-aware test harness if we want to verify a derived value). The CSV is for authoring; the JSON is for runtime; they're connected by an explicit `npm run build:catalog` step.
+
+**Why JSON, not TS.** No new dependencies (the build script is plain Node, no TS loader needed), Vite imports JSON natively, the artifact is debuggable in any editor. A TS module would have given autocomplete in the generated file itself, but nothing reads the generated file by hand.
+
+**How it runs.** `predev` / `prebuild` / `pretypecheck` npm hooks fire `build:catalog` automatically before the corresponding command, so a fresh `npm ci && npm run dev` works without any explicit step. The same chain runs on CI for GitHub Pages (`npm run build` → `prebuild` → catalog → `tsc && vite build`). The generated JSON is gitignored; the CSV diff is the durable history of what changed.
+
+**No hot-reload on CSV edits.** A CSV edit during a dev session doesn't propagate until you re-run `npm run build:catalog` (Vite then HMRs on the regenerated JSON). Accepted tradeoff for keeping the pipeline simple — there's no watcher.
+
+**Pair-scan cost.** The KDTree-backed pair scans in `expandCoincidentSets` and `buildClusters` become brute-force O(n²) at build time (~1.1M ops on a 1500-star catalog, sub-millisecond). Avoids duplicating `kdtree.ts` into a Node-runnable `.mjs`. The k-d tree still exists at runtime, but only over `STAR_CLUSTERS` for per-frame `nearestClusterIdxTo` queries.
 
 ### Bootstrap / scene split
 
@@ -139,7 +165,7 @@ Galactic cartesian, units in light years:
 - **+Z** points toward the north galactic pole (the camera's up vector is fixed to `(0, 0, 1)`)
 - The Sun sits at the origin
 
-Star positions are derived at module load from each Wikipedia row's RA/Dec/distance via the standard ICRS → galactic rotation matrix (J2000), so they're as accurate as Wikipedia's parallax-derived inputs. Don't treat the catalog as scientifically authoritative anyway — Wikipedia itself rounds aggressively, and our radii are derived from class + mass (not measured) since the upstream table doesn't carry a radius column.
+Star positions are derived at build time from each Wikipedia row's RA/Dec/distance via the standard ICRS → galactic rotation matrix (J2000), so they're as accurate as Wikipedia's parallax-derived inputs. Don't treat the catalog as scientifically authoritative anyway — Wikipedia itself rounds aggressively, and our radii are derived from class + mass (not measured) since the upstream table doesn't carry a radius column.
 
 ### Camera
 
@@ -219,7 +245,7 @@ To add a font, drop the `.bdf` at `src/data/BDF/<Family>/<size>.bdf` and add a t
 ### Star color and size
 
 - **`CLASS_COLOR`** in `src/data/stars.ts` — approximate blackbody color per spectral class (Mitchell Charity table). O/B/A trend blue, F/G white, K/M orange-red, WD pale blue, BD deep red. Color stays class-driven because it's a temperature signal, not a size one.
-- **Per-star `pxSize`**, baked at module load by `radiusToPxSize(s.radiusSolar)`. The Wikipedia source table doesn't carry a radius column, so each entry's `radiusSolar` is derived from class + mass at load time: Chandrasekhar `M^(−1/3)` for white dwarfs (anchored at ~0.012 R☉ for a 0.6 M☉ WD), a Jupiter-radius constant (~0.10 R☉) for brown dwarfs, and a rough main-sequence `M^0.8` anchored at the Sun (1 M☉ = 1 R☉) elsewhere. Loses the subgiant offset for entries like Procyon A; accepted regression for source-of-truth simplicity. The mapping is `R^(1/3)` linear, anchored so Sirius B-class WDs (~0.012 R☉) land near pxSize 3 and the largest A-class dwarfs (~2 R☉) near 18. The shader takes `pxSize`, scales by `uPxScale / 800` (the global size knob — bump that divisor to shrink all stars uniformly), applies the depth-attenuation factor, floors at 2 px, and rounds to integer.
+- **Per-star `pxSize`**, baked at build time by `radiusToPxSize(s.radiusSolar)` in `build-catalog.mjs`. The Wikipedia source table doesn't carry a radius column, so each entry's `radiusSolar` is derived at the same point from class + mass: Chandrasekhar `M^(−1/3)` for white dwarfs (anchored at ~0.012 R☉ for a 0.6 M☉ WD), a Jupiter-radius constant (~0.10 R☉) for brown dwarfs, and a rough main-sequence `M^0.8` anchored at the Sun (1 M☉ = 1 R☉) elsewhere. Loses the subgiant offset for entries like Procyon A; accepted regression for source-of-truth simplicity. The mapping is `R^(1/3)` linear, anchored so Sirius B-class WDs (~0.012 R☉) land near pxSize 3 and the largest A-class dwarfs (~2 R☉) near 18. The shader takes `pxSize`, scales by `uPxScale / 800` (the global size knob — bump that divisor to shrink all stars uniformly), applies the depth-attenuation factor, floors at 2 px, and rounds to integer.
 
 Real radii in the catalog span ~250× (Sirius B → Procyon A), so a linear mapping would make WDs invisible and A-class dwarfs dominate. Cube-root compression takes that 250× range and maps it into a ~6× pixel range across `[3, 18]`: WDs 3–4 px, BDs/smallest M dwarfs ~7, Wolf 359 ~8, mid M dwarfs ~10, K dwarfs 12–13, the Sun ~14, F dwarfs ~16, A dwarfs 17–18. A `log10` mapping was tried first but over-compressed — it bunched M dwarfs and A dwarfs into ~11 vs ~18 px (a ~1.6× ratio), close enough that the brightest class barely stood out. Cube-root recovers roughly the same class spacing as the old per-class `CLASS_SIZE` table (~2× M-to-A) while keeping within-class variation: Wolf 359 (0.144 R☉) and Lalande 21185 (0.392 R☉) render as visibly different M dwarfs, which a class-keyed lookup couldn't express.
 
@@ -251,7 +277,7 @@ The effect is starmap-only; `SystemScene` doesn't apply it.
 
 ### Star clusters
 
-Stars within `CLUSTER_THRESHOLD_LY = 0.25` of each other (`buildClusters` in `src/data/stars.ts`) are grouped via union-find. Captures both ringed-out coincident binaries (e.g. Sirius A/B share Wikipedia's RA/Dec, post-processed onto a small ring) and hierarchical systems where Wikipedia gives one component a different RA/Dec (Alpha Centauri's Proxima ends up ~0.19 ly from the AB pair after the equatorial-to-galactic conversion, well inside the threshold). Each cluster has a **primary** (the heaviest member by `mass`, with `CLASS_SIZE` as a tie-breaker) and an ordered `members` list with the primary first.
+Stars within `CLUSTER_THRESHOLD_LY = 0.25` of each other (`buildClusters` in `scripts/build-catalog.mjs`) are grouped via union-find at build time. Captures both ringed-out coincident binaries (e.g. Sirius A/B share Wikipedia's RA/Dec, post-processed onto a small ring) and hierarchical systems where Wikipedia gives one component a different RA/Dec (Alpha Centauri's Proxima ends up ~0.19 ly from the AB pair after the equatorial-to-galactic conversion, well inside the threshold). Each cluster has a **primary** (the heaviest member by `mass`, with `pxSize` as a tie-breaker) and an ordered `members` list with the primary first.
 
 `Labels` (in `src/scene/labels.ts`) renders one visible label per cluster — anchored at the primary's position, suffixed with ` +N` (in dim cyan) when the cluster has additional members. Two textures per cluster are eagerly built at construction: a **plain** variant (cyan, warm-white for Sol) and a **yellow** variant (reticle yellow `#ffe98a`, matching the cluster brackets and the info-card star name). The yellow variant is shown when the cluster is selected OR is the active candidate (hover or focus-proximity — see "Cluster brackets"). Same dimensions, same anchor offset, so the swap is positionally invisible. Anchored at the primary so the emphasis doesn't twitch as you move between near-coincident dots.
 
@@ -280,7 +306,7 @@ The catalog also stores the **raw spectral class string** (`G3III:`, `M4.0Ve`, `
 
 ### Multi-star system layout (post-processing)
 
-Wikipedia gives every member of a binary/triple system the same RA/Dec because real inter-member separations (10–1000 AU) are far below the resolution of the table's coordinates. After the equatorial-to-galactic conversion those members all land at the same 3D point. `expandCoincidentSets` in `src/data/stars.ts` detects 2+ stars at effectively-identical positions and rings them out across **two concentric rings keyed off the IAU component letter encoded in each row's `id` slug** — top-level letters (A, B, C, …) on an outer ring at `R_OUTER = 0.05` ly; sub-components (Aa/Ab; Ba/Bb) on a tighter inner ring at `R_INNER = 0.015` ly centered on the parent's outer slot. So Capella's Aa+Ab spectroscopic binary reads as a tight pair while H and L sit out on the outer ring, instead of all four landing at equal radii on one ring. The component letter is parsed from `id` rather than the colloquial `name` because `name` is presentational and often elides the letter ("Toliman", "Fomalhaut"); `id` is the canonical IAU-anchored slug, set up by `sync-with-catalog.mjs` to always carry the component as the trailing suffix. Both rings share one plane normal + start angle seeded per-system from the primary's id (FNV-1a → mulberry32), so each system gets its own tilt and renders identically across reloads.
+Wikipedia gives every member of a binary/triple system the same RA/Dec because real inter-member separations (10–1000 AU) are far below the resolution of the table's coordinates. After the equatorial-to-galactic conversion those members all land at the same 3D point. `expandCoincidentSets` in `scripts/build-catalog.mjs` detects 2+ stars at effectively-identical positions and rings them out across **two concentric rings keyed off the IAU component letter encoded in each row's `id` slug** — top-level letters (A, B, C, …) on an outer ring at `R_OUTER = 0.05` ly; sub-components (Aa/Ab; Ba/Bb) on a tighter inner ring at `R_INNER = 0.015` ly centered on the parent's outer slot. So Capella's Aa+Ab spectroscopic binary reads as a tight pair while H and L sit out on the outer ring, instead of all four landing at equal radii on one ring. The component letter is parsed from `id` rather than the colloquial `name` because `name` is presentational and often elides the letter ("Toliman", "Fomalhaut"); `id` is the canonical IAU-anchored slug, set up by `sync-with-catalog.mjs` to always carry the component as the trailing suffix. Both rings share one plane normal + start angle seeded per-system from the primary's id (FNV-1a → mulberry32), so each system gets its own tilt and renders identically across reloads.
 
 Bare-slug primaries (e.g. `ab-doradus` with siblings `-ba`, `-bb`, `-c`) parse as implicit `[a]` — the bare row becomes the system's A component without needing a redundant `-a` suffix in the CSV. If any member's id suffix doesn't parse as a 1–2 lowercase-letter component (something malformed slipped through, a hand-edit broke the convention), the whole set falls back to the legacy single-ring distribution rather than producing a half-hierarchical placement.
 
@@ -313,7 +339,7 @@ Drop-lines currently snap on/off with selection state (`setFade(0)` on deselect,
 
 #### Per-drop visibility
 
-`Grid` is just a translated `Group`; selection writes `group.position` and toggles `group.visible`. One pin per cluster, anchored at the cluster's mass-weighted **center of mass** (`StarCluster.com`, computed once at module load in `buildClusters`). Non-primary cluster members — Sirius B, Alpha Cen B, Proxima, the Gliese 570 BC pair, etc. — share the cluster's pin rather than getting their own. The COM (rather than the primary's position) makes a binary/triple read as one system whose pin emerges from the geometric middle of the ring rather than from one of its members. Two flavors exist per pin: a **solid** `Line` (one full-length segment) and a **dotted** `Points` whose vertices live in a pre-allocated `MAX_DOTS_PER_PIN = 500` buffer (`DynamicDrawUsage`). Z-values are rewritten in place when the selection plane shifts, at fixed world-Z intervals (`DOT_PERIOD_LY = 0.25`), and `setDrawRange` slices the active count — avoids reallocating attributes on every selection change. Each frame `Droplines.update()` picks solid if the COM is on the same side of the plane as the camera, dotted if on the far side (`camera.position.z >= planeZ`).
+`Grid` is just a translated `Group`; selection writes `group.position` and toggles `group.visible`. One pin per cluster, anchored at the cluster's mass-weighted **center of mass** (`StarCluster.com`, baked into `catalog.generated.json` by `buildClusters` in the build script). Non-primary cluster members — Sirius B, Alpha Cen B, Proxima, the Gliese 570 BC pair, etc. — share the cluster's pin rather than getting their own. The COM (rather than the primary's position) makes a binary/triple read as one system whose pin emerges from the geometric middle of the ring rather than from one of its members. Two flavors exist per pin: a **solid** `Line` (one full-length segment) and a **dotted** `Points` whose vertices live in a pre-allocated `MAX_DOTS_PER_PIN = 500` buffer (`DynamicDrawUsage`). Z-values are rewritten in place when the selection plane shifts, at fixed world-Z intervals (`DOT_PERIOD_LY = 0.25`), and `setDrawRange` slices the active count — avoids reallocating attributes on every selection change. Each frame `Droplines.update()` picks solid if the COM is on the same side of the plane as the camera, dotted if on the far side (`camera.position.z >= planeZ`).
 
 Visibility is per-drop, not via `group.visible`. Composed gating, in this order:
 - **Selection gate** (the outer one): no selection → every drop hidden, early return.
@@ -354,7 +380,7 @@ When hover ends, the candidate falls back to whatever the focus-proximity branch
 
 The same candidate index drives **three** consumers each tick: candidate brackets (dot corners), labels (yellow text promotion + fade-bypass — see "Cluster label visibility"), and the spacebar handler (F is bound separately — see "Input").
 
-Nearest-cluster lookup is centralized in `nearestClusterIdxTo(x, y, z)` in `src/data/stars.ts`, backed by a static 3D k-d tree over `STAR_CLUSTERS` keyed on COM (`src/data/kdtree.ts`). `StarmapScene.tick()` runs it once per frame and shares the result with `FocusMarker` (anchor when nothing is selected) and the candidate-bracket gating. The same tree class also backs the load-time pair scans in `buildClusters` (over post-expansion `STARS`) and `expandCoincidentSets` (over pre-expansion star positions) via `pairsWithin`, so the spatial work at module load scales O(n log n) with the catalog.
+Nearest-cluster lookup is centralized in `nearestClusterIdxTo(x, y, z)` in `src/data/stars.ts`, backed by a static 3D k-d tree over `STAR_CLUSTERS` keyed on COM (`src/data/kdtree.ts`). `StarmapScene.tick()` runs it once per frame and shares the result with `FocusMarker` (anchor when nothing is selected) and the candidate-bracket gating. The k-d tree itself is built fresh at module load over the precomputed clusters — derivation work (cluster detection, coincident-set expansion) has already happened in `build-catalog.mjs`, so the runtime only pays the tree construction cost.
 
 ### Input
 
