@@ -48,6 +48,7 @@ src/
     app-controller.ts       AppController: owns shared WebGLRenderer; swaps active scene
     scene.ts                StarmapScene: galaxy view, tick loop, selection routing
     system-scene.ts         SystemScene: cluster close-up, lazily built/disposed
+    system-diagram.ts       SystemDiagram: flat 2D ortho scene rendering cluster stars + labels
     input-controller.ts     InputController: classifies pointer/keyboard gestures into intents
     grid.ts                 Range rings + axes + galactic-centre arrow; ring expand/collapse choreography
     droplines.ts            Per-cluster vertical pins to the selected COM.z plane
@@ -72,7 +73,7 @@ src/
       index.ts              MapHud: settings trigger, panel, info card, action pills
       info-card.ts          Bottom-right cluster info card
     system-hud/
-      index.ts              SystemHud: header bar + back button + reused InfoCard
+      index.ts              SystemHud: header bar + back button
       header-bar.ts         Full-width top bar with centered system name
   data/                     Star catalog + bitmap fonts. For data tasks see scripts/README.md.
     nearest-stars.csv       0–20 ly bracket; Wikipedia-seeded, hand-tunable
@@ -154,9 +155,11 @@ A close-up tactical view of one cluster lives in `SystemScene` (peer of `Starmap
 
 `AppController` owns the shared `WebGLRenderer` and the persistent `StarmapScene` instance. Galaxy view state — camera, selection, settings — lives on the `StarmapScene` instance, so the round-trip preserves it without any serialization: `enterSystem` calls `starmap.stop()` and constructs a fresh `SystemScene`; `exitSystem` disposes the system scene and calls `starmap.start()` again. The galaxy scene's `tick()` is paused, not torn down, so resuming is instant and the camera comes back exactly where the user left it.
 
-`SystemHud` mirrors `MapHud`'s structure (own scene + ortho camera + composed widgets, `autoClear` off). It owns a full-width `HeaderBar` with the system name centered and a 1-px accent line along the bottom, an `IconButton` back-arrow on the left edge of the header, and reuses the galaxy view's `InfoCard` (no close-X — the back button is the exit) to list every cluster member.
+`SystemHud` mirrors `MapHud`'s structure (own scene + ortho camera + composed widgets, `autoClear` off). It owns a full-width `HeaderBar` with the system name centered and a 1-px accent line along the bottom, plus an `IconButton` back-arrow on the left edge of the header. No info card, no settings panel — the back button is the only chrome.
 
-The 3D scene inside `SystemScene` is currently a skeleton: an empty `Scene`, a `PerspectiveCamera` orbited via simple yaw/pitch on pointer drag, and `wheel` zoom. Future work fills in the cluster's stars as scaled-up disks; today the HUD chrome carries the view.
+The scene's body is a flat 2D diagram, not a 3D space. `SystemDiagram` (in `src/scene/system-diagram.ts`) owns its own `OrthographicCamera` at 1 unit = 1 buffer pixel — the same convention as `Labels` and the HUD overlays — and renders each cluster member as a pixel disc in a horizontal row under the header, with the star name as a label directly below each disc. There's no orbit, no zoom, no depth attenuation; the only pointer interaction in system view is clicking the back button. Disc sizes preserve the within-class ratios baked into the catalog's `pxSize` field, multiplied by a global `DISC_SCALE = 6` so the diagram reads at a larger size than the galaxy view's stars. The row is horizontally centered; the wide empty space below it is reserved for planets/ships in a later pass.
+
+The discs are drawn by `makeFlatStarsMaterial` — a system-view variant of the perspective stars shader that drops depth attenuation, pivot-dim, and selection/candidate bypass, but keeps the parity-aware center snap and the `gl_FragCoord − vCenter` disc discard so the pixel-disc rendering matches the galaxy view's. See the "Pixel-perfect rendering" notes below for the shared snap math.
 
 ### Pixel-perfect rendering — the load-bearing constraints
 
