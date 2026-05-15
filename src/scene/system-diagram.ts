@@ -117,6 +117,13 @@ const MOON_DISC_BASE = 67;
 // pushes moons outward; negative pulls them inward.
 const MOON_EDGE_BIAS = 0;
 
+// Per-channel lerp of moon color toward white. Same-world-class moon +
+// parent would otherwise share an exact color and the moon's inner half
+// would disappear into the parent at the rim overlap. Lerp toward white
+// (rather than additive bump) preserves hue and won't oversaturate
+// channels already near 1.
+const MOON_BRIGHTEN = 0.15;
+
 function planetDiscPx(b: Body): number {
   const r = b.radiusEarth ?? 1.0;
   const px = Math.cbrt(Math.max(r, 0.0001)) * PLANET_DISC_BASE;
@@ -614,9 +621,9 @@ function makeMoonPool(slots: MoonSlot[], moonBodyIdx: readonly number[], renderO
     const col = b.worldClass !== null
       ? (WORLD_CLASS_COLOR[b.worldClass] ?? WORLD_CLASS_UNKNOWN_COLOR)
       : WORLD_CLASS_UNKNOWN_COLOR;
-    colors[i * 3 + 0] = col.r;
-    colors[i * 3 + 1] = col.g;
-    colors[i * 3 + 2] = col.b;
+    colors[i * 3 + 0] = col.r + (1 - col.r) * MOON_BRIGHTEN;
+    colors[i * 3 + 1] = col.g + (1 - col.g) * MOON_BRIGHTEN;
+    colors[i * 3 + 2] = col.b + (1 - col.b) * MOON_BRIGHTEN;
     sizesAttr[i] = slot.discPx;
   });
   const geometry = new BufferGeometry();
