@@ -69,14 +69,25 @@ export interface Star {
   // procgen-assigned planets. Moons of those planets are not in this list —
   // they live on each planet's own `moons` array.
   readonly planets: readonly number[];
+  // Indices into BODIES of every belt that orbits this star (asteroid
+  // belt, Kuiper analog, debris disk), sorted by semi-major axis. Parallel
+  // to `planets`; belts are kept on their own list so consumers can iterate
+  // structural bands without inspecting every body's `kind`.
+  readonly belts: readonly number[];
 }
 
 export type WorldClass =
   | 'rocky' | 'ocean' | 'ice' | 'desert' | 'lava'
   | 'gas_dwarf' | 'gas_giant' | 'ice_giant';
 export type Biosphere = 'none' | 'microbial' | 'simple' | 'complex' | 'civilized';
-export type BodyKind = 'planet' | 'moon';
+export type BodyKind = 'planet' | 'moon' | 'belt' | 'ring';
 export type BodySource = 'catalog' | 'procgen';
+
+// Belt / ring sub-classification. 'asteroid' and 'debris' have rocky
+// chunks; 'ice' is volatile-dominated. Rings constrain to ice / debris
+// only — dust rings (Jupiter, Uranus inner) are deliberately not modeled
+// because they're visually negligible and gameplay-irrelevant.
+export type BeltClass = 'asteroid' | 'ice' | 'debris';
 
 // One planet or moon. Catalog-sourced rows come from
 // scripts/scrape-planets-from-stellarcatalog.mjs; hand-seeded Sol bodies and
@@ -99,7 +110,8 @@ export interface Body {
   // `hostBodyIdx`. The other is always null.
   readonly hostStarIdx: number | null;
   readonly hostBodyIdx: number | null;
-  // Orbit (around the host star for planets; around the host planet for moons)
+  // Orbit (around the host star for planets/belts; around the host
+  // planet for moons/rings).
   readonly semiMajorAu: number | null;
   readonly eccentricity: number | null;
   readonly inclinationDeg: number | null;
@@ -107,10 +119,20 @@ export interface Body {
   readonly orbitalPhaseDeg: number | null;
   readonly rotationPeriodHours: number | null;
   readonly axialTiltDeg: number | null;
-  // Physical
+  // Belt (kind='belt') extent in AU. Ring (kind='ring') extent in
+  // multiples of the host planet's radius. All four are null for
+  // planet / moon kinds.
+  readonly innerAu: number | null;
+  readonly outerAu: number | null;
+  readonly innerPlanetRadii: number | null;
+  readonly outerPlanetRadii: number | null;
+  // Physical. radiusEarth is null for belt/ring kinds; massEarth is
+  // meaningful (total belt mass) for belts but null for rings.
   readonly massEarth: number | null;
   readonly radiusEarth: number | null;
-  // Surface character
+  // Belt / ring sub-class. Null for planet / moon kinds.
+  readonly beltClass: BeltClass | null;
+  // Surface character. All null for belt / ring kinds (no surface).
   readonly worldClass: WorldClass | null;
   readonly avgSurfaceTempK: number | null;
   readonly surfaceTempMinK: number | null;
@@ -140,6 +162,12 @@ export interface Body {
   // Indices into BODIES of moons orbiting this body, sorted by semi-major
   // axis ascending. Always empty when `kind === 'moon'` (no sub-moons modeled).
   readonly moons: readonly number[];
+  // Index into BODIES of this body's ring system, or null. Only planet
+  // kinds can carry a ring; the catalog enforces at most one ring per
+  // planet — multi-band ring systems (Saturn's A/B/C, Uranus's epsilon /
+  // delta / etc.) collapse into a single ring row with bounding
+  // inner/outer radii.
+  readonly ring: number | null;
 }
 
 export interface StarCluster {
@@ -199,6 +227,15 @@ export const WORLD_CLASS_COLOR: Record<WorldClass, Color> = {
   ice_giant: new Color(0x5a9ad6),
 };
 export const WORLD_CLASS_UNKNOWN_COLOR = new Color(0x808080);
+
+// Disc / chunk color per BeltClass. Asteroid belts read brown-tan
+// (rocky/metallic dominant), ice belts pale cyan (water ice), debris
+// fields dusty olive (mixed rocky + processed material).
+export const BELT_CLASS_COLOR: Record<BeltClass, Color> = {
+  asteroid: new Color(0xa89060),
+  ice:      new Color(0xb8d8e8),
+  debris:   new Color(0x806848),
+};
 
 // =============================================================================
 // Runtime spatial indices

@@ -25,6 +25,11 @@ import {
   ECCENTRICITY,
   INCLINATION_DEG,
   AXIAL_TILT_DEG,
+  BELT_OCCURRENCE_BY_CLASS,
+  BELT_PLACEMENT,
+  BELT_RESOURCE_PRIORS,
+  RING_OCCURRENCE_BY_TYPE,
+  RING_EXTENT,
 } from './procgen-priors.mjs';
 
 // =============================================================================
@@ -58,6 +63,20 @@ function slotPrng(starId, slotIdx, salt) {
 // planet's id is the only stable handle that exists in both cases.
 function moonPrng(planetId, mIdx, salt) {
   return mulberry32(hash32(`${planetId}:moon${mIdx}:${salt}:${PROCGEN_VERSION}`));
+}
+
+// Per-(star, beltClass, salt) PRNG. Belts are system-level structural
+// features — one of each class per star at most — so the slot key is
+// the class name rather than an index.
+function beltPrng(starId, beltClass, salt) {
+  return mulberry32(hash32(`${starId}:belt:${beltClass}:${salt}:${PROCGEN_VERSION}`));
+}
+
+// Per-(planet, salt) PRNG for ring sampling. Like moonPrng, keyed off
+// the planet id so both architect-built and backfilled-catalog rings
+// share the same seeding scheme.
+function ringPrng(planetId, salt) {
+  return mulberry32(hash32(`${planetId}:ring:${salt}:${PROCGEN_VERSION}`));
 }
 
 // =============================================================================
@@ -112,12 +131,15 @@ const FILLER_TARGET_FIELDS = [
 ];
 
 // Build a body record with anchors set + every Filler-target field as null
-// + `_unknowns` listing those targets.
+// + `_unknowns` listing those targets. Belts and rings pass `_unknowns: []`
+// in props to short-circuit the Filler (their structural fields are baked
+// at architect time from belt/ring priors, not derived from physics).
 function makeBody(props) {
   const base = {
     hostStarIdx: null,
     hostBodyIdx: null,
-    worldClass: null, avgSurfaceTempK: null, surfaceTempMinK: null, surfaceTempMaxK: null,
+    worldClass: null, beltClass: null,
+    avgSurfaceTempK: null, surfaceTempMinK: null, surfaceTempMaxK: null,
     waterFraction: null, iceFraction: null, albedo: null,
     magneticFieldGauss: null, tectonicActivity: null,
     surfacePressureBar: null,
@@ -126,7 +148,9 @@ function makeBody(props) {
     resRareEarths: null, resRadioactives: null, resExotics: null,
     biosphere: null,
     rotationPeriodHours: null,
+    innerAu: null, outerAu: null, innerPlanetRadii: null, outerPlanetRadii: null,
     moons: [],
+    ring: null,
     _unknowns: [...FILLER_TARGET_FIELDS],
   };
   return { ...base, ...props };
@@ -191,6 +215,139 @@ export function generateMoons(planet, planetType) {
     }));
   }
   return moons;
+}
+
+// =============================================================================
+// Belts
+// =============================================================================
+
+// Roman numeral for the IAU-style "II Belt" naming below. Caps at IV —
+// no system today has more than 3 belt classes, so this is plenty.
+const BELT_NUMERAL = { asteroid: 'I', debris: 'II', ice: 'III' };
+
+// Descriptive belt name keyed off the band's center distance and class:
+// e.g. "Inner Asteroid Belt", "Outer Ice Belt". Used for procgen rows
+// where there's no curated colloquial name. Bands at < 1 AU are "Hot",
+// 1–5 AU "Inner", 5–20 AU "Middle", 20–100 AU "Outer", >100 AU "Distant".
+function describeBeltLocation(centerAu) {
+  if (centerAu < 1)   return 'Hot';
+  if (centerAu < 5)   return 'Inner';
+  if (centerAu < 20)  return 'Middle';
+  if (centerAu < 100) return 'Outer';
+  return 'Distant';
+}
+
+const BELT_CLASS_LABEL = {
+  asteroid: 'Asteroid Belt',
+  ice:      'Ice Belt',
+  debris:   'Debris Field',
+};
+
+// Generate 0..3 belts for one star (asteroid, ice, debris — each rolled
+// independently). Returns Body[] ready to concatenate with the planet
+// stream. Exported so the catalog backfill in build-catalog.mjs could
+// add belts to partially-observed catalog stars later (v1 only emits
+// during generateSystem).
+export function generateBelts(star) {
+  const cls = star.cls;
+  const occurrence = BELT_OCCURRENCE_BY_CLASS[cls];
+  const geom = ORBITAL_GEOMETRY_BY_CLASS[cls];
+  if (!occurrence || !geom) return [];
+
+  const belts = [];
+  for (const beltClass of Object.keys(occurrence)) {
+    const rollPrng = beltPrng(star.id, beltClass, 'occur');
+    if (rollPrng() >= occurrence[beltClass]) continue;
+
+    const placement = BELT_PLACEMENT[beltClass];
+    const innerAu = geom.outerEdgeAu * placement.innerFrac;
+    const outerAu = geom.outerEdgeAu * placement.outerFrac;
+    const centerAu = (innerAu + outerAu) / 2;
+
+    // Mass: log-uniform between placement.mass.min and .max.
+    const massPrng = beltPrng(star.id, beltClass, 'mass');
+    const logMin = Math.log10(placement.mass.min);
+    const logMax = Math.log10(placement.mass.max);
+    const massEarth = Math.pow(10, logMin + massPrng() * (logMax - logMin));
+
+    // Resources: per-field truncated normal from BELT_RESOURCE_PRIORS.
+    const resPriors = BELT_RESOURCE_PRIORS[beltClass];
+    const resources = {};
+    for (const field of Object.keys(resPriors)) {
+      const prng = beltPrng(star.id, beltClass, `res_${field}`);
+      resources[field] = Math.round(sampleTruncated(prng, resPriors[field]));
+    }
+
+    // Ice fraction tags volatile-dominated belts so the renderer + game
+    // logic can treat "icy belt" generically without hardcoding the
+    // beltClass enum: ~0.85 for ice belts, ~0.1 for asteroid/debris.
+    const iceFraction = beltClass === 'ice' ? 0.85 : 0.1;
+
+    const formal = `${star.name} ${describeBeltLocation(centerAu)} ${BELT_CLASS_LABEL[beltClass]}`;
+    belts.push(makeBody({
+      id: `${star.id}-belt-${beltClass}`,
+      hostId: star.id,
+      kind: 'belt',
+      formalName: formal,
+      name: formal,
+      source: 'procgen',
+      beltClass,
+      semiMajorAu: Number(centerAu.toFixed(3)),
+      innerAu: Number(innerAu.toFixed(3)),
+      outerAu: Number(outerAu.toFixed(3)),
+      massEarth: Number(massEarth.toFixed(5)),
+      iceFraction,
+      ...resources,
+      _unknowns: [],
+    }));
+  }
+  return belts;
+}
+
+// =============================================================================
+// Rings
+// =============================================================================
+
+// Generate 0 or 1 ring for one planet. Exported so the build-catalog
+// backfill can run rings over catalog planets that arrived without one
+// (same posture as moon backfill — the bias model assumes the catalog
+// is silent on rings, not authoritative).
+export function generateRing(planet, planetType) {
+  const spec = RING_OCCURRENCE_BY_TYPE[planetType];
+  if (!spec) return null;
+  const rollPrng = ringPrng(planet.id, 'occur');
+  if (rollPrng() >= spec.p) return null;
+
+  // Class: weighted sample over { ice, debris }.
+  const classPrng = ringPrng(planet.id, 'class');
+  const ringClass = sampleWeighted(classPrng, spec.weights);
+  const extent = RING_EXTENT[ringClass];
+  if (!extent) return null;
+
+  const innerPrng = ringPrng(planet.id, 'inner');
+  const outerPrng = ringPrng(planet.id, 'outer');
+  const icePrng   = ringPrng(planet.id, 'ice');
+  let inner = sampleTruncated(innerPrng, extent.inner);
+  let outer = sampleTruncated(outerPrng, extent.outer);
+  // If the outer sample lands below the inner, swap (cleaner than
+  // re-rolling, preserves determinism).
+  if (outer < inner) { const t = inner; inner = outer; outer = t; }
+
+  const iceFraction = Number(sampleTruncated(icePrng, extent.iceFraction).toFixed(3));
+  const formal = `${planet.formalName} ${ringClass === 'ice' ? 'Ice' : 'Debris'} Ring`;
+  return makeBody({
+    id: `${planet.id}-ring`,
+    hostId: planet.id,
+    kind: 'ring',
+    formalName: formal,
+    name: formal,
+    source: 'procgen',
+    beltClass: ringClass,
+    innerPlanetRadii: Number(inner.toFixed(3)),
+    outerPlanetRadii: Number(outer.toFixed(3)),
+    iceFraction,
+    _unknowns: [],
+  });
 }
 
 // =============================================================================
@@ -278,6 +435,11 @@ export function generateSystem(star) {
     });
     bodies.push(planet);
     bodies.push(...generateMoons(planet, planetType));
+    const ring = generateRing(planet, planetType);
+    if (ring) bodies.push(ring);
   }
+  // Belts roll independently of the planet stream — even a system with
+  // zero planet samples may still host belts (a debris-disk-only star).
+  bodies.push(...generateBelts(star));
   return bodies;
 }

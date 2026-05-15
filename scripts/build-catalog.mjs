@@ -17,7 +17,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hash32, mulberry32 } from './lib/prng.mjs';
 import { fillBodies, radiusFromMass, worldClassFor, planetTypeFor } from './lib/procgen.mjs';
-import { generateSystem, generateMoons } from './lib/procgen-architect.mjs';
+import { generateSystem, generateMoons, generateRing } from './lib/procgen-architect.mjs';
 import { insolation } from './lib/astrophysics.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -486,8 +486,13 @@ function buildClusters(stars) {
 const BODIES_FILE = 'bodies.csv';
 const WORLD_CLASSES = new Set(['rocky', 'ocean', 'ice', 'desert', 'lava', 'gas_dwarf', 'gas_giant', 'ice_giant']);
 const BIOSPHERES = new Set(['none', 'microbial', 'simple', 'complex', 'civilized']);
-const BODY_KINDS = new Set(['planet', 'moon']);
+const BODY_KINDS = new Set(['planet', 'moon', 'belt', 'ring']);
 const BODY_SOURCES = new Set(['catalog', 'procgen']);
+const BELT_CLASSES = new Set(['asteroid', 'ice', 'debris']);
+// Rings constrain to a subset of BELT_CLASSES — dust rings (Jupiter,
+// Uranus inner) are deliberately unmodeled (visually negligible, no
+// gameplay payoff), so rings are always 'ice' or 'debris'.
+const RING_CLASSES = new Set(['ice', 'debris']);
 
 // Stars whose body list is hand-curated and authoritative — the moon
 // backfill pass skips planets hosted by these so missing moons read as
@@ -526,6 +531,10 @@ const BODY_NUMERIC_FIELDS = [
   ['res_rare_earths',        'resRareEarths'],
   ['res_radioactives',       'resRadioactives'],
   ['res_exotics',            'resExotics'],
+  ['inner_au',               'innerAu'],
+  ['outer_au',               'outerAu'],
+  ['inner_planet_radii',     'innerPlanetRadii'],
+  ['outer_planet_radii',     'outerPlanetRadii'],
 ];
 const BODY_STRING_FIELDS = [
   ['atm1', 'atm1'],
@@ -555,6 +564,7 @@ function parseCsvBodies(text, label) {
     name: colIdx('name'),
     source: colIdx('source'),
     world_class: colIdx('world_class'),
+    belt_class: colIdx('belt_class'),
     biosphere: colIdx('biosphere'),
   };
   for (const [csvName] of BODY_NUMERIC_FIELDS) ix[csvName] = colIdx(csvName);
@@ -587,6 +597,18 @@ function parseCsvBodies(text, label) {
     if (worldClass !== null && !WORLD_CLASSES.has(worldClass)) {
       throw new Error(`${label}: ${id} invalid world_class=${worldClass}`);
     }
+    const beltClass = trackedCell('belt_class', 'beltClass');
+    if (beltClass !== null) {
+      if (!BELT_CLASSES.has(beltClass)) {
+        throw new Error(`${label}: ${id} invalid belt_class=${beltClass}`);
+      }
+      if (kind === 'ring' && !RING_CLASSES.has(beltClass)) {
+        throw new Error(`${label}: ${id} ring rows must use belt_class in {${[...RING_CLASSES].join(',')}}, got ${beltClass}`);
+      }
+    }
+    if ((kind === 'belt' || kind === 'ring') && beltClass === null) {
+      throw new Error(`${label}: ${id} kind=${kind} requires a belt_class`);
+    }
     const biosphere = trackedCell('biosphere', 'biosphere');
     if (biosphere !== null && !BIOSPHERES.has(biosphere)) {
       throw new Error(`${label}: ${id} invalid biosphere=${biosphere}`);
@@ -602,8 +624,10 @@ function parseCsvBodies(text, label) {
       hostStarIdx: null,
       hostBodyIdx: null,
       worldClass,
+      beltClass,
       biosphere,
       moons: [],
+      ring: null,
     };
     for (const [csvName, jsName] of BODY_NUMERIC_FIELDS) {
       const c = trackedCell(csvName, jsName);
@@ -644,48 +668,78 @@ function attachBodies(stars, rawBodies) {
     if (b.kind === 'planet') planetById.set(b.id, b);
   }
 
-  // Pass 1: resolve planet hosts against the survivor star set.
+  // Pass 1: resolve star-hosted bodies (planets + belts). Star ownership
+  // is the same shape; we keep planets and belts in two parallel lists
+  // so the per-star child arrays stay typed (planets[] vs belts[]).
   const planets = [];
+  const belts = [];
   for (const b of rawBodies) {
-    if (b.kind !== 'planet') continue;
-    const idx = starIdToIdx.get(b.hostId);
-    if (idx === undefined) {
-      console.warn(`${BODIES_FILE}: dropping ${b.id} (host star ${b.hostId} not in catalog)`);
-      planetById.delete(b.id);
-      continue;
+    if (b.kind === 'planet' || b.kind === 'belt') {
+      const idx = starIdToIdx.get(b.hostId);
+      if (idx === undefined) {
+        console.warn(`${BODIES_FILE}: dropping ${b.id} (host star ${b.hostId} not in catalog)`);
+        if (b.kind === 'planet') planetById.delete(b.id);
+        continue;
+      }
+      const resolved = { ...b, hostStarIdx: idx, hostBodyIdx: null };
+      if (b.kind === 'planet') planets.push(resolved);
+      else belts.push(resolved);
     }
-    planets.push({ ...b, hostStarIdx: idx, hostBodyIdx: null });
   }
   const planetIdxById = new Map();
   planets.forEach((p, i) => planetIdxById.set(p.id, i));
 
-  // Pass 2: resolve moon hosts against the surviving planets.
+  // Pass 2: resolve planet-hosted bodies (moons + rings). The combined
+  // body array places planets first, then belts, then moons, then rings —
+  // hostBodyIdx is rewritten with the planet's index in that combined
+  // layout below.
   const moons = [];
+  const rings = [];
+  // Track which planets have already accepted a ring so we can warn-and-
+  // drop duplicates rather than silently picking one.
+  const ringedPlanets = new Set();
   for (const b of rawBodies) {
-    if (b.kind !== 'moon') continue;
-    const planetIdx = planetIdxById.get(b.hostId);
-    if (planetIdx === undefined) {
+    if (b.kind !== 'moon' && b.kind !== 'ring') continue;
+    const localPlanetIdx = planetIdxById.get(b.hostId);
+    if (localPlanetIdx === undefined) {
       const host = planetById.get(b.hostId);
       if (host && host.kind !== 'planet') {
-        throw new Error(`body ${b.id}: moon must host on a planet, got kind=${host.kind}`);
+        throw new Error(`body ${b.id}: ${b.kind} must host on a planet, got kind=${host.kind}`);
       }
-      console.warn(`${BODIES_FILE}: dropping moon ${b.id} (host body ${b.hostId} not in catalog)`);
+      console.warn(`${BODIES_FILE}: dropping ${b.kind} ${b.id} (host body ${b.hostId} not in catalog)`);
       continue;
     }
-    moons.push({ ...b, hostStarIdx: null, hostBodyIdx: planetIdx });
+    if (b.kind === 'ring') {
+      if (ringedPlanets.has(b.hostId)) {
+        console.warn(`${BODIES_FILE}: dropping ${b.id} (host ${b.hostId} already has a ring)`);
+        continue;
+      }
+      ringedPlanets.add(b.hostId);
+    }
+    // hostBodyIdx is the planet's index in the combined `bodies` array
+    // below (planets occupy [0, planets.length), so this is just the
+    // local index).
+    const resolved = { ...b, hostStarIdx: null, hostBodyIdx: localPlanetIdx };
+    if (b.kind === 'moon') moons.push(resolved);
+    else rings.push(resolved);
   }
 
-  // Final BODIES order: planets first, moons after — keeps hostBodyIdx
-  // indices stable (they point into this combined array, with the moon
-  // offset = planets.length added back).
-  const bodies = [...planets, ...moons.map(m => ({ ...m, hostBodyIdx: m.hostBodyIdx }))];
+  // Final BODIES order: planets, then belts, then moons, then rings.
+  // Planets first keeps hostBodyIdx (set above to the planet's local
+  // index) stable across the concatenation; belts/moons/rings just
+  // append.
+  const bodies = [...planets, ...belts, ...moons, ...rings];
 
-  const starChildren = stars.map(() => []);
-  const bodyMoons = bodies.map(() => []);
+  const starPlanets = stars.map(() => []);
+  const starBelts   = stars.map(() => []);
+  const bodyMoons   = bodies.map(() => []);
+  const bodyRing    = bodies.map(() => null);
   for (let i = 0; i < bodies.length; i++) {
     const b = bodies[i];
-    if (b.kind === 'planet') starChildren[b.hostStarIdx].push(i);
-    else bodyMoons[b.hostBodyIdx].push(i);
+    if (b.kind === 'planet')      starPlanets[b.hostStarIdx].push(i);
+    else if (b.kind === 'belt')   starBelts[b.hostStarIdx].push(i);
+    else if (b.kind === 'moon')   bodyMoons[b.hostBodyIdx].push(i);
+    else if (b.kind === 'ring')   bodyRing[b.hostBodyIdx] = i;
   }
   const cmp = (a, b) => {
     const aa = bodies[a].semiMajorAu;
@@ -695,11 +749,12 @@ function attachBodies(stars, rawBodies) {
     if (bb === null) return -1;
     return aa - bb;
   };
-  for (const list of starChildren) list.sort(cmp);
-  for (const list of bodyMoons) list.sort(cmp);
+  for (const list of starPlanets) list.sort(cmp);
+  for (const list of starBelts)   list.sort(cmp);
+  for (const list of bodyMoons)   list.sort(cmp);
 
-  const finalBodies = bodies.map((b, i) => ({ ...b, moons: bodyMoons[i] }));
-  const finalStars = stars.map((s, i) => ({ ...s, planets: starChildren[i] }));
+  const finalBodies = bodies.map((b, i) => ({ ...b, moons: bodyMoons[i], ring: bodyRing[i] }));
+  const finalStars = stars.map((s, i) => ({ ...s, planets: starPlanets[i], belts: starBelts[i] }));
   return { stars: finalStars, bodies: finalBodies };
 }
 
@@ -746,12 +801,13 @@ async function main() {
   // none" rather than a "we don't know" — backfilling would invent
   // moons that contradict the curated truth.
   const catalogMoonHosts = new Set(rawBodies.filter(b => b.kind === 'moon').map(b => b.hostId));
+  const catalogRingHosts = new Set(rawBodies.filter(b => b.kind === 'ring').map(b => b.hostId));
   const starById = new Map(placedStars.map(s => [s.id, s]));
   const backfillMoons = [];
+  const backfillRings = [];
   for (const planet of rawBodies) {
     if (planet.kind !== 'planet') continue;
     if (CURATED_SYSTEM_HOSTS.has(planet.hostId)) continue;
-    if (catalogMoonHosts.has(planet.id)) continue;
     if (planet.massEarth == null) continue;  // no anchor → moon Kepler would NaN
     const host = starById.get(planet.hostId);
     if (!host) continue;
@@ -761,10 +817,20 @@ async function main() {
     const wc = planet.worldClass ?? worldClassFor({ ...planet, radiusEarth: r }, S);
     if (wc == null) continue;
     const planetType = planetTypeFor(wc, planet.massEarth, S);
-    backfillMoons.push(...generateMoons(planet, planetType));
+    if (!catalogMoonHosts.has(planet.id)) {
+      backfillMoons.push(...generateMoons(planet, planetType));
+    }
+    // Ring backfill mirrors the moon backfill: the catalog is silent on
+    // rings (transit + RV detection methods don't surface them), so we
+    // sample one per planet using the same per-(planet, salt) seeding
+    // the architect uses for in-line rings around procgen planets.
+    if (!catalogRingHosts.has(planet.id)) {
+      const ring = generateRing(planet, planetType);
+      if (ring) backfillRings.push(ring);
+    }
   }
 
-  const allBodies = [...rawBodies, ...procgenBodies, ...backfillMoons];
+  const allBodies = [...rawBodies, ...procgenBodies, ...backfillMoons, ...backfillRings];
 
   const { stars, bodies: resolvedBodies } = attachBodies(placedStars, allBodies);
   // Body Filler — fills `_unknowns` cells from physics + seeded PRNG;

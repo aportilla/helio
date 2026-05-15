@@ -392,10 +392,98 @@ export function makeFlatStarsMaterial(initialDiscScale: number): ShaderMaterial 
     `,
     vertexColors: true,
     transparent: false,
-    depthWrite: false,
+    // depthWrite intentionally true here — the system diagram threads
+    // a per-vertex z based on each planet's row index so each planet's
+    // stack (back-ring / back-moon / disc / front-ring / front-moon)
+    // renders as a single z-layer above or below its neighbors. With
+    // depthWrite off this ordering would collapse back to draw order.
+    depthWrite: true,
   });
   snappedMaterials.push(m);
   return m;
+}
+
+// Blob material — flat-color triangle-mesh fill for irregular polygon
+// chunks (belt + debris-ring debris). Geometry is indexed triangles
+// authored CPU-side in buffer-pixel coords; the rasterizer determines
+// the visible silhouette. Per-vertex color (so one pool can mix
+// asteroid + ice + debris hues) and per-vertex hover flag — when set,
+// the fragment shader inverts the triangle to white. Every vertex in
+// one chunk shares the same hover value by construction, so the whole
+// polygon highlights as a unit on hover.
+//
+// No pixel snapping: triangle vertices are placed at CPU-rounded
+// integer pixel coords and the rasterizer handles fragment coverage
+// from there. The polygon silhouette is what makes a chunk feel like
+// debris rather than a sprite, so any sub-pixel edge variation reads
+// as a coarse-pixel-art feature rather than noise.
+export function makeBlobMaterial(): ShaderMaterial {
+  return new ShaderMaterial({
+    uniforms: {},
+    vertexShader: `
+      attribute float aHovered;
+      varying vec3 vColor;
+      varying float vHovered;
+      void main() {
+        vColor = color;
+        vHovered = aHovered;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vColor;
+      varying float vHovered;
+      void main() {
+        vec3 col = vHovered > 0.5 ? vec3(1.0) : vColor;
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
+    vertexColors: true,
+    transparent: false,
+    // See makeFlatStarsMaterial — the system diagram uses vertex z to
+    // bundle each planet's elements as one z-layer; the chunks need to
+    // write depth too so adjacent planets' rings/discs occlude this
+    // pool correctly.
+    depthWrite: true,
+  });
+}
+
+// Solid-fill mesh material for ice rings — used by the triangle-strip
+// annulus halves in SystemDiagram. Flat color, no shading, no AA. The
+// caller provides geometry whose vertex positions live in the host
+// planet's local frame (origin at planet center, env-pixel units); the
+// mesh is positioned at the planet's cx/cy.
+//
+// Per-mesh uHovered uniform (0 / 1) inverts the entire fill to white
+// on hover. No per-vertex outline math because the geometry is a
+// continuous arc rather than a sprite — a 1-px rim would need a
+// second pass.
+export function makeIceRingMaterial(color: Color): ShaderMaterial {
+  return new ShaderMaterial({
+    uniforms: {
+      uColor:   { value: new Color().copy(color) },
+      uHovered: { value: 0 },
+    },
+    vertexShader: `
+      void main() {
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      uniform float uHovered;
+      void main() {
+        vec3 col = uHovered > 0.5 ? vec3(1.0) : uColor;
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
+    transparent: false,
+    // See makeFlatStarsMaterial — ice ring meshes ride the per-planet
+    // z stride too. The back / front mesh pair sits at z slightly
+    // bracketing the host planet's z so the planet disc paints over
+    // the back half and the front half overpaints the planet.
+    depthWrite: true,
+  });
 }
 
 // Mesh-based pixel-disc material — same procedural circle as the flat

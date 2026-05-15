@@ -241,3 +241,121 @@ export const ORBITAL_PHASE_DEG = { min: 0, max: 360 };
 // generator suffixes can be layered on top by individual generators that
 // want to be re-rollable independently.
 export const PROCGEN_VERSION = 'v1';
+
+// ---------------------------------------------------------------------------
+// Belts (asteroid / ice / debris) — system-level structural bands
+// ---------------------------------------------------------------------------
+
+export const BELT_CLASSES = ['asteroid', 'ice', 'debris'];
+
+// Per-stellar-class occurrence probability for each belt class. Rolled
+// independently per belt class — a system can host any combination of
+// the three. Belts represent NOTABLE structural bands worth a player's
+// attention (resource clusters, debris fields with stories), not every
+// system's background Kuiper-analog. Sol's Main Belt counts as notable
+// (named, hand-curated); Sol's Kuiper Belt does not. These rates are
+// pulled down from the underlying physical occurrence stats by an order
+// of magnitude — most stars have *some* belt structure, but only a
+// minority host one that reads as a navigable / mine-able landmark in
+// the game. Debris disks stay relatively elevated around A/B/F stars
+// since the famous ones (Vega, Fomalhaut, β Pic) are notable for a
+// reason: they're visually dramatic at our scale.
+export const BELT_OCCURRENCE_BY_CLASS = {
+  O:  { asteroid: 0.08, ice: 0.12, debris: 0.25 },
+  B:  { asteroid: 0.10, ice: 0.15, debris: 0.22 },
+  A:  { asteroid: 0.12, ice: 0.18, debris: 0.20 },
+  F:  { asteroid: 0.18, ice: 0.18, debris: 0.12 },
+  G:  { asteroid: 0.22, ice: 0.15, debris: 0.05 },
+  K:  { asteroid: 0.22, ice: 0.15, debris: 0.05 },
+  M:  { asteroid: 0.15, ice: 0.12, debris: 0.03 },
+  WD: { asteroid: 0.05, ice: 0.05, debris: 0.02 },
+  BD: { asteroid: 0.05, ice: 0.05, debris: 0.02 },
+};
+
+// Belt extent in AU, scaled by stellar luminosity (∝ √L roughly — the
+// snow line and rocky-zone boundary both move outward with hotter
+// stars). innerFrac / outerFrac are multiplied by the host's outerEdgeAu
+// from ORBITAL_GEOMETRY_BY_CLASS to get the band's AU bounds. Mass is
+// in M⊕, log-uniform between min and max.
+//
+// Asteroid: between the rocky and giant zones (0.05–0.10× outer edge).
+// Ice: past the giant zone (0.75–1.20× outer edge — extends past
+// the architect's planet-placement cutoff). Debris: a wide warm band
+// straddling the planet zone (0.10–0.50×).
+export const BELT_PLACEMENT = {
+  asteroid: { innerFrac: 0.05, outerFrac: 0.10, mass: { min: 0.0001, max: 0.01 } },
+  ice:      { innerFrac: 0.75, outerFrac: 1.25, mass: { min: 0.01,   max: 0.3  } },
+  debris:   { innerFrac: 0.10, outerFrac: 0.50, mass: { min: 0.001,  max: 0.05 } },
+};
+
+// Resource priors per belt class. Sampled as truncated normals,
+// rounded to integer, clamped [0, 10]. Asteroid belts skew metals/
+// silicates; ice belts dominate on volatiles; debris fields sit in the
+// middle with elevated exotics (processed-material proxy).
+export const BELT_RESOURCE_PRIORS = {
+  asteroid: {
+    resMetals:        { mean: 7, sd: 2, min: 0, max: 10 },
+    resSilicates:     { mean: 6, sd: 2, min: 0, max: 10 },
+    resVolatiles:     { mean: 1, sd: 1, min: 0, max: 10 },
+    resRareEarths:    { mean: 4, sd: 2, min: 0, max: 10 },
+    resRadioactives:  { mean: 3, sd: 2, min: 0, max: 10 },
+    resExotics:       { mean: 1, sd: 1, min: 0, max: 10 },
+  },
+  ice: {
+    resMetals:        { mean: 1, sd: 1, min: 0, max: 10 },
+    resSilicates:     { mean: 1, sd: 1, min: 0, max: 10 },
+    resVolatiles:     { mean: 9, sd: 1, min: 0, max: 10 },
+    resRareEarths:    { mean: 1, sd: 1, min: 0, max: 10 },
+    resRadioactives:  { mean: 1, sd: 1, min: 0, max: 10 },
+    resExotics:       { mean: 2, sd: 2, min: 0, max: 10 },
+  },
+  debris: {
+    resMetals:        { mean: 4, sd: 2, min: 0, max: 10 },
+    resSilicates:     { mean: 4, sd: 2, min: 0, max: 10 },
+    resVolatiles:     { mean: 3, sd: 2, min: 0, max: 10 },
+    resRareEarths:    { mean: 2, sd: 2, min: 0, max: 10 },
+    resRadioactives:  { mean: 2, sd: 2, min: 0, max: 10 },
+    resExotics:       { mean: 3, sd: 2, min: 0, max: 10 },
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Rings — per-planet ring systems (0 or 1)
+// ---------------------------------------------------------------------------
+
+// Per-planet-type probability of having a NOTABLE ring system, and the
+// conditional class weights when one exists. Dust rings are deliberately
+// not modeled — the weights only cover the dramatic 'ice' (Saturn-style)
+// and 'debris' (Uranus/Neptune-style, but more striking than Sol's faint
+// versions) varieties that have visual + gameplay payoff.
+//
+// Sol's calibration: Saturn's rings count as notable (visually iconic +
+// hand-curated); Uranus's and Neptune's faint debris rings do not. So
+// among Sol's four gas/ice giants, 1/4 = 25% notable-ring rate. Real
+// physical ring occurrence around gas giants is closer to 100% (every
+// outer giant has *some* ring system), but ~75% of those are subtle
+// enough to be invisible at our zoom — they wouldn't read as "rings"
+// to a player. The numbers below target the visually-notable subset.
+export const RING_OCCURRENCE_BY_TYPE = {
+  hot_rocky:   { p: 0.002, weights: { ice: 0.0,  debris: 1.0  } },
+  rocky:       { p: 0.005, weights: { ice: 0.0,  debris: 1.0  } },
+  super_earth: { p: 0.01,  weights: { ice: 0.30, debris: 0.70 } },
+  sub_neptune: { p: 0.03,  weights: { ice: 0.75, debris: 0.25 } },
+  neptune:     { p: 0.07,  weights: { ice: 0.80, debris: 0.20 } },
+  jupiter:     { p: 0.12,  weights: { ice: 0.65, debris: 0.35 } },
+};
+
+// Ring extent in multiples of the host planet's radius. Inner edge sits
+// above the Roche limit (~1.1–1.5 R_p depending on density); outer edge
+// inside the synchronous-orbit boundary for ice rings (Saturn's F ring
+// ≈ 2.3 R_S, well inside synchronous). Debris rings are narrower (Uranus
+// epsilon, Neptune Adams ≈ 2.0 R_p), reflecting their shepherded origin.
+// iceFraction is set per class — Saturn ≈ 0.95; Uranus / Neptune ≈ 0.1.
+export const RING_EXTENT = {
+  ice:    { inner: { mean: 1.20, sd: 0.10, min: 1.05, max: 1.5 },
+            outer: { mean: 2.30, sd: 0.20, min: 1.6,  max: 3.0 },
+            iceFraction: { mean: 0.92, sd: 0.05, min: 0.6, max: 0.99 } },
+  debris: { inner: { mean: 1.70, sd: 0.15, min: 1.3,  max: 2.1 },
+            outer: { mean: 2.10, sd: 0.20, min: 1.5,  max: 2.8 },
+            iceFraction: { mean: 0.15, sd: 0.10, min: 0,   max: 0.4 } },
+};

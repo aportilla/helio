@@ -8,7 +8,7 @@
 // ephemeral; dismissal is the cursor leaving the disc.
 
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
-import { BODIES, STARS, type Biosphere, type WorldClass } from '../../data/stars';
+import { BODIES, STARS, type BeltClass, type Biosphere, type Body, type WorldClass } from '../../data/stars';
 import type { BodyPick } from '../../scene/system-diagram';
 import { BasePanel } from '../base-panel';
 import { paintSurface } from '../painter';
@@ -34,6 +34,24 @@ const BIOSPHERE_LABEL: Record<Exclude<Biosphere, 'none'>, string> = {
   complex:   'Complex Life',
   civilized: 'Civilized',
 };
+
+const BELT_CLASS_LABEL: Record<BeltClass, string> = {
+  asteroid: 'Asteroid',
+  ice:      'Ice',
+  debris:   'Debris',
+};
+
+// Resource label table for the per-row mineral readouts on belts.
+// Listed in display order; entries with value 0 are still shown so the
+// reader can compare profiles across belts (a 0 is signal, not noise).
+const RES_ROWS: Array<{ key: string; field: 'resMetals' | 'resSilicates' | 'resVolatiles' | 'resRareEarths' | 'resRadioactives' | 'resExotics' }> = [
+  { key: 'metals',    field: 'resMetals' },
+  { key: 'silicates', field: 'resSilicates' },
+  { key: 'volatiles', field: 'resVolatiles' },
+  { key: 'rare',      field: 'resRareEarths' },
+  { key: 'radio',     field: 'resRadioactives' },
+  { key: 'exotics',   field: 'resExotics' },
+];
 
 // Periods are stored in days. Sub-year reads in days; multi-year reads
 // in years so a 12-year orbit doesn't surface as "4383.0 d".
@@ -68,6 +86,8 @@ function rowsForStar(starIdx: number): BodyRow[] {
 
 function rowsForBody(bodyIdx: number): BodyRow[] {
   const b = BODIES[bodyIdx];
+  if (b.kind === 'belt') return rowsForBelt(b);
+  if (b.kind === 'ring') return rowsForRing(b);
   const rows: BodyRow[] = [];
   if (b.worldClass !== null) rows.push({ key: k('class'),    val: WORLD_CLASS_LABEL[b.worldClass] });
   if (b.massEarth !== null)  rows.push({ key: k('mass'),     val: `${b.massEarth.toFixed(2)} Mearth` });
@@ -84,13 +104,46 @@ function rowsForBody(bodyIdx: number): BodyRow[] {
   return rows;
 }
 
-// Parent line for moons: "Moon of <parent display name>". Skipped for
-// planets (host is the system's star, which is already named in the HUD
-// title across the top of the screen).
-function parentLineForMoon(bodyIdx: number): string | null {
+// Belt rows surface the band's extent and its full resource profile.
+// Resources are the gameplay payoff (asteroid mining, ice harvesting),
+// so listing all six lets players compare candidate belts at a glance.
+function rowsForBelt(b: Body): BodyRow[] {
+  const rows: BodyRow[] = [];
+  if (b.beltClass) rows.push({ key: k('class'), val: BELT_CLASS_LABEL[b.beltClass] });
+  if (b.innerAu !== null && b.outerAu !== null) {
+    rows.push({ key: k('extent'), val: `${b.innerAu.toFixed(2)}–${b.outerAu.toFixed(2)} AU` });
+  }
+  if (b.massEarth !== null) rows.push({ key: k('mass'), val: `${b.massEarth.toFixed(4)} Mearth` });
+  for (const r of RES_ROWS) {
+    const v = b[r.field];
+    if (v !== null) rows.push({ key: k(r.key), val: `${v}/10` });
+  }
+  return rows;
+}
+
+// Ring rows: extent in planetary radii (so "1.1–2.3 R_p" reads against
+// the host planet's size), ring class, and iceFraction as a one-line
+// composition cue. No resource grid — ring volumes are too small for
+// the mining-profile lens that makes sense for belts.
+function rowsForRing(b: Body): BodyRow[] {
+  const rows: BodyRow[] = [];
+  if (b.beltClass) rows.push({ key: k('class'), val: BELT_CLASS_LABEL[b.beltClass] });
+  if (b.innerPlanetRadii !== null && b.outerPlanetRadii !== null) {
+    rows.push({ key: k('extent'), val: `${b.innerPlanetRadii.toFixed(2)}–${b.outerPlanetRadii.toFixed(2)} R_p` });
+  }
+  if (b.iceFraction !== null) rows.push({ key: k('ice'), val: `${(b.iceFraction * 100).toFixed(0)}%` });
+  return rows;
+}
+
+// Parent line for moons and rings: "Moon of <p>" or "Ring of <p>".
+// Skipped for planets and belts (whose host is the system's star,
+// already named in the HUD title across the top of the screen).
+function parentLineFor(bodyIdx: number): string | null {
   const b = BODIES[bodyIdx];
-  if (b.kind !== 'moon' || b.hostBodyIdx === null) return null;
-  return `Moon of ${BODIES[b.hostBodyIdx].name}`;
+  if (b.hostBodyIdx === null) return null;
+  if (b.kind === 'moon') return `Moon of ${BODIES[b.hostBodyIdx].name}`;
+  if (b.kind === 'ring') return `Ring of ${BODIES[b.hostBodyIdx].name}`;
+  return null;
 }
 
 function titleFor(pick: BodyPick): string {
@@ -126,7 +179,7 @@ export class BodyInfoCard extends BasePanel {
     let maxBodyW = 0;
     let bodyLines = 0;
 
-    const parentLine = this.current.kind === 'moon' ? parentLineForMoon(this.current.bodyIdx) : null;
+    const parentLine = this.current.kind !== 'star' ? parentLineFor(this.current.bodyIdx) : null;
     if (parentLine) {
       const w = measurePixelText(parentLine);
       if (w > maxBodyW) maxBodyW = w;
@@ -161,7 +214,7 @@ export class BodyInfoCard extends BasePanel {
 
     let cursorY = sizes.padY + titleLineH + sizes.cardNameGap;
 
-    const parentLine = this.current.kind === 'moon' ? parentLineForMoon(this.current.bodyIdx) : null;
+    const parentLine = this.current.kind !== 'star' ? parentLineFor(this.current.bodyIdx) : null;
     if (parentLine) {
       drawPixelText(g, parentLine, sizes.padX, cursorY, colors.textKey);
       cursorY += bodyLineH;
