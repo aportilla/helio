@@ -489,6 +489,13 @@ const BIOSPHERES = new Set(['none', 'microbial', 'simple', 'complex', 'civilized
 const BODY_KINDS = new Set(['planet', 'moon']);
 const BODY_SOURCES = new Set(['catalog', 'procgen']);
 
+// Stars whose body list is hand-curated and authoritative — the moon
+// backfill pass skips planets hosted by these so missing moons read as
+// "really none / not yet curated" rather than as "we don't know, please
+// invent." Sol is the canonical reference; extend this set when other
+// systems get fully hand-tuned.
+const CURATED_SYSTEM_HOSTS = new Set(['sol']);
+
 // Columns split by handling: numeric cells get parsed via Number(), value
 // cells stay as strings (or null). Both paths fold empty + 'n/a' to null.
 const BODY_NUMERIC_FIELDS = [
@@ -733,11 +740,17 @@ async function main() {
   // the Architect's moon generator. The Filler will write the planet's
   // own worldClass/temp/pressure authoritatively a step later — we only
   // derive a class here as a moon-count bucket, not to persist it.
+  //
+  // Curated systems (Sol today) are exempt: their CSV is authoritative,
+  // so an empty moon list for Mercury / Venus is the catalog's "really
+  // none" rather than a "we don't know" — backfilling would invent
+  // moons that contradict the curated truth.
   const catalogMoonHosts = new Set(rawBodies.filter(b => b.kind === 'moon').map(b => b.hostId));
   const starById = new Map(placedStars.map(s => [s.id, s]));
   const backfillMoons = [];
   for (const planet of rawBodies) {
     if (planet.kind !== 'planet') continue;
+    if (CURATED_SYSTEM_HOSTS.has(planet.hostId)) continue;
     if (catalogMoonHosts.has(planet.id)) continue;
     if (planet.massEarth == null) continue;  // no anchor → moon Kepler would NaN
     const host = starById.get(planet.hostId);
