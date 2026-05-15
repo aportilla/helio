@@ -12,7 +12,7 @@
 // character, atmosphere, resources, biosphere are left as `_unknowns`
 // for the Filler (procgen.mjs) to derive.
 
-import { hash32, mulberry32 } from './prng.mjs';
+import { hash32, mulberry32, sampleNormal, sampleTruncated } from './prng.mjs';
 import { insolation } from './astrophysics.mjs';
 import {
   PROCGEN_VERSION,
@@ -30,22 +30,6 @@ import {
 // =============================================================================
 // Sampling helpers
 // =============================================================================
-
-// Box-Muller normal sample. Returns one variate per call (the second is
-// discarded; cheap enough for build-time use).
-function sampleNormal(prng, mean, sd) {
-  let u1 = prng(); if (u1 < 1e-9) u1 = 1e-9;
-  const u2 = prng();
-  const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-  return mean + z * sd;
-}
-
-// Sample N(mean, sd), clamp to [min, max]. Optionally round.
-function sampleTruncated(prng, spec, round = false) {
-  const v = sampleNormal(prng, spec.mean, spec.sd);
-  const clamped = Math.max(spec.min, Math.min(spec.max, v));
-  return round ? Math.round(clamped) : clamped;
-}
 
 // Weighted categorical sample. Weights can be unnormalized; zero/negative
 // entries are skipped. Falls back to last key on FP edge cases.
@@ -66,6 +50,14 @@ function sampleWeighted(prng, weights) {
 // (planet count, etc.) that aren't tied to a specific orbital slot.
 function slotPrng(starId, slotIdx, salt) {
   return mulberry32(hash32(`${starId}:${slotIdx}:${salt}:${PROCGEN_VERSION}`));
+}
+
+// Per-(planet, moon, salt) PRNG. Seeded off planet.id rather than the
+// architect's (starId, slot) tuple so the same generator works for both
+// architect-built planets and catalog rows being moon-backfilled — the
+// planet's id is the only stable handle that exists in both cases.
+function moonPrng(planetId, mIdx, salt) {
+  return mulberry32(hash32(`${planetId}:moon${mIdx}:${salt}:${PROCGEN_VERSION}`));
 }
 
 // =============================================================================
@@ -148,22 +140,25 @@ function makeBody(props) {
 // from the planet in AU at planetary scales (Galilean ~0.003 AU). Mass
 // distribution is log-uniform from sub-Enceladus (10^-5 M⊕) to about
 // 0.025 M⊕ (Titan-Ganymede range). Radius approximated from mass via a
-// rocky-mean-density relation (ρ ≈ 3 g/cm³).
-function generateMoons(planet, hostStarId, planetSlot, planetType) {
+// rocky-mean-density relation (ρ ≈ 3 g/cm³). Exported so the Filler can
+// reuse it when backfilling moons for catalog planets that arrived with
+// none — observed exoplanets rarely have moon coverage, but every body
+// should be explorable for the game.
+export function generateMoons(planet, planetType) {
   const spec = MOON_COUNT_BY_TYPE[planetType];
   if (!spec) return [];
-  const countPrng = slotPrng(hostStarId, planetSlot, 'moon_count');
+  const countPrng = moonPrng(planet.id, -1, 'count');
   const N = Math.max(0, Math.min(spec.max, Math.round(sampleNormal(countPrng, spec.mean, spec.sd))));
   if (N === 0) return [];
 
   const moons = [];
   for (let mIdx = 0; mIdx < N; mIdx++) {
-    const massPrng = slotPrng(hostStarId, planetSlot, `moon${mIdx}_mass`);
-    const orbitPrng = slotPrng(hostStarId, planetSlot, `moon${mIdx}_orbit`);
-    const phasePrng = slotPrng(hostStarId, planetSlot, `moon${mIdx}_phase`);
-    const eccPrng = slotPrng(hostStarId, planetSlot, `moon${mIdx}_ecc`);
-    const incPrng = slotPrng(hostStarId, planetSlot, `moon${mIdx}_inc`);
-    const tiltPrng = slotPrng(hostStarId, planetSlot, `moon${mIdx}_tilt`);
+    const massPrng = moonPrng(planet.id, mIdx, 'mass');
+    const orbitPrng = moonPrng(planet.id, mIdx, 'orbit');
+    const phasePrng = moonPrng(planet.id, mIdx, 'phase');
+    const eccPrng = moonPrng(planet.id, mIdx, 'ecc');
+    const incPrng = moonPrng(planet.id, mIdx, 'inc');
+    const tiltPrng = moonPrng(planet.id, mIdx, 'tilt');
 
     // Mass: log-uniform between Enceladus-tiny and Ganymede-large.
     const massEarth = Math.pow(10, -5 + massPrng() * (Math.log10(0.025) + 5));
@@ -282,7 +277,7 @@ export function generateSystem(star) {
       radiusEarth: Number(radiusEarth.toFixed(3)),
     });
     bodies.push(planet);
-    bodies.push(...generateMoons(planet, star.id, i, planetType));
+    bodies.push(...generateMoons(planet, planetType));
   }
   return bodies;
 }

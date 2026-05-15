@@ -20,3 +20,19 @@ export function mulberry32(seed) {
     return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+// Box-Muller normal sample. Returns one variate per call; the second
+// variate is discarded — cheap enough for build-time use.
+export function sampleNormal(prng, mean, sd) {
+  let u1 = prng(); if (u1 < 1e-9) u1 = 1e-9;
+  const u2 = prng();
+  const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  return mean + z * sd;
+}
+
+// Sample N(mean, sd), clamp to [min, max]. Optionally round to integer.
+export function sampleTruncated(prng, spec, round = false) {
+  const v = sampleNormal(prng, spec.mean, spec.sd);
+  const clamped = Math.max(spec.min, Math.min(spec.max, v));
+  return round ? Math.round(clamped) : clamped;
+}

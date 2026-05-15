@@ -16,8 +16,9 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hash32, mulberry32 } from './lib/prng.mjs';
-import { fillBodies } from './lib/procgen.mjs';
-import { generateSystem } from './lib/procgen-architect.mjs';
+import { fillBodies, radiusFromMass, worldClassFor, planetTypeFor } from './lib/procgen.mjs';
+import { generateSystem, generateMoons } from './lib/procgen-architect.mjs';
+import { insolation } from './lib/astrophysics.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
@@ -721,7 +722,36 @@ async function main() {
     if (catalogPlanetHosts.has(star.id)) continue;
     procgenBodies.push(...generateSystem(star));
   }
-  const allBodies = [...rawBodies, ...procgenBodies];
+
+  // Moon backfill — observed exoplanets almost never have moon coverage
+  // in the catalog (RV/transit detection bias against picking out
+  // satellite signals), so without this pass every catalog planet would
+  // surface as moonless in-game, contradicting the catalog-is-incomplete
+  // bias the rest of the procgen pipeline assumes. For each catalog
+  // planet that arrived with no moons in the CSV, derive a transient
+  // worldClass + planet type from its mass and orbital context and run
+  // the Architect's moon generator. The Filler will write the planet's
+  // own worldClass/temp/pressure authoritatively a step later — we only
+  // derive a class here as a moon-count bucket, not to persist it.
+  const catalogMoonHosts = new Set(rawBodies.filter(b => b.kind === 'moon').map(b => b.hostId));
+  const starById = new Map(placedStars.map(s => [s.id, s]));
+  const backfillMoons = [];
+  for (const planet of rawBodies) {
+    if (planet.kind !== 'planet') continue;
+    if (catalogMoonHosts.has(planet.id)) continue;
+    if (planet.massEarth == null) continue;  // no anchor → moon Kepler would NaN
+    const host = starById.get(planet.hostId);
+    if (!host) continue;
+    const r = planet.radiusEarth ?? radiusFromMass(planet.massEarth);
+    if (r == null) continue;
+    const S = planet.semiMajorAu != null ? insolation(host.mass, planet.semiMajorAu) : null;
+    const wc = planet.worldClass ?? worldClassFor({ ...planet, radiusEarth: r }, S);
+    if (wc == null) continue;
+    const planetType = planetTypeFor(wc, planet.massEarth, S);
+    backfillMoons.push(...generateMoons(planet, planetType));
+  }
+
+  const allBodies = [...rawBodies, ...procgenBodies, ...backfillMoons];
 
   const { stars, bodies: resolvedBodies } = attachBodies(placedStars, allBodies);
   // Body Filler — fills `_unknowns` cells from physics + seeded PRNG;
