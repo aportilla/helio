@@ -336,13 +336,16 @@ export function makeFlatStarsMaterial(initialDiscScale: number): ShaderMaterial 
     },
     vertexShader: `
       attribute float aSize;
+      attribute float aHovered;
       varying vec3 vColor;
       varying float vRadius;
       varying vec2 vCenter;
+      varying float vHovered;
       uniform float uDiscScale;
       uniform vec2 uViewport;
       void main() {
         vColor = color;
+        vHovered = aHovered;
         // Integer-pixel disc diameter. No depth attenuation — this is a
         // flat diagram, every star renders at its table size scaled by the
         // global knob. Floor + 0.5 → round-to-nearest.
@@ -373,10 +376,18 @@ export function makeFlatStarsMaterial(initialDiscScale: number): ShaderMaterial 
       varying vec3 vColor;
       varying float vRadius;
       varying vec2 vCenter;
+      varying float vHovered;
       void main() {
         vec2 d = gl_FragCoord.xy - vCenter;
-        if (length(d) > vRadius) discard;
-        gl_FragColor = vec4(vColor, 1.0);
+        float r = length(d);
+        if (r > vRadius) discard;
+        // 1px white outline at the rim when hovered. The discard above
+        // bounds the disc; this swap stamps the outermost pixel ring
+        // (where r > vRadius - 1) to white so the hovered body reads
+        // distinct from anything it overlaps. Same natural pixel-disc
+        // ring shape as the body — no AA, no extra geometry.
+        vec3 col = (vHovered > 0.5 && r > vRadius - 1.0) ? vec3(1.0) : vColor;
+        gl_FragColor = vec4(col, 1.0);
       }
     `,
     vertexColors: true,
@@ -403,9 +414,13 @@ export function makeFlatStarsMaterial(initialDiscScale: number): ShaderMaterial 
 export function makeStarMeshMaterial(): ShaderMaterial {
   return new ShaderMaterial({
     uniforms: {
-      uCenter: { value: new Vector2() },
-      uRadius: { value: 0 },
-      uColor:  { value: new Color() },
+      uCenter:  { value: new Vector2() },
+      uRadius:  { value: 0 },
+      uColor:   { value: new Color() },
+      // Hover outline toggle (0 = off, 1 = on). One material per disc, so
+      // this lives as a uniform — no need for a per-vertex attribute path
+      // here. Outline rings the bottom-strip of the top-clipped disc.
+      uHovered: { value: 0 },
     },
     vertexShader: `
       void main() {
@@ -416,10 +431,13 @@ export function makeStarMeshMaterial(): ShaderMaterial {
       uniform vec2 uCenter;
       uniform float uRadius;
       uniform vec3 uColor;
+      uniform float uHovered;
       void main() {
         vec2 d = gl_FragCoord.xy - uCenter;
-        if (length(d) > uRadius) discard;
-        gl_FragColor = vec4(uColor, 1.0);
+        float r = length(d);
+        if (r > uRadius) discard;
+        vec3 col = (uHovered > 0.5 && r > uRadius - 1.0) ? vec3(1.0) : uColor;
+        gl_FragColor = vec4(col, 1.0);
       }
     `,
     transparent: false,

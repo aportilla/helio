@@ -267,9 +267,28 @@ interface MoonSlot {
   parentIndex: number;
   // Index into the per-pool moon arrays (positions, colors, sizes).
   poolIndex: number;
+  // Index into BODIES — used by the picker / hover lookup so a pool can
+  // map a slot back to the body it represents without a parallel array.
+  bodyIdx: number;
   // Per-moon disc diameter (px), and per-moon angle around parent.
   discPx: number;
   angle: number;
+}
+
+// Picker result. Discriminated by `kind`: star vs. body (planet/moon).
+// Returned by SystemDiagram.pickAt and consumed by setHovered + the HUD
+// body info card. starIdx indexes STARS; bodyIdx indexes BODIES.
+export type BodyPick =
+  | { readonly kind: 'star'; readonly starIdx: number }
+  | { readonly kind: 'planet' | 'moon'; readonly bodyIdx: number };
+
+function picksEqual(a: BodyPick | null, b: BodyPick | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'star' && b.kind === 'star') return a.starIdx === b.starIdx;
+  if (a.kind !== 'star' && b.kind !== 'star') return a.bodyIdx === b.bodyIdx;
+  return false;
 }
 
 interface MoonPool {
@@ -322,6 +341,12 @@ export class SystemDiagram {
   private readonly backMoons: MoonPool | null = null;
   private readonly frontMoons: MoonPool | null = null;
 
+  // -- Hover --
+  // Currently-outlined body. setHovered() diffs against this to skip
+  // no-op repaints (cursor moving within the same disc) and to clear the
+  // previous outline before stamping the new one.
+  private hoveredPick: BodyPick | null = null;
+
   constructor(clusterIdx: number) {
     const cluster = STAR_CLUSTERS[clusterIdx];
 
@@ -369,6 +394,10 @@ export class SystemDiagram {
       const pPositions = new Float32Array(P * 3);
       const pColors    = new Float32Array(P * 3);
       const pSizes     = new Float32Array(P);
+      // aHovered carries the per-vertex hover flag (0 or 1) consumed by
+      // the fragment shader's outline branch. Starts all-zero; setHovered
+      // flips one entry at a time.
+      const pHovered   = new Float32Array(P);
       planetIndices.forEach((bIdx, i) => {
         const b = BODIES[bIdx];
         const col = b.worldClass !== null
@@ -385,6 +414,7 @@ export class SystemDiagram {
       this.planetGeometry.setAttribute('position', new BufferAttribute(pPositions, 3));
       this.planetGeometry.setAttribute('color',    new BufferAttribute(pColors, 3));
       this.planetGeometry.setAttribute('aSize',    new BufferAttribute(pSizes, 1));
+      this.planetGeometry.setAttribute('aHovered', new BufferAttribute(pHovered, 1));
       this.planetMaterial = makeFlatStarsMaterial(1.0);
       this.planetPoints = new Points(this.planetGeometry, this.planetMaterial);
       this.planetPoints.renderOrder = 10;
@@ -403,11 +433,6 @@ export class SystemDiagram {
     // front pool otherwise.
     const backSlots: MoonSlot[] = [];
     const frontSlots: MoonSlot[] = [];
-    // moonBodyIdxByPool[poolKey][i] = body index in BODIES for the
-    // moon at the i'th slot of that pool. Used to write color/size into
-    // the pool's attributes after the pool is built.
-    const backMoonBodyIdx: number[] = [];
-    const frontMoonBodyIdx: number[] = [];
     planetIndices.forEach((pIdx, parentIndex) => {
       const parent = BODIES[pIdx];
       const Nm = parent.moons.length;
@@ -421,25 +446,23 @@ export class SystemDiagram {
       parent.moons.forEach((moonBodyIdx, j) => {
         const angle = moonAngles[j];
         const discPx = moonDiscs[j];
-        const slot: MoonSlot = { parentIndex, poolIndex: -1, discPx, angle };
+        const slot: MoonSlot = { parentIndex, poolIndex: -1, bodyIdx: moonBodyIdx, discPx, angle };
         if (Math.sin(angle) > 0) {
           slot.poolIndex = backSlots.length;
           backSlots.push(slot);
-          backMoonBodyIdx.push(moonBodyIdx);
         } else {
           slot.poolIndex = frontSlots.length;
           frontSlots.push(slot);
-          frontMoonBodyIdx.push(moonBodyIdx);
         }
       });
     });
 
     if (backSlots.length > 0) {
-      this.backMoons = makeMoonPool(backSlots, backMoonBodyIdx, /*renderOrder=*/ 5);
+      this.backMoons = makeMoonPool(backSlots, /*renderOrder=*/ 5);
       this.scene.add(this.backMoons.points);
     }
     if (frontSlots.length > 0) {
-      this.frontMoons = makeMoonPool(frontSlots, frontMoonBodyIdx, /*renderOrder=*/ 15);
+      this.frontMoons = makeMoonPool(frontSlots, /*renderOrder=*/ 15);
       this.scene.add(this.frontMoons.points);
     }
   }
@@ -594,6 +617,104 @@ export class SystemDiagram {
     writePool(this.frontMoons);
   }
 
+  // Hit-test the rendered discs at (x, y) in buffer-pixel coords. Layer
+  // priority follows what the eye sees: front moons paint over planets,
+  // planets paint over back moons, and stars sit behind everything. The
+  // first disc to contain the point wins — no smaller-radius tiebreaker
+  // (so a moon overlapping its parent's rim always wins because the moon
+  // pool draws after the planet pool).
+  pickAt(x: number, y: number): BodyPick | null {
+    const inDisc = (cx: number, cy: number, r: number): boolean => {
+      const dx = x - cx;
+      const dy = y - cy;
+      return dx * dx + dy * dy <= r * r;
+    };
+
+    const pickFromMoonPool = (pool: MoonPool | null): BodyPick | null => {
+      if (!pool) return null;
+      const pos = pool.geometry.attributes.position.array as Float32Array;
+      for (let i = 0; i < pool.slots.length; i++) {
+        const slot = pool.slots[i];
+        const cx = pos[i * 3 + 0];
+        const cy = pos[i * 3 + 1];
+        if (inDisc(cx, cy, slot.discPx / 2)) {
+          return { kind: 'moon', bodyIdx: slot.bodyIdx };
+        }
+      }
+      return null;
+    };
+
+    const frontHit = pickFromMoonPool(this.frontMoons);
+    if (frontHit) return frontHit;
+
+    if (this.planetGeometry) {
+      const pos = this.planetGeometry.attributes.position.array as Float32Array;
+      for (let i = 0; i < this.planetIndices.length; i++) {
+        const cx = pos[i * 3 + 0];
+        const cy = pos[i * 3 + 1];
+        if (inDisc(cx, cy, this.planetDiscPx[i] / 2)) {
+          return { kind: 'planet', bodyIdx: this.planetIndices[i] };
+        }
+      }
+    }
+
+    const backHit = pickFromMoonPool(this.backMoons);
+    if (backHit) return backHit;
+
+    for (let slot = 0; slot < this.starDiscs.length; slot++) {
+      const disc = this.starDiscs[slot];
+      const cx = disc.mesh.position.x;
+      const cy = disc.mesh.position.y;
+      if (inDisc(cx, cy, disc.currentDiam / 2)) {
+        return { kind: 'star', starIdx: this.starMembers[slot] };
+      }
+    }
+
+    return null;
+  }
+
+  // Stamp the 1-px outline onto the picked disc, clearing the previous
+  // one if any. No-op when the pick is unchanged so continuous pointer
+  // movement within the same disc doesn't churn the GPU upload.
+  setHovered(pick: BodyPick | null): void {
+    if (picksEqual(pick, this.hoveredPick)) return;
+    this.writeHover(this.hoveredPick, 0);
+    this.writeHover(pick, 1);
+    this.hoveredPick = pick;
+  }
+
+  // Flip the per-vertex aHovered (planets/moons) or per-mesh uHovered
+  // (stars) to `value` for the disc identified by `pick`.
+  private writeHover(pick: BodyPick | null, value: 0 | 1): void {
+    if (!pick) return;
+    if (pick.kind === 'star') {
+      const slot = this.starMembers.indexOf(pick.starIdx);
+      if (slot < 0) return;
+      this.starDiscs[slot].material.uniforms.uHovered.value = value;
+      return;
+    }
+    if (pick.kind === 'planet') {
+      if (!this.planetGeometry) return;
+      const slot = this.planetIndices.indexOf(pick.bodyIdx);
+      if (slot < 0) return;
+      const attr = this.planetGeometry.attributes.aHovered as BufferAttribute;
+      attr.setX(slot, value);
+      attr.needsUpdate = true;
+      return;
+    }
+    // moon — scan both pools (each moon belongs to exactly one).
+    const pools: ReadonlyArray<MoonPool | null> = [this.frontMoons, this.backMoons];
+    for (const pool of pools) {
+      if (!pool) continue;
+      const slotIdx = pool.slots.findIndex(s => s.bodyIdx === pick.bodyIdx);
+      if (slotIdx < 0) continue;
+      const attr = pool.geometry.attributes.aHovered as BufferAttribute;
+      attr.setX(slotIdx, value);
+      attr.needsUpdate = true;
+      return;
+    }
+  }
+
   dispose(): void {
     for (const disc of this.starDiscs) {
       disc.geometry.dispose();
@@ -609,15 +730,17 @@ export class SystemDiagram {
 }
 
 // Build a Points geometry for one moon pool. Colors/sizes pulled from
-// each moon's body record at the parallel-array index; positions left
-// zeroed and rewritten in layoutMoons() once parent positions exist.
-function makeMoonPool(slots: MoonSlot[], moonBodyIdx: readonly number[], renderOrder: number): MoonPool {
+// each moon's body record via slot.bodyIdx; positions left zeroed and
+// rewritten in layoutMoons() once parent positions exist.
+function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   const N = slots.length;
   const positions = new Float32Array(N * 3);
   const colors    = new Float32Array(N * 3);
   const sizesAttr = new Float32Array(N);
+  // Hover flag per moon; flipped to 1 by SystemDiagram.setHovered.
+  const hoveredAttr = new Float32Array(N);
   slots.forEach((slot, i) => {
-    const b = BODIES[moonBodyIdx[i]];
+    const b = BODIES[slot.bodyIdx];
     const col = b.worldClass !== null
       ? (WORLD_CLASS_COLOR[b.worldClass] ?? WORLD_CLASS_UNKNOWN_COLOR)
       : WORLD_CLASS_UNKNOWN_COLOR;
@@ -630,6 +753,7 @@ function makeMoonPool(slots: MoonSlot[], moonBodyIdx: readonly number[], renderO
   geometry.setAttribute('position', new BufferAttribute(positions, 3));
   geometry.setAttribute('color',    new BufferAttribute(colors, 3));
   geometry.setAttribute('aSize',    new BufferAttribute(sizesAttr, 1));
+  geometry.setAttribute('aHovered', new BufferAttribute(hoveredAttr, 1));
   const material = makeFlatStarsMaterial(1.0);
   const points = new Points(geometry, material);
   points.renderOrder = renderOrder;

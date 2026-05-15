@@ -28,10 +28,11 @@ export class SystemScene {
   private rafId = 0;
   private running = false;
 
-  private readonly _onPointerDown = (e: PointerEvent) => this.onPointerDown(e);
-  private readonly _onPointerMove = (e: PointerEvent) => this.onPointerMove(e);
-  private readonly _onKeyDown     = (e: KeyboardEvent) => this.onKeyDown(e);
-  private readonly _onResize      = () => this.resize();
+  private readonly _onPointerDown  = (e: PointerEvent) => this.onPointerDown(e);
+  private readonly _onPointerMove  = (e: PointerEvent) => this.onPointerMove(e);
+  private readonly _onPointerLeave = ()                => this.onPointerLeave();
+  private readonly _onKeyDown      = (e: KeyboardEvent) => this.onKeyDown(e);
+  private readonly _onResize       = () => this.resize();
 
   private readonly _hudPt = { x: 0, y: 0 };
 
@@ -80,15 +81,17 @@ export class SystemScene {
   // -- listeners --------------------------------------------------------
 
   private attachListeners(): void {
-    this.canvas.addEventListener('pointerdown', this._onPointerDown);
-    this.canvas.addEventListener('pointermove', this._onPointerMove);
+    this.canvas.addEventListener('pointerdown',  this._onPointerDown);
+    this.canvas.addEventListener('pointermove',  this._onPointerMove);
+    this.canvas.addEventListener('pointerleave', this._onPointerLeave);
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('resize',  this._onResize);
   }
 
   private detachListeners(): void {
-    this.canvas.removeEventListener('pointerdown', this._onPointerDown);
-    this.canvas.removeEventListener('pointermove', this._onPointerMove);
+    this.canvas.removeEventListener('pointerdown',  this._onPointerDown);
+    this.canvas.removeEventListener('pointermove',  this._onPointerMove);
+    this.canvas.removeEventListener('pointerleave', this._onPointerLeave);
     window.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('resize',  this._onResize);
   }
@@ -111,6 +114,20 @@ export class SystemScene {
     this.clientToHud(e.clientX, e.clientY, this._hudPt);
     const onButton = this.hud.handlePointerMove(this._hudPt.x, this._hudPt.y);
     this.canvas.style.cursor = onButton ? 'pointer' : '';
+    // Body hover info card — skip the picker when the cursor is over
+    // any interactive HUD chrome (back button) so a tooltip can't
+    // appear under the chrome the user is aiming at.
+    const overChrome = this.hud.hitTest(this._hudPt.x, this._hudPt.y) !== 'transparent';
+    const pick = overChrome ? null : this.diagram.pickAt(this._hudPt.x, this._hudPt.y);
+    this.diagram.setHovered(pick);
+    this.hud.setHoveredBody(pick, this._hudPt.x, this._hudPt.y);
+  }
+
+  private onPointerLeave(): void {
+    // Cursor left the canvas — clear the outline and hide the tooltip
+    // so they don't linger on stale state when the cursor comes back.
+    this.diagram.setHovered(null);
+    this.hud.setHoveredBody(null, 0, 0);
   }
 
   private onKeyDown(e: KeyboardEvent): void {
