@@ -117,6 +117,10 @@ export class StarmapScene {
 
   private rafId = 0;
   private running = false;
+  // One-shot timer that auto-selects Sol shortly after start() so the grid's
+  // staged expand choreography fires on first paint as a startup beat.
+  // Cleared in stop() and skipped if the user has already selected by then.
+  private autoSelectTimer: number | null = null;
 
   // Fired when the user requests the system view for a cluster — either
   // by clicking the "View System" button on the info card or by double-
@@ -245,11 +249,26 @@ export class StarmapScene {
     this.input.start();
     this.resize();
     this.tick();
+    if (this.autoSelectTimer === null && this.selectedClusterIdx < 0) {
+      this.autoSelectTimer = window.setTimeout(() => {
+        this.autoSelectTimer = null;
+        if (!this.running || this.selectedClusterIdx >= 0) return;
+        const sunIdx = STARS.findIndex(s => s.id === 'sol');
+        if (sunIdx < 0) return;
+        const solCluster = clusterIndexFor(sunIdx);
+        if (solCluster < 0) return;
+        this.selectAndFocusCluster(solCluster);
+      }, 1000);
+    }
   }
 
   stop(): void {
     if (!this.running) return;
     this.running = false;
+    if (this.autoSelectTimer !== null) {
+      clearTimeout(this.autoSelectTimer);
+      this.autoSelectTimer = null;
+    }
     cancelAnimationFrame(this.rafId);
     window.removeEventListener('resize', this._onResize);
     this.input.stop();
