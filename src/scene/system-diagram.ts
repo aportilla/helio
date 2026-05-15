@@ -69,7 +69,7 @@ const MIN_STAR_GAP = 2;
 // middle planet sits). Fixed — the top of the arc stays at a constant
 // gap below the stars regardless of viewport size; only the dome's
 // edges move (see DOME_PEAK_*_PX below).
-const PLANET_PEAK_FROM_TOP = 150;
+const PLANET_PEAK_FROM_TOP = 120;
 
 // Dome height — vertical drop from the peak to the edges. Scales with
 // viewport area so bigger screens get a more pronounced arc; the edges
@@ -522,13 +522,17 @@ export class SystemDiagram {
     const positions = this.planetGeometry.attributes.position.array as Float32Array;
 
     const availW = this.bufferW - 2 * sizes.edgePad;
-    // Each body owns an equal slot across the available width; when N is
-    // large and the screen is narrow, step shrinks below disc diameter
-    // and bodies naturally overlap (deck-of-cards). With PLANET_DISC_MAX
-    // = 22 and the procgen cap, this only triggers on very narrow viewports.
-    const step = availW / N;
-
     const xLeft = sizes.edgePad;
+
+    // Edge-to-edge spacing: free space split into N+1 equal gaps — one
+    // between each adjacent pair plus one as a margin on each end — so a
+    // gas giant next to a rocky world preserves the same edge-to-edge gap
+    // as two same-sized neighbors. Goes negative when sum(d) > availW;
+    // planets then overlap evenly (deck-of-cards). Not shrinking discs in
+    // that case because the cbrt size curve is what keeps Mercury legible
+    // next to Jupiter — uniform shrinkage would flatten the ratio.
+    const sumD = sumOf(this.planetDiscPx);
+    const gap = (availW - sumD) / (N + 1);
 
     // Lerp the dome's height over viewport area, then derive the baseline
     // from the (fixed) peak position. Peak anchored = top of the arc
@@ -541,14 +545,21 @@ export class SystemDiagram {
     const peakY = this.bufferH - PLANET_PEAK_FROM_TOP;
     const baselineY = peakY - peakHeight;
 
+    let cursor = xLeft + gap;
     for (let i = 0; i < N; i++) {
-      const t = (i + 0.5) / N;
-      // sin(π·t) peaks at t = 0.5 and is 0 at t = 0 / t = 1 — gives a
-      // smooth dome that handles any body count without special-casing.
+      const d = this.planetDiscPx[i];
+      const r = d / 2;
+      const cx = cursor + r;
+      // Dome Y keyed to actual x (not ordinal index), so the peak stays
+      // at availW/2 regardless of size variation across the row — the
+      // arc is a geometric shape the planets ride on, not a function of
+      // slot index. sin(π·t) peaks at t = 0.5 and is 0 at t = 0 / t = 1.
+      const t = (cx - xLeft) / availW;
       const yOffset = peakHeight * Math.sin(Math.PI * t);
-      positions[i * 3 + 0] = Math.round(xLeft + (i + 0.5) * step);
+      positions[i * 3 + 0] = Math.round(cx);
       positions[i * 3 + 1] = Math.round(baselineY + yOffset);
       positions[i * 3 + 2] = 0;
+      cursor += d + gap;
     }
     this.planetGeometry.attributes.position.needsUpdate = true;
   }
