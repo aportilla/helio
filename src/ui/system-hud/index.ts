@@ -1,24 +1,27 @@
 // SystemHud — composition root for the system view's HUD overlay.
 //
-// Mirrors MapHud's structure: own scene + ortho camera + composed widgets,
-// drawn after the main scene with autoClear off. Owns:
-//   - headerBar (top, full-width) — system name centered
-//   - backBtn   (left edge of header) — IconButton, fires onBack
+// Two pieces of chrome live here:
+//   - backBtn   — IconButton floating in the top-left corner.
+//   - nameLabel — system name anchored to the top-right corner with the
+//                 same edgePad inset as the back button. Display-only,
+//                 transparent to pointer hits.
 //
-// The diagram itself (stars + labels) is rendered by SystemDiagram into the
-// content area below the header — see system-diagram.ts.
+// The diagram (stars + bodies + moons) is rendered by SystemDiagram into
+// the content area beneath this HUD — see system-diagram.ts.
 
 import {
   CanvasTexture,
   OrthographicCamera,
   Scene,
 } from 'three';
+import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
+import { STARS, STAR_CLUSTERS } from '../../data/stars';
+import { BasePanel } from '../base-panel';
 import { type HitResult } from '../hit-test';
 import { paintLeftArrow, paintSurface } from '../painter';
-import { colors, sizes } from '../theme';
+import { colors, fonts, sizes } from '../theme';
 import { paintToTexture } from '../widget';
 import { IconButton, type IconButtonStates } from '../icon-button';
-import { HEADER_HEIGHT, HeaderBar } from './header-bar';
 
 function buildBackBtnTexture(hover: boolean): CanvasTexture {
   const SIZE = sizes.iconBox;
@@ -33,16 +36,33 @@ function buildBackBtnTexture(hover: boolean): CanvasTexture {
   return paintToTexture(c);
 }
 
+// System-name title texture. Painted once at construction (system never
+// changes mid-life); SystemHud handles placement on each resize.
+class SystemNameLabel extends BasePanel {
+  private readonly text: string;
+  constructor(text: string, renderOrder: number) {
+    super(renderOrder);
+    this.text = text;
+  }
+  protected measure(): { w: number; h: number } {
+    return {
+      w: measurePixelText(this.text, fonts.title),
+      h: getFont(fonts.title).lineHeight,
+    };
+  }
+  protected paintInto(g: CanvasRenderingContext2D, _w: number, _h: number): void {
+    drawPixelText(g, this.text, 0, 0, colors.starName, fonts.title);
+  }
+}
+
 export class SystemHud {
   readonly scene = new Scene();
   readonly camera = new OrthographicCamera(0, 1, 1, 0, -1, 1);
 
-  // Only the height needs caching for layout — the bar/header span the
-  // full canvas width, fed straight into headerBar.setWidth(), and no
-  // right-anchored chrome lives here yet.
+  private bufferW = 1;
   private bufferH = 1;
 
-  private readonly headerBar: HeaderBar;
+  private readonly nameLabel: SystemNameLabel;
   private readonly backBtn: IconButton;
   private readonly backBtnTextures: IconButtonStates;
 
@@ -51,8 +71,16 @@ export class SystemHud {
   onBack: () => void = () => {};
 
   constructor(clusterIdx: number) {
-    this.headerBar = new HeaderBar(clusterIdx, 99);
-    this.headerBar.addTo(this.scene);
+    const cluster = STAR_CLUSTERS[clusterIdx];
+    const primary = STARS[cluster.primary];
+    const isMulti = cluster.members.length > 1;
+    const text = isMulti
+      ? `${primary.name} +${cluster.members.length - 1}`
+      : primary.name;
+
+    this.nameLabel = new SystemNameLabel(text, 99);
+    this.nameLabel.addTo(this.scene);
+    this.nameLabel.rebuild();
 
     this.backBtnTextures = {
       off:   buildBackBtnTexture(false),
@@ -66,64 +94,57 @@ export class SystemHud {
   }
 
   resize(bufferW: number, bufferH: number): void {
+    this.bufferW = bufferW;
     this.bufferH = bufferH;
     this.camera.left = 0; this.camera.right = bufferW;
     this.camera.bottom = 0; this.camera.top = bufferH;
     this.camera.updateProjectionMatrix();
-    this.headerBar.setWidth(bufferW);
     this.layoutAll();
   }
 
-  // Returns true if the click was consumed by the HUD (interactive widget
-  // dispatch OR opaque-surface absorb). Caller should NOT start a world
-  // drag/pick when this returns true.
+  // Returns true if the click was consumed by the HUD. The name label is
+  // display-only; only the back button takes pointer events.
   handleClick(bufX: number, bufY: number): boolean {
     if (this.backBtn.bounds.contains(bufX, bufY)) {
       this.onBack();
       return true;
     }
-    // Absorb clicks on the header bar background so they don't fall
-    // through to whatever lives behind it.
-    if (this.headerBar.visibleBounds.contains(bufX, bufY)) return true;
     return false;
   }
 
-  // Returns true if the cursor is over an interactive element so the
-  // caller can swap to the pointer cursor.
   handlePointerMove(bufX: number, bufY: number): boolean {
     const onBack = this.backBtn.bounds.contains(bufX, bufY);
     this.backBtn.setHover(onBack);
     return onBack;
   }
 
-  // Three-way pointer hit-test (see hit-test.ts). System view has no
-  // world picking yet, but the seam exists so the same model scales when
-  // SystemScene grows pickable geometry, and so click absorption (via
-  // handleClick) and hover routing share one source of truth.
   hitTest(bufX: number, bufY: number): HitResult {
     if (this.backBtn.bounds.contains(bufX, bufY)) return 'interactive';
-    if (this.headerBar.visibleBounds.contains(bufX, bufY)) return 'opaque';
     return 'transparent';
   }
 
   private layoutAll(): void {
-    // Header bar: full-width strip flush with the top of the canvas.
-    this.headerBar.placeAt(0, this.bufferH - HEADER_HEIGHT);
+    // Back button: top-left, edgePad on both axes.
+    this.backBtn.placeAt(
+      sizes.edgePad,
+      this.bufferH - sizes.edgePad - sizes.iconBox,
+    );
 
-    // Back button: left side of the header, vertically centered. The
-    // -1 on the available height accounts for the bottom accent line so
-    // the icon visually centers on the header's interior, not its frame.
-    const headerBottom = this.bufferH - HEADER_HEIGHT;
-    const innerH = HEADER_HEIGHT - 1;
-    const btnBottom = headerBottom + Math.floor((innerH - sizes.iconBox) / 2) + 1;
-    this.backBtn.placeAt(sizes.edgePad, btnBottom);
+    // System name: anchored to the top-right corner with the same
+    // edgePad inset as the back button uses on the top-left, so the two
+    // pieces of chrome read as a balanced pair across the top.
+    const nameW = this.nameLabel.width;
+    const nameH = this.nameLabel.height;
+    const nameLeft = this.bufferW - sizes.edgePad - nameW;
+    const nameBottom = this.bufferH - sizes.edgePad - nameH;
+    this.nameLabel.placeAt(nameLeft, nameBottom);
   }
 
   dispose(): void {
     for (const k of Object.keys(this.backBtnTextures) as Array<keyof IconButtonStates>) {
       this.backBtnTextures[k]?.dispose();
     }
-    this.headerBar.dispose();
+    this.nameLabel.dispose();
     this.backBtn.dispose();
   }
 }

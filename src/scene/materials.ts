@@ -386,3 +386,43 @@ export function makeFlatStarsMaterial(initialDiscScale: number): ShaderMaterial 
   snappedMaterials.push(m);
   return m;
 }
+
+// Mesh-based pixel-disc material — same procedural circle as the flat
+// stars material, but rasterized through a PlaneGeometry quad instead
+// of a GL_POINTS sprite. The Mesh path lets the disc's center sit
+// outside the viewport (above the top edge): triangle primitives are
+// clipped per-fragment by the GPU, whereas GL_POINTS discards any
+// point sprite whose vertex falls outside the clip volume — so the
+// "star peeks down from above the screen" framing is only possible
+// with the mesh path.
+//
+// Per-star uniforms: uCenter (buffer-pixel coords, parity-snapped by
+// the caller), uRadius, uColor. Geometry should be a PlaneGeometry
+// sized to fully enclose the disc bounding box (typically d×d where
+// d = 2·radius). Caller positions the mesh at uCenter.
+export function makeStarMeshMaterial(): ShaderMaterial {
+  return new ShaderMaterial({
+    uniforms: {
+      uCenter: { value: new Vector2() },
+      uRadius: { value: 0 },
+      uColor:  { value: new Color() },
+    },
+    vertexShader: `
+      void main() {
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec2 uCenter;
+      uniform float uRadius;
+      uniform vec3 uColor;
+      void main() {
+        vec2 d = gl_FragCoord.xy - uCenter;
+        if (length(d) > uRadius) discard;
+        gl_FragColor = vec4(uColor, 1.0);
+      }
+    `,
+    transparent: false,
+    depthWrite: false,
+  });
+}
