@@ -26,6 +26,11 @@ If a CSV gets corrupted (e.g. by a scraper bug), the recovery path is to clear t
 | `lookup-star.mjs` | Resolve a star name (or distance range) to a stellarcatalog URL. Useful for ad-hoc poking. |
 | `scrape-planets-from-stellarcatalog.mjs` | Read-only walk over the cached star detail pages; write `src/data/bodies.csv` with one row per exoplanet listed in each system-structure table (semi-major axis, mass M⊕, radius R⊕, period days). Resolves the host star from the planet's catalog name (so Proxima's planets land on `alpha-centauri-c`, not on Alpha Cen A's page slug). Default dry-run; `--apply` to write, `--force` to overwrite. |
 | `lib/catalog-index.mjs` | Shared helpers: catalog HTML parsing, name normalization + variant generation, per-component section parsing for detail pages, CSV (de)serialization. Imported by the other scripts. |
+| `lib/prng.mjs` | Shared FNV-1a + mulberry32 PRNG helpers. Same numerical behavior the original `syntheticMass` / `expandCoincidentSets` used; lifted into a shared module so procgen derives identical seeds from the same id strings. |
+| `lib/astrophysics.mjs` | Shared physical-relation approximations (`luminositySun(M)`, `insolation(M, a)`) used by both the procgen Architect and Filler. Piecewise mass-luminosity (M dwarfs vs FGK+). |
+| `lib/procgen-priors.mjs` | Data file — the entire tuning surface for body procgen. Per-class planet counts, orbital geometry, insolation-zone weights, type multipliers, mass/radius specs, moon counts. No code, just exports. Edit + re-run `npm run build:catalog`. |
+| `lib/procgen-architect.mjs` | System Architect — top-down procgen. For each star with zero catalog planets, samples a full planetary system (planets + moons) from the priors. Imported by `build-catalog.mjs`. |
+| `lib/procgen.mjs` | Body Filler — bottom-up procgen. For each body's empty cells, derives values from anchors + physics + seeded PRNG. v1 fills `worldClass`, `avgSurfaceTempK`, `surfacePressureBar`. Imported by `build-catalog.mjs`. |
 
 The local stellarcatalog listing defaults to `~/Documents/catalog.html` (override with `--catalog=PATH` on any script that uses it). The cache for fetched detail pages lives at `.cache/stellarcatalog/` (gitignored).
 
@@ -201,7 +206,7 @@ node scripts/scrape-planets-from-stellarcatalog.mjs --apply --force
 
 Disks and belts are filtered out (they share the `exoplanet.php` link but use a different icon). Hosts are resolved from the planet's catalog name, not the cache filename, so a planet listed under Alpha Centauri A's page that actually orbits Proxima lands on `alpha-centauri-c`. Slug-derived candidates win over display-name lookup because the CSV carries duplicate display names ("Gliese 49" appears as the name of two different stars) but ids are unique.
 
-Hand-curated rows (Sol's planets and moons, future procgen output) live in `bodies.csv` alongside the scraper output. **Re-running the scraper overwrites the whole file** — a merge story doesn't exist yet, so don't re-run --apply if you've hand-edited rows since the last scrape. Recovery is `git checkout` on the file.
+Hand-curated rows (Sol's planets and moons, plus any further hand-additions) live in `bodies.csv` alongside the scraper output. **Re-running the scraper overwrites the whole file** — a merge story doesn't exist yet, so don't re-run --apply if you've hand-edited rows since the last scrape. Recovery is `git checkout` on the file. Procgen runs downstream (inside `build-catalog.mjs`, against the parsed CSV — not against `bodies.csv` directly) so it never touches the authoring surface; see `lib/procgen-priors.mjs` for the tuning knobs.
 
 ## Notes
 
