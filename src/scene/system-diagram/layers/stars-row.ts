@@ -31,6 +31,9 @@ export class StarsRowLayer {
   private readonly starMembers: readonly number[];
   private readonly starSlotDiscPx: readonly number[];
   private readonly starDiscs: StarDisc[] = [];
+  // starIdx → slot index in starMembers, so setHovered can flip the
+  // per-mesh uHovered uniform without scanning starMembers.
+  private readonly slotByStarIdx: ReadonlyMap<number, number>;
 
   constructor(scene: Scene, cluster: StarCluster) {
     // Sort by disc size descending, then permute into big-middle slot
@@ -40,6 +43,7 @@ export class StarsRowLayer {
     const slotPerm = bigMiddleOrder(sortedIdx.length);
     this.starMembers     = slotPerm.map(p => cluster.members[sortedIdx[p]]);
     this.starSlotDiscPx  = slotPerm.map(p => rawDiscPx[sortedIdx[p]]);
+    this.slotByStarIdx   = new Map(this.starMembers.map((s, i) => [s, i]));
 
     // Build one mesh per star. Geometry is sized to the star's natural
     // diameter (before any width-fit scaling); layout() rebuilds it if
@@ -143,8 +147,8 @@ export class StarsRowLayer {
 
   setHovered(pick: DiagramPick, value: 0 | 1): void {
     if (pick.kind !== 'star') return;
-    const slot = this.starMembers.indexOf(pick.starIdx);
-    if (slot < 0) return;
+    const slot = this.slotByStarIdx.get(pick.starIdx);
+    if (slot === undefined) return;
     this.starDiscs[slot].material.uniforms.uHovered.value = value;
   }
 

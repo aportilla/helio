@@ -34,17 +34,22 @@ interface BeltSlot {
 
 export class BeltsLayer {
   private readonly pool: ChunkPool<BeltSlot> | null;
+  // bodyIdx → BeltSlot ref, so setHovered can iterate the slot's vertex
+  // range without scanning pool.slots.
+  private readonly slotByBodyIdx: ReadonlyMap<number, BeltSlot>;
 
   constructor(scene: Scene, rowSlots: readonly RowSlot[]) {
     const beltItems = rowSlots.filter(r => r.kind === 'belt');
     if (beltItems.length === 0) {
       this.pool = null;
+      this.slotByBodyIdx = new Map();
       return;
     }
     const planetItems = rowSlots.filter(r => r.kind === 'planet');
     const largestPlanet = planetItems.reduce((m, r) => Math.max(m, r.widthPx), PLANET_DISC_MIN);
     const heightPx = largestPlanet * BELT_HEIGHT_FACTOR;
     this.pool = buildBeltPool(beltItems.map(r => ({ bodyIdx: r.bodyIdx, rowIdx: r.rowIdx })), heightPx);
+    this.slotByBodyIdx = new Map(this.pool.slots.map(s => [s.bodyIdx, s]));
     scene.add(this.pool.mesh);
   }
 
@@ -87,7 +92,7 @@ export class BeltsLayer {
 
   setHovered(pick: DiagramPick, value: 0 | 1): void {
     if (pick.kind !== 'belt' || !this.pool) return;
-    const slot = this.pool.slots.find(s => s.bodyIdx === pick.bodyIdx);
+    const slot = this.slotByBodyIdx.get(pick.bodyIdx);
     if (!slot) return;
     const attr = this.pool.geometry.attributes.aHovered as BufferAttribute;
     for (let v = slot.startVertex; v < slot.endVertex; v++) attr.setX(v, value);

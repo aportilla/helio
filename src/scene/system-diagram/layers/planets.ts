@@ -15,6 +15,9 @@ export class PlanetsLayer {
   // planetDiscPx[i] = its disc diameter in env-px.
   private readonly planetIndices: readonly number[];
   private readonly planetDiscPx: readonly number[];
+  // bodyIdx → slot index in planetIndices, so setHovered can write the
+  // per-vertex hover flag without scanning planetIndices on every change.
+  private readonly slotByBodyIdx: ReadonlyMap<number, number>;
   private readonly geometry: BufferGeometry | null;
   private readonly material: ShaderMaterial | null;
   private readonly points: Points | null;
@@ -27,6 +30,7 @@ export class PlanetsLayer {
     const planetItems = rowSlots.filter(r => r.kind === 'planet');
     this.planetIndices = planetItems.map(r => r.bodyIdx);
     this.planetDiscPx  = planetItems.map(r => r.widthPx);
+    this.slotByBodyIdx = new Map(this.planetIndices.map((b, i) => [b, i]));
 
     if (this.planetIndices.length === 0) {
       this.geometry = null;
@@ -116,8 +120,8 @@ export class PlanetsLayer {
 
   setHovered(pick: DiagramPick, value: 0 | 1): void {
     if (pick.kind !== 'planet' || !this.geometry) return;
-    const slot = this.planetIndices.indexOf(pick.bodyIdx);
-    if (slot < 0) return;
+    const slot = this.slotByBodyIdx.get(pick.bodyIdx);
+    if (slot === undefined) return;
     const attr = this.geometry.attributes.aHovered as BufferAttribute;
     attr.setX(slot, value);
     attr.needsUpdate = true;

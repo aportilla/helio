@@ -37,6 +37,9 @@ interface MoonPool {
   geometry: BufferGeometry;
   material: ShaderMaterial;
   points: Points;
+  // bodyIdx → slot index inside this pool. Built at construction so
+  // setHovered can locate the moon's BufferAttribute slot in O(1).
+  slotByBodyIdx: ReadonlyMap<number, number>;
 }
 
 export class MoonsLayer {
@@ -95,8 +98,8 @@ export class MoonsLayer {
     // Each moon belongs to exactly one pool; try both.
     for (const pool of [this.frontPool, this.backPool]) {
       if (!pool) continue;
-      const slotIdx = pool.slots.findIndex(s => s.bodyIdx === pick.bodyIdx);
-      if (slotIdx < 0) continue;
+      const slotIdx = pool.slotByBodyIdx.get(pick.bodyIdx);
+      if (slotIdx === undefined) continue;
       const attr = pool.geometry.attributes.aHovered as BufferAttribute;
       attr.setX(slotIdx, value);
       attr.needsUpdate = true;
@@ -257,5 +260,6 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   // their original bounds. GPU per-vertex clipping handles anything
   // actually off-screen.
   points.frustumCulled = false;
-  return { slots, geometry, material, points };
+  const slotByBodyIdx = new Map(slots.map((s, i) => [s.bodyIdx, i]));
+  return { slots, geometry, material, points, slotByBodyIdx };
 }

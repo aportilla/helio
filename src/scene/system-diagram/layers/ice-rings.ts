@@ -33,6 +33,9 @@ interface IceRing {
 
 export class IceRingsLayer {
   private readonly rings: IceRing[] = [];
+  // bodyIdx → IceRing ref, so setHovered can flip the material uniform
+  // without scanning rings.
+  private readonly ringByBodyIdx: Map<number, IceRing> = new Map();
 
   constructor(scene: Scene, rowSlots: readonly RowSlot[]) {
     const planetItems = rowSlots.filter(r => r.kind === 'planet');
@@ -43,6 +46,7 @@ export class IceRingsLayer {
       if (ring.beltClass !== 'ice') continue;
       const built = buildIceRing(ring, planet.ring, item.bodyIdx, item.widthPx);
       this.rings.push(built);
+      this.ringByBodyIdx.set(built.bodyIdx, built);
       scene.add(built.backMesh);
       scene.add(built.frontMesh);
     }
@@ -83,7 +87,7 @@ export class IceRingsLayer {
   // coordinator can stop short of also trying the debris-rings layer).
   setHovered(pick: DiagramPick, value: 0 | 1): boolean {
     if (pick.kind !== 'ring') return false;
-    const ring = this.rings.find(r => r.bodyIdx === pick.bodyIdx);
+    const ring = this.ringByBodyIdx.get(pick.bodyIdx);
     if (!ring) return false;
     ring.material.uniforms.uHovered.value = value;
     return true;

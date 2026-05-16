@@ -39,6 +39,11 @@ interface RingSlot {
 export class DebrisRingsLayer {
   private readonly backPool:  ChunkPool<RingSlot> | null;
   private readonly frontPool: ChunkPool<RingSlot> | null;
+  // bodyIdx → RingSlot ref, per pool. A ring may live in both pools
+  // (chunks routed back/front by un-tilted y sign), so setHovered must
+  // check each independently rather than early-returning on first hit.
+  private readonly backSlotByBodyIdx:  ReadonlyMap<number, RingSlot>;
+  private readonly frontSlotByBodyIdx: ReadonlyMap<number, RingSlot>;
 
   constructor(scene: Scene, rowSlots: readonly RowSlot[]) {
     const planetItems = rowSlots.filter(r => r.kind === 'planet');
@@ -54,6 +59,8 @@ export class DebrisRingsLayer {
     if (specs.length === 0) {
       this.backPool  = null;
       this.frontPool = null;
+      this.backSlotByBodyIdx  = new Map();
+      this.frontSlotByBodyIdx = new Map();
       return;
     }
 
@@ -64,6 +71,8 @@ export class DebrisRingsLayer {
     this.frontPool = built.frontSlots.length > 0
       ? buildChunkPool(built.frontSlots, built.frontPositions, built.frontIndices, built.frontColors, RENDER_ORDER_FRONT_RING)
       : null;
+    this.backSlotByBodyIdx  = new Map(built.backSlots.map(s  => [s.bodyIdx, s]));
+    this.frontSlotByBodyIdx = new Map(built.frontSlots.map(s => [s.bodyIdx, s]));
     if (this.backPool)  scene.add(this.backPool.mesh);
     if (this.frontPool) scene.add(this.frontPool.mesh);
   }
@@ -85,17 +94,11 @@ export class DebrisRingsLayer {
   // A ring may live in both pools; flip every owning slot in lockstep.
   setHovered(pick: DiagramPick, value: 0 | 1): boolean {
     if (pick.kind !== 'ring') return false;
-    let found = false;
-    for (const pool of [this.frontPool, this.backPool]) {
-      if (!pool) continue;
-      const slot = pool.slots.find(s => s.bodyIdx === pick.bodyIdx);
-      if (!slot) continue;
-      const attr = pool.geometry.attributes.aHovered as BufferAttribute;
-      for (let v = slot.startVertex; v < slot.endVertex; v++) attr.setX(v, value);
-      attr.needsUpdate = true;
-      found = true;
-    }
-    return found;
+    const front = this.frontPool && this.frontSlotByBodyIdx.get(pick.bodyIdx);
+    const back  = this.backPool  && this.backSlotByBodyIdx.get(pick.bodyIdx);
+    if (this.frontPool && front) writeHoverRange(this.frontPool, front, value);
+    if (this.backPool  && back)  writeHoverRange(this.backPool,  back,  value);
+    return Boolean(front || back);
   }
 
   dispose(): void {
@@ -104,6 +107,12 @@ export class DebrisRingsLayer {
     this.frontPool?.geometry.dispose();
     this.frontPool?.material.dispose();
   }
+}
+
+function writeHoverRange(pool: ChunkPool<RingSlot>, slot: RingSlot, value: 0 | 1): void {
+  const attr = pool.geometry.attributes.aHovered as BufferAttribute;
+  for (let v = slot.startVertex; v < slot.endVertex; v++) attr.setX(v, value);
+  attr.needsUpdate = true;
 }
 
 function writePool(pool: ChunkPool<RingSlot> | null, centers: PlanetCenterIndex, layerZ: number): void {
