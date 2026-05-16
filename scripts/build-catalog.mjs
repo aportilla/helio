@@ -17,7 +17,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hash32, mulberry32 } from './lib/prng.mjs';
 import { fillBodies, radiusFromMass, worldClassFor, planetTypeFor } from './lib/procgen.mjs';
-import { generateSystem, generateMoons, generateRing } from './lib/procgen-architect.mjs';
+import { generateSystem, generateMoons, generateRing, generateOverlay } from './lib/procgen-architect.mjs';
 import { insolation } from './lib/astrophysics.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -623,6 +623,7 @@ function parseCsvBodies(text, label) {
       source,
       hostStarIdx: null,
       hostBodyIdx: null,
+      planetType: null,
       worldClass,
       beltClass,
       biosphere,
@@ -775,14 +776,34 @@ async function main() {
   const bodiesText = await readFile(resolve(DATA_DIR, BODIES_FILE), 'utf8');
   const rawBodies = parseCsvBodies(bodiesText, BODIES_FILE);
 
-  // Architect — generate procgen systems for stars with no catalog planets.
-  // v1 skips augmenting partially-observed stars (those with at least one
-  // catalog planet); Phase 4 will overlay procgen extras on those too.
-  const catalogPlanetHosts = new Set(rawBodies.filter(b => b.kind === 'planet').map(b => b.hostId));
+  // Architect — generate full procgen systems for stars with no catalog
+  // planets. Catalog-anchored stars go through the overlay below instead.
+  const catalogPlanetsByStarId = new Map();
+  for (const b of rawBodies) {
+    if (b.kind !== 'planet') continue;
+    const list = catalogPlanetsByStarId.get(b.hostId) ?? [];
+    list.push(b);
+    catalogPlanetsByStarId.set(b.hostId, list);
+  }
   const procgenBodies = [];
   for (const star of placedStars) {
-    if (catalogPlanetHosts.has(star.id)) continue;
+    if (catalogPlanetsByStarId.has(star.id)) continue;
     procgenBodies.push(...generateSystem(star));
+  }
+
+  // Partial-system overlay — for each catalog-anchored star, add outer
+  // procgen siblings so the system reaches PLANET_COUNT_BY_CLASS's target,
+  // plus the system-level belts the architect would have rolled if it had
+  // run here. Outer-only matches the detection bias (RV / transit miss
+  // long-period planets). Curated systems are skipped — their CSV is
+  // authoritative and a Mercury-Venus-only Sol would not benefit from
+  // imagined outer siblings.
+  const overlayBodies = [];
+  for (const star of placedStars) {
+    if (CURATED_SYSTEM_HOSTS.has(star.id)) continue;
+    const catalogPlanets = catalogPlanetsByStarId.get(star.id);
+    if (!catalogPlanets || catalogPlanets.length === 0) continue;
+    overlayBodies.push(...generateOverlay(star, catalogPlanets));
   }
 
   // Moon backfill — observed exoplanets almost never have moon coverage
@@ -817,6 +838,10 @@ async function main() {
     const wc = planet.worldClass ?? worldClassFor({ ...planet, radiusEarth: r }, S);
     if (wc == null) continue;
     const planetType = planetTypeFor(wc, planet.massEarth, S);
+    // Persist the derived type on the catalog planet so downstream consumers
+    // (audit script, future gameplay code) see the same value the backfill
+    // used. Curated-system planets skipped above stay planetType: null.
+    planet.planetType = planetType;
     if (!catalogMoonHosts.has(planet.id)) {
       backfillMoons.push(...generateMoons(planet, planetType));
     }
@@ -830,7 +855,7 @@ async function main() {
     }
   }
 
-  const allBodies = [...rawBodies, ...procgenBodies, ...backfillMoons, ...backfillRings];
+  const allBodies = [...rawBodies, ...procgenBodies, ...overlayBodies, ...backfillMoons, ...backfillRings];
 
   const { stars, bodies: resolvedBodies } = attachBodies(placedStars, allBodies);
   // Body Filler — fills `_unknowns` cells from physics + seeded PRNG;

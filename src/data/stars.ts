@@ -83,6 +83,17 @@ export type Biosphere = 'none' | 'microbial' | 'simple' | 'complex' | 'civilized
 export type BodyKind = 'planet' | 'moon' | 'belt' | 'ring';
 export type BodySource = 'catalog' | 'procgen';
 
+// Procgen mass/radius taxonomy used by the Architect when sampling a
+// planet's physical spec and ring/moon priors. Persisted on the body so
+// downstream consumers don't have to reverse-engineer it from the
+// many-to-one `worldClass` mapping (a 2 M⊕ super_earth and a 2 M⊕ rocky
+// can both land at worldClass='desert' but carry different priors).
+// Null for non-planet kinds and for curated-system planets where the
+// Architect/backfill didn't run.
+export type PlanetType =
+  | 'hot_rocky' | 'rocky' | 'super_earth'
+  | 'sub_neptune' | 'neptune' | 'jupiter';
+
 // Belt / ring sub-classification. 'asteroid' and 'debris' have rocky
 // chunks; 'ice' is volatile-dominated. Rings constrain to ice / debris
 // only — dust rings (Jupiter, Uranus inner) are deliberately not modeled
@@ -132,6 +143,8 @@ export interface Body {
   readonly radiusEarth: number | null;
   // Belt / ring sub-class. Null for planet / moon kinds.
   readonly beltClass: BeltClass | null;
+  // Architect's mass/radius taxonomy. See `PlanetType` for semantics.
+  readonly planetType: PlanetType | null;
   // Surface character. All null for belt / ring kinds (no surface).
   readonly worldClass: WorldClass | null;
   readonly avgSurfaceTempK: number | null;

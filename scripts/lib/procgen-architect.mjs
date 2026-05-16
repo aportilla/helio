@@ -12,7 +12,7 @@
 // character, atmosphere, resources, biosphere are left as `_unknowns`
 // for the Filler (procgen.mjs) to derive.
 
-import { hash32, mulberry32, sampleNormal, sampleTruncated } from './prng.mjs';
+import { hash32, mulberry32, sampleNormal, sampleTruncated, samplePoisson } from './prng.mjs';
 import { insolation } from './astrophysics.mjs';
 import {
   PROCGEN_VERSION,
@@ -138,6 +138,7 @@ function makeBody(props) {
   const base = {
     hostStarIdx: null,
     hostBodyIdx: null,
+    planetType: null,
     worldClass: null, beltClass: null,
     avgSurfaceTempK: null, surfaceTempMinK: null, surfaceTempMaxK: null,
     waterFraction: null, iceFraction: null, albedo: null,
@@ -172,7 +173,7 @@ export function generateMoons(planet, planetType) {
   const spec = MOON_COUNT_BY_TYPE[planetType];
   if (!spec) return [];
   const countPrng = moonPrng(planet.id, -1, 'count');
-  const N = Math.max(0, Math.min(spec.max, Math.round(sampleNormal(countPrng, spec.mean, spec.sd))));
+  const N = Math.min(spec.max, samplePoisson(countPrng, spec.mean));
   if (N === 0) return [];
 
   const moons = [];
@@ -354,8 +355,11 @@ export function generateRing(planet, planetType) {
 // Entry point
 // =============================================================================
 
-// Generate the planets + moons for one star. Returns [] when the stellar
-// class isn't in the priors or the count sample lands at 0.
+// Generate the planets + moons + belts for one star. Returns [] when
+// the stellar class isn't in the priors. N=0 systems still flow through —
+// they emit no planets but their belt rolls still fire, so a debris-
+// disk-only star is representable (BD/WD with min=0 hit this branch
+// regularly).
 export function generateSystem(star) {
   const cls = star.cls;
   const countSpec = PLANET_COUNT_BY_CLASS[cls];
@@ -364,7 +368,6 @@ export function generateSystem(star) {
   // Planet count
   const countPrng = slotPrng(star.id, -1, 'planet_count');
   const N = sampleTruncated(countPrng, countSpec, true);
-  if (N <= 0) return [];
 
   // Orbit layout — start past the inner edge, walk outward by sampled
   // period ratios. Stop when we exceed the outer edge or hit N planets.
@@ -391,55 +394,140 @@ export function generateSystem(star) {
 
   const bodies = [];
   for (let i = 0; i < orbits.length; i++) {
-    const aAu = orbits[i];
-    const S = insolation(star.mass, aAu);
-
-    // Type sample
-    const weights = planetTypeWeights(S, cls);
-    const typePrng = slotPrng(star.id, i, 'planet_type');
-    const planetType = sampleWeighted(typePrng, weights);
-    const physSpec = PHYSICAL_SPEC_BY_TYPE[planetType];
-    if (!physSpec) continue;
-
-    // Mass + radius
-    const massPrng = slotPrng(star.id, i, 'mass');
-    const radiusPrng = slotPrng(star.id, i, 'radius');
-    const massEarth = sampleTruncated(massPrng, physSpec.massEarth);
-    const radiusEarth = sampleTruncated(radiusPrng, physSpec.radiusEarth);
-
-    // Flavor
-    const eccPrng = slotPrng(star.id, i, 'eccentricity');
-    const incPrng = slotPrng(star.id, i, 'inclination');
-    const tiltPrng = slotPrng(star.id, i, 'axial_tilt');
-    const phasePrng = slotPrng(star.id, i, 'orbital_phase');
-
-    // Kepler period: P² = a³ / M_host_solar
-    const periodDays = 365.25 * Math.sqrt(Math.pow(aAu, 3) / Math.max(star.mass, 0.01));
-
-    const letter = planetLetterAt(i);
-    const planet = makeBody({
-      id: `${star.id}-${letter}`,
-      hostId: star.id,
-      kind: 'planet',
-      formalName: `${star.name} ${letter}`,
-      name: `${star.name} ${letter}`,
-      source: 'procgen',
-      semiMajorAu: Number(aAu.toFixed(4)),
-      eccentricity: Number(sampleTruncated(eccPrng, ECCENTRICITY).toFixed(4)),
-      inclinationDeg: Number(sampleTruncated(incPrng, INCLINATION_DEG).toFixed(2)),
-      periodDays: Number(periodDays.toFixed(2)),
-      orbitalPhaseDeg: Number((phasePrng() * 360).toFixed(2)),
-      axialTiltDeg: Number(sampleTruncated(tiltPrng, AXIAL_TILT_DEG).toFixed(2)),
-      massEarth: Number(massEarth.toFixed(3)),
-      radiusEarth: Number(radiusEarth.toFixed(3)),
-    });
-    bodies.push(planet);
-    bodies.push(...generateMoons(planet, planetType));
-    const ring = generateRing(planet, planetType);
-    if (ring) bodies.push(ring);
+    bodies.push(...buildPlanetAtOrbit(star, i, orbits[i], planetLetterAt(i)));
   }
   // Belts roll independently of the planet stream — even a system with
   // zero planet samples may still host belts (a debris-disk-only star).
   bodies.push(...generateBelts(star));
   return bodies;
+}
+
+// Per-orbit body construction: sample type → mass → radius → flavor for a
+// planet at `aAu` around `star`, generate its moons and (optional) ring,
+// and return them as a flat array. Shared by the architect's primary
+// planet stream and the partial-system overlay below; `saltPrefix` keeps
+// the two PRNG streams independent so the overlay's draws can't be
+// confused with what the architect would have produced.
+function buildPlanetAtOrbit(star, slotIdx, aAu, letter, saltPrefix = '') {
+  const cls = star.cls;
+  const S = insolation(star.mass, aAu);
+  const weights = planetTypeWeights(S, cls);
+  const typePrng = slotPrng(star.id, slotIdx, saltPrefix + 'planet_type');
+  const planetType = sampleWeighted(typePrng, weights);
+  const physSpec = PHYSICAL_SPEC_BY_TYPE[planetType];
+  if (!physSpec) return [];
+
+  const massPrng = slotPrng(star.id, slotIdx, saltPrefix + 'mass');
+  const radiusPrng = slotPrng(star.id, slotIdx, saltPrefix + 'radius');
+  const massEarth = sampleTruncated(massPrng, physSpec.massEarth);
+  const radiusEarth = sampleTruncated(radiusPrng, physSpec.radiusEarth);
+
+  const eccPrng = slotPrng(star.id, slotIdx, saltPrefix + 'eccentricity');
+  const incPrng = slotPrng(star.id, slotIdx, saltPrefix + 'inclination');
+  const tiltPrng = slotPrng(star.id, slotIdx, saltPrefix + 'axial_tilt');
+  const phasePrng = slotPrng(star.id, slotIdx, saltPrefix + 'orbital_phase');
+
+  // Kepler: P² = a³ / M_host_solar
+  const periodDays = 365.25 * Math.sqrt(Math.pow(aAu, 3) / Math.max(star.mass, 0.01));
+
+  const planet = makeBody({
+    id: `${star.id}-${letter}`,
+    hostId: star.id,
+    kind: 'planet',
+    formalName: `${star.name} ${letter}`,
+    name: `${star.name} ${letter}`,
+    source: 'procgen',
+    planetType,
+    semiMajorAu: Number(aAu.toFixed(4)),
+    eccentricity: Number(sampleTruncated(eccPrng, ECCENTRICITY).toFixed(4)),
+    inclinationDeg: Number(sampleTruncated(incPrng, INCLINATION_DEG).toFixed(2)),
+    periodDays: Number(periodDays.toFixed(2)),
+    orbitalPhaseDeg: Number((phasePrng() * 360).toFixed(2)),
+    axialTiltDeg: Number(sampleTruncated(tiltPrng, AXIAL_TILT_DEG).toFixed(2)),
+    massEarth: Number(massEarth.toFixed(3)),
+    radiusEarth: Number(radiusEarth.toFixed(3)),
+  });
+  const out = [planet, ...generateMoons(planet, planetType)];
+  const ring = generateRing(planet, planetType);
+  if (ring) out.push(ring);
+  return out;
+}
+
+// Partial-system overlay. For stars that already host one or more catalog
+// planets, sample a target planet count from PLANET_COUNT_BY_CLASS and
+// add procgen siblings at orbits beyond the outermost catalog anchor
+// until the count is met. Outer-only because RV / transit detection is
+// biased toward short-period planets — the "missing" siblings sit further
+// out, not interleaved with what was observed. Also rolls system-level
+// belts that generateSystem would have produced if it had run here; the
+// catalog provides per-planet anchors but doesn't enumerate belts, so
+// they're as detection-biased as the outer planets are. Curated systems
+// (Sol) bypass this in the caller — their CSV is authoritative.
+//
+// `catalogPlanets` is the array of catalog Body objects on this star (in
+// CSV order); their `semiMajorAu` anchors the outer walk. Returns a flat
+// array of new bodies (planets + moons + rings + belts).
+export function generateOverlay(star, catalogPlanets) {
+  const cls = star.cls;
+  const countSpec = PLANET_COUNT_BY_CLASS[cls];
+  const geom = ORBITAL_GEOMETRY_BY_CLASS[cls];
+  if (!countSpec || !geom) return [];
+
+  const out = [];
+
+  // Target planet count from the same prior the architect uses. Independent
+  // seed so a star moving between the architect and overlay code paths
+  // (would only happen if curation status changed) doesn't reuse a draw.
+  const countPrng = slotPrng(star.id, -1, 'overlay_planet_count');
+  const N = sampleTruncated(countPrng, countSpec, true);
+  const existing = catalogPlanets.length;
+  const toAdd = Math.max(0, N - existing);
+
+  if (toAdd > 0) {
+    let outermost = -Infinity;
+    for (const p of catalogPlanets) {
+      if (p.semiMajorAu != null && p.semiMajorAu > outermost) outermost = p.semiMajorAu;
+    }
+    // Without a usable anchor the outer walk has nowhere to start. Skip
+    // the planet additions; system-level belts still roll below since
+    // they don't depend on existing orbits.
+    if (Number.isFinite(outermost) && outermost < geom.outerEdgeAu) {
+      // Letters: continue past whatever the catalog already uses. The
+      // catalog convention is `${star.id}-${letter}`; we skip any that
+      // are already taken so the overlay never collides with the
+      // observed system's IAU labels.
+      const usedLetters = new Set();
+      const prefix = star.id + '-';
+      for (const p of catalogPlanets) {
+        if (p.id.startsWith(prefix)) usedLetters.add(p.id.slice(prefix.length));
+      }
+      let letterCursor = existing;
+      const allocLetter = () => {
+        while (true) {
+          const letter = planetLetterAt(letterCursor++);
+          if (!usedLetters.has(letter)) {
+            usedLetters.add(letter);
+            return letter;
+          }
+        }
+      };
+
+      let a = outermost;
+      for (let i = 0; i < toAdd; i++) {
+        const slotIdx = existing + i;
+        const ratioPrng = slotPrng(star.id, slotIdx, 'overlay_spacing');
+        const periodRatio = Math.exp(sampleNormal(ratioPrng, Math.log(geom.spacingRatio.mean), geom.spacingRatio.sd));
+        a *= Math.pow(periodRatio, 2 / 3);
+        if (a > geom.outerEdgeAu) break;
+        out.push(...buildPlanetAtOrbit(star, slotIdx, a, allocLetter(), 'overlay_'));
+      }
+    }
+  }
+
+  // System-level belts. generateSystem fires these for architect-eligible
+  // stars; catalog-anchored stars went through this path instead, so the
+  // overlay carries the same responsibility.
+  out.push(...generateBelts(star));
+
+  return out;
 }

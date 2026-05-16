@@ -187,7 +187,13 @@ export const PHYSICAL_SPEC_BY_TYPE = {
                  radiusEarth: { mean: 12,  sd: 3,   min: 8,   max: 20  } },
 };
 
-// Moon count per planet type. Sample N(mean, sd), clamp to [0, max].
+// Moon count per planet type. Sampled as Poisson(mean) and clamped to
+// [0, max]. Poisson rather than truncated-normal because moon counts are
+// non-negative integers with variance ≈ mean — the natural shape for a
+// count process. A truncated-normal with mean near 0 would lift the
+// observed mean ~10-20% above the prior (clamped negative draws round
+// to 0, raising the post-clamp mean); see audit-procgen.mjs.
+//
 // Anchored to Sol: Jupiter (4 Galilean + many smaller; capped at 15
 // "interesting" moons since the rest are <50 km irregular fragments),
 // Earth (1), Mercury (0), Saturn (large + Titan + Enceladus).
@@ -196,12 +202,12 @@ export const PHYSICAL_SPEC_BY_TYPE = {
 // limit timescales. Outer gas giants accumulate moons from their disk +
 // captured planetesimals.
 export const MOON_COUNT_BY_TYPE = {
-  hot_rocky:   { mean: 0,   sd: 0.2, max: 1  },
-  rocky:       { mean: 0.5, sd: 0.7, max: 3  },  // Earth=1, Mars=2 (tiny), Venus=0
-  super_earth: { mean: 1,   sd: 1,   max: 4  },
-  sub_neptune: { mean: 2,   sd: 1.5, max: 6  },
-  neptune:     { mean: 4,   sd: 2,   max: 10 },  // Uranus has 5 major
-  jupiter:     { mean: 7,   sd: 3,   max: 15 },  // Sol Jupiter ~4 Galilean
+  hot_rocky:   { mean: 0,   max: 1  },  // Poisson(0) is degenerate-zero — Mercury/Venus
+  rocky:       { mean: 0.5, max: 3  },  // Earth=1, Mars=2 (tiny), Venus=0
+  super_earth: { mean: 1,   max: 4  },
+  sub_neptune: { mean: 2,   max: 6  },
+  neptune:     { mean: 4,   max: 10 },  // Uranus has 5 major
+  jupiter:     { mean: 7,   max: 15 },  // Sol Jupiter ~4 Galilean
 };
 
 // ---------------------------------------------------------------------------
