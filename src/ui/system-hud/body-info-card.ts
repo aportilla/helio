@@ -8,7 +8,7 @@
 // ephemeral; dismissal is the cursor leaving the disc.
 
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
-import { BODIES, STARS, type BeltClass, type Biosphere, type Body, type WorldClass } from '../../data/stars';
+import { BODIES, STARS, type BeltClass, type BiosphereArchetype, type BiosphereTier, type Body, type WorldClass } from '../../data/stars';
 import type { DiagramPick } from '../../scene/system-diagram';
 import { BasePanel } from '../base-panel';
 import { paintSurface } from '../painter';
@@ -28,11 +28,19 @@ const WORLD_CLASS_LABEL: Record<WorldClass, string> = {
   ice_giant: 'Ice Giant',
 };
 
-const BIOSPHERE_LABEL: Record<Exclude<Biosphere, 'none'>, string> = {
+const BIOSPHERE_ARCHETYPE_LABEL: Record<BiosphereArchetype, string> = {
+  carbon_aqueous:     'Aqueous',
+  subsurface_aqueous: 'Subsurface',
+  aerial:             'Aerial',
+  cryogenic:          'Cryogenic',
+  silicate:           'Silicate',
+  sulfur:             'Sulfur',
+};
+const BIOSPHERE_TIER_LABEL: Record<Exclude<BiosphereTier, 'none'>, string> = {
+  prebiotic: 'Prebiotic',
   microbial: 'Microbial',
-  simple:    'Simple Life',
-  complex:   'Complex Life',
-  civilized: 'Civilized',
+  complex:   'Complex',
+  gaian:     'Gaian',
 };
 
 const BELT_CLASS_LABEL: Record<BeltClass, string> = {
@@ -96,10 +104,13 @@ function rowsForBody(bodyIdx: number): BodyRow[] {
   if (b.periodDays !== null)  rows.push({ key: k('period'),  val: formatPeriod(b.periodDays) });
   if (b.avgSurfaceTempK !== null) rows.push({ key: k('temp'), val: `${Math.round(b.avgSurfaceTempK)} K` });
   if (b.surfacePressureBar !== null) rows.push({ key: k('pressure'), val: `${b.surfacePressureBar.toFixed(2)} bar` });
-  // Biosphere 'none' is the null-equivalent for inhabited-life — skip;
-  // a planet with bacteria is what we want to surface, not a barren rock.
-  if (b.biosphere !== null && b.biosphere !== 'none') {
-    rows.push({ key: k('life'), val: BIOSPHERE_LABEL[b.biosphere] });
+  // Biosphere 'none' is the null-equivalent — skip; a planet with bacteria
+  // is what we want to surface, not a barren rock. When life exists, show
+  // both axes so the player sees what kind ("Aerial Microbial", etc.).
+  if (b.biosphereTier !== null && b.biosphereTier !== 'none' && b.biosphereArchetype !== null) {
+    const archLabel = BIOSPHERE_ARCHETYPE_LABEL[b.biosphereArchetype];
+    const tierLabel = BIOSPHERE_TIER_LABEL[b.biosphereTier];
+    rows.push({ key: k('life'), val: `${archLabel} ${tierLabel}` });
   }
   return rows;
 }

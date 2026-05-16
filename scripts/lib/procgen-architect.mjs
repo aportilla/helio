@@ -12,7 +12,7 @@
 // character, atmosphere, resources, biosphere are left as `_unknowns`
 // for the Filler (procgen.mjs) to derive.
 
-import { hash32, mulberry32, sampleNormal, sampleTruncated, samplePoisson } from './prng.mjs';
+import { hash32, mulberry32, sampleNormal, sampleTruncated, sampleMixture, samplePoisson } from './prng.mjs';
 import { insolation } from './astrophysics.mjs';
 import {
   PROCGEN_VERSION,
@@ -126,7 +126,7 @@ const FILLER_TARGET_FIELDS = [
   'atm1', 'atm1Frac', 'atm2', 'atm2Frac', 'atm3', 'atm3Frac',
   'resMetals', 'resSilicates', 'resVolatiles',
   'resRareEarths', 'resRadioactives', 'resExotics',
-  'biosphere',
+  'biosphereArchetype', 'biosphereTier',
   'rotationPeriodHours',
 ];
 
@@ -147,7 +147,7 @@ function makeBody(props) {
     atm1: null, atm1Frac: null, atm2: null, atm2Frac: null, atm3: null, atm3Frac: null,
     resMetals: null, resSilicates: null, resVolatiles: null,
     resRareEarths: null, resRadioactives: null, resExotics: null,
-    biosphere: null,
+    biosphereArchetype: null, biosphereTier: null,
     rotationPeriodHours: null,
     innerAu: null, outerAu: null, innerPlanetRadii: null, outerPlanetRadii: null,
     moons: [],
@@ -206,7 +206,7 @@ export function generateMoons(planet, planetType) {
       name: `${planet.formalName} ${ROMAN[mIdx] ?? `M${mIdx + 1}`}`,
       source: 'procgen',
       semiMajorAu: Number(semiMajorAu.toFixed(5)),
-      eccentricity: Number(sampleTruncated(eccPrng, ECCENTRICITY).toFixed(4)),
+      eccentricity: Number(sampleMixture(eccPrng, ECCENTRICITY).toFixed(4)),
       inclinationDeg: Number(sampleTruncated(incPrng, INCLINATION_DEG).toFixed(2)),
       periodDays: Number(periodDays.toFixed(3)),
       orbitalPhaseDeg: Number((phasePrng() * 360).toFixed(2)),
@@ -439,7 +439,7 @@ function buildPlanetAtOrbit(star, slotIdx, aAu, letter, saltPrefix = '') {
     source: 'procgen',
     planetType,
     semiMajorAu: Number(aAu.toFixed(4)),
-    eccentricity: Number(sampleTruncated(eccPrng, ECCENTRICITY).toFixed(4)),
+    eccentricity: Number(sampleMixture(eccPrng, ECCENTRICITY).toFixed(4)),
     inclinationDeg: Number(sampleTruncated(incPrng, INCLINATION_DEG).toFixed(2)),
     periodDays: Number(periodDays.toFixed(2)),
     orbitalPhaseDeg: Number((phasePrng() * 360).toFixed(2)),

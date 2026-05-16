@@ -79,7 +79,24 @@ export interface Star {
 export type WorldClass =
   | 'rocky' | 'ocean' | 'ice' | 'desert' | 'lava'
   | 'gas_dwarf' | 'gas_giant' | 'ice_giant';
-export type Biosphere = 'none' | 'microbial' | 'simple' | 'complex' | 'civilized';
+// Biosphere is two orthogonal axes:
+//   - archetype: what kind of life (carbon/water, methane/cryogenic, etc.)
+//   - tier: how developed (prebiotic → microbial → complex → gaian)
+// Sterile bodies carry tier='none' and archetype=null. Anything else is
+// guaranteed to have both axes set.
+export type BiosphereArchetype =
+  | 'carbon_aqueous'      // Earth-standard, water + carbon
+  | 'subsurface_aqueous'  // ice-shell ocean (Europa, Enceladus)
+  | 'aerial'              // gas-giant atmospheric
+  | 'cryogenic'           // methane/ethane solvent (Titan-hypothesized)
+  | 'silicate'            // crystalline mineral metabolism
+  | 'sulfur';             // sulfur-cycle / thermal-vent biology
+export type BiosphereTier =
+  | 'none'        // sterile
+  | 'prebiotic'   // organic chemistry, no replicating life
+  | 'microbial'   // simple unicellular
+  | 'complex'     // multicellular ecosystems
+  | 'gaian';      // life has reshaped planet chemistry (Earth post-GOE)
 export type BodyKind = 'planet' | 'moon' | 'belt' | 'ring';
 export type BodySource = 'catalog' | 'procgen';
 
@@ -170,8 +187,11 @@ export interface Body {
   readonly resRareEarths: number | null;
   readonly resRadioactives: number | null;
   readonly resExotics: number | null;
-  // Life
-  readonly biosphere: Biosphere | null;
+  // Life — two-axis. archetype is null on sterile bodies (tier='none') and
+  // on bodies where the Filler skipped the roll (gas giants in curated
+  // systems, etc.). When tier ≠ 'none', archetype is guaranteed non-null.
+  readonly biosphereArchetype: BiosphereArchetype | null;
+  readonly biosphereTier: BiosphereTier | null;
   // Indices into BODIES of moons orbiting this body, sorted by semi-major
   // axis ascending. Always empty when `kind === 'moon'` (no sub-moons modeled).
   readonly moons: readonly number[];

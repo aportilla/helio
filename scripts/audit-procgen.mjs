@@ -33,6 +33,17 @@ import {
   RING_OCCURRENCE_BY_TYPE,
   MOON_COUNT_BY_TYPE,
   BELT_OCCURRENCE_BY_CLASS,
+  WATER_FRACTION_BY_CLASS,
+  ICE_FRACTION_BY_CLASS,
+  ALBEDO_BY_CLASS,
+  TECTONIC_ACTIVITY_BY_CLASS,
+  MAGNETIC_FIELD_GAUSS_BY_CLASS,
+  TEMP_SWING_FRAC_BY_CLASS,
+  PLANET_RESOURCE_PRIORS_BY_CLASS,
+  BIOSPHERE_BY_CLASS,
+  BIOSPHERE_GATE_INSOLATION,
+  BIOSPHERE_ARCHETYPES,
+  BIOSPHERE_TIERS,
 } from './lib/procgen-priors.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -290,5 +301,167 @@ for (const cls of STELLAR_CLASSES) {
     '   ' + pad((p.debris * 100).toFixed(2) + '%', 6, true) +
     fmtZ(zBinom(row.debris, row.systems, p.debris), Math.min(row.systems * p.debris, row.systems * (1 - p.debris))),
   );
+}
+console.log();
+
+// --- 7. Surface scalars by worldClass ---------------------------------------
+
+console.log('=== Surface scalars, by worldClass (procgen planets) ===');
+function auditScalar(field, priorTable, label) {
+  console.log('  --- ' + label + ' ---');
+  console.log('  class       |  n      obs.mean  obs.sd     prior.mean  prior.sd   z');
+  const byClass = {};
+  for (const b of bodies) {
+    if (b.kind !== 'planet' || b.source !== 'procgen') continue;
+    if (b.worldClass == null || b[field] == null) continue;
+    if (!byClass[b.worldClass]) byClass[b.worldClass] = [];
+    byClass[b.worldClass].push(b[field]);
+  }
+  for (const cls of Object.keys(priorTable).sort()) {
+    const arr = byClass[cls] || [];
+    const obs = meanStd(arr);
+    const p = priorTable[cls];
+    if (!arr.length) continue;
+    console.log(
+      '  ' + pad(cls, 11) +
+      ' |' + pad(arr.length, 5, true) +
+      '   ' + pad(obs.mean.toFixed(3), 6, true) +
+      '   ' + pad(obs.sd.toFixed(3), 5, true) +
+      '      ' + pad(p.mean.toFixed(3), 5, true) +
+      '       ' + pad(p.sd.toFixed(3), 5, true) +
+      fmtZ(zMean(obs.mean, arr.length, p.mean, p.sd || 0.001), arr.length),
+    );
+  }
+}
+auditScalar('waterFraction',    WATER_FRACTION_BY_CLASS,    'waterFraction');
+auditScalar('iceFraction',      ICE_FRACTION_BY_CLASS,      'iceFraction');
+auditScalar('albedo',           ALBEDO_BY_CLASS,            'albedo (post-ice-lift; expect bias above prior on ice worlds)');
+auditScalar('tectonicActivity', TECTONIC_ACTIVITY_BY_CLASS, 'tectonicActivity (post-mass-scale; expect bias on non-Earth-mass)');
+auditScalar('magneticFieldGauss', MAGNETIC_FIELD_GAUSS_BY_CLASS, 'magneticFieldGauss (post-tect/rot scaling for terrestrials)');
+console.log();
+
+// --- 8. Atmosphere top-gas distribution -------------------------------------
+
+console.log('=== Atmosphere top gas (atm1) by worldClass ===');
+const atmByClass = {};
+for (const b of bodies) {
+  if (b.kind !== 'planet' || b.source !== 'procgen') continue;
+  if (!b.worldClass || !b.atm1) continue;
+  if (!atmByClass[b.worldClass]) atmByClass[b.worldClass] = { total: 0, gases: {} };
+  atmByClass[b.worldClass].total += 1;
+  atmByClass[b.worldClass].gases[b.atm1] = (atmByClass[b.worldClass].gases[b.atm1] || 0) + 1;
+}
+for (const cls of Object.keys(atmByClass).sort()) {
+  const r = atmByClass[cls];
+  const sorted = Object.entries(r.gases).sort((a, b) => b[1] - a[1]).slice(0, 4);
+  const breakdown = sorted.map(([g, n]) => `${g} ${(n / r.total * 100).toFixed(0)}%`).join('  ');
+  console.log('  ' + pad(cls, 11) + ' | n=' + pad(r.total, 4, true) + '  ' + breakdown);
+}
+console.log();
+
+// --- 9. Resource means by worldClass ---------------------------------------
+
+console.log('=== Resource means, by worldClass (procgen planets, 0-10 scale) ===');
+console.log('  class       |  n      met  sil  vol  rare radio exo    (priors in brackets)');
+const RES = ['resMetals','resSilicates','resVolatiles','resRareEarths','resRadioactives','resExotics'];
+const resByClass = {};
+for (const b of bodies) {
+  if (b.kind !== 'planet' || b.source !== 'procgen') continue;
+  if (!b.worldClass) continue;
+  if (!resByClass[b.worldClass]) {
+    resByClass[b.worldClass] = { n: 0, sums: Object.fromEntries(RES.map(f => [f, 0])) };
+  }
+  resByClass[b.worldClass].n += 1;
+  for (const f of RES) if (b[f] != null) resByClass[b.worldClass].sums[f] += b[f];
+}
+for (const cls of Object.keys(PLANET_RESOURCE_PRIORS_BY_CLASS).sort()) {
+  const r = resByClass[cls];
+  const p = PLANET_RESOURCE_PRIORS_BY_CLASS[cls];
+  if (!r || !r.n) continue;
+  const obs = RES.map(f => (r.sums[f] / r.n).toFixed(1).padStart(3));
+  const prior = RES.map(f => p[f].mean.toString().padStart(3));
+  console.log(
+    '  ' + pad(cls, 11) +
+    ' | ' + pad(r.n, 4, true) +
+    '   ' + obs.join('  ') +
+    '   [' + prior.join(' ') + ']',
+  );
+}
+console.log();
+
+// --- 10. Biosphere distribution ---------------------------------------------
+
+console.log('=== Biosphere — archetype × tier matrix (procgen planets) ===');
+const bioMatrix = {};
+const tierTotals = {};
+const archTotals = {};
+let aliveCount = 0;
+let totalProcgenAll = 0;
+for (const b of bodies) {
+  if (b.kind !== 'planet' || b.source !== 'procgen') continue;
+  totalProcgenAll += 1;
+  const t = b.biosphereTier ?? 'null';
+  const a = b.biosphereArchetype ?? 'sterile';
+  if (t && t !== 'none') {
+    aliveCount += 1;
+    archTotals[a] = (archTotals[a] || 0) + 1;
+    if (!bioMatrix[a]) bioMatrix[a] = {};
+    bioMatrix[a][t] = (bioMatrix[a][t] || 0) + 1;
+  }
+  tierTotals[t] = (tierTotals[t] || 0) + 1;
+}
+console.log('  total procgen planets: ' + totalProcgenAll);
+console.log('  with life:             ' + aliveCount + ' (' + (aliveCount / totalProcgenAll * 100).toFixed(2) + '%)');
+console.log();
+const TIERS = BIOSPHERE_TIERS.filter(t => t !== 'none');
+console.log('  archetype           |' + TIERS.map(t => pad(t, 11, true)).join(' |') + ' |  total');
+console.log('  --------------------+' + TIERS.map(_ => '-'.repeat(12)).join('+') + '+--------');
+for (const a of BIOSPHERE_ARCHETYPES) {
+  const row = bioMatrix[a] || {};
+  const cells = TIERS.map(t => pad(row[t] || 0, 11, true));
+  const total = TIERS.reduce((s, t) => s + (row[t] || 0), 0);
+  console.log('  ' + pad(a, 19) + ' |' + cells.join(' |') + ' | ' + pad(total, 6, true));
+}
+console.log();
+
+console.log('=== Biosphere — observed vs predicted occurrence per (worldClass, archetype) ===');
+console.log('  class      | archetype           | gate       |  n      hits   obs%     prior%   z');
+console.log('  -----------+---------------------+------------+--------------------------------------');
+for (const cls of Object.keys(BIOSPHERE_BY_CLASS)) {
+  const archTable = BIOSPHERE_BY_CLASS[cls];
+  for (const [archetype, spec] of Object.entries(archTable)) {
+    // Count eligible bodies (in-gate, of this worldClass) and observed hits
+    // (where this archetype was the chosen one). Note observed hits are a
+    // LOWER bound on archetype rolls because the tier resolution prefers
+    // higher tiers across archetypes — a silicate hit can be overridden by
+    // a carbon_aqueous hit on the same body.
+    let eligible = 0, hits = 0;
+    for (const b of bodies) {
+      if (b.kind !== 'planet' || b.source !== 'procgen') continue;
+      if (b.worldClass !== cls) continue;
+      if (spec.gate != null) {
+        if (b.hostStarIdx == null || b.semiMajorAu == null) continue;
+        const star = stars[b.hostStarIdx];
+        if (!star || star.mass == null) continue;
+        const S = insolation(star.mass, b.semiMajorAu);
+        const r = BIOSPHERE_GATE_INSOLATION[spec.gate];
+        if (S == null || S < r.min || S >= r.max) continue;
+      }
+      eligible += 1;
+      if (b.biosphereArchetype === archetype) hits += 1;
+    }
+    if (!eligible) continue;
+    const obsRate = hits / eligible;
+    console.log(
+      '  ' + pad(cls, 10) +
+      ' | ' + pad(archetype, 19) +
+      ' | ' + pad(spec.gate ?? '—', 10) +
+      ' | ' + pad(eligible, 6, true) +
+      ' ' + pad(hits, 5, true) +
+      '   ' + pad((obsRate * 100).toFixed(2) + '%', 6, true) +
+      '   ' + pad((spec.occurrenceRate * 100).toFixed(2) + '%', 6, true) +
+      fmtZ(zBinom(hits, eligible, spec.occurrenceRate), Math.min(eligible * spec.occurrenceRate, eligible * (1 - spec.occurrenceRate))),
+    );
+  }
 }
 console.log();

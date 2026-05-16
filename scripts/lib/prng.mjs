@@ -47,6 +47,23 @@ export function sampleTruncated(prng, spec, round = false) {
   return round ? Math.round(clamped) : clamped;
 }
 
+// Sample from a mixture of truncated normals. `spec` is an object mapping
+// mode names to `{ mean, sd, min, max, weight }`. Weights need not sum to
+// 1 — the sampler normalizes. Used for priors whose true distribution is
+// bimodal (e.g. eccentricity: settled multi-planet systems vs. scattered
+// outliers — a single normal can't fit both).
+export function sampleMixture(prng, spec) {
+  const modes = Object.values(spec);
+  let totalWeight = 0;
+  for (const m of modes) totalWeight += m.weight;
+  let r = prng() * totalWeight;
+  for (const m of modes) {
+    r -= m.weight;
+    if (r <= 0) return sampleTruncated(prng, m);
+  }
+  return sampleTruncated(prng, modes[modes.length - 1]);
+}
+
 // Poisson(λ) via Knuth's algorithm. Returns a non-negative integer.
 // Suitable for the small λ (≤ ~15) the build-time procgen uses; for
 // larger λ Atkinson's PA would be faster but we don't need it. Used in

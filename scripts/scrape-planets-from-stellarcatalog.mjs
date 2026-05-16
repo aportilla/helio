@@ -58,7 +58,7 @@ const HEADER = [
   'magnetic_field_gauss', 'tectonic_activity',
   'surface_pressure_bar', 'atm1', 'atm1_frac', 'atm2', 'atm2_frac', 'atm3', 'atm3_frac',
   'res_metals', 'res_silicates', 'res_volatiles', 'res_rare_earths', 'res_radioactives', 'res_exotics',
-  'biosphere',
+  'biosphere_archetype', 'biosphere_tier',
 ];
 const COL = Object.fromEntries(HEADER.map((c, i) => [c, i]));
 const emptyRow = () => Array(HEADER.length).fill('');

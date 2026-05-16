@@ -23,3 +23,18 @@ export function insolation(hostStarMass, aAu) {
   if (L == null) return null;
   return L / (aAu * aAu);
 }
+
+// Dimensionless proxy for tidal-locking timescale, normalized so Earth = 1.
+// The physical timescale is τ_lock ∝ a^6 / M_star^2 (the planet-side factors
+// are weaker and don't vary much across our taxonomy). Earth at 1 AU around
+// the Sun isn't locked over the age of the universe; Mercury (a=0.387) is;
+// M-dwarf HZ planets at a~0.15 AU around 0.2 M☉ stars are deeply locked.
+// Smaller proxy → faster locking → more likely locked.
+//
+// Returns null when inputs aren't available. The Filler maps the proxy to a
+// log-interpolated locking probability so the rocky M-dwarf HZ catalog
+// reads as mostly tide-locked while G-dwarf systems mostly aren't.
+export function tidalLockProxy(hostStarMass, aAu) {
+  if (hostStarMass == null || hostStarMass <= 0 || aAu == null || aAu <= 0) return null;
+  return Math.pow(aAu, 6) / (hostStarMass * hostStarMass);
+}

@@ -485,7 +485,14 @@ function buildClusters(stars) {
 
 const BODIES_FILE = 'bodies.csv';
 const WORLD_CLASSES = new Set(['rocky', 'ocean', 'ice', 'desert', 'lava', 'gas_dwarf', 'gas_giant', 'ice_giant']);
-const BIOSPHERES = new Set(['none', 'microbial', 'simple', 'complex', 'civilized']);
+// Biosphere is two orthogonal axes — archetype (what kind of life) and
+// tier (how developed). Sterile bodies carry tier='none' and archetype is
+// 'n/a' (curated) or null (procgen-skipped). 'none' is the only tier where
+// archetype-null is meaningful.
+const BIOSPHERE_TIERS_SET = new Set(['none', 'prebiotic', 'microbial', 'complex', 'gaian']);
+const BIOSPHERE_ARCHETYPES_SET = new Set([
+  'carbon_aqueous', 'subsurface_aqueous', 'aerial', 'cryogenic', 'silicate', 'sulfur',
+]);
 const BODY_KINDS = new Set(['planet', 'moon', 'belt', 'ring']);
 const BODY_SOURCES = new Set(['catalog', 'procgen']);
 const BELT_CLASSES = new Set(['asteroid', 'ice', 'debris']);
@@ -565,7 +572,8 @@ function parseCsvBodies(text, label) {
     source: colIdx('source'),
     world_class: colIdx('world_class'),
     belt_class: colIdx('belt_class'),
-    biosphere: colIdx('biosphere'),
+    biosphere_archetype: colIdx('biosphere_archetype'),
+    biosphere_tier: colIdx('biosphere_tier'),
   };
   for (const [csvName] of BODY_NUMERIC_FIELDS) ix[csvName] = colIdx(csvName);
   for (const [csvName] of BODY_STRING_FIELDS)  ix[csvName] = colIdx(csvName);
@@ -609,9 +617,22 @@ function parseCsvBodies(text, label) {
     if ((kind === 'belt' || kind === 'ring') && beltClass === null) {
       throw new Error(`${label}: ${id} kind=${kind} requires a belt_class`);
     }
-    const biosphere = trackedCell('biosphere', 'biosphere');
-    if (biosphere !== null && !BIOSPHERES.has(biosphere)) {
-      throw new Error(`${label}: ${id} invalid biosphere=${biosphere}`);
+    const biosphereArchetype = trackedCell('biosphere_archetype', 'biosphereArchetype');
+    if (biosphereArchetype !== null && !BIOSPHERE_ARCHETYPES_SET.has(biosphereArchetype)) {
+      throw new Error(`${label}: ${id} invalid biosphere_archetype=${biosphereArchetype}`);
+    }
+    const biosphereTier = trackedCell('biosphere_tier', 'biosphereTier');
+    if (biosphereTier !== null && !BIOSPHERE_TIERS_SET.has(biosphereTier)) {
+      throw new Error(`${label}: ${id} invalid biosphere_tier=${biosphereTier}`);
+    }
+    // Cross-axis consistency: a non-'none' tier requires an archetype, and
+    // an archetype requires a non-'none' tier. The Filler maintains this
+    // automatically; this check catches malformed catalog rows.
+    if (biosphereTier === 'none' && biosphereArchetype !== null) {
+      throw new Error(`${label}: ${id} biosphere_tier='none' incompatible with archetype=${biosphereArchetype}`);
+    }
+    if (biosphereTier !== null && biosphereTier !== 'none' && biosphereArchetype === null) {
+      throw new Error(`${label}: ${id} biosphere_tier=${biosphereTier} requires a biosphere_archetype`);
     }
 
     const body = {
@@ -626,7 +647,8 @@ function parseCsvBodies(text, label) {
       planetType: null,
       worldClass,
       beltClass,
-      biosphere,
+      biosphereArchetype,
+      biosphereTier,
       moons: [],
       ring: null,
     };

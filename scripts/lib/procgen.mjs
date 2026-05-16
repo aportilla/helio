@@ -12,24 +12,48 @@
 //
 // Generator dependency chain (run in this order in fillBody):
 //   radiusEarth ← massEarth
-//   worldClass  ← radiusEarth + insolation
-//   avgSurfaceTempK ← worldClass + insolation + albedo
-//   surfacePressureBar ← worldClass + massEarth
+//   worldClass ← radiusEarth + insolation
+//   waterFraction, iceFraction ← worldClass
+//   albedo ← worldClass + iceFraction
+//   tectonicActivity ← worldClass + massEarth
 //   periodDays ↔ semiMajorAu (Kepler 3, bidirectional; needs host mass)
+//   rotationPeriodHours ← worldClass + tidal-lock proxy + periodDays
+//   magneticFieldGauss ← worldClass + tectonicActivity + rotationPeriodHours
+//   surfacePressureBar ← worldClass + massEarth        (must precede avgSurfaceTempK)
+//   avgSurfaceTempK ← worldClass + insolation + albedo + surfacePressureBar
 //   eccentricity, inclinationDeg, axialTiltDeg, orbitalPhaseDeg ← seeded draws
+//   surfaceTempMinK, surfaceTempMaxK ← avg + worldClass + axial tilt + eccentricity
+//   biosphereArchetype, biosphereTier ← worldClass + insolation gate   (must precede atmosphere)
+//   atm1..atm3 + fractions ← worldClass + surfacePressureBar + biosphere
+//   resMetals..resExotics ← worldClass
 //
 // The Kepler step is bidirectional so RV-discovery catalog rows (period
 // known, axis unknown) and transit-discovery rows (axis known, period
 // unknown) both fill out symmetrically.
 
-import { hash32, mulberry32, sampleTruncated } from './prng.mjs';
+import { hash32, mulberry32, sampleTruncated, sampleMixture } from './prng.mjs';
 import {
   PROCGEN_VERSION,
   ECCENTRICITY,
   INCLINATION_DEG,
   AXIAL_TILT_DEG,
+  WATER_BUDGET_THRESHOLDS,
+  WATER_FRACTION_BY_CLASS,
+  ICE_FRACTION_BY_CLASS,
+  ALBEDO_BY_CLASS,
+  TECTONIC_ACTIVITY_BY_CLASS,
+  ROTATION_PERIOD_HOURS_BY_CLASS,
+  TIDAL_LOCK_RANGE,
+  TEMP_SWING_FRAC_BY_CLASS,
+  MAGNETIC_FIELD_GAUSS_BY_CLASS,
+  ATMOSPHERE_GASES_BY_CLASS,
+  ATMOSPHERE_O2_BIOTIC_LIFT,
+  ATMOSPHERE_MIN_PRESSURE_BAR,
+  PLANET_RESOURCE_PRIORS_BY_CLASS,
+  BIOSPHERE_BY_CLASS,
+  BIOSPHERE_GATE_INSOLATION,
 } from './procgen-priors.mjs';
-import { insolation } from './astrophysics.mjs';
+import { insolation, tidalLockProxy } from './astrophysics.mjs';
 
 function fieldPrng(body, field) {
   return mulberry32(hash32(`${body.id}:${field}:${PROCGEN_VERSION}`));
@@ -128,15 +152,15 @@ export function worldClassFor(body, S) {
     // Hot rocky — Venus/Mercury class. Dry by default; occasional
     // water-bearing exceptions for hothouse worlds with retained volatiles.
     const r_w = fieldPrng(body, 'water_budget')();
-    return r_w < 0.7 ? 'desert' : 'rocky';
+    return r_w < WATER_BUDGET_THRESHOLDS.hot.desertMax ? 'desert' : 'rocky';
   }
   if (S < 0.1) return 'ice';         // outer cold
 
   // Temperate band (0.1 < S < 1.5) — seeded water budget chooses surface.
-  // 50% rocky (Earth-like), 30% ocean (water-rich), 20% desert (dry).
+  // Thresholds in WATER_BUDGET_THRESHOLDS.temperate.
   const r_w = fieldPrng(body, 'water_budget')();
-  if (r_w < 0.5) return 'rocky';
-  if (r_w < 0.8) return 'ocean';
+  if (r_w < WATER_BUDGET_THRESHOLDS.temperate.rockyMax) return 'rocky';
+  if (r_w < WATER_BUDGET_THRESHOLDS.temperate.oceanMax) return 'ocean';
   return 'desert';
 }
 
@@ -158,21 +182,25 @@ export function planetTypeFor(worldClass, massEarth, S) {
 // Surface character (temperature, pressure)
 // =============================================================================
 
-// Greenhouse offset (K) above radiative equilibrium, keyed on world_class.
-// Crude — real greenhouse varies with pressure, composition, cloud cover.
-// Venus's actual +500K is intentionally not modeled here; v1 keeps generic
-// rocky/ocean/lava values that produce sensible surface temps for unknown
-// worlds without requiring full atmospheric simulation.
+// Greenhouse offset (K) above radiative equilibrium at Earth-class
+// surface pressure (1 bar). The per-class value gets multiplied by
+// pressureFactor = P_bar^0.3 so a Mars-thin desert (P=0.003) gets ~0.15×
+// its nominal offset (≈+0.8 K, correct), Earth gets ×1.0 (+33 K, correct),
+// and a Venus-class lava world at P=50 bar gets ×3.2 (+256 K — under
+// Venus's real +500 K but ×8 closer than the constant-offset version).
+// Exponent 0.3 sits between optically-thin linear scaling and the slow
+// log saturation of thick atmospheres.
 const GREENHOUSE_K_BY_CLASS = {
-  rocky:  33,    // Earth +33K
+  rocky:  33,    // Earth +33K at 1 bar
   ocean:  50,    // water vapor adds to Earth-class
-  desert:  5,    // thin atmosphere, minimal greenhouse
-  lava:   80,    // outgassed CO2 / SO2 — middle ground (v1 underestimates Venus)
+  desert:  5,    // thin atmosphere baseline
+  lava:   80,    // outgassed CO2 / SO2; pressure scaling reaches toward Venus
   ice:     5,    // typically thin / no atmosphere
 };
 
-// Stefan-Boltzmann equilibrium temperature plus a world_class greenhouse
-// offset. Gas giants return cloud-top equilibrium temp (no surface).
+// Stefan-Boltzmann equilibrium temperature plus a worldClass greenhouse
+// offset scaled by surface pressure. Gas giants return cloud-top
+// equilibrium temp (no surface).
 function avgSurfaceTempFor(body, S) {
   if (S == null || body.worldClass == null) return null;
   const A = body.albedo ?? 0.3;
@@ -181,7 +209,14 @@ function avgSurfaceTempFor(body, S) {
   if (wc === 'gas_giant' || wc === 'gas_dwarf' || wc === 'ice_giant') {
     return Math.round(tEq);
   }
-  return Math.round(tEq + (GREENHOUSE_K_BY_CLASS[wc] ?? 0));
+  const baseOffset = GREENHOUSE_K_BY_CLASS[wc] ?? 0;
+  const P = body.surfacePressureBar;
+  // Default pressure factor of 1.0 when no surfacePressureBar is set —
+  // matches the pre-v4 constant-offset behavior for any class missing
+  // from the pressure table (defensive fallback only; in practice every
+  // terrestrial class has a pressure value by this point in the cascade).
+  const pressureFactor = (P != null && P > 0) ? Math.pow(P, 0.3) : 1.0;
+  return Math.round(tEq + baseOffset * pressureFactor);
 }
 
 // Baseline atmospheric pressure (bar) per world_class. Scaled by sqrt(mass)
@@ -202,6 +237,266 @@ function surfacePressureFor(body) {
   if (baseline == null) return null;  // gas/ice giants land here — no surface
   const m = body.massEarth ?? 1.0;
   return Number((baseline * Math.sqrt(Math.max(m, 0.001))).toFixed(3));
+}
+
+// =============================================================================
+// Surface composition — water / ice fraction
+// =============================================================================
+
+// Per-class truncated-normal draws. Returns null for classes outside the
+// table (gas/ice giants and gas dwarfs have no surface). Water and ice
+// each draw independent PRNG streams so adding more generators later
+// doesn't shift earlier values.
+function waterFractionFor(body) {
+  const spec = WATER_FRACTION_BY_CLASS[body.worldClass];
+  if (spec == null) return null;
+  if (spec.max === 0) return 0;
+  return Number(sampleTruncated(fieldPrng(body, 'waterFraction'), spec).toFixed(3));
+}
+
+function iceFractionFor(body) {
+  const spec = ICE_FRACTION_BY_CLASS[body.worldClass];
+  if (spec == null) return null;
+  if (spec.max === 0) return 0;
+  return Number(sampleTruncated(fieldPrng(body, 'iceFraction'), spec).toFixed(3));
+}
+
+// =============================================================================
+// Albedo
+// =============================================================================
+
+// Per-class base albedo, lifted toward 1 when ice covers most of the
+// surface (Enceladus 0.99 is essentially "max ice" for an ice world).
+// Crude but enough to keep avgSurfaceTempK self-consistent.
+function albedoFor(body) {
+  const spec = ALBEDO_BY_CLASS[body.worldClass];
+  if (spec == null) return null;
+  let a = sampleTruncated(fieldPrng(body, 'albedo'), spec);
+  // Ice fraction lifts albedo toward ~0.99 in proportion to coverage.
+  if (body.iceFraction != null && body.iceFraction > 0) {
+    a = a * (1 - body.iceFraction) + 0.95 * body.iceFraction;
+  }
+  return Number(Math.max(0, Math.min(1, a)).toFixed(3));
+}
+
+// =============================================================================
+// Tectonic activity
+// =============================================================================
+
+// Per-class draw multiplied by sqrt(mass / Earth) so a 5 M⊕ super-Earth at
+// worldClass='rocky' reads as significantly more active than a Mars-mass
+// world of the same class. Clamped to [0, 1].
+function tectonicActivityFor(body) {
+  const spec = TECTONIC_ACTIVITY_BY_CLASS[body.worldClass];
+  if (spec == null) return null;
+  const base = sampleTruncated(fieldPrng(body, 'tectonicActivity'), spec);
+  const m = body.massEarth ?? 1.0;
+  const massScale = Math.sqrt(Math.max(m, 0.05));
+  return Number(Math.max(0, Math.min(1, base * massScale)).toFixed(3));
+}
+
+// =============================================================================
+// Rotation period — with probabilistic tidal locking
+// =============================================================================
+
+// Returns hours. Close-in bodies probabilistically lock (rotation =
+// orbital period); free rotators draw from the per-class log-ish normal.
+// Tidal-lock proxy uses the body's host star + semi-major axis from the
+// star, even for moons (whose stellar-flux context is inherited).
+function rotationPeriodHoursFor(body, periodDays, lockProxy) {
+  const spec = ROTATION_PERIOD_HOURS_BY_CLASS[body.worldClass];
+  if (spec == null) return null;
+  const prng = fieldPrng(body, 'rotationPeriodHours');
+  // Probabilistic tidal lock: log-interpolate the lock probability
+  // between PROXY_LOCKED (≈ always) and PROXY_FREE (≈ never).
+  if (lockProxy != null && periodDays != null) {
+    const { proxyLocked, proxyFree } = TIDAL_LOCK_RANGE;
+    let pLock;
+    if (lockProxy <= proxyLocked) pLock = 1;
+    else if (lockProxy >= proxyFree) pLock = 0;
+    else {
+      const t = (Math.log(lockProxy) - Math.log(proxyLocked)) /
+                (Math.log(proxyFree)   - Math.log(proxyLocked));
+      pLock = 1 - t;
+    }
+    if (prng() < pLock) {
+      return Number((periodDays * 24).toFixed(2));
+    }
+  }
+  return Number(sampleTruncated(prng, spec).toFixed(2));
+}
+
+// =============================================================================
+// Magnetic field
+// =============================================================================
+
+// Terrestrial fields scale with tectonicActivity (core convection) and
+// inversely with rotation period (faster dynamo = stronger field). Gas
+// giants ignore both — their fields come from metallic-hydrogen
+// convection deep in the mantle, not core dynamos.
+function magneticFieldGaussFor(body) {
+  const spec = MAGNETIC_FIELD_GAUSS_BY_CLASS[body.worldClass];
+  if (spec == null) return null;
+  if (spec.max === 0) return 0;
+  const base = sampleTruncated(fieldPrng(body, 'magneticFieldGauss'), spec);
+  const wc = body.worldClass;
+  if (wc === 'gas_giant' || wc === 'gas_dwarf' || wc === 'ice_giant') {
+    return Number(base.toFixed(3));
+  }
+  // Terrestrials: gate on core activity + rotation rate.
+  const tect = body.tectonicActivity ?? 0.3;
+  const rot = body.rotationPeriodHours ?? 24;
+  const dynamoScale = tect * Math.sqrt(24 / Math.max(rot, 4));
+  return Number(Math.max(0, base * dynamoScale).toFixed(4));
+}
+
+// =============================================================================
+// Surface temperature extremes
+// =============================================================================
+
+// Per-class fractional swing widened by axial tilt and eccentricity. Tilt
+// drives seasonal variation; eccentricity drives orbital insolation
+// variation. Combined multiplicatively over the class base.
+function surfaceTempRangeFor(body) {
+  if (body.avgSurfaceTempK == null) return { min: null, max: null };
+  const spec = TEMP_SWING_FRAC_BY_CLASS[body.worldClass];
+  if (spec == null) return { min: null, max: null };
+  const baseSwing = sampleTruncated(fieldPrng(body, 'tempSwing'), spec);
+  // Tilt 0 → ×1.0, tilt 90° → ×2.0; capped at 2.5 at extreme retrograde.
+  const tiltDeg = body.axialTiltDeg ?? 20;
+  const tiltFactor = 1 + Math.min(Math.abs(tiltDeg), 90) / 90;
+  // Eccentricity 0 → ×1.0, e=0.3 → ×1.6.
+  const ecc = body.eccentricity ?? 0.05;
+  const eccFactor = 1 + ecc * 2;
+  const swing = Math.min(2.5, baseSwing * tiltFactor * eccFactor);
+  const half = swing / 2;
+  return {
+    min: Math.round(body.avgSurfaceTempK * (1 - half)),
+    max: Math.round(body.avgSurfaceTempK * (1 + half)),
+  };
+}
+
+// =============================================================================
+// Atmosphere composition
+// =============================================================================
+
+// Pick the top 3 gases for the given world class by weighted-random draw
+// without replacement, then renormalize their fractions to sum to 1.0.
+// Returns null entries for classes with no atmosphere table or when the
+// surface pressure is below the trace floor.
+function atmosphereFor(body) {
+  if (body.surfacePressureBar != null && body.surfacePressureBar < ATMOSPHERE_MIN_PRESSURE_BAR) {
+    return [null, null, null];
+  }
+  const table = ATMOSPHERE_GASES_BY_CLASS[body.worldClass];
+  if (!table) return [null, null, null];
+  const prng = fieldPrng(body, 'atmosphere');
+  // Per-gas seeded weight perturbation (×0.5 to ×1.5) so two same-class
+  // worlds don't end up with identical mixes.
+  const weights = {};
+  for (const [gas, w] of Object.entries(table)) {
+    if (w <= 0) continue;
+    weights[gas] = w * (0.5 + prng());
+  }
+  // Biotic O2 lift: photosynthetic life makes free O2. Abiotic rocky/ocean
+  // worlds carry only photolysis-trace O2 (the small weight in the table);
+  // worlds with carbon_aqueous life at microbial+ tier get a multiplicative
+  // lift, so a Gaian Earth-analog ends up with Earth-class O2 fractions.
+  const lift = ATMOSPHERE_O2_BIOTIC_LIFT[body.biosphereArchetype]?.[body.biosphereTier];
+  if (lift != null && weights.O2 != null) {
+    weights.O2 *= lift;
+  }
+  // Pick top 3 (or however many are non-zero) by weight via repeated
+  // weighted-random draw without replacement.
+  const picked = [];
+  for (let i = 0; i < 3; i++) {
+    const keys = Object.keys(weights);
+    if (!keys.length) break;
+    let total = 0;
+    for (const k of keys) total += weights[k];
+    let r = prng() * total;
+    let chosen = keys[keys.length - 1];
+    for (const k of keys) {
+      r -= weights[k];
+      if (r <= 0) { chosen = k; break; }
+    }
+    picked.push([chosen, weights[chosen]]);
+    delete weights[chosen];
+  }
+  // Renormalize the picked weights to sum to 1.
+  let total = 0;
+  for (const [, w] of picked) total += w;
+  const out = [];
+  for (const [gas, w] of picked) {
+    out.push({ gas, frac: Number((w / total).toFixed(3)) });
+  }
+  while (out.length < 3) out.push(null);
+  return out;
+}
+
+// =============================================================================
+// Resources
+// =============================================================================
+
+// Six per-class truncated-normal draws. Returns null for unsupported
+// worldClass values (none currently — every defined class is in the
+// table).
+function resourcesFor(body) {
+  const spec = PLANET_RESOURCE_PRIORS_BY_CLASS[body.worldClass];
+  if (!spec) return null;
+  const draw = (field, fieldSpec) => {
+    if (fieldSpec.max === 0 || (fieldSpec.mean === 0 && fieldSpec.sd === 0)) return 0;
+    return Math.round(sampleTruncated(fieldPrng(body, field), fieldSpec));
+  };
+  return {
+    resMetals:       draw('resMetals',       spec.resMetals),
+    resSilicates:    draw('resSilicates',    spec.resSilicates),
+    resVolatiles:    draw('resVolatiles',    spec.resVolatiles),
+    resRareEarths:   draw('resRareEarths',   spec.resRareEarths),
+    resRadioactives: draw('resRadioactives', spec.resRadioactives),
+    resExotics:      draw('resExotics',      spec.resExotics),
+  };
+}
+
+// =============================================================================
+// Biosphere — archetype × tier
+// =============================================================================
+
+function insolationGateSatisfied(gate, S) {
+  if (gate == null) return true;
+  const range = BIOSPHERE_GATE_INSOLATION[gate];
+  if (!range || S == null) return false;
+  return S >= range.min && S < range.max;
+}
+
+// For each eligible archetype on this world class: check insolation gate,
+// roll occurrence, sample a tier. Among all hits, return the one with the
+// highest tier; ties broken by archetype order (rarer ones come first in
+// the prior table, so they win ties).
+function biosphereFor(body, S) {
+  const table = BIOSPHERE_BY_CLASS[body.worldClass];
+  if (!table) return { archetype: null, tier: 'none' };
+  const TIER_ORDER = ['none', 'prebiotic', 'microbial', 'complex', 'gaian'];
+  let best = { archetype: null, tier: 'none', tierIdx: 0 };
+  for (const [archetype, spec] of Object.entries(table)) {
+    if (!insolationGateSatisfied(spec.gate, S)) continue;
+    const prng = fieldPrng(body, `biosphere:${archetype}`);
+    if (prng() >= spec.occurrenceRate) continue;
+    // Sample tier from the conditional weights.
+    let total = 0;
+    for (const w of Object.values(spec.tierWeights)) total += w;
+    let r = prng() * total;
+    let chosenTier = 'microbial';
+    for (const [tier, w] of Object.entries(spec.tierWeights)) {
+      r -= w;
+      if (r <= 0) { chosenTier = tier; break; }
+    }
+    const tierIdx = TIER_ORDER.indexOf(chosenTier);
+    if (tierIdx > best.tierIdx) {
+      best = { archetype, tier: chosenTier, tierIdx };
+    }
+  }
+  return { archetype: best.archetype, tier: best.tier };
 }
 
 // =============================================================================
@@ -246,43 +541,65 @@ function fillBody(b, allBodies, stars) {
   }
 
   const S = hostStar ? insolation(hostStar.mass, aFromStar) : null;
+  const lockProxy = (b.kind === 'planet' && hostStar)
+    ? tidalLockProxy(hostStar.mass, b.semiMajorAu)
+    : (b.kind === 'moon' ? tidalLockProxy(hostMassSolar, b.semiMajorAu) : null);
   const unknowns = new Set(b._unknowns ?? []);
 
   // Track filled values starting from the body's current state. Each
   // generator reads its dependencies from a working copy that includes
-  // previously-filled values; that's how worldClass picks up the radius
-  // we may have just derived two lines earlier.
-  let { radiusEarth, worldClass, avgSurfaceTempK, surfacePressureBar,
-        periodDays, semiMajorAu, eccentricity, inclinationDeg,
-        axialTiltDeg, orbitalPhaseDeg } = b;
+  // previously-filled values; that's how downstream rules pick up upstream
+  // results within the same pass.
+  let {
+    radiusEarth, worldClass,
+    waterFraction, iceFraction, albedo,
+    avgSurfaceTempK, surfaceTempMinK, surfaceTempMaxK,
+    tectonicActivity, rotationPeriodHours, magneticFieldGauss,
+    surfacePressureBar,
+    atm1, atm1Frac, atm2, atm2Frac, atm3, atm3Frac,
+    resMetals, resSilicates, resVolatiles, resRareEarths, resRadioactives, resExotics,
+    biosphereArchetype, biosphereTier,
+    periodDays, semiMajorAu, eccentricity, inclinationDeg,
+    axialTiltDeg, orbitalPhaseDeg,
+  } = b;
 
   if (unknowns.has('radiusEarth')) {
     const r = radiusFromMass(b.massEarth);
     if (r != null) radiusEarth = r;
   }
 
-  const withRadius = { ...b, radiusEarth };
+  let working = { ...b, radiusEarth };
 
   if (unknowns.has('worldClass')) {
-    const w = worldClassFor(withRadius, S);
+    const w = worldClassFor(working, S);
     if (w != null) worldClass = w;
   }
+  working = { ...working, worldClass };
 
-  const withClass = { ...withRadius, worldClass };
-
-  if (unknowns.has('avgSurfaceTempK')) {
-    const t = avgSurfaceTempFor(withClass, S);
-    if (t != null) avgSurfaceTempK = t;
+  // Surface composition first — albedo depends on iceFraction.
+  if (unknowns.has('waterFraction')) {
+    waterFraction = waterFractionFor(working);
   }
-
-  if (unknowns.has('surfacePressureBar')) {
-    const p = surfacePressureFor(withClass);
-    if (p != null) surfacePressureBar = p;
+  working = { ...working, waterFraction };
+  if (unknowns.has('iceFraction')) {
+    iceFraction = iceFractionFor(working);
   }
+  working = { ...working, iceFraction };
 
-  // Kepler ↔ semi-major axis. Fill whichever side is missing when the
-  // other side and the host mass are both available. Both unknown stays
-  // both null.
+  // Albedo (depends on iceFraction).
+  if (unknowns.has('albedo')) {
+    albedo = albedoFor(working);
+  }
+  working = { ...working, albedo };
+
+  // Tectonics → Kepler → rotation → magnetic-field chain.
+  if (unknowns.has('tectonicActivity')) {
+    tectonicActivity = tectonicActivityFor(working);
+  }
+  working = { ...working, tectonicActivity };
+
+  // rotationPeriodHours needs periodDays for the lock branch; fill the
+  // Kepler relation here before consulting it.
   if (unknowns.has('periodDays') && semiMajorAu != null) {
     const p = keplerPeriodDays(semiMajorAu, hostMassSolar);
     if (p != null) periodDays = p;
@@ -291,12 +608,35 @@ function fillBody(b, allBodies, stars) {
     const a = keplerSemiMajorAu(periodDays, hostMassSolar);
     if (a != null) semiMajorAu = a;
   }
+  working = { ...working, periodDays, semiMajorAu };
 
-  // Orbital flavor — pure seeded draws, no anchor dependencies. Each
-  // field gets its own PRNG stream via fieldPrng so adding more
-  // generators later doesn't shift existing values.
+  if (unknowns.has('rotationPeriodHours')) {
+    rotationPeriodHours = rotationPeriodHoursFor(working, periodDays, lockProxy);
+  }
+  working = { ...working, rotationPeriodHours };
+
+  if (unknowns.has('magneticFieldGauss')) {
+    magneticFieldGauss = magneticFieldGaussFor(working);
+  }
+  working = { ...working, magneticFieldGauss };
+
+  // Pressure must precede temperature: avgSurfaceTempFor reads pressure
+  // for the greenhouse-pressure scaling.
+  if (unknowns.has('surfacePressureBar')) {
+    const p = surfacePressureFor(working);
+    if (p != null) surfacePressureBar = p;
+  }
+  working = { ...working, surfacePressureBar };
+
+  if (unknowns.has('avgSurfaceTempK')) {
+    const t = avgSurfaceTempFor(working, S);
+    if (t != null) avgSurfaceTempK = t;
+  }
+  working = { ...working, avgSurfaceTempK };
+
+  // Orbital flavor before temperature range — range reads tilt/ecc.
   if (unknowns.has('eccentricity')) {
-    eccentricity = Number(sampleTruncated(fieldPrng(b, 'eccentricity'), ECCENTRICITY).toFixed(4));
+    eccentricity = Number(sampleMixture(fieldPrng(b, 'eccentricity'), ECCENTRICITY).toFixed(4));
   }
   if (unknowns.has('inclinationDeg')) {
     inclinationDeg = Number(sampleTruncated(fieldPrng(b, 'inclinationDeg'), INCLINATION_DEG).toFixed(2));
@@ -307,12 +647,60 @@ function fillBody(b, allBodies, stars) {
   if (unknowns.has('orbitalPhaseDeg')) {
     orbitalPhaseDeg = Number((fieldPrng(b, 'orbitalPhaseDeg')() * 360).toFixed(2));
   }
+  working = { ...working, eccentricity, axialTiltDeg };
+
+  if (unknowns.has('surfaceTempMinK') || unknowns.has('surfaceTempMaxK')) {
+    const { min, max } = surfaceTempRangeFor(working);
+    if (unknowns.has('surfaceTempMinK') && min != null) surfaceTempMinK = min;
+    if (unknowns.has('surfaceTempMaxK') && max != null) surfaceTempMaxK = max;
+  }
+
+  // Biosphere BEFORE atmosphere — atmosphereFor reads biosphereArchetype/
+  // biosphereTier to lift O2 for photosynthetic worlds.
+  if (unknowns.has('biosphereArchetype') || unknowns.has('biosphereTier')) {
+    const { archetype, tier } = biosphereFor(working, S);
+    if (unknowns.has('biosphereArchetype')) biosphereArchetype = archetype;
+    if (unknowns.has('biosphereTier'))      biosphereTier = tier;
+  }
+  working = { ...working, biosphereArchetype, biosphereTier };
+
+  // Atmosphere — picks top 3 gases with renormalized fractions. Skips
+  // worlds with sub-trace surface pressure (ice / airless bodies).
+  if (unknowns.has('atm1') || unknowns.has('atm2') || unknowns.has('atm3')) {
+    const [a1, a2, a3] = atmosphereFor(working);
+    if (unknowns.has('atm1')) { atm1 = a1?.gas ?? null; atm1Frac = a1?.frac ?? null; }
+    if (unknowns.has('atm2')) { atm2 = a2?.gas ?? null; atm2Frac = a2?.frac ?? null; }
+    if (unknowns.has('atm3')) { atm3 = a3?.gas ?? null; atm3Frac = a3?.frac ?? null; }
+  }
+
+  // Resources — six 0..10 scalars.
+  if (
+    unknowns.has('resMetals') || unknowns.has('resSilicates') || unknowns.has('resVolatiles') ||
+    unknowns.has('resRareEarths') || unknowns.has('resRadioactives') || unknowns.has('resExotics')
+  ) {
+    const r = resourcesFor(working);
+    if (r) {
+      if (unknowns.has('resMetals'))       resMetals = r.resMetals;
+      if (unknowns.has('resSilicates'))    resSilicates = r.resSilicates;
+      if (unknowns.has('resVolatiles'))    resVolatiles = r.resVolatiles;
+      if (unknowns.has('resRareEarths'))   resRareEarths = r.resRareEarths;
+      if (unknowns.has('resRadioactives')) resRadioactives = r.resRadioactives;
+      if (unknowns.has('resExotics'))      resExotics = r.resExotics;
+    }
+  }
 
   // Strip _unknowns; runtime sees only the public Body shape.
   const { _unknowns, ...rest } = b;
   return {
     ...rest,
-    radiusEarth, worldClass, avgSurfaceTempK, surfacePressureBar,
+    radiusEarth, worldClass,
+    waterFraction, iceFraction, albedo,
+    avgSurfaceTempK, surfaceTempMinK, surfaceTempMaxK,
+    tectonicActivity, rotationPeriodHours, magneticFieldGauss,
+    surfacePressureBar,
+    atm1, atm1Frac, atm2, atm2Frac, atm3, atm3Frac,
+    resMetals, resSilicates, resVolatiles, resRareEarths, resRadioactives, resExotics,
+    biosphereArchetype, biosphereTier,
     periodDays, semiMajorAu,
     eccentricity, inclinationDeg, axialTiltDeg, orbitalPhaseDeg,
   };
