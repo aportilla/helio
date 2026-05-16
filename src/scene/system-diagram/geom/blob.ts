@@ -174,29 +174,29 @@ export function sampleBeltChunks(
   return placed;
 }
 
-// Generic blob pool — one indexed triangle Mesh shared by N slots
+// Generic chunk pool — one indexed triangle Mesh shared by N slots
 // (belts share the belt pool; back debris rings share the back-ring
 // pool; etc.). Each slot occupies a contiguous vertex range plus its
 // own contiguous index range; hover writes `aHovered = 1` across the
 // vertex range to flip every polygon in the slot to white at once.
-export interface BlobPool<S> {
+export interface ChunkPool<S> {
   slots: S[];
   geometry: BufferGeometry;
   material: ShaderMaterial;
   mesh: Mesh;
 }
 
-// Blob pool builder — wraps the accumulated per-vertex (positions,
+// Chunk pool builder — wraps the accumulated per-vertex (positions,
 // colors) and per-triangle (indices) arrays into an indexed Mesh with
 // makeBlobMaterial. aHovered is allocated zero; the owning layer flips
 // it per-slot on hover.
-export function buildBlobPool<S>(
+export function buildChunkPool<S>(
   slots: S[],
   positions: number[],
   indices: number[],
   colors: number[],
   renderOrder: number,
-): BlobPool<S> {
+): ChunkPool<S> {
   const V = positions.length / 3;
   const posArr = new Float32Array(positions);
   const colorArr = new Float32Array(colors);

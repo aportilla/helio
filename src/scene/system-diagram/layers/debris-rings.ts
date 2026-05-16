@@ -14,14 +14,14 @@ import {
   RENDER_ORDER_BACK_RING, RENDER_ORDER_FRONT_RING,
   RING_MINOR_OVER_MAJOR, Z_BACK_RING, Z_FRONT_RING, Z_STRIDE,
 } from '../layout/constants';
-import type { RowItem } from '../layout/row';
+import type { RowSlot } from '../layout/row';
 import {
-  bakeBlob, buildBlobPool, CHUNK_PLACE_ATTEMPTS, overlapsAny, shapesFor,
-  type BlobPool, type ChunkSpec,
+  bakeBlob, buildChunkPool, CHUNK_PLACE_ATTEMPTS, overlapsAny, shapesFor,
+  type ChunkPool, type ChunkSpec,
 } from '../geom/blob';
 import { hash32, mulberry32 } from '../geom/prng';
 import { hitsRing, ringEllipseParams } from '../geom/ring';
-import type { BodyPick, PlanetCenterIndex } from '../types';
+import type { DiagramPick, PlanetCenterIndex } from '../types';
 
 // One ring's footprint inside the back- or front-debris pool — vertex
 // range + chunk offsets + the ellipse params needed by the picker.
@@ -37,11 +37,11 @@ interface RingSlot {
 }
 
 export class DebrisRingsLayer {
-  private readonly backPool:  BlobPool<RingSlot> | null;
-  private readonly frontPool: BlobPool<RingSlot> | null;
+  private readonly backPool:  ChunkPool<RingSlot> | null;
+  private readonly frontPool: ChunkPool<RingSlot> | null;
 
-  constructor(scene: Scene, rowItems: readonly RowItem[]) {
-    const planetItems = rowItems.filter(r => r.kind === 'planet');
+  constructor(scene: Scene, rowSlots: readonly RowSlot[]) {
+    const planetItems = rowSlots.filter(r => r.kind === 'planet');
     const specs: Array<{ ring: Body; ringBodyIdx: number; hostBodyIdx: number; hostDiscPx: number }> = [];
     for (const item of planetItems) {
       const planet = BODIES[item.bodyIdx];
@@ -59,10 +59,10 @@ export class DebrisRingsLayer {
 
     const built = buildDebrisRingPools(specs);
     this.backPool  = built.backSlots.length  > 0
-      ? buildBlobPool(built.backSlots,  built.backPositions,  built.backIndices,  built.backColors,  RENDER_ORDER_BACK_RING)
+      ? buildChunkPool(built.backSlots,  built.backPositions,  built.backIndices,  built.backColors,  RENDER_ORDER_BACK_RING)
       : null;
     this.frontPool = built.frontSlots.length > 0
-      ? buildBlobPool(built.frontSlots, built.frontPositions, built.frontIndices, built.frontColors, RENDER_ORDER_FRONT_RING)
+      ? buildChunkPool(built.frontSlots, built.frontPositions, built.frontIndices, built.frontColors, RENDER_ORDER_FRONT_RING)
       : null;
     if (this.backPool)  scene.add(this.backPool.mesh);
     if (this.frontPool) scene.add(this.frontPool.mesh);
@@ -73,17 +73,17 @@ export class DebrisRingsLayer {
     writePool(this.frontPool, centers, Z_FRONT_RING);
   }
 
-  pickFront(x: number, y: number, centers: PlanetCenterIndex): BodyPick | null {
+  pickFront(x: number, y: number, centers: PlanetCenterIndex): DiagramPick | null {
     return pickFromPool(this.frontPool, centers, x, y, 'front');
   }
 
-  pickBack(x: number, y: number, centers: PlanetCenterIndex): BodyPick | null {
+  pickBack(x: number, y: number, centers: PlanetCenterIndex): DiagramPick | null {
     return pickFromPool(this.backPool, centers, x, y, 'back');
   }
 
   // Returns true if this layer owns any chunks for the toggled ring.
   // A ring may live in both pools; flip every owning slot in lockstep.
-  setHovered(pick: BodyPick, value: 0 | 1): boolean {
+  setHovered(pick: DiagramPick, value: 0 | 1): boolean {
     if (pick.kind !== 'ring') return false;
     let found = false;
     for (const pool of [this.frontPool, this.backPool]) {
@@ -106,7 +106,7 @@ export class DebrisRingsLayer {
   }
 }
 
-function writePool(pool: BlobPool<RingSlot> | null, centers: PlanetCenterIndex, layerZ: number): void {
+function writePool(pool: ChunkPool<RingSlot> | null, centers: PlanetCenterIndex, layerZ: number): void {
   if (!pool) return;
   const positions = pool.geometry.attributes.position.array as Float32Array;
   for (const slot of pool.slots) {
@@ -124,11 +124,11 @@ function writePool(pool: BlobPool<RingSlot> | null, centers: PlanetCenterIndex, 
 }
 
 function pickFromPool(
-  pool: BlobPool<RingSlot> | null,
+  pool: ChunkPool<RingSlot> | null,
   centers: PlanetCenterIndex,
   x: number, y: number,
   half: 'back' | 'front',
-): BodyPick | null {
+): DiagramPick | null {
   if (!pool) return null;
   for (const slot of pool.slots) {
     const parent = centers.get(slot.hostBodyIdx);
@@ -250,7 +250,7 @@ function buildDebrisRingPools(
     }
   }
   // hovered arrays travel into the geometry alongside positions /
-  // indices / colors; buildBlobPool re-allocates them, so we don't need
+  // indices / colors; buildChunkPool re-allocates them, so we don't need
   // to return them — the per-vertex hover flag starts at 0 either way.
   void backHovered; void frontHovered;
   return { backSlots, backPositions, backIndices, backColors, frontSlots, frontPositions, frontIndices, frontColors };

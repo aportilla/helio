@@ -19,10 +19,10 @@ import { IceRingsLayer } from './layers/ice-rings';
 import { MoonsLayer } from './layers/moons';
 import { PlanetsLayer } from './layers/planets';
 import { StarsRowLayer } from './layers/stars-row';
-import { buildRowItems, layoutRow, type RowItem } from './layout/row';
-import { type BodyPick, picksEqual } from './types';
+import { buildRowSlots, layoutRow, type RowSlot } from './layout/row';
+import { type DiagramPick, picksEqual } from './types';
 
-export type { BodyPick } from './types';
+export type { DiagramPick } from './types';
 
 export class SystemDiagram {
   readonly scene = new Scene();
@@ -31,7 +31,7 @@ export class SystemDiagram {
   private bufferW = 1;
   private bufferH = 1;
 
-  private readonly rowItems: RowItem[];
+  private readonly rowSlots: RowSlot[];
 
   private readonly stars:        StarsRowLayer;
   private readonly planets:      PlanetsLayer;
@@ -43,18 +43,18 @@ export class SystemDiagram {
   // Currently-outlined body. setHovered() diffs against this to skip
   // no-op repaints (cursor moving within the same disc) and to clear the
   // previous outline before stamping the new one.
-  private hoveredPick: BodyPick | null = null;
+  private hoveredPick: DiagramPick | null = null;
 
   constructor(clusterIdx: number) {
     const cluster = STAR_CLUSTERS[clusterIdx];
-    this.rowItems = buildRowItems(cluster);
+    this.rowSlots = buildRowSlots(cluster);
 
     this.stars       = new StarsRowLayer(this.scene, cluster);
-    this.planets     = new PlanetsLayer(this.scene, this.rowItems);
-    this.belts       = new BeltsLayer(this.scene, this.rowItems);
-    this.moons       = new MoonsLayer(this.scene, this.rowItems);
-    this.iceRings    = new IceRingsLayer(this.scene, this.rowItems);
-    this.debrisRings = new DebrisRingsLayer(this.scene, this.rowItems);
+    this.planets     = new PlanetsLayer(this.scene, this.rowSlots);
+    this.belts       = new BeltsLayer(this.scene, this.rowSlots);
+    this.moons       = new MoonsLayer(this.scene, this.rowSlots);
+    this.iceRings    = new IceRingsLayer(this.scene, this.rowSlots);
+    this.debrisRings = new DebrisRingsLayer(this.scene, this.rowSlots);
   }
 
   resize(bufferW: number, bufferH: number): void {
@@ -67,12 +67,12 @@ export class SystemDiagram {
   }
 
   private layout(): void {
-    // Row layout writes cx/cy into rowItems; subsequent passes read it.
+    // Row layout writes cx/cy into rowSlots; subsequent passes read it.
     this.stars.layout(this.bufferW, this.bufferH);
-    layoutRow(this.rowItems, this.bufferW, this.bufferH);
+    layoutRow(this.rowSlots, this.bufferW, this.bufferH);
     // PlanetsLayer publishes the center index that moons + rings consume.
-    this.planets.layout(this.rowItems);
-    this.belts.layout(this.rowItems);
+    this.planets.layout(this.rowSlots);
+    this.belts.layout(this.rowSlots);
     const centers = this.planets.getCenterIndex();
     this.moons.layout(centers);
     this.iceRings.layout(centers);
@@ -86,7 +86,7 @@ export class SystemDiagram {
   // wins, with no smaller-radius tiebreaker (so a moon overlapping its
   // parent's rim always wins because the moon pool draws after the
   // planet pool).
-  pickAt(x: number, y: number): BodyPick | null {
+  pickAt(x: number, y: number): DiagramPick | null {
     const centers = this.planets.getCenterIndex();
     return this.moons.pickFront(x, y)
         ?? this.iceRings.pickFront(x, y, centers)
@@ -94,7 +94,7 @@ export class SystemDiagram {
         ?? this.planets.pickAt(x, y)
         ?? this.iceRings.pickBack(x, y, centers)
         ?? this.debrisRings.pickBack(x, y, centers)
-        ?? this.belts.pickAt(x, y, this.rowItems)
+        ?? this.belts.pickAt(x, y, this.rowSlots)
         ?? this.moons.pickBack(x, y)
         ?? this.stars.pickAt(x, y);
   }
@@ -102,7 +102,7 @@ export class SystemDiagram {
   // Stamp the 1-px outline onto the picked disc, clearing the previous
   // one if any. No-op when the pick is unchanged so continuous pointer
   // movement within the same disc doesn't churn the GPU upload.
-  setHovered(pick: BodyPick | null): void {
+  setHovered(pick: DiagramPick | null): void {
     if (picksEqual(pick, this.hoveredPick)) return;
     this.writeHover(this.hoveredPick, 0);
     this.writeHover(pick, 1);
@@ -112,7 +112,7 @@ export class SystemDiagram {
   // Dispatch to the layer that owns the picked kind. Rings are split
   // across two layer types (ice + debris); try ice first, fall back to
   // debris if the pick isn't an ice ring.
-  private writeHover(pick: BodyPick | null, value: 0 | 1): void {
+  private writeHover(pick: DiagramPick | null, value: 0 | 1): void {
     if (!pick) return;
     switch (pick.kind) {
       case 'star':   this.stars.setHovered(pick, value); return;

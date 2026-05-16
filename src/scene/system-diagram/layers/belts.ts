@@ -8,18 +8,18 @@ import {
   BELT_CHUNKS_MAX, BELT_CHUNKS_MIN, BELT_CHUNK_SIZES, BELT_HEIGHT_FACTOR,
   BELT_SLOT_WIDTH, PLANET_DISC_MIN, RENDER_ORDER_BELT, Z_BELT, Z_STRIDE,
 } from '../layout/constants';
-import type { RowItem } from '../layout/row';
+import type { RowSlot } from '../layout/row';
 import {
-  bakeBlob, buildBlobPool, sampleBeltChunks, shapesFor, type BlobPool,
+  bakeBlob, buildChunkPool, sampleBeltChunks, shapesFor, type ChunkPool,
 } from '../geom/blob';
 import { hash32, mulberry32 } from '../geom/prng';
-import type { BodyPick } from '../types';
+import type { DiagramPick } from '../types';
 
 // One belt's footprint inside the shared chunk pool — vertex range +
 // the vertical extent used by the picker's bounding-box test.
 interface BeltSlot {
   bodyIdx: number;
-  // rowItems index — threaded into the chunk vertex z so this belt's
+  // rowSlots index — threaded into the chunk vertex z so this belt's
   // chunks z-stack consistently with its row neighbors.
   rowIdx: number;
   startVertex: number;
@@ -33,15 +33,15 @@ interface BeltSlot {
 }
 
 export class BeltsLayer {
-  private readonly pool: BlobPool<BeltSlot> | null;
+  private readonly pool: ChunkPool<BeltSlot> | null;
 
-  constructor(scene: Scene, rowItems: readonly RowItem[]) {
-    const beltItems = rowItems.filter(r => r.kind === 'belt');
+  constructor(scene: Scene, rowSlots: readonly RowSlot[]) {
+    const beltItems = rowSlots.filter(r => r.kind === 'belt');
     if (beltItems.length === 0) {
       this.pool = null;
       return;
     }
-    const planetItems = rowItems.filter(r => r.kind === 'planet');
+    const planetItems = rowSlots.filter(r => r.kind === 'planet');
     const largestPlanet = planetItems.reduce((m, r) => Math.max(m, r.widthPx), PLANET_DISC_MIN);
     const heightPx = largestPlanet * BELT_HEIGHT_FACTOR;
     this.pool = buildBeltPool(beltItems.map(r => ({ bodyIdx: r.bodyIdx, rowIdx: r.rowIdx })), heightPx);
@@ -50,11 +50,11 @@ export class BeltsLayer {
 
   // Translate each belt's pre-baked chunk offsets onto the current slot
   // center. No re-randomization on resize — the chunk pattern is stable.
-  layout(rowItems: readonly RowItem[]): void {
+  layout(rowSlots: readonly RowSlot[]): void {
     if (!this.pool) return;
     const positions = this.pool.geometry.attributes.position.array as Float32Array;
     let bi = 0;
-    for (const item of rowItems) {
+    for (const item of rowSlots) {
       if (item.kind !== 'belt') continue;
       const slot = this.pool.slots[bi];
       const z = slot.rowIdx * Z_STRIDE + Z_BELT;
@@ -69,12 +69,12 @@ export class BeltsLayer {
     this.pool.geometry.attributes.position.needsUpdate = true;
   }
 
-  // Bbox test against each belt slot. Iterate rowItems to pair each
+  // Bbox test against each belt slot. Iterate rowSlots to pair each
   // belt slot with its laid-out cx/cy.
-  pickAt(x: number, y: number, rowItems: readonly RowItem[]): BodyPick | null {
+  pickAt(x: number, y: number, rowSlots: readonly RowSlot[]): DiagramPick | null {
     if (!this.pool) return null;
     let bi = 0;
-    for (const item of rowItems) {
+    for (const item of rowSlots) {
       if (item.kind !== 'belt') continue;
       const slot = this.pool.slots[bi];
       if (Math.abs(x - item.cx) <= slot.halfW && Math.abs(y - item.cy) <= slot.halfH) {
@@ -85,7 +85,7 @@ export class BeltsLayer {
     return null;
   }
 
-  setHovered(pick: BodyPick, value: 0 | 1): void {
+  setHovered(pick: DiagramPick, value: 0 | 1): void {
     if (pick.kind !== 'belt' || !this.pool) return;
     const slot = this.pool.slots.find(s => s.bodyIdx === pick.bodyIdx);
     if (!slot) return;
@@ -109,7 +109,7 @@ export class BeltsLayer {
 function buildBeltPool(
   belts: ReadonlyArray<{ bodyIdx: number; rowIdx: number }>,
   heightPx: number,
-): BlobPool<BeltSlot> {
+): ChunkPool<BeltSlot> {
   const slots: BeltSlot[] = [];
   const positions: number[] = [];
   const indices:   number[] = [];
@@ -155,5 +155,5 @@ function buildBeltPool(
       halfW, halfH,
     });
   }
-  return buildBlobPool(slots, positions, indices, colors, RENDER_ORDER_BELT);
+  return buildChunkPool(slots, positions, indices, colors, RENDER_ORDER_BELT);
 }

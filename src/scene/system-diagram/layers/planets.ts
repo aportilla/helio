@@ -1,5 +1,5 @@
 // Planets layer — one Points pool covering every planet across every
-// cluster member. Position writes come from row-laid-out RowItem.cx/cy;
+// cluster member. Position writes come from row-laid-out RowSlot.cx/cy;
 // after layout, the layer publishes a PlanetCenterIndex that moons +
 // rings consume to anchor relative to their host.
 
@@ -7,8 +7,8 @@ import { BufferAttribute, BufferGeometry, Points, Scene, ShaderMaterial } from '
 import { BODIES, WORLD_CLASS_COLOR, WORLD_CLASS_UNKNOWN_COLOR } from '../../../data/stars';
 import { makeFlatStarsMaterial } from '../../materials';
 import { RENDER_ORDER_PLANET, Z_PLANET, Z_STRIDE } from '../layout/constants';
-import type { RowItem } from '../layout/row';
-import type { BodyPick, PlanetCenterIndex } from '../types';
+import type { RowSlot } from '../layout/row';
+import type { DiagramPick, PlanetCenterIndex } from '../types';
 
 export class PlanetsLayer {
   // planetIndices[i] = bodyIdx of the i-th planet in row order.
@@ -23,8 +23,8 @@ export class PlanetsLayer {
   // planets in the cluster.
   private centerIndex: Map<number, { cx: number; cy: number; rowIdx: number }> = new Map();
 
-  constructor(scene: Scene, rowItems: readonly RowItem[]) {
-    const planetItems = rowItems.filter(r => r.kind === 'planet');
+  constructor(scene: Scene, rowSlots: readonly RowSlot[]) {
+    const planetItems = rowSlots.filter(r => r.kind === 'planet');
     this.planetIndices = planetItems.map(r => r.bodyIdx);
     this.planetDiscPx  = planetItems.map(r => r.widthPx);
 
@@ -72,16 +72,16 @@ export class PlanetsLayer {
     scene.add(this.points);
   }
 
-  // Write planet Points positions from the rowItems' (already-laid-out)
+  // Write planet Points positions from the rowSlots' (already-laid-out)
   // cx/cy. Iterates the planet-only subset in row order, so index i
   // lines up with planetIndices[i]. Also rebuilds the PlanetCenterIndex
   // for moons + rings to consume.
-  layout(rowItems: readonly RowItem[]): void {
+  layout(rowSlots: readonly RowSlot[]): void {
     this.centerIndex.clear();
     if (!this.geometry || !this.points) return;
     const positions = this.geometry.attributes.position.array as Float32Array;
     let pi = 0;
-    for (const item of rowItems) {
+    for (const item of rowSlots) {
       if (item.kind !== 'planet') continue;
       positions[pi * 3 + 0] = item.cx;
       positions[pi * 3 + 1] = item.cy;
@@ -98,7 +98,7 @@ export class PlanetsLayer {
     return this.centerIndex;
   }
 
-  pickAt(x: number, y: number): BodyPick | null {
+  pickAt(x: number, y: number): DiagramPick | null {
     if (!this.geometry) return null;
     const pos = this.geometry.attributes.position.array as Float32Array;
     for (let i = 0; i < this.planetIndices.length; i++) {
@@ -114,7 +114,7 @@ export class PlanetsLayer {
     return null;
   }
 
-  setHovered(pick: BodyPick, value: 0 | 1): void {
+  setHovered(pick: DiagramPick, value: 0 | 1): void {
     if (pick.kind !== 'planet' || !this.geometry) return;
     const slot = this.planetIndices.indexOf(pick.bodyIdx);
     if (slot < 0) return;

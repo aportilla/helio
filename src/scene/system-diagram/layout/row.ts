@@ -1,5 +1,5 @@
 // Row layout — planets + belts share one dome-arc row, sorted by
-// semi-major axis. This module owns the RowItem datatype, the
+// semi-major axis. This module owns the RowSlot datatype, the
 // dome-arc math, and a handful of small utilities (bigMiddleOrder,
 // sumOf, planetDiscPx) that the row build needs.
 
@@ -19,7 +19,7 @@ import {
 // it into every element's vertex z via Z_STRIDE so each row item's
 // stack renders as one z-layer above its left-of-here neighbors and
 // below its right-of-here neighbors.
-export interface RowItem {
+export interface RowSlot {
   kind: 'planet' | 'belt';
   bodyIdx: number;
   widthPx: number;
@@ -31,7 +31,7 @@ export interface RowItem {
 // Per-planet disc diameter from radiusEarth with cube-root compression.
 // See PLANET_DISC_* in constants.ts for the rationale; this function is
 // kept here because both row construction (widthPx) and PlanetsLayer
-// (shader aSize) read it via RowItem.widthPx.
+// (shader aSize) read it via RowSlot.widthPx.
 export function planetDiscPx(radiusEarth: number | null): number {
   const r = radiusEarth ?? 1.0;
   const px = Math.cbrt(Math.max(r, 0.0001)) * PLANET_DISC_BASE;
@@ -42,8 +42,8 @@ export function planetDiscPx(radiusEarth: number | null): number {
 // with its slot width, and sort by semi-major axis. rowIdx is assigned
 // after the sort so it's stable across the rest of the construction
 // pipeline.
-export function buildRowItems(cluster: StarCluster): RowItem[] {
-  const items: RowItem[] = [];
+export function buildRowSlots(cluster: StarCluster): RowSlot[] {
+  const items: RowSlot[] = [];
   for (const starIdx of cluster.members) {
     for (const pIdx of STARS[starIdx].planets) {
       items.push({
@@ -82,7 +82,7 @@ export function buildRowItems(cluster: StarCluster): RowItem[] {
 // index, so the peak stays at availW/2 regardless of within-row size
 // variation — the arc is a geometric shape every slot rides on, not a
 // function of slot index.
-export function layoutRow(items: RowItem[], bufferW: number, bufferH: number): void {
+export function layoutRow(items: RowSlot[], bufferW: number, bufferH: number): void {
   const N = items.length;
   if (N === 0) return;
 

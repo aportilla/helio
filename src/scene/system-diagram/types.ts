@@ -6,11 +6,11 @@
 // belt / ring). Returned by SystemDiagram.pickAt and consumed by
 // setHovered + the HUD body info card. starIdx indexes STARS; bodyIdx
 // indexes BODIES.
-export type BodyPick =
+export type DiagramPick =
   | { readonly kind: 'star'; readonly starIdx: number }
   | { readonly kind: 'planet' | 'moon' | 'belt' | 'ring'; readonly bodyIdx: number };
 
-export function picksEqual(a: BodyPick | null, b: BodyPick | null): boolean {
+export function picksEqual(a: DiagramPick | null, b: DiagramPick | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
   if (a.kind !== b.kind) return false;

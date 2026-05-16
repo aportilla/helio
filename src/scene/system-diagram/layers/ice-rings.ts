@@ -12,9 +12,9 @@ import {
   ICE_RING_SEGMENTS, RENDER_ORDER_BACK_RING, RENDER_ORDER_FRONT_RING,
   RING_MINOR_OVER_MAJOR, Z_BACK_RING, Z_FRONT_RING, Z_STRIDE,
 } from '../layout/constants';
-import type { RowItem } from '../layout/row';
+import type { RowSlot } from '../layout/row';
 import { hitsRing, ringEllipseParams } from '../geom/ring';
-import type { BodyPick, PlanetCenterIndex } from '../types';
+import type { DiagramPick, PlanetCenterIndex } from '../types';
 
 interface IceRing {
   bodyIdx: number;
@@ -34,8 +34,8 @@ interface IceRing {
 export class IceRingsLayer {
   private readonly rings: IceRing[] = [];
 
-  constructor(scene: Scene, rowItems: readonly RowItem[]) {
-    const planetItems = rowItems.filter(r => r.kind === 'planet');
+  constructor(scene: Scene, rowSlots: readonly RowSlot[]) {
+    const planetItems = rowSlots.filter(r => r.kind === 'planet');
     for (const item of planetItems) {
       const planet = BODIES[item.bodyIdx];
       if (planet.ring == null) continue;
@@ -58,15 +58,15 @@ export class IceRingsLayer {
     }
   }
 
-  pickFront(x: number, y: number, centers: PlanetCenterIndex): BodyPick | null {
+  pickFront(x: number, y: number, centers: PlanetCenterIndex): DiagramPick | null {
     return this.pick(x, y, centers, 'front');
   }
 
-  pickBack(x: number, y: number, centers: PlanetCenterIndex): BodyPick | null {
+  pickBack(x: number, y: number, centers: PlanetCenterIndex): DiagramPick | null {
     return this.pick(x, y, centers, 'back');
   }
 
-  private pick(x: number, y: number, centers: PlanetCenterIndex, half: 'back' | 'front'): BodyPick | null {
+  private pick(x: number, y: number, centers: PlanetCenterIndex, half: 'back' | 'front'): DiagramPick | null {
     for (const ring of this.rings) {
       const c = centers.get(ring.hostBodyIdx);
       if (!c) continue;
@@ -81,7 +81,7 @@ export class IceRingsLayer {
 
   // Returns true if this layer owns the ring being toggled (so the
   // coordinator can stop short of also trying the debris-rings layer).
-  setHovered(pick: BodyPick, value: 0 | 1): boolean {
+  setHovered(pick: DiagramPick, value: 0 | 1): boolean {
     if (pick.kind !== 'ring') return false;
     const ring = this.rings.find(r => r.bodyIdx === pick.bodyIdx);
     if (!ring) return false;

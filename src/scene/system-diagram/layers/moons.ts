@@ -13,9 +13,9 @@ import {
   RENDER_ORDER_BACK_MOON, RENDER_ORDER_FRONT_MOON,
   Z_BACK_MOON, Z_FRONT_MOON, Z_STRIDE,
 } from '../layout/constants';
-import type { RowItem } from '../layout/row';
+import type { RowSlot } from '../layout/row';
 import { hash32, mulberry32 } from '../geom/prng';
-import type { BodyPick, PlanetCenterIndex } from '../types';
+import type { DiagramPick, PlanetCenterIndex } from '../types';
 
 interface MoonSlot {
   // bodyIdx of this moon's parent planet. Layout looks the parent's
@@ -43,8 +43,8 @@ export class MoonsLayer {
   private readonly backPool:  MoonPool | null;
   private readonly frontPool: MoonPool | null;
 
-  constructor(scene: Scene, rowItems: readonly RowItem[]) {
-    const planetItems = rowItems.filter(r => r.kind === 'planet');
+  constructor(scene: Scene, rowSlots: readonly RowSlot[]) {
+    const planetItems = rowSlots.filter(r => r.kind === 'planet');
     const backSlots:  MoonSlot[] = [];
     const frontSlots: MoonSlot[] = [];
     for (const item of planetItems) {
@@ -82,15 +82,15 @@ export class MoonsLayer {
     writePoolPositions(this.frontPool, centers, Z_FRONT_MOON);
   }
 
-  pickFront(x: number, y: number): BodyPick | null {
+  pickFront(x: number, y: number): DiagramPick | null {
     return pickFromPool(this.frontPool, x, y);
   }
 
-  pickBack(x: number, y: number): BodyPick | null {
+  pickBack(x: number, y: number): DiagramPick | null {
     return pickFromPool(this.backPool, x, y);
   }
 
-  setHovered(pick: BodyPick, value: 0 | 1): void {
+  setHovered(pick: DiagramPick, value: 0 | 1): void {
     if (pick.kind !== 'moon') return;
     // Each moon belongs to exactly one pool; try both.
     for (const pool of [this.frontPool, this.backPool]) {
@@ -112,7 +112,7 @@ export class MoonsLayer {
   }
 }
 
-function pickFromPool(pool: MoonPool | null, x: number, y: number): BodyPick | null {
+function pickFromPool(pool: MoonPool | null, x: number, y: number): DiagramPick | null {
   if (!pool) return null;
   const pos = pool.geometry.attributes.position.array as Float32Array;
   for (let i = 0; i < pool.slots.length; i++) {

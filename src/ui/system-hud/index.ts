@@ -19,7 +19,7 @@ import {
 } from 'three';
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
 import { STARS, STAR_CLUSTERS } from '../../data/stars';
-import type { BodyPick } from '../../scene/system-diagram';
+import type { DiagramPick } from '../../scene/system-diagram';
 import { BasePanel } from '../base-panel';
 import { type HitResult } from '../hit-test';
 import { paintLeftArrow, paintSurface } from '../painter';
@@ -145,7 +145,7 @@ export class SystemHud {
   // picker returned. Null = hide. Non-null = repaint (only on target
   // change) and place near the cursor, flipping across the cursor axis
   // when the default below-right placement would clip a screen edge.
-  setHoveredBody(pick: BodyPick | null, bufX: number, bufY: number): void {
+  setHoveredBody(pick: DiagramPick | null, bufX: number, bufY: number): void {
     if (!pick) {
       this.bodyCard.setVisible(false);
       this.bodyCard.clearTarget();

@@ -14,7 +14,7 @@ import {
   DISC_SCALE, MIN_STAR_GAP, STAR_HORIZ_GAP_FACTOR, STAR_OFFSCREEN_FRAC,
 } from '../layout/constants';
 import { bigMiddleOrder, sumOf } from '../layout/row';
-import type { BodyPick } from '../types';
+import type { DiagramPick } from '../types';
 
 interface StarDisc {
   mesh: Mesh;
@@ -126,7 +126,7 @@ export class StarsRowLayer {
     }
   }
 
-  pickAt(x: number, y: number): BodyPick | null {
+  pickAt(x: number, y: number): DiagramPick | null {
     for (let slot = 0; slot < this.starDiscs.length; slot++) {
       const disc = this.starDiscs[slot];
       const cx = disc.mesh.position.x;
@@ -141,7 +141,7 @@ export class StarsRowLayer {
     return null;
   }
 
-  setHovered(pick: BodyPick, value: 0 | 1): void {
+  setHovered(pick: DiagramPick, value: 0 | 1): void {
     if (pick.kind !== 'star') return;
     const slot = this.starMembers.indexOf(pick.starIdx);
     if (slot < 0) return;

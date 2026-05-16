@@ -9,7 +9,7 @@
 
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
 import { BODIES, STARS, type BeltClass, type Biosphere, type Body, type WorldClass } from '../../data/stars';
-import type { BodyPick } from '../../scene/system-diagram';
+import type { DiagramPick } from '../../scene/system-diagram';
 import { BasePanel } from '../base-panel';
 import { paintSurface } from '../painter';
 import { colors, fonts, sizes } from '../theme';
@@ -146,7 +146,7 @@ function parentLineFor(bodyIdx: number): string | null {
   return null;
 }
 
-function titleFor(pick: BodyPick): string {
+function titleFor(pick: DiagramPick): string {
   if (pick.kind === 'star') return STARS[pick.starIdx].name;
   return BODIES[pick.bodyIdx].name;
 }
@@ -155,9 +155,9 @@ export class BodyInfoCard extends BasePanel {
   // Track current target so successive setTarget() calls with the same
   // pick are a no-op — the cursor moves continuously within a disc, but
   // we only need to rebuild the canvas when the picked body changes.
-  private current: BodyPick | null = null;
+  private current: DiagramPick | null = null;
 
-  setTarget(pick: BodyPick): void {
+  setTarget(pick: DiagramPick): void {
     if (picksMatch(pick, this.current)) return;
     this.current = pick;
     this.rebuild();
@@ -234,7 +234,7 @@ export class BodyInfoCard extends BasePanel {
 // Local equivalent of system-diagram.ts's picksEqual — duplicated here
 // to avoid a circular dependency on a runtime export from the scene
 // module just for one tiny pure helper.
-function picksMatch(a: BodyPick | null, b: BodyPick | null): boolean {
+function picksMatch(a: DiagramPick | null, b: DiagramPick | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
   if (a.kind !== b.kind) return false;
