@@ -1,0 +1,161 @@
+// Ice rings layer — one Mesh per ring per half (back + front), drawn
+// through triangle-strip annulus geometry around the host planet.
+// The back-half mesh draws before the planet disc (planet paints over
+// the back); the front-half mesh draws after (front paints over the
+// planet). Both halves share one ShaderMaterial per ring so hover
+// covers the whole annulus with a single uniform flip.
+
+import { BufferAttribute, BufferGeometry, Mesh, Scene, ShaderMaterial } from 'three';
+import { BELT_CLASS_COLOR, BODIES, type Body } from '../../../data/stars';
+import { makeIceRingMaterial } from '../../materials';
+import {
+  ICE_RING_SEGMENTS, RENDER_ORDER_BACK_RING, RENDER_ORDER_FRONT_RING,
+  RING_MINOR_OVER_MAJOR, Z_BACK_RING, Z_FRONT_RING, Z_STRIDE,
+} from '../layout/constants';
+import type { RowItem } from '../layout/row';
+import { hitsRing, ringEllipseParams } from '../geom/ring';
+import type { BodyPick, PlanetCenterIndex } from '../types';
+
+interface IceRing {
+  bodyIdx: number;
+  hostBodyIdx: number;
+  backMesh: Mesh;
+  frontMesh: Mesh;
+  backGeometry: BufferGeometry;
+  frontGeometry: BufferGeometry;
+  // Both halves share a material (the hover state covers the whole
+  // ring; toggling one half without the other would look broken).
+  material: ShaderMaterial;
+  outerR: number;
+  innerR: number;
+  tiltRad: number;
+}
+
+export class IceRingsLayer {
+  private readonly rings: IceRing[] = [];
+
+  constructor(scene: Scene, rowItems: readonly RowItem[]) {
+    const planetItems = rowItems.filter(r => r.kind === 'planet');
+    for (const item of planetItems) {
+      const planet = BODIES[item.bodyIdx];
+      if (planet.ring == null) continue;
+      const ring = BODIES[planet.ring];
+      if (ring.beltClass !== 'ice') continue;
+      const built = buildIceRing(ring, planet.ring, item.bodyIdx, item.widthPx);
+      this.rings.push(built);
+      scene.add(built.backMesh);
+      scene.add(built.frontMesh);
+    }
+  }
+
+  layout(centers: PlanetCenterIndex): void {
+    for (const ring of this.rings) {
+      const c = centers.get(ring.hostBodyIdx);
+      if (!c) continue;
+      const baseZ = c.rowIdx * Z_STRIDE;
+      ring.backMesh.position.set(c.cx, c.cy, baseZ + Z_BACK_RING);
+      ring.frontMesh.position.set(c.cx, c.cy, baseZ + Z_FRONT_RING);
+    }
+  }
+
+  pickFront(x: number, y: number, centers: PlanetCenterIndex): BodyPick | null {
+    return this.pick(x, y, centers, 'front');
+  }
+
+  pickBack(x: number, y: number, centers: PlanetCenterIndex): BodyPick | null {
+    return this.pick(x, y, centers, 'back');
+  }
+
+  private pick(x: number, y: number, centers: PlanetCenterIndex, half: 'back' | 'front'): BodyPick | null {
+    for (const ring of this.rings) {
+      const c = centers.get(ring.hostBodyIdx);
+      if (!c) continue;
+      const hit = hitsRing(x, y, {
+        hostCx: c.cx, hostCy: c.cy,
+        outerR: ring.outerR, innerR: ring.innerR, tiltRad: ring.tiltRad,
+      }, half);
+      if (hit) return { kind: 'ring', bodyIdx: ring.bodyIdx };
+    }
+    return null;
+  }
+
+  // Returns true if this layer owns the ring being toggled (so the
+  // coordinator can stop short of also trying the debris-rings layer).
+  setHovered(pick: BodyPick, value: 0 | 1): boolean {
+    if (pick.kind !== 'ring') return false;
+    const ring = this.rings.find(r => r.bodyIdx === pick.bodyIdx);
+    if (!ring) return false;
+    ring.material.uniforms.uHovered.value = value;
+    return true;
+  }
+
+  dispose(): void {
+    for (const ring of this.rings) {
+      ring.backGeometry.dispose();
+      ring.frontGeometry.dispose();
+      ring.material.dispose();
+    }
+  }
+}
+
+function buildIceRing(ring: Body, ringBodyIdx: number, hostBodyIdx: number, hostDiscPx: number): IceRing {
+  const { innerR, outerR, tiltRad } = ringEllipseParams(ring, hostDiscPx);
+  const color = BELT_CLASS_COLOR.ice;
+  const material = makeIceRingMaterial(color);
+  const backGeometry  = buildHalfAnnulusGeometry(innerR, outerR, tiltRad, /*upperHalf=*/ true);
+  const frontGeometry = buildHalfAnnulusGeometry(innerR, outerR, tiltRad, /*upperHalf=*/ false);
+  const backMesh  = new Mesh(backGeometry,  material);
+  const frontMesh = new Mesh(frontGeometry, material);
+  // renderOrder is a secondary tiebreaker behind z (which the row-item
+  // banding does the heavy lifting for); the back-then-planet-then-
+  // front sequence keeps tied-z scenarios settling the right way.
+  backMesh.renderOrder  = RENDER_ORDER_BACK_RING;
+  frontMesh.renderOrder = RENDER_ORDER_FRONT_RING;
+  // Geometry vertices live in planet-local coords; layout writes the
+  // per-row z into mesh.position.z so the host planet's disc paints
+  // over the back mesh and the front mesh paints over the disc.
+  backMesh.frustumCulled  = false;
+  frontMesh.frustumCulled = false;
+  return { bodyIdx: ringBodyIdx, hostBodyIdx, backMesh, frontMesh, backGeometry, frontGeometry, material, outerR, innerR, tiltRad };
+}
+
+// Build one half of the ring's annulus as a triangle strip. The arc
+// runs from angle 0 to π (upperHalf=true) or π to 2π (upperHalf=false)
+// in the ring's local frame, then rotates by tiltRad so the visible
+// silhouette matches the picker's hit-test math.
+function buildHalfAnnulusGeometry(innerR: number, outerR: number, tiltRad: number, upperHalf: boolean): BufferGeometry {
+  const N = ICE_RING_SEGMENTS;
+  const start = upperHalf ? 0 : Math.PI;
+  const end   = start + Math.PI;
+  const positions = new Float32Array((N + 1) * 2 * 3);
+  const indices: number[] = [];
+  const cosT = Math.cos(tiltRad);
+  const sinT = Math.sin(tiltRad);
+  for (let i = 0; i <= N; i++) {
+    const t = start + (i / N) * (end - start);
+    const cos = Math.cos(t);
+    const sin = Math.sin(t);
+    // Inner + outer points on the un-tilted ellipse.
+    const ix = innerR * cos;
+    const iy = innerR * sin * RING_MINOR_OVER_MAJOR;
+    const ox = outerR * cos;
+    const oy = outerR * sin * RING_MINOR_OVER_MAJOR;
+    // Apply tilt rotation (positive tiltRad = counter-clockwise in
+    // scene coords where y grows upward).
+    const ixR = ix * cosT - iy * sinT;
+    const iyR = ix * sinT + iy * cosT;
+    const oxR = ox * cosT - oy * sinT;
+    const oyR = ox * sinT + oy * cosT;
+    positions[i * 6 + 0] = ixR; positions[i * 6 + 1] = iyR; positions[i * 6 + 2] = 0;
+    positions[i * 6 + 3] = oxR; positions[i * 6 + 4] = oyR; positions[i * 6 + 5] = 0;
+    if (i < N) {
+      const v0 = i * 2, v1 = i * 2 + 1, v2 = (i + 1) * 2, v3 = (i + 1) * 2 + 1;
+      indices.push(v0, v1, v2);
+      indices.push(v1, v3, v2);
+    }
+  }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  return geometry;
+}
