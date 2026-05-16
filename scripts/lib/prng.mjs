@@ -3,6 +3,16 @@
 // expandCoincidentSets used in build-catalog.mjs; lifted into a shared
 // module so procgen.mjs can derive identical seeds from the same id
 // strings, and so future build-time consumers don't fork the implementation.
+//
+// **Mirrored at runtime** in src/scene/system-diagram/geom/prng.ts. Two
+// copies exist because this file runs under Node (no TS toolchain in
+// the build script's path) and the diagram runs in the bundled browser
+// build. Any change to hash32 or mulberry32 here MUST be mirrored over
+// there (and vice-versa) — drift would silently desync the runtime's
+// per-body seeds from the ones baked into catalog.generated.json, so
+// procgen moons/belts/rings would re-roll different layouts on load
+// than the build script intended. sampleNormal / sampleTruncated are
+// build-time only and have no runtime counterpart.
 
 export function hash32(s) {
   let h = 0x811c9dc5;
