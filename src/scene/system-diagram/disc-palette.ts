@@ -42,6 +42,17 @@ const SURFACE_WITH_CHROMOPHORE_BASE   = 0.5;
 const SURFACE_WITH_CHROMOPHORE_RES1   = 0.25;
 const SURFACE_WITH_CHROMOPHORE_CHROMO = 0.25;
 
+// How strongly banded-mode palette entries collapse toward their
+// weighted mean. 0 = today's full-contrast alternation (e.g. 3 blue
+// bands + 1 white band reads as alternating blue/white strips);
+// 1 = single flat color (all bands identical). 0.75 keeps the
+// atmosphere reading as its dominant tone with small per-band
+// variation — three light-blue bands with subtle tonal shifts rather
+// than blue-then-white. The visually-weighted `topGases` weights
+// already up-rank chromophores and condensables, so the mean honors
+// "what you see" rather than molar fraction.
+const BAND_BLEND_TOWARD_MEAN = 0.75;
+
 export type DiscMode = 0 | 1;  // 0 = surface, 1 = banded
 
 export interface DiscPalette {
@@ -85,6 +96,30 @@ function applyTint(c: Color, tint: { color: Color; amount: number } | undefined)
   );
 }
 
+// Collapse three palette entries toward their weight-proportional mean
+// by `blend`. Returns the entries lerped from their original color
+// toward the mean of all three — visually, this turns a high-contrast
+// palette (e.g. 3 blue + 1 white) into close tonal variations of the
+// dominant tone (light blue, slightly lighter blue, slightly darker
+// blue). Pass-through when weights sum to zero (defensive).
+function blendTowardMean(
+  c0: Color, c1: Color, c2: Color,
+  w0: number, w1: number, w2: number,
+  blend: number,
+): [Color, Color, Color] {
+  const total = w0 + w1 + w2;
+  if (total <= 0) return [c0, c1, c2];
+  const mr = (c0.r * w0 + c1.r * w1 + c2.r * w2) / total;
+  const mg = (c0.g * w0 + c1.g * w1 + c2.g * w2) / total;
+  const mb = (c0.b * w0 + c1.b * w1 + c2.b * w2) / total;
+  const lerp = (c: Color) => new Color(
+    c.r + (mr - c.r) * blend,
+    c.g + (mg - c.g) * blend,
+    c.b + (mb - c.b) * blend,
+  );
+  return [lerp(c0), lerp(c1), lerp(c2)];
+}
+
 // Build the per-body palette + mode + seed for one disc. discPx is the
 // final rendered diameter — sub-PROCEDURAL_TEXTURE_MIN_PX bodies force
 // flat fill (weights = [1, 0, 0]) so tiny moons don't render as noise.
@@ -120,12 +155,18 @@ export function buildDiscPalette(
       c0 = base; c1 = base; c2 = base;
       w0 = 1; w1 = 0; w2 = 0;
     } else {
-      c0 = gases[0].color;
-      c1 = gases[1]?.color ?? gases[0].color;
-      c2 = gases[2]?.color ?? gases[0].color;
+      const g0 = gases[0].color;
+      const g1 = gases[1]?.color ?? gases[0].color;
+      const g2 = gases[2]?.color ?? gases[0].color;
       w0 = gases[0].weight;
       w1 = gases[1]?.weight ?? 0;
       w2 = gases[2]?.weight ?? 0;
+      // Pull each gas color toward the visually-weighted mean so bands
+      // share a dominant tone with small per-band variation rather than
+      // alternating full-contrast (e.g. blue/white → three light-blue
+      // shades). The picker downstream still selects by weight, so
+      // higher-weight gases still dominate the band count.
+      [c0, c1, c2] = blendTowardMean(g0, g1, g2, w0, w1, w2, BAND_BLEND_TOWARD_MEAN);
     }
   } else {
     const base = worldClassColor(body);
