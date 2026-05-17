@@ -337,7 +337,7 @@ export const PHYSICAL_SPEC_BY_TYPE = {
 // Hot-zone planets get fewer moons — tides strip them within ~Roche
 // limit timescales. Outer gas giants accumulate moons from their disk +
 // captured planetesimals.
-export const MOON_COUNT_BY_TYPE = {
+const MOON_COUNT_BY_TYPE_REALISTIC = {
   hot_rocky:   { mean: 0,   max: 1  },  // Poisson(0) is degenerate-zero — Mercury/Venus
   rocky:       { mean: 0.5, max: 3  },  // Earth=1, Mars=2 (tiny), Venus=0
   super_earth: { mean: 1,   max: 4  },
@@ -345,6 +345,25 @@ export const MOON_COUNT_BY_TYPE = {
   neptune:     { mean: 4,   max: 10 },  // Uranus has 5 major
   jupiter:     { mean: 7,   max: 15 },  // Sol Jupiter ~4 Galilean
 };
+
+// Gameplay tune: less moony across the board. The realistic block makes
+// gas giants moon-heavy enough that they dominate both the system-diagram
+// dome visually and the satellite-as-colony budget. Pulling means down
+// alongside the cap keeps a real Poisson shape (rather than a hard pile-up
+// at the cap) — typical jupiter shifts from ~7 moons to ~3 with a visible
+// max of 5 everywhere. hot_rocky is already ≤ 1; omitted.
+const MOON_COUNT_BY_TYPE_TUNE = {
+  rocky:       { mean: 0.3, max: 2 },
+  super_earth: { mean: 0.7, max: 3 },
+  sub_neptune: { mean: 1.5, max: 4 },
+  neptune:     { mean: 2.5, max: 5 },
+  jupiter:     { mean: 3,   max: 5 },
+};
+
+export const MOON_COUNT_BY_TYPE = mergeTunes(
+  MOON_COUNT_BY_TYPE_REALISTIC,
+  MOON_COUNT_BY_TYPE_TUNE,
+);
 
 // ---------------------------------------------------------------------------
 // Surface character thresholds (read by the Filler, not the Architect)
