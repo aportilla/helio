@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { hash32, mulberry32 } from './lib/prng.mjs';
 import { fillBodies, radiusFromMass, worldClassFor, planetTypeFor } from './lib/procgen.mjs';
 import { generateSystem, generateMoons, generateRing, generateOverlay } from './lib/procgen-architect.mjs';
+import { MAX_PLANETS_PER_CLUSTER } from './lib/procgen-priors.mjs';
 import { insolation } from './lib/astrophysics.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -807,36 +808,62 @@ async function main() {
     list.push(b);
     catalogPlanetsByStarId.set(b.hostId, list);
   }
-  // Cluster role per star drives planet-count suppression in the Architect.
-  // Primary = heaviest member of a cluster (cluster.members[0]), secondary
-  // = 2nd, tertiary+ = 3rd onward. Singleton-cluster stars (most of the
-  // catalog) are 'primary' → unchanged independent-roll behavior.
-  const roleByStarId = new Map();
-  for (const cluster of clusters) {
-    for (let i = 0; i < cluster.members.length; i++) {
-      const role = i === 0 ? 'primary' : i === 1 ? 'secondary' : 'tertiary_plus';
-      roleByStarId.set(placedStars[cluster.members[i]].id, role);
-    }
-  }
+  // Cluster-driven dispatch. Iterating clusters (rather than stars) lets a
+  // single MAX_PLANETS_PER_CLUSTER budget travel through the cluster's
+  // members in heaviest-first order. Catalog anchors are immovable (we
+  // never prune observed planets), so we reserve every member's catalog
+  // count up-front and only distribute the slack to procgen.
+  //
+  // Per member i, the cap passed to the generator is:
+  //   max(0, MAX − usedByEarlierMembers − catalogOnLaterMembers)
+  // — the "total planets allowed on this member" headroom, accounting for
+  // what earlier members already took and what later members will
+  // contribute via catalog. The architect treats this as its target N; the
+  // overlay treats it as its target N (its `toAdd = max(0, N − existing)`
+  // already handles the "catalog is keeping me at or above the cap" case
+  // by adding zero).
+  //
+  // Per member:
+  //   - architect path (no catalog planets): generateSystem with the cap.
+  //   - overlay path (catalog planets present, non-curated): generateOverlay
+  //     with the cap. Returned procgen additions count toward usedByEarlier
+  //     alongside the catalog anchors on the same star.
+  //   - curated catalog path (Sol): CSV is authoritative, no procgen runs;
+  //     its catalog anchors still reserve cluster budget for any companion.
+  //
+  // Catalog totals exceeding MAX (no clusters today, but the algorithm
+  // tolerates it) leave companions with a 0 cap and won't be pruned —
+  // catalog anchors win.
   const procgenBodies = [];
-  for (const star of placedStars) {
-    if (catalogPlanetsByStarId.has(star.id)) continue;
-    procgenBodies.push(...generateSystem(star, roleByStarId.get(star.id) ?? 'primary'));
-  }
-
-  // Partial-system overlay — for each catalog-anchored star, add outer
-  // procgen siblings so the system reaches PLANET_COUNT_BY_CLASS's target,
-  // plus the system-level belts the architect would have rolled if it had
-  // run here. Outer-only matches the detection bias (RV / transit miss
-  // long-period planets). Curated systems are skipped — their CSV is
-  // authoritative and a Mercury-Venus-only Sol would not benefit from
-  // imagined outer siblings.
   const overlayBodies = [];
-  for (const star of placedStars) {
-    if (CURATED_SYSTEM_HOSTS.has(star.id)) continue;
-    const catalogPlanets = catalogPlanetsByStarId.get(star.id);
-    if (!catalogPlanets || catalogPlanets.length === 0) continue;
-    overlayBodies.push(...generateOverlay(star, catalogPlanets, roleByStarId.get(star.id) ?? 'primary'));
+  for (const cluster of clusters) {
+    let catalogOnLaterMembers = 0;
+    for (const idx of cluster.members) {
+      const cp = catalogPlanetsByStarId.get(placedStars[idx].id);
+      if (cp) catalogOnLaterMembers += cp.length;
+    }
+    let usedByEarlierMembers = 0;
+    for (let i = 0; i < cluster.members.length; i++) {
+      const star = placedStars[cluster.members[i]];
+      const role = i === 0 ? 'primary' : i === 1 ? 'secondary' : 'tertiary_plus';
+      const catalogPlanets = catalogPlanetsByStarId.get(star.id) ?? [];
+      const existing = catalogPlanets.length;
+      catalogOnLaterMembers -= existing;  // this member's catalog moves into 'used'
+      const memberCap = Math.max(0, MAX_PLANETS_PER_CLUSTER - usedByEarlierMembers - catalogOnLaterMembers);
+      let procgenAdded = 0;
+      if (existing > 0) {
+        if (!CURATED_SYSTEM_HOSTS.has(star.id)) {
+          const bodies = generateOverlay(star, catalogPlanets, role, memberCap);
+          overlayBodies.push(...bodies);
+          procgenAdded = bodies.filter(b => b.kind === 'planet').length;
+        }
+      } else {
+        const bodies = generateSystem(star, role, memberCap);
+        procgenBodies.push(...bodies);
+        procgenAdded = bodies.filter(b => b.kind === 'planet').length;
+      }
+      usedByEarlierMembers += existing + procgenAdded;
+    }
   }
 
   // Moon backfill — observed exoplanets almost never have moon coverage

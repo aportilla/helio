@@ -29,6 +29,7 @@ import { planetTypeFor } from './lib/procgen.mjs';
 import { insolation } from './lib/astrophysics.mjs';
 import {
   PLANET_COUNT_BY_CLASS,
+  MAX_PLANETS_PER_CLUSTER,
   PLANET_TYPES,
   RING_OCCURRENCE_BY_TYPE,
   MOON_COUNT_BY_TYPE,
@@ -145,9 +146,13 @@ console.log();
 
 // --- 2. Planets per system, by stellar class --------------------------------
 
+// `obs.max` and `% at cap` exist to verify hard upper-bound tunes — the
+// distribution mean/sd don't tell you whether a single system slipped past
+// the prior's `max`, and the share clipped at the cap is the visible
+// signal of how aggressive the clamp is.
 console.log('=== Planets per system, by stellar class ===');
-console.log('  cls | systems |  obs.mean  obs.sd     prior.mean  prior.sd   z');
-console.log('  ----+---------+----------  ------     ----------  --------   --------');
+console.log('  cls | systems |  obs.mean  obs.sd  obs.max   prior.mean  prior.sd  prior.max   % at cap    z');
+console.log('  ----+---------+----------  ------  -------   ----------  --------  ---------   --------    --------');
 const planetCountByCls = {};
 for (const star of stars) {
   const cls = star.cls || '?';
@@ -158,13 +163,18 @@ for (const cls of STELLAR_CLASSES) {
   const arr = planetCountByCls[cls] || [];
   const obs = meanStd(arr);
   const p = PLANET_COUNT_BY_CLASS[cls];
+  const obsMax = arr.length ? Math.max(...arr) : 0;
+  const atCap = arr.filter(n => n >= p.max).length;
   console.log(
     '  ' + pad(cls, 4) +
     '| ' + pad(arr.length, 7, true) +
     ' |  ' + pad(obs.mean.toFixed(2), 6, true) +
     '   ' + pad(obs.sd.toFixed(2), 4, true) +
+    '   ' + pad(obsMax, 5, true) +
     '       ' + pad(p.mean.toFixed(2), 5, true) +
     '       ' + pad(p.sd.toFixed(2), 4, true) +
+    '       ' + pad(p.max, 4, true) +
+    '    ' + pct(atCap, arr.length) +
     fmtZ(zMean(obs.mean, arr.length, p.mean, p.sd), arr.length),
   );
 }
@@ -215,6 +225,43 @@ for (const role of ['primary', 'secondary', 'tertiary_plus']) {
     '   ' + pad(obs.sd.toFixed(2), 4, true) +
     '       ' + pad(mul.toFixed(2) + '×', 6, true) +
     '        ' + pad(expected.toFixed(2), 5, true),
+  );
+}
+console.log();
+
+// --- 2c. Planets per cluster (gameplay system) ------------------------------
+//
+// Gameplay framing treats a multi-star cluster as one system, so the
+// cluster total is the player-visible planet count. MAX_PLANETS_PER_CLUSTER
+// is the gameplay cap; this block verifies the sum across cluster members
+// holds against it.
+console.log('=== Planets per cluster (gameplay system) ===');
+console.log('  members  | clusters |  obs.mean  obs.sd   obs.max   cap   % at cap');
+console.log('  ---------+----------+----------  ------   -------   ---   --------');
+const planetsPerCluster = { 1: [], 2: [], '3+': [] };
+let totalPlanets = [];
+for (const cluster of clusters) {
+  let n = 0;
+  for (const idx of cluster.members) n += stars[idx].planets.length;
+  const bucket = cluster.members.length === 1 ? 1
+                : cluster.members.length === 2 ? 2 : '3+';
+  planetsPerCluster[bucket].push(n);
+  totalPlanets.push(n);
+}
+for (const bucket of [1, 2, '3+', 'total']) {
+  const arr = bucket === 'total' ? totalPlanets : planetsPerCluster[bucket];
+  if (!arr.length) continue;
+  const obs = meanStd(arr);
+  const obsMax = Math.max(...arr);
+  const atCap = arr.filter(n => n >= MAX_PLANETS_PER_CLUSTER).length;
+  console.log(
+    '  ' + pad(bucket, 8) +
+    ' |' + pad(arr.length, 7, true) +
+    '  |  ' + pad(obs.mean.toFixed(2), 6, true) +
+    '   ' + pad(obs.sd.toFixed(2), 4, true) +
+    '   ' + pad(obsMax, 5, true) +
+    '     ' + pad(MAX_PLANETS_PER_CLUSTER, 3, true) +
+    '    ' + pct(atCap, arr.length),
   );
 }
 console.log();

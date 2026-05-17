@@ -110,7 +110,7 @@ export const COMPANION_PLANET_SUPPRESSION = {
   tertiary_plus: 0.2,
 };
 
-export const PLANET_COUNT_BY_CLASS = {
+const PLANET_COUNT_BY_CLASS_REALISTIC = {
   O:  { mean: 2,   sd: 1.5, min: 0, max: 5  },  // massive, short-lived; observation-limited
   B:  { mean: 2,   sd: 1.5, min: 0, max: 5  },
   A:  { mean: 4,   sd: 2,   min: 0, max: 8  },
@@ -124,6 +124,38 @@ export const PLANET_COUNT_BY_CLASS = {
   WD: { mean: 0.1, sd: 0.4, min: 0, max: 3  },
   BD: { mean: 1,   sd: 1,   min: 0, max: 4  },  // compact, tight orbits when present
 };
+
+// Gameplay tune: cap every system at 8 planets. Sol sits at 8 and reads as
+// a full system; pushing past that crowds the system-diagram row and the
+// extra outer planets — usually neptunes/jupiters per the insolation-zone
+// weights — add visual mass without adding decisions. A/M/O/B/WD/BD are
+// already ≤ 8 in the realistic block, so only F/G/K need the clamp.
+// The clamp lives on `max` only; means and SDs stay at their realistic
+// values, so the distribution body is unchanged and the tune is pure
+// upper-tail truncation. `generateSystem` and `generateOverlay` already
+// apply `Math.min(countSpec.max, …)` to the sampled count.
+const PLANET_COUNT_BY_CLASS_TUNE = {
+  F: { max: 8 },
+  G: { max: 8 },
+  K: { max: 8 },
+};
+
+export const PLANET_COUNT_BY_CLASS = mergeTunes(
+  PLANET_COUNT_BY_CLASS_REALISTIC,
+  PLANET_COUNT_BY_CLASS_TUNE,
+);
+
+// Gameplay tune: cap the *sum* of planets across all members of a
+// multi-star cluster, since gameplay presents a cluster as one system.
+// No realistic peer — physical planet formation has no cluster-level
+// budget; each star's count is independent (modulated by the realistic
+// COMPANION_PLANET_SUPPRESSION above for binary-stability effects).
+//
+// Allocation is primary-first: the heaviest member (cluster.members[0])
+// rolls under the per-star clamp as usual, the secondary's clamp tightens
+// to whatever budget remains, then tertiary+. Singleton clusters (~82% of
+// the catalog) see no change — their budget equals the per-star clamp.
+export const MAX_PLANETS_PER_CLUSTER = 8;
 
 // Inner/outer orbital bounds (AU) per stellar class.
 //

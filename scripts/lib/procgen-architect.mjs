@@ -365,7 +365,14 @@ export function generateRing(planet, planetType) {
 // `clusterRole` (primary/secondary/tertiary_plus) suppresses the sampled
 // planet count for tight-binary companions; defaults to 'primary' (no
 // suppression) so callers that don't know the role get unchanged behavior.
-export function generateSystem(star, clusterRole = 'primary') {
+//
+// `clusterPlanetBudget` is the gameplay-level remaining-budget cap for the
+// cluster this star belongs to (see MAX_PLANETS_PER_CLUSTER). Primary-first
+// allocation: the caller passes the full budget to the primary, subtracts
+// the primary's actual planet count, and passes the remainder to each
+// companion in turn. Defaults to Infinity for callers without cluster
+// context (no extra clamp).
+export function generateSystem(star, clusterRole = 'primary', clusterPlanetBudget = Infinity) {
   const cls = star.cls;
   const countSpec = PLANET_COUNT_BY_CLASS[cls];
   if (!countSpec) return [];
@@ -379,7 +386,7 @@ export function generateSystem(star, clusterRole = 'primary') {
   const countPrng = slotPrng(star.id, -1, 'planet_count');
   const rawN = sampleTruncated(countPrng, countSpec, true);
   const suppression = COMPANION_PLANET_SUPPRESSION[clusterRole] ?? 1.0;
-  const N = Math.max(0, Math.min(countSpec.max, Math.round(rawN * suppression)));
+  const N = Math.max(0, Math.min(clusterPlanetBudget, countSpec.max, Math.round(rawN * suppression)));
 
   // Orbit layout — start past the inner edge, walk outward by sampled
   // period ratios. Stop when we exceed the outer edge or hit N planets.
@@ -479,7 +486,13 @@ function buildPlanetAtOrbit(star, slotIdx, aAu, letter, saltPrefix = '') {
 // `catalogPlanets` is the array of catalog Body objects on this star (in
 // CSV order); their `semiMajorAu` anchors the outer walk. Returns a flat
 // array of new bodies (planets + moons + rings + belts).
-export function generateOverlay(star, catalogPlanets, clusterRole = 'primary') {
+//
+// `clusterPlanetBudget` matches generateSystem's semantics — the remaining
+// cluster-level budget after earlier members have been processed. The
+// budget bounds the target N; catalog anchors past the budget are kept
+// (we never prune observed planets), so `toAdd` can still be 0 even when
+// existing > budget.
+export function generateOverlay(star, catalogPlanets, clusterRole = 'primary', clusterPlanetBudget = Infinity) {
   const cls = star.cls;
   const countSpec = PLANET_COUNT_BY_CLASS[cls];
   const geom = ORBITAL_GEOMETRY_BY_CLASS[cls];
@@ -494,7 +507,7 @@ export function generateOverlay(star, catalogPlanets, clusterRole = 'primary') {
   const countPrng = slotPrng(star.id, -1, 'overlay_planet_count');
   const rawN = sampleTruncated(countPrng, countSpec, true);
   const suppression = COMPANION_PLANET_SUPPRESSION[clusterRole] ?? 1.0;
-  const N = Math.max(0, Math.min(countSpec.max, Math.round(rawN * suppression)));
+  const N = Math.max(0, Math.min(clusterPlanetBudget, countSpec.max, Math.round(rawN * suppression)));
   const existing = catalogPlanets.length;
   const toAdd = Math.max(0, N - existing);
 
