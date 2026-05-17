@@ -340,6 +340,13 @@ export class StarmapScene {
         const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
         this.animateFocusTo(com.x, com.y, com.z);
       },
+      onEnter: () => {
+        // Enter: keyboard equivalent of the View System pill button + the
+        // double-click gesture. Routes through the same onViewSystem
+        // callback so the AppController scene swap stays one path.
+        if (this.selectedClusterIdx < 0) return;
+        this.onViewSystem(this.selectedClusterIdx);
+      },
       cancelFocusAnimation: () => { this.focusAnimating = false; },
     };
   }

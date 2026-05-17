@@ -527,6 +527,7 @@ export class MapHud {
                 { kind: 'keybinding', key: 'Q / E',    desc: 'Orbit left / right' },
                 { kind: 'keybinding', key: 'Z / X',    desc: 'Sink / lift pivot' },
                 { kind: 'keybinding', key: 'F, Space', desc: 'Focus selection' },
+                { kind: 'keybinding', key: 'Enter',    desc: 'Open system view' },
                 { kind: 'keybinding', key: 'Esc',      desc: 'Deselect / back' },
               ],
             },

@@ -106,6 +106,11 @@ export interface InputHandlers {
   // cluster's COM. Ignores any candidate — F is "go home", not "advance".
   // No-op when nothing is selected.
   onFocusSelection(): void;
+  // Enter key: open the system view for the currently-selected cluster.
+  // Keyboard equivalent of the View System pill button + double-click.
+  // Ignores any candidate (you must first select via click or spacebar);
+  // no-op when nothing is selected.
+  onEnter(): void;
 
   // Cancel any in-flight focus-glide animation when the user takes manual
   // control of the camera (pinch zoom/pan, WASD/QE/ZX). Drag-orbit and
@@ -510,6 +515,16 @@ export class InputController {
   private onKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
       this.handlers.onEscape();
+      return;
+    }
+    if (e.key === 'Enter') {
+      // Enter = open the system view for the selected cluster. Skip when
+      // a modifier is held so Cmd/Ctrl/Alt+Enter stays free for future
+      // bindings (and the browser's own Enter handling on focused chrome
+      // — though our HUD is canvas-rendered with no DOM focus targets).
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      this.handlers.onEnter();
+      e.preventDefault();
       return;
     }
     if (e.key === ' ') {
