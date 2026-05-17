@@ -10,10 +10,13 @@ import { glsl, RASTER_PAD, snappedMaterials } from './shared';
 // Planet + moon disc material. Renders a pixel-crisp disc whose interior
 // is one of two procedural textures:
 //
-//   - **Surface mode (aMode = 0)** — per-fragment palette pick from a
-//     hash keyed on the integer pixel coord (so the texture is sharp
-//     pixel-art, not noise). Driven CPU-side by the world-class color +
-//     2 dominant resources from the body's resource grid.
+//   - **Surface mode (aMode = 0)** — worley/voronoi cell texture: the
+//     disc is divided into SURFACE_PATCH_PX-wide cells, each with a
+//     jittered center seeded per-body; every fragment picks a palette
+//     entry by hashing its nearest cell. Gives organic lumpy ground
+//     cover rather than per-pixel speckle. Driven CPU-side by the
+//     world-class color + 2 dominant resources from the body's resource
+//     grid.
 //   - **Banded mode (aMode = 1)** — latitude-quantized strips, each band
 //     picking a palette entry by a per-band hash. Driven by the top 3
 //     atmospheric gases. Used for gas/ice giants and Venus-class worlds
@@ -30,9 +33,9 @@ import { glsl, RASTER_PAD, snappedMaterials } from './shared';
 // Pixel-crisp constraints (see README §Pixel-perfect rendering):
 //   - The disc still does parity-aware center snap so `gl_FragCoord -
 //     vCenter` lands at symmetric pixel offsets.
-//   - The fragment hash takes `floor(d)` so all sub-pixel positions
-//     within one rendered pixel resolve to the same palette entry — the
-//     texture is integer-pixel grained.
+//   - Cell boundaries are computed from integer pixel offsets, so each
+//     rendered pixel resolves to exactly one cell — the texture is
+//     integer-pixel grained.
 //   - No AA, no gradients, no inter-palette blending.
 //
 // Designed for an OrthographicCamera at 1 unit = 1 buffer pixel (vertex
@@ -112,6 +115,12 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       // (≈7 px on a 40 px disc, ≈20 px on a 120 px gas giant).
       const float BAND_COUNT = 3.0;
 
+      // Surface-mode worley cell pitch in buffer pixels. A 60-px planet
+      // disc gets ~15 cells across; jittered cell centers make the
+      // patch silhouettes non-grid-aligned, so the ground reads as
+      // organic lumps rather than rectangular tiles.
+      const float SURFACE_PATCH_PX = 4.0;
+
       float hash11(float x) {
         return fract(sin(x * 12.9898 + 78.233) * 43758.5453);
       }
@@ -139,12 +148,36 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
 
         vec3 col;
         if (vMode < 0.5) {
-          // Surface — per-integer-pixel hash, salted by per-body seed so
-          // two same-palette planets get distinct textures. floor(d)
-          // collapses sub-pixel positions to one hash value → integer-
-          // pixel texture grain.
-          vec2 q = floor(d);
-          float h = hash21(q + vec2(vSeed * 1009.0, vSeed * 2017.0));
+          // Surface — worley/voronoi cells. Divide the disc into
+          // SURFACE_PATCH_PX-wide cells, jitter each cell's center
+          // per-body, and pick the palette entry for the nearest cell.
+          // Salted by vSeed so two same-palette planets get distinct
+          // patch layouts. 9 candidate cells (3x3 neighborhood) is the
+          // minimum needed for correct nearest-cell when centers are
+          // jittered within the full unit cell.
+          vec2 cellPos = d / SURFACE_PATCH_PX;
+          vec2 cellId  = floor(cellPos);
+          vec2 cellFrac = cellPos - cellId;
+          float minDist2 = 1e9;
+          vec2  winnerCell = cellId;
+          for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+              vec2 off = vec2(float(dx), float(dy));
+              vec2 nCell = cellId + off;
+              vec2 jitter = vec2(
+                hash21(nCell + vec2(vSeed * 13.0,  vSeed * 19.0)),
+                hash21(nCell + vec2(vSeed * 23.0,  vSeed * 29.0))
+              );
+              vec2 nCenter = off + jitter;
+              vec2 diff = nCenter - cellFrac;
+              float d2 = dot(diff, diff);
+              if (d2 < minDist2) {
+                minDist2 = d2;
+                winnerCell = nCell;
+              }
+            }
+          }
+          float h = hash21(winnerCell + vec2(vSeed * 1009.0, vSeed * 2017.0));
           col = pickFromPalette(h);
         } else {
           // Banded atmosphere — quantize latitude into discrete strips,
