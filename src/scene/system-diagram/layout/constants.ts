@@ -143,26 +143,10 @@ export const RING_TILT_DEG_MAX = 14;
 // (always outside the planet rim).
 export const RING_WIDTH_VIZ_SCALE = 0.5;
 
-// Segments per half-ellipse for the ice-ring triangle strips. 24 is
-// the floor where the silhouette stops reading as a polygon at the
-// largest realistic planet sizes; bumping past 32 is wasted geometry.
-export const ICE_RING_SEGMENTS = 24;
-// Debris-ring chunk density (chunks per px of ellipse perimeter) and
-// clamp range. The perimeter approximation uses Ramanujan's first
-// formula for the outer ellipse; close enough at our aspect ratios.
-export const DEBRIS_RING_CHUNKS_PER_PX = 0.10;
-export const DEBRIS_RING_CHUNKS_MIN = 18;
-export const DEBRIS_RING_CHUNKS_MAX = 80;
-// Debris ring chunk polygon half-extents (env-px). Same blob shape +
-// rotation model as belt chunks; smaller scale since rings are visual
-// texture around an existing object and shouldn't out-mass the host
-// planet's disc.
-export const DEBRIS_RING_CHUNK_SIZES = [2, 3, 3, 3];
-// Brightness multiplier for debris ring chunks. Multiplies the
-// BELT_CLASS_COLOR.debris value (~0x806848 → already dusty); pulling
-// it down further per the brief ("darker thicker chunks") keeps debris
-// distinct from the pale-cyan ice rings even at small sizes.
-export const DEBRIS_RING_DIM = 0.75;
+// Segments per half-ellipse for the ring triangle strips. 24 is the
+// floor where the silhouette stops reading as a polygon at the largest
+// realistic planet sizes; bumping past 32 is wasted geometry.
+export const RING_SEGMENTS = 24;
 
 // --- Per-row-item depth ---
 //

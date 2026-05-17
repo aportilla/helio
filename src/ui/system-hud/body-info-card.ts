@@ -8,7 +8,7 @@
 // ephemeral; dismissal is the cursor leaving the disc.
 
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
-import { BODIES, STARS, ringClass, type BeltClass, type BiosphereArchetype, type BiosphereTier, type Body, type WorldClass } from '../../data/stars';
+import { BODIES, STARS, type BiosphereArchetype, type BiosphereTier, type Body, type WorldClass } from '../../data/stars';
 import type { DiagramPick } from '../../scene/system-diagram';
 import { BasePanel } from '../base-panel';
 import { paintSurface } from '../painter';
@@ -41,23 +41,6 @@ const BIOSPHERE_TIER_LABEL: Record<Exclude<BiosphereTier, 'none'>, string> = {
   microbial: 'Microbial',
   complex:   'Complex',
   gaian:     'Gaian',
-};
-
-const BELT_CLASS_LABEL: Record<BeltClass, string> = {
-  asteroid: 'Asteroid',
-  ice:      'Ice',
-  debris:   'Debris',
-};
-
-// Population structure for belts — surfaces the orthogonal axis to
-// composition. 'Discrete' = a few large named parents dominate (sortie
-// targets); 'Collisional' = dust + many small parents (sweep harvest).
-// Distinguishes an asteroid belt (primordial, discrete) from a debris
-// field (second-generation, collisional) which otherwise share many of
-// the same compositional fields.
-const POPULATION_MODEL_LABEL: Record<'discrete' | 'collisional', string> = {
-  discrete:    'Discrete',
-  collisional: 'Collisional',
 };
 
 // Resource label table for the per-row mineral readouts on belts.
@@ -131,8 +114,6 @@ function rowsForBody(bodyIdx: number): BodyRow[] {
 // so listing all six lets players compare candidate belts at a glance.
 function rowsForBelt(b: Body): BodyRow[] {
   const rows: BodyRow[] = [];
-  if (b.beltClass) rows.push({ key: k('class'), val: BELT_CLASS_LABEL[b.beltClass] });
-  if (b.populationModel) rows.push({ key: k('pop'), val: POPULATION_MODEL_LABEL[b.populationModel] });
   if (b.innerAu !== null && b.outerAu !== null) {
     rows.push({ key: k('extent'), val: `${b.innerAu.toFixed(2)}–${b.outerAu.toFixed(2)} AU` });
   }
@@ -155,16 +136,19 @@ function rowsForBelt(b: Body): BodyRow[] {
 }
 
 // Ring rows: extent in planetary radii (so "1.1–2.3 R_p" reads against
-// the host planet's size), ring class, and iceFraction as a one-line
-// composition cue. No resource grid — ring volumes are too small for
-// the mining-profile lens that makes sense for belts.
+// the host planet's size) plus the full six-resource grid. The grid
+// carries composition (resVolatiles dominant → bright icy, rocky
+// resources dominant → dark dusty) and is what the renderer reads to
+// pick the ring's visual character.
 function rowsForRing(b: Body): BodyRow[] {
   const rows: BodyRow[] = [];
-  rows.push({ key: k('class'), val: BELT_CLASS_LABEL[ringClass(b)] });
   if (b.innerPlanetRadii !== null && b.outerPlanetRadii !== null) {
     rows.push({ key: k('extent'), val: `${b.innerPlanetRadii.toFixed(2)}–${b.outerPlanetRadii.toFixed(2)} R_p` });
   }
-  if (b.iceFraction !== null) rows.push({ key: k('ice'), val: `${(b.iceFraction * 100).toFixed(0)}%` });
+  for (const r of RES_ROWS) {
+    const v = b[r.field];
+    if (v !== null) rows.push({ key: k(r.key), val: `${v}` });
+  }
   return rows;
 }
 

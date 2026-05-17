@@ -14,10 +14,9 @@
 import { OrthographicCamera, Scene } from 'three';
 import { STAR_CLUSTERS } from '../../data/stars';
 import { BeltsLayer } from './layers/belts';
-import { DebrisRingsLayer } from './layers/debris-rings';
-import { IceRingsLayer } from './layers/ice-rings';
 import { MoonsLayer } from './layers/moons';
 import { PlanetsLayer } from './layers/planets';
+import { RingsLayer } from './layers/rings';
 import { StarsRowLayer } from './layers/stars-row';
 import { buildRowSlots, layoutRow, type RowSlot } from './layout/row';
 import { type DiagramPick, picksEqual } from './types';
@@ -33,12 +32,11 @@ export class SystemDiagram {
 
   private readonly rowSlots: RowSlot[];
 
-  private readonly stars:        StarsRowLayer;
-  private readonly planets:      PlanetsLayer;
-  private readonly belts:        BeltsLayer;
-  private readonly moons:        MoonsLayer;
-  private readonly iceRings:     IceRingsLayer;
-  private readonly debrisRings:  DebrisRingsLayer;
+  private readonly stars:   StarsRowLayer;
+  private readonly planets: PlanetsLayer;
+  private readonly belts:   BeltsLayer;
+  private readonly moons:   MoonsLayer;
+  private readonly rings:   RingsLayer;
 
   // Currently-outlined body. setHovered() diffs against this to skip
   // no-op repaints (cursor moving within the same disc) and to clear the
@@ -49,12 +47,11 @@ export class SystemDiagram {
     const cluster = STAR_CLUSTERS[clusterIdx];
     this.rowSlots = buildRowSlots(cluster);
 
-    this.stars       = new StarsRowLayer(this.scene, cluster);
-    this.planets     = new PlanetsLayer(this.scene, this.rowSlots);
-    this.belts       = new BeltsLayer(this.scene, this.rowSlots);
-    this.moons       = new MoonsLayer(this.scene, this.rowSlots);
-    this.iceRings    = new IceRingsLayer(this.scene, this.rowSlots);
-    this.debrisRings = new DebrisRingsLayer(this.scene, this.rowSlots);
+    this.stars   = new StarsRowLayer(this.scene, cluster);
+    this.planets = new PlanetsLayer(this.scene, this.rowSlots);
+    this.belts   = new BeltsLayer(this.scene, this.rowSlots);
+    this.moons   = new MoonsLayer(this.scene, this.rowSlots);
+    this.rings   = new RingsLayer(this.scene, this.rowSlots);
   }
 
   resize(bufferW: number, bufferH: number): void {
@@ -75,8 +72,7 @@ export class SystemDiagram {
     this.belts.layout(this.rowSlots);
     const centers = this.planets.getCenterIndex();
     this.moons.layout(centers);
-    this.iceRings.layout(centers);
-    this.debrisRings.layout(centers);
+    this.rings.layout(centers);
   }
 
   // Hit-test the rendered discs at (x, y) in buffer-pixel coords. Walk
@@ -89,11 +85,9 @@ export class SystemDiagram {
   pickAt(x: number, y: number): DiagramPick | null {
     const centers = this.planets.getCenterIndex();
     return this.moons.pickFront(x, y)
-        ?? this.iceRings.pickFront(x, y, centers)
-        ?? this.debrisRings.pickFront(x, y, centers)
+        ?? this.rings.pickFront(x, y, centers)
         ?? this.planets.pickAt(x, y)
-        ?? this.iceRings.pickBack(x, y, centers)
-        ?? this.debrisRings.pickBack(x, y, centers)
+        ?? this.rings.pickBack(x, y, centers)
         ?? this.belts.pickAt(x, y, this.rowSlots)
         ?? this.moons.pickBack(x, y)
         ?? this.stars.pickAt(x, y);
@@ -109,9 +103,7 @@ export class SystemDiagram {
     this.hoveredPick = pick;
   }
 
-  // Dispatch to the layer that owns the picked kind. Rings are split
-  // across two layer types (ice + debris); try ice first, fall back to
-  // debris if the pick isn't an ice ring.
+  // Dispatch to the layer that owns the picked kind.
   private writeHover(pick: DiagramPick | null, value: 0 | 1): void {
     if (!pick) return;
     switch (pick.kind) {
@@ -119,11 +111,7 @@ export class SystemDiagram {
       case 'planet': this.planets.setHovered(pick, value); return;
       case 'belt':   this.belts.setHovered(pick, value); return;
       case 'moon':   this.moons.setHovered(pick, value); return;
-      case 'ring':
-        if (!this.iceRings.setHovered(pick, value)) {
-          this.debrisRings.setHovered(pick, value);
-        }
-        return;
+      case 'ring':   this.rings.setHovered(pick, value); return;
     }
   }
 
@@ -132,7 +120,6 @@ export class SystemDiagram {
     this.planets.dispose();
     this.belts.dispose();
     this.moons.dispose();
-    this.iceRings.dispose();
-    this.debrisRings.dispose();
+    this.rings.dispose();
   }
 }

@@ -137,20 +137,29 @@ export function makeBlobMaterial(): ShaderMaterial {
   });
 }
 
-// Solid-fill mesh material for ice rings — used by the triangle-strip
-// annulus halves in SystemDiagram. Flat color, no shading, no AA. The
-// caller provides geometry whose vertex positions live in the host
-// planet's local frame (origin at planet center, env-pixel units); the
-// mesh is positioned at the planet's cx/cy.
+// Solid-fill mesh material for planetary rings — used by the
+// triangle-strip annulus halves in SystemDiagram. Flat color, no
+// shading, no AA. The caller provides geometry whose vertex positions
+// live in the host planet's local frame (origin at planet center,
+// env-pixel units); the mesh is positioned at the planet's cx/cy.
+//
+// The caller pre-lerps `color` from the icy/dusty palette endpoints
+// based on the ring's resource mix (see bodyIcyness in data/stars.ts).
+// `alpha` is similarly lerped — icy rings paint opaque (Saturn-class
+// bright band) while dusty rings paint translucent (Uranus/Neptune-
+// class faint dust). When alpha < 1 the material flips to transparent
+// + depthWrite=false so the stars and background show through.
 //
 // Per-mesh uHovered uniform (0 / 1) inverts the entire fill to white
 // on hover. No per-vertex outline math because the geometry is a
 // continuous arc rather than a sprite — a 1-px rim would need a
 // second pass.
-export function makeIceRingMaterial(color: Color): ShaderMaterial {
+export function makeRingMaterial(color: Color, alpha: number): ShaderMaterial {
+  const transparent = alpha < 1;
   return new ShaderMaterial({
     uniforms: {
       uColor:   { value: new Color().copy(color) },
+      uAlpha:   { value: alpha },
       uHovered: { value: 0 },
     },
     vertexShader: `
@@ -160,18 +169,22 @@ export function makeIceRingMaterial(color: Color): ShaderMaterial {
     `,
     fragmentShader: `
       uniform vec3 uColor;
+      uniform float uAlpha;
       uniform float uHovered;
       void main() {
         vec3 col = uHovered > 0.5 ? vec3(1.0) : uColor;
-        gl_FragColor = vec4(col, 1.0);
+        float a  = uHovered > 0.5 ? 1.0 : uAlpha;
+        gl_FragColor = vec4(col, a);
       }
     `,
-    transparent: false,
-    // See makeFlatStarsMaterial — ice ring meshes ride the per-planet
-    // z stride too. The back / front mesh pair sits at z slightly
+    transparent,
+    // See makeFlatStarsMaterial — ring meshes ride the per-planet z
+    // stride too. The back / front mesh pair sits at z slightly
     // bracketing the host planet's z so the planet disc paints over
     // the back half and the front half overpaints the planet.
-    depthWrite: true,
+    // depthWrite stays off for translucent rings so the background
+    // shows through their gaps rather than masking it.
+    depthWrite: !transparent,
   });
 }
 

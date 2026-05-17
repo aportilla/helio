@@ -230,5 +230,5 @@ vega-b,vega,planet,Vega b,Vega b,catalog,0.05,,,2.4,,,,21.9,,,,,,,,,,,,,,,,,,,,,
 wise-j0336-0143-b,wise-j03360505-0143504,planet,WISE J0336-0143 b,WISE J0336-0143 b,catalog,0.97,,,2560,,,,2543.3,,,,,,,,,,,,,,,,,,,,,,,,,,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a
 wolf-1539-c,wolf-1539,planet,Wolf 1539 c,Wolf 1539 c,catalog,0.03,,,3.5,,,,4.9,,,,,,,,,,,,,,,,,,,,,,,,,,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a
 wolf-1539-b,wolf-1539,planet,Wolf 1539 b,Wolf 1539 b,catalog,2.41,,,2288,,,,260.7,,,,,,,,,,,,,,,,,,,,,,,,,,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a
-sol-main-belt,sol,belt,Sol Main Asteroid Belt,Main Belt,catalog,2.7,n/a,n/a,n/a,n/a,n/a,n/a,0.0005,n/a,n/a,n/a,n/a,n/a,n/a,0.1,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,8,7,1,5,3,1,n/a,n/a,asteroid,2.1,3.3,n/a,n/a,discrete,940,jupiter
-saturn-ring,saturn,ring,Saturn Ring System,Rings,catalog,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,0.95,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,0,1,8,0,0,1,n/a,n/a,ice,n/a,n/a,1.11,2.27,n/a,n/a,n/a
+sol-main-belt,sol,belt,Sol Main Asteroid Belt,Main Belt,catalog,2.7,n/a,n/a,n/a,n/a,n/a,n/a,0.0005,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,8,7,1,5,3,1,n/a,n/a,n/a,2.1,3.3,n/a,n/a,n/a,940,jupiter
+saturn-ring,saturn,ring,Saturn Ring System,Rings,catalog,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,0,1,8,0,0,1,n/a,n/a,n/a,n/a,n/a,1.11,2.27,n/a,n/a,n/a

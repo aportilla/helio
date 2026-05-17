@@ -1,22 +1,32 @@
-// Ice rings layer — one Mesh per ring per half (back + front), drawn
-// through triangle-strip annulus geometry around the host planet.
-// The back-half mesh draws before the planet disc (planet paints over
-// the back); the front-half mesh draws after (front paints over the
-// planet). Both halves share one ShaderMaterial per ring so hover
-// covers the whole annulus with a single uniform flip.
+// Rings layer — one Mesh per ring per half (back + front), drawn
+// through a triangle-strip annulus around the host planet. Both halves
+// share one ShaderMaterial per ring; hover flips a single uniform that
+// covers the whole annulus.
+//
+// Composition is read from the ring body's six-resource grid via
+// `bodyIcyness`: resVolatiles-dominant rings lerp toward the bright
+// Saturn-class palette, rocky-dominant rings lerp toward the dark
+// Uranus/Neptune-class palette. The same data drives mining yields,
+// so visual character and gameplay attribute can't disagree.
 
-import { BufferAttribute, BufferGeometry, Mesh, Scene, ShaderMaterial } from 'three';
-import { BELT_CLASS_COLOR, BODIES, ringClass, type Body } from '../../../data/stars';
-import { makeIceRingMaterial } from '../../materials';
+import { BufferAttribute, BufferGeometry, Color, Mesh, Scene, ShaderMaterial } from 'three';
 import {
-  ICE_RING_SEGMENTS, RENDER_ORDER_BACK_RING, RENDER_ORDER_FRONT_RING,
-  RING_MINOR_OVER_MAJOR, Z_BACK_RING, Z_FRONT_RING, Z_STRIDE,
+  BELT_RING_COLOR_ICY, BELT_RING_COLOR_ROCKY,
+  BODIES, bodyIcyness,
+  RING_ALPHA_DUSTY, RING_ALPHA_ICY,
+  type Body,
+} from '../../../data/stars';
+import { makeRingMaterial } from '../../materials';
+import {
+  RENDER_ORDER_BACK_RING, RENDER_ORDER_FRONT_RING,
+  RING_MINOR_OVER_MAJOR, RING_SEGMENTS,
+  Z_BACK_RING, Z_FRONT_RING, Z_STRIDE,
 } from '../layout/constants';
 import type { RowSlot } from '../layout/row';
 import { hitsRing, ringEllipseParams } from '../geom/ring';
 import type { DiagramPick, PlanetCenterIndex } from '../types';
 
-interface IceRing {
+interface Ring {
   bodyIdx: number;
   hostBodyIdx: number;
   backMesh: Mesh;
@@ -31,11 +41,11 @@ interface IceRing {
   tiltRad: number;
 }
 
-export class IceRingsLayer {
-  private readonly rings: IceRing[] = [];
-  // bodyIdx → IceRing ref, so setHovered can flip the material uniform
+export class RingsLayer {
+  private readonly rings: Ring[] = [];
+  // bodyIdx → Ring ref, so setHovered can flip the material uniform
   // without scanning rings.
-  private readonly ringByBodyIdx: Map<number, IceRing> = new Map();
+  private readonly ringByBodyIdx: Map<number, Ring> = new Map();
 
   constructor(scene: Scene, rowSlots: readonly RowSlot[]) {
     const planetItems = rowSlots.filter(r => r.kind === 'planet');
@@ -43,8 +53,7 @@ export class IceRingsLayer {
       const planet = BODIES[item.bodyIdx];
       if (planet.ring == null) continue;
       const ring = BODIES[planet.ring];
-      if (ringClass(ring) !== 'ice') continue;
-      const built = buildIceRing(ring, planet.ring, item.bodyIdx, item.widthPx);
+      const built = buildRing(ring, planet.ring, item.bodyIdx, item.widthPx);
       this.rings.push(built);
       this.ringByBodyIdx.set(built.bodyIdx, built);
       scene.add(built.backMesh);
@@ -83,14 +92,11 @@ export class IceRingsLayer {
     return null;
   }
 
-  // Returns true if this layer owns the ring being toggled (so the
-  // coordinator can stop short of also trying the debris-rings layer).
-  setHovered(pick: DiagramPick, value: 0 | 1): boolean {
-    if (pick.kind !== 'ring') return false;
+  setHovered(pick: DiagramPick, value: 0 | 1): void {
+    if (pick.kind !== 'ring') return;
     const ring = this.ringByBodyIdx.get(pick.bodyIdx);
-    if (!ring) return false;
+    if (!ring) return;
     ring.material.uniforms.uHovered.value = value;
-    return true;
   }
 
   dispose(): void {
@@ -102,10 +108,12 @@ export class IceRingsLayer {
   }
 }
 
-function buildIceRing(ring: Body, ringBodyIdx: number, hostBodyIdx: number, hostDiscPx: number): IceRing {
+function buildRing(ring: Body, ringBodyIdx: number, hostBodyIdx: number, hostDiscPx: number): Ring {
   const { innerR, outerR, tiltRad } = ringEllipseParams(ring, hostDiscPx);
-  const color = BELT_CLASS_COLOR.ice;
-  const material = makeIceRingMaterial(color);
+  const t = bodyIcyness(ring);
+  const color = new Color().copy(BELT_RING_COLOR_ROCKY).lerp(BELT_RING_COLOR_ICY, t);
+  const alpha = RING_ALPHA_DUSTY + (RING_ALPHA_ICY - RING_ALPHA_DUSTY) * t;
+  const material = makeRingMaterial(color, alpha);
   const backGeometry  = buildHalfAnnulusGeometry(innerR, outerR, tiltRad, /*upperHalf=*/ true);
   const frontGeometry = buildHalfAnnulusGeometry(innerR, outerR, tiltRad, /*upperHalf=*/ false);
   const backMesh  = new Mesh(backGeometry,  material);
@@ -128,7 +136,7 @@ function buildIceRing(ring: Body, ringBodyIdx: number, hostBodyIdx: number, host
 // in the ring's local frame, then rotates by tiltRad so the visible
 // silhouette matches the picker's hit-test math.
 function buildHalfAnnulusGeometry(innerR: number, outerR: number, tiltRad: number, upperHalf: boolean): BufferGeometry {
-  const N = ICE_RING_SEGMENTS;
+  const N = RING_SEGMENTS;
   const start = upperHalf ? 0 : Math.PI;
   const end   = start + Math.PI;
   const positions = new Float32Array((N + 1) * 2 * 3);

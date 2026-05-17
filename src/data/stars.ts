@@ -111,32 +111,6 @@ export type PlanetType =
   | 'hot_rocky' | 'rocky' | 'super_earth'
   | 'sub_neptune' | 'neptune' | 'jupiter';
 
-// Belt / ring sub-classification. 'asteroid' and 'debris' have rocky
-// chunks; 'ice' is volatile-dominated. Rings constrain to ice / debris
-// only — dust rings (Jupiter, Uranus inner) are deliberately not modeled
-// because they're visually negligible and gameplay-irrelevant.
-export type BeltClass = 'asteroid' | 'ice' | 'debris';
-
-// Rings are physically restricted to 'ice' or 'debris' — an "asteroid
-// ring" is not a real configuration (a single planet can't accumulate a
-// belt of km-scale rocky bodies above its Roche limit; debris is the
-// rocky-equivalent). The architect and the bodies.csv validator both
-// enforce this; the type makes the constraint legible at use sites.
-export type RingClass = Extract<BeltClass, 'ice' | 'debris'>;
-
-// Population-structure axis for belts. Orthogonal to BeltClass (which
-// captures composition + location). 'discrete' = a small number of large
-// parent bodies dominate the mass distribution (Sol Main Belt: Ceres
-// alone is ~35% of Main Belt mass; Kuiper Belt: Pluto/Eris similar);
-// gameplay maps to "sortie to a specific named body." 'collisional' =
-// mass spread across a steep power-law size distribution dominated by
-// dust + small parents (debris disks); gameplay maps to "sweep-harvest
-// a region." This is the field that actually distinguishes an asteroid
-// belt (primordial planetesimal survivors) from a debris field (second-
-// generation collisional dust) — under the old schema they shared a
-// composition enum and were otherwise indistinguishable.
-export type PopulationModel = 'discrete' | 'collisional';
-
 // One planet or moon. Catalog-sourced rows come from
 // scripts/scrape-planets-from-stellarcatalog.mjs; hand-seeded Sol bodies and
 // (later) procgen output share the same shape. `kind` discriminates whether
@@ -178,28 +152,22 @@ export interface Body {
   // meaningful (total belt mass) for belts but null for rings.
   readonly massEarth: number | null;
   readonly radiusEarth: number | null;
-  // Belt / ring sub-class. Null for planet / moon kinds.
-  readonly beltClass: BeltClass | null;
-  // Population structure for belts. Null for planet / moon / ring kinds.
-  // See PopulationModel: 'discrete' for primordial parent-body-dominated
-  // belts (asteroid, ice), 'collisional' for second-generation dust
-  // (debris).
-  readonly populationModel: PopulationModel | null;
-  // Diameter of the largest body in the belt, in km. For 'discrete'
-  // populations this is a meaningful "show up on the system map" anchor
-  // (Sol Main Belt's Ceres = 940 km; Kuiper Belt's Pluto = 2376 km).
-  // For 'collisional' populations the largest parent is small (debris
-  // disks have no Vesta-equivalent — their existence implies the
+  // Diameter of the largest body in the belt, in km. Shepherded
+  // belts (anchored to a giant via the architect's BELT_GIANT_ADJACENCY)
+  // sample from the parent-body range — Sol Main Belt's Ceres = 940 km,
+  // Kuiper Belt's Pluto = 2376 km. Free-float belts sample from the
+  // dust-cascade range (tens of km max — debris disks have no
+  // Vesta-equivalent because their existence implies the
   // collision cascade hasn't run out of material yet, which requires
   // many small parents rather than a few large ones). Null on planets,
   // moons, rings.
   readonly largestBodyKm: number | null;
   // Index into BODIES of the gas/ice giant that dynamically shepherds
-  // this belt (mean-motion resonance stabilizer for 'asteroid' and 'ice'
-  // classes; analog of Jupiter for Sol's Main Belt, Neptune for the
-  // Kuiper Belt). Null on debris fields (no shepherd needed —
-  // collisional dust isn't dynamically stabilized), on belts that
-  // formed without a giant in the system, and on planet/moon/ring kinds.
+  // this belt — mean-motion resonance stabilizer (analog of Jupiter
+  // for Sol's Main Belt, Neptune for the Kuiper Belt). Null on belts
+  // that formed without a giant in the system (free-float belts pull
+  // smaller largestBodyKm to reflect their dust-cascade character)
+  // and on planet/moon/ring kinds.
   readonly shepherdBodyIdx: number | null;
   // Architect's mass/radius taxonomy. See `PlanetType` for semantics.
   readonly planetType: PlanetType | null;
@@ -302,31 +270,26 @@ export const WORLD_CLASS_COLOR: Record<WorldClass, Color> = {
 };
 export const WORLD_CLASS_UNKNOWN_COLOR = new Color(0x808080);
 
-// Disc / chunk color per BeltClass. Asteroid belts read brown-tan
-// (rocky/metallic dominant), ice belts pale cyan (water ice), debris
-// fields dusty olive (mixed rocky + processed material).
-export const BELT_CLASS_COLOR: Record<BeltClass, Color> = {
-  asteroid: new Color(0xa89060),
-  ice:      new Color(0xb8d8e8),
-  debris:   new Color(0x806848),
-};
+// Endpoints of the rocky↔icy palette lerp shared by belts and rings.
+// `bodyIcyness` returns a 0..1 scalar from a body's resource grid
+// (resVolatiles vs. rocky resources); the renderer lerps between these.
+export const BELT_RING_COLOR_ICY   = new Color(0xb8d8e8);  // pale cyan (Saturn/KBO ice)
+export const BELT_RING_COLOR_ROCKY = new Color(0xa89060);  // brown-tan (Main Belt rocky)
+export const RING_ALPHA_ICY   = 1.0;
+export const RING_ALPHA_DUSTY = 0.55;
 
-// Narrowing accessor for ring bodies. Rings store their composition
-// in the same `beltClass` column as belts (one column per row, shared
-// schema), but the value is constrained to RingClass — the build
-// validator and the architect both reject 'asteroid' for rings. This
-// accessor exposes the narrower type so ring-rendering code doesn't
-// have to handle an 'asteroid' branch that can never fire. Throws on
-// invariant violation (something bypassed both writers).
-export function ringClass(body: Body): RingClass {
-  if (body.kind !== 'ring') {
-    throw new Error(`ringClass: ${body.id} is kind=${body.kind}, not 'ring'`);
-  }
-  const c = body.beltClass;
-  if (c === null || c === 'asteroid') {
-    throw new Error(`ringClass: ${body.id} has invalid beltClass=${c}`);
-  }
-  return c;
+// Map a body's resource grid to a 0..1 icyness scalar. Volatiles drive
+// the bright icy end; metals + silicates + rare earths drive the rocky
+// end. Returns 0.5 when the body carries no resource signal at all
+// (defensive fallback — every architect/CSV emit should set the grid).
+// Used by both ring and belt rendering to read composition off the same
+// data that drives mining yields.
+export function bodyIcyness(body: Body): number {
+  const v = body.resVolatiles ?? 0;
+  const rocky = (body.resMetals ?? 0) + (body.resSilicates ?? 0) + (body.resRareEarths ?? 0);
+  const denom = v + rocky;
+  if (denom <= 0) return 0.5;
+  return v / denom;
 }
 
 // =============================================================================

@@ -496,14 +496,11 @@ const BIOSPHERE_ARCHETYPES_SET = new Set([
 ]);
 const BODY_KINDS = new Set(['planet', 'moon', 'belt', 'ring']);
 const BODY_SOURCES = new Set(['catalog', 'procgen']);
-const BELT_CLASSES = new Set(['asteroid', 'ice', 'debris']);
-// Rings constrain to a subset of BELT_CLASSES — dust rings (Jupiter,
-// Uranus inner) are deliberately unmodeled (visually negligible, no
-// gameplay payoff), so rings are always 'ice' or 'debris'.
-const RING_CLASSES = new Set(['ice', 'debris']);
-// Population structure axis for belts. Orthogonal to BeltClass; only
-// meaningful for kind='belt' (rings + planets + moons stay null).
-const POPULATION_MODELS = new Set(['discrete', 'collisional']);
+// belt_class and population_model are vestigial columns kept in the
+// CSV schema so column positions don't shift, but ignored at runtime.
+// Composition lives in the six-resource grid; size character emerges
+// from the architect's shepherding-conditional largestBodyKm draw.
+// See the validators below.
 
 // Stars whose body list is hand-curated and authoritative — the moon
 // backfill pass skips planets hosted by these so missing moons read as
@@ -612,26 +609,20 @@ function parseCsvBodies(text, label) {
     if (worldClass !== null && !WORLD_CLASSES.has(worldClass)) {
       throw new Error(`${label}: ${id} invalid world_class=${worldClass}`);
     }
+    // belt_class is vestigial — composition lives in the resource grid
+    // for both belts and rings. Reject any value to surface stale CSV
+    // rows; the column stays in the schema so column positions don't
+    // shift, but it always parses to null.
     const beltClass = trackedCell('belt_class', 'beltClass');
     if (beltClass !== null) {
-      if (!BELT_CLASSES.has(beltClass)) {
-        throw new Error(`${label}: ${id} invalid belt_class=${beltClass}`);
-      }
-      if (kind === 'ring' && !RING_CLASSES.has(beltClass)) {
-        throw new Error(`${label}: ${id} ring rows must use belt_class in {${[...RING_CLASSES].join(',')}}, got ${beltClass}`);
-      }
+      throw new Error(`${label}: ${id} belt_class is vestigial; clear to n/a (composition lives in the resource grid)`);
     }
-    if ((kind === 'belt' || kind === 'ring') && beltClass === null) {
-      throw new Error(`${label}: ${id} kind=${kind} requires a belt_class`);
-    }
+    // population_model is vestigial — belt character emerges from the
+    // resource grid + largestBodyKm. Reject any value to surface stale
+    // CSV rows; the column stays in the schema so positions don't shift.
     const populationModel = trackedCell('population_model', 'populationModel');
     if (populationModel !== null) {
-      if (!POPULATION_MODELS.has(populationModel)) {
-        throw new Error(`${label}: ${id} invalid population_model=${populationModel}`);
-      }
-      if (kind !== 'belt') {
-        throw new Error(`${label}: ${id} population_model only valid on kind='belt' (got ${kind})`);
-      }
+      throw new Error(`${label}: ${id} population_model is vestigial; clear to n/a (belt character lives in the resource grid + largestBodyKm)`);
     }
     // shepherdId is a deferred reference resolved against the planet
     // index later in attachBodies. Validation here is just shape (set
@@ -670,8 +661,6 @@ function parseCsvBodies(text, label) {
       hostBodyIdx: null,
       planetType: null,
       worldClass,
-      beltClass,
-      populationModel,
       shepherdId,
       shepherdBodyIdx: null,
       biosphereArchetype,

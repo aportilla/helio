@@ -462,45 +462,47 @@ export const ORBITAL_PHASE_DEG = { min: 0, max: 360 };
 export const PROCGEN_VERSION = 'v7';
 
 // ---------------------------------------------------------------------------
-// Belts (asteroid / ice / debris) — system-level structural bands
+// Belts — system-level structural bands
 // ---------------------------------------------------------------------------
 
-export const BELT_CLASSES = ['asteroid', 'ice', 'debris'];
+// Belt context is a single thermal axis: warm (inward of giants, rocky-
+// leaning) or cold (outward of giants, volatile-leaning). Composition
+// lives in the six-resource grid; the renderer derives belt color from
+// resVolatiles vs. rocky resources. Size character emerges from
+// shepherding — belts anchored to a giant draw `largestBodyKm` from
+// the parent-body range (Ceres / Pluto class); free-float belts draw
+// from the dust-cascade range (~tens of km). No discrete enum exposes
+// the parent-body vs. dust-cascade distinction since gameplay treats
+// all belts uniformly as resource sources.
+export const BELT_CONTEXTS = ['warm', 'cold'];
 
-// Per-stellar-class occurrence probability for each belt class. Rolled
-// independently per belt class — a system can host any combination of
-// the three. Belts represent NOTABLE structural bands worth a player's
-// attention (resource clusters, debris fields with stories), not every
-// system's background Kuiper-analog. Sol's Main Belt counts as notable
-// (named, hand-curated); Sol's Kuiper Belt does not. These rates are
-// pulled down from the underlying physical occurrence stats by an order
-// of magnitude — most stars have *some* belt structure, but only a
-// minority host one that reads as a navigable / mine-able landmark in
-// the game.
+// Per-stellar-class occurrence probability for each belt context.
+// Rolled independently per context — a system can host warm + cold,
+// either alone, or neither. Belts represent NOTABLE structural bands
+// worth a player's attention (resource clusters, mining sites), not
+// every system's background Kuiper-analog. Sol's Main Belt counts as
+// notable (named, hand-curated); Sol's Kuiper Belt does not. These
+// rates are pulled down from the underlying physical occurrence stats
+// by an order of magnitude — most stars have *some* belt structure,
+// but only a minority host one that reads as a navigable / mine-able
+// landmark in the game.
 //
-// Debris rates are anchored to Spitzer/Herschel survey statistics
-// (Su 2006, Thureau 2014, Chen 2014). The observational peak is at A
-// (Vega/Fomalhaut/β Pic territory); O drops back down because
-// photoevaporation clears primordial disks in 1–3 Myr; F/G/K trail off
-// as the dust depletes faster than collisions can replenish it.
-// WD rate captures metal-pollution-evidence disks (Zuckerman 2010 —
-// ~25–50% of WDs accrete tidally-disrupted debris) filtered to those
-// where the dust component is visible at our scale.
-//
-// Asteroid rates favor cool main-sequence stars where resonance traps
-// stay stable over the long stellar lifetime — K/M dominate, with M
-// bumped from a previous 0.15 since long-lived M dwarfs preserve
-// shepherded belts particularly well once a giant is in the system.
+// Rates are the union of the old discrete + collisional rates (a
+// system used to roll each independently — same total occurrence,
+// minus the small double-belt overlap). Survey anchors: Spitzer/
+// Herschel debris statistics (Su 2006, Thureau 2014, Chen 2014); WD
+// captures metal-pollution-evidence disks (Zuckerman 2010 — ~25–50%
+// of WDs accrete tidally-disrupted debris).
 const BELT_OCCURRENCE_BY_CLASS_REALISTIC = {
-  O:  { asteroid: 0.08, ice: 0.12, debris: 0.15 },
-  B:  { asteroid: 0.10, ice: 0.15, debris: 0.25 },
-  A:  { asteroid: 0.12, ice: 0.18, debris: 0.32 },
-  F:  { asteroid: 0.18, ice: 0.18, debris: 0.18 },
-  G:  { asteroid: 0.22, ice: 0.15, debris: 0.10 },
-  K:  { asteroid: 0.22, ice: 0.15, debris: 0.08 },
-  M:  { asteroid: 0.20, ice: 0.12, debris: 0.04 },
-  WD: { asteroid: 0.05, ice: 0.05, debris: 0.12 },
-  BD: { asteroid: 0.05, ice: 0.05, debris: 0.02 },
+  O:  { warm: 0.15, cold: 0.19 },
+  B:  { warm: 0.21, cold: 0.26 },
+  A:  { warm: 0.25, cold: 0.32 },
+  F:  { warm: 0.25, cold: 0.25 },
+  G:  { warm: 0.26, cold: 0.19 },
+  K:  { warm: 0.25, cold: 0.18 },
+  M:  { warm: 0.22, cold: 0.14 },
+  WD: { warm: 0.11, cold: 0.11 },
+  BD: { warm: 0.06, cold: 0.06 },
 };
 
 // No gameplay tunes on belt occurrence today — the realistic rates above
@@ -516,69 +518,71 @@ export const BELT_OCCURRENCE_BY_CLASS = mergeTunes(
   BELT_OCCURRENCE_BY_CLASS_TUNE,
 );
 
-// Belt extent in AU, scaled by stellar luminosity (∝ √L roughly — the
-// snow line and rocky-zone boundary both move outward with hotter
-// stars). innerFrac / outerFrac are multiplied by the host's outerEdgeAu
-// from ORBITAL_GEOMETRY_BY_CLASS to get the band's AU bounds. Mass is
-// in M⊕, log-uniform between min and max.
+// Belt extent in AU when shepherding doesn't apply, scaled by stellar
+// luminosity via the host's outerEdgeAu from ORBITAL_GEOMETRY_BY_CLASS.
+// innerFrac / outerFrac are multiplied by outerEdgeAu to get the band's
+// AU bounds. Mass is in M⊕, log-uniform between min and max.
 //
-// Asteroid: between the rocky and giant zones (0.05–0.10× outer edge).
-// Ice: past the giant zone (0.75–1.20× outer edge — extends past
-// the architect's planet-placement cutoff). Debris: a wide warm band
-// straddling the planet zone (0.10–0.50×).
+//   warm: wide band from inside the rocky zone out to mid-planet zone
+//         (0.05–0.50×). Used as fallback when no inner giant shepherds.
+//   cold: past the planet zone out to where cold dust rings sit
+//         (0.75–2.50×). Fallback when no outer giant shepherds.
+//
+// Mass ranges span both archetypes — the realistic distribution
+// emerges because shepherded belts tend to be more massive (primordial
+// planetesimal survivors) while free-float belts tend smaller (recent
+// dust cascades), but we don't enforce a bimodal cut here.
 export const BELT_PLACEMENT = {
-  asteroid: { innerFrac: 0.05, outerFrac: 0.10, mass: { min: 0.0001, max: 0.01 } },
-  ice:      { innerFrac: 0.75, outerFrac: 1.25, mass: { min: 0.01,   max: 0.3  } },
-  debris:   { innerFrac: 0.10, outerFrac: 0.50, mass: { min: 0.001,  max: 0.05 } },
+  warm: { innerFrac: 0.05, outerFrac: 0.50, mass: { min: 0.0001, max: 0.05 } },
+  cold: { innerFrac: 0.75, outerFrac: 2.50, mass: { min: 0.001,  max: 0.3  } },
 };
 
-// Resource priors per belt class. Sampled as truncated normals,
-// rounded to integer, clamped [0, 10]. Asteroid belts skew metals/
-// silicates; ice belts dominate on volatiles; debris fields sit in the
-// middle with elevated exotics (processed-material proxy).
+// Resource priors per belt context. Sampled as truncated normals,
+// rounded to integer, clamped [0, 10]. The grid carries composition
+// AND drives rendered character (resVolatiles dominant → bright icy
+// chunks; rocky resources dominant → tan/dusty chunks). Wide sd
+// reflects the real spread: a warm belt can be a Sol-Main-Belt rocky
+// parent-body system OR an HD 69830-style processed-material cascade,
+// and the priors here cover both.
+//
+//   warm: rocky-dominant — high metals/silicates, low volatiles.
+//         Anchored on Sol Main Belt (rocky) + HD 69830 (warm dust)
+//         composition envelope.
+//   cold: volatile-dominant — high volatiles, low rocky. Anchored on
+//         Kuiper Belt (icy KBOs) + β Pic outer ring (mixed cold dust)
+//         envelope.
 const BELT_RESOURCE_PRIORS_REALISTIC = {
-  asteroid: {
-    resMetals:        { mean: 7, sd: 2, min: 0, max: 10 },
+  warm: {
+    resMetals:        { mean: 6, sd: 3, min: 0, max: 10 },
     resSilicates:     { mean: 6, sd: 2, min: 0, max: 10 },
     resVolatiles:     { mean: 1, sd: 1, min: 0, max: 10 },
-    resRareEarths:    { mean: 4, sd: 2, min: 0, max: 10 },
-    resRadioactives:  { mean: 3, sd: 2, min: 0, max: 10 },
-    resExotics:       { mean: 1, sd: 1, min: 0, max: 10 },
-  },
-  ice: {
-    resMetals:        { mean: 1, sd: 1, min: 0, max: 10 },
-    resSilicates:     { mean: 1, sd: 1, min: 0, max: 10 },
-    resVolatiles:     { mean: 9, sd: 1, min: 0, max: 10 },
-    resRareEarths:    { mean: 1, sd: 1, min: 0, max: 10 },
-    resRadioactives:  { mean: 1, sd: 1, min: 0, max: 10 },
+    resRareEarths:    { mean: 3, sd: 2, min: 0, max: 10 },
+    resRadioactives:  { mean: 2, sd: 2, min: 0, max: 10 },
     resExotics:       { mean: 2, sd: 2, min: 0, max: 10 },
   },
-  debris: {
-    resMetals:        { mean: 4, sd: 2, min: 0, max: 10 },
-    resSilicates:     { mean: 4, sd: 2, min: 0, max: 10 },
-    resVolatiles:     { mean: 3, sd: 2, min: 0, max: 10 },
-    resRareEarths:    { mean: 2, sd: 2, min: 0, max: 10 },
-    resRadioactives:  { mean: 2, sd: 2, min: 0, max: 10 },
+  cold: {
+    resMetals:        { mean: 2, sd: 2, min: 0, max: 10 },
+    resSilicates:     { mean: 2, sd: 2, min: 0, max: 10 },
+    resVolatiles:     { mean: 7, sd: 3, min: 0, max: 10 },
+    resRareEarths:    { mean: 1, sd: 1, min: 0, max: 10 },
+    resRadioactives:  { mean: 1, sd: 1, min: 0, max: 10 },
     resExotics:       { mean: 3, sd: 2, min: 0, max: 10 },
   },
 };
 
 // Gameplay tune: belts should be strategic mining targets that DOMINATE
 // their resource niche, not generic "any-resource" sources roughly equal
-// to planet surface mining. The realistic priors give a rocky planet
-// (5/6/3/4/3/1) higher per-cell metal yield than an asteroid belt
-// (7/6/1/4/3/1) once volumetric extraction factors in — so a player
-// thinking "where do I send the mining fleet" picks planets every time
-// and belts feel decorative. Bumps:
-//   - asteroid resMetals 7→8 (asteroid belt = THE strategic metal source)
-//   - ice resVolatiles 9→10 (ice belts = THE volatile source, max scale)
-//   - debris resExotics 3→5 (debris fields = THE processed-material source)
-// Each tune makes one belt class the unambiguous best option for one
-// resource category. Other resources untouched.
+// to planet surface mining. Without these tunes a rocky planet
+// (5/6/3/4/3/1) ties or beats a warm belt on per-cell metal yield once
+// volumetric extraction factors in — so a player thinking "where do I
+// send the mining fleet" picks planets every time and belts feel
+// decorative. Bumps:
+//   - warm resMetals    6→8 (THE strategic metal source)
+//   - cold resVolatiles 7→9 (THE volatile source)
+// Other resources untouched.
 const BELT_RESOURCE_PRIORS_TUNE = {
-  asteroid: { resMetals:    { mean: 8  } },
-  ice:      { resVolatiles: { mean: 10 } },
-  debris:   { resExotics:   { mean: 5  } },
+  warm: { resMetals:    { mean: 8 } },
+  cold: { resVolatiles: { mean: 9 } },
 };
 
 export const BELT_RESOURCE_PRIORS = mergeTunes(
@@ -586,85 +590,68 @@ export const BELT_RESOURCE_PRIORS = mergeTunes(
   BELT_RESOURCE_PRIORS_TUNE,
 );
 
-// Volatile / water-ice mass fraction per belt class, sampled per system.
-// Distinct from beltClass: a body inside an asteroid belt is *mostly*
-// rocky but the population is heterogeneous (Sol's C-types — ~60% of the
-// outer Main Belt — carry 5–10% water in hydrated silicates; Ceres alone
-// is ~25% ice by mass). A per-system roll lets the schema produce a
-// "water-rich C-type-dominated belt" worth a flavor beat without
-// re-bucketing it as an ice belt.
+// largestBodyKm draw range, conditioned on shepherding rather than a
+// discrete population enum. Shepherded belts (anchored to a giant via
+// BELT_GIANT_ADJACENCY) tend to be primordial parent-body inventories
+// with Ceres/Pluto-class anchors; free-float belts tend to be dust
+// cascades with sub-50-km parents. The architect picks the bucket
+// based on whether the belt found a shepherd at placement time.
 //
 // Anchors:
-//   asteroid: Main Belt bulk-average ~5%, with C-type-heavy outliers up
-//             to ~20% (Ceres-class). Tail clipped at 0.25.
-//   ice:      KBOs are 50–80% water + methane + N₂ ice by mass; pure-ice
-//             tail (Eris-class) approaches 0.95.
-//   debris:   wide-open prior reflecting the real population: warm
-//             silicate debris (HD 69830) is bone-dry, cold outer debris
-//             (β Pic's outer ring, Fomalhaut's main belt) can be quite
-//             icy. The roll picks the system's character.
-export const BELT_ICE_FRACTION = {
-  asteroid: { mean: 0.05, sd: 0.04, min: 0,    max: 0.25 },
-  ice:      { mean: 0.85, sd: 0.07, min: 0.50, max: 0.99 },
-  debris:   { mean: 0.15, sd: 0.12, min: 0,    max: 0.50 },
+//   warm shepherded:    Ceres 940 km (Sol Main Belt); range covers
+//                       Vesta-class 525 km to the upper bound where
+//                       a single body would dominate dynamics.
+//   cold shepherded:    Pluto 2376 km, Eris 2326 km (KBO inventory);
+//                       Quaoar / Sedna ~1000 km set the low end of
+//                       "notable belt with a named parent body."
+//   warm free-float:    dust cascade parent bodies; observed debris-
+//                       disk parents top out at tens-of-km (HD 69830
+//                       warm dust, β Pic parents inferred from
+//                       collision rates).
+//   cold free-float:    same scale as warm free-float — collisional
+//                       cascades require many small parents regardless
+//                       of where they sit.
+export const BELT_LARGEST_BODY_KM = {
+  warm: {
+    shepherded: { min: 100, max: 1000 },
+    freeFloat:  { min: 1,   max: 50   },
+  },
+  cold: {
+    shepherded: { min: 500, max: 2500 },
+    freeFloat:  { min: 1,   max: 50   },
+  },
 };
 
-// Population structure per belt class — orthogonal axis to composition.
-// `populationModel` is fixed per class (compositional asteroid/ice belts
-// are always parent-body-dominated; debris is by definition collisional
-// dust). `largestBodyKm` is log-uniform sampled within the range that
-// matches real-world inventories of that population type.
-//
-// Anchors:
-//   asteroid: Ceres 940 km (Sol Main Belt's largest); range covers
-//             smaller belts (Vesta-class 525 km) up to the modest upper
-//             bound where a single body would dominate the dynamics.
-//   ice:      Pluto 2376 km, Eris 2326 km (KBO inventory); Quaoar /
-//             Sedna ~1000 km set the low end of "notable belt with a
-//             named parent body."
-//   debris:   collisional cascades require many small parents, not a few
-//             large ones; observed debris-disk parent populations top
-//             out at the tens-of-km scale (β Pic's parent bodies inferred
-//             from collision rates).
-export const BELT_POPULATION = {
-  asteroid: { populationModel: 'discrete',    largestBodyKm: { min: 100, max: 1000 } },
-  ice:      { populationModel: 'discrete',    largestBodyKm: { min: 500, max: 2500 } },
-  debris:   { populationModel: 'collisional', largestBodyKm: { min: 1,   max: 50   } },
-};
-
-// Giant adjacency placement. Asteroid + ice belts are dynamically tied
-// to a shepherding giant (planetType ∈ {sub_neptune, neptune, jupiter}):
-// the giant's gravity defines stable orbits via mean-motion resonances
-// and Kirkwood-gap-style clearing. Without a giant nearby, primordial
-// planetesimals either accrete into a small planet or scatter, so the
-// belt should sit *adjacent to* the giant rather than wherever the
-// system's outer-edge fraction suggests.
+// Giant adjacency placement. Belts placed adjacent to a shepherding
+// giant (planetType ∈ {sub_neptune, neptune, jupiter}) inherit stable
+// resonance-anchored orbits — Sol Main Belt sits at Jupiter's resonance
+// boundary, the Kuiper Belt at Neptune's. Without a giant nearby,
+// belts fall back to BELT_PLACEMENT's system-edge-scaled band; the
+// `GIANTLESS_BELT_PENALTY` reflects the lower physical likelihood of
+// a stable belt persisting without a shepherd.
 //
 // Fractions are multiples of the shepherding giant's semiMajorAu:
-//   asteroid: anchored INWARD of the innermost giant. Sol Main Belt at
-//             2.7 AU = 0.52 × Jupiter's 5.2 AU; band 2.1–3.3 AU spans
-//             0.40–0.65×. Generalized here to 0.40–0.70×.
-//   ice:      anchored OUTWARD of the outermost giant. Kuiper Belt at
-//             ~40 AU = ~1.33 × Neptune's 30 AU; classical KBO band
-//             extends to ~50 AU = ~1.67×. Generalized to 1.30–1.85×.
-//
-// Debris is excluded — collisional dust isn't dynamically shepherded
-// and uses BELT_PLACEMENT (system-edge-scaled band) regardless of
-// whether a giant exists.
+//   warm: anchored INWARD of the innermost giant. Sol Main Belt at
+//         2.7 AU = 0.52 × Jupiter's 5.2 AU; band 2.1–3.3 AU spans
+//         0.40–0.65×. Generalized to 0.40–0.70×.
+//   cold: anchored OUTWARD of the outermost giant. Kuiper Belt at
+//         ~40 AU = ~1.33 × Neptune's 30 AU; classical KBO band
+//         extends to ~50 AU = ~1.67×. Generalized to 1.30–1.85×.
 export const BELT_GIANT_ADJACENCY = {
-  asteroid: { innerFrac: 0.40, outerFrac: 0.70 },
-  ice:      { innerFrac: 1.30, outerFrac: 1.85 },
+  warm: { innerFrac: 0.40, outerFrac: 0.70 },
+  cold: { innerFrac: 1.30, outerFrac: 1.85 },
 };
 
 // Occurrence multiplier applied when the system has no gas/ice giant.
-// Without a shepherd, asteroid + ice belts can still form from relic
-// planetesimals but are much rarer (Wyatt 2008 estimates <20% of the
-// giant-shepherded rate); debris fields are unaffected because they're
-// collisional dust, not dynamically anchored.
+// Without a shepherd, belts can still form but are rarer (Wyatt 2008
+// estimates <20% of the giant-shepherded rate for primordial belts;
+// dust cascades are less affected because they don't depend on
+// resonance trapping). Halfway between the old discrete-only penalty
+// (0.15–0.25) and collisional-only no-penalty (1.0) to represent the
+// blended physical likelihood.
 export const GIANTLESS_BELT_PENALTY = {
-  asteroid: 0.15,
-  ice:      0.25,
-  debris:   1.0,
+  warm: 0.30,
+  cold: 0.40,
 };
 
 // Planet types that count as "giant" for belt shepherding. Sub-neptunes
@@ -691,12 +678,12 @@ export const SHEPHERD_PLANET_TYPES = new Set(['sub_neptune', 'neptune', 'jupiter
 // class around super-earth-mass) anchor the lower end. These rates assume
 // "any ring system at all, irrespective of how visible it is."
 const RING_OCCURRENCE_BY_TYPE_REALISTIC = {
-  hot_rocky:   { p: 0.005, weights: { ice: 0.0,  debris: 1.0  } },  // tidally disrupted; rare
-  rocky:       { p: 0.01,  weights: { ice: 0.0,  debris: 1.0  } },
-  super_earth: { p: 0.05,  weights: { ice: 0.30, debris: 0.70 } },
-  sub_neptune: { p: 0.30,  weights: { ice: 0.75, debris: 0.25 } },
-  neptune:     { p: 0.70,  weights: { ice: 0.80, debris: 0.20 } },
-  jupiter:     { p: 0.80,  weights: { ice: 0.65, debris: 0.35 } },  // Sol giants = 4/4
+  hot_rocky:   { p: 0.005 },  // tidally disrupted; rare
+  rocky:       { p: 0.01  },
+  super_earth: { p: 0.05  },
+  sub_neptune: { p: 0.30  },
+  neptune:     { p: 0.70  },
+  jupiter:     { p: 0.80  },  // Sol giants = 4/4
 };
 
 // Gameplay tune: rings are filtered by perception, not added by gameplay
@@ -731,17 +718,91 @@ export const RING_OCCURRENCE_BY_TYPE = mergeTunes(
 
 // Ring extent in multiples of the host planet's radius. Inner edge sits
 // above the Roche limit (~1.1–1.5 R_p depending on density); outer edge
-// inside the synchronous-orbit boundary for ice rings (Saturn's F ring
-// ≈ 2.3 R_S, well inside synchronous). Debris rings are narrower (Uranus
-// epsilon, Neptune Adams ≈ 2.0 R_p), reflecting their shepherded origin.
-// iceFraction is set per class — Saturn ≈ 0.95; Uranus / Neptune ≈ 0.1.
+// inside the synchronous-orbit boundary (Saturn's F ring ≈ 2.3 R_S, well
+// inside synchronous). One distribution spans both bright icy rings and
+// faint dusty ones — composition lives in the resource grid (see
+// RING_RESOURCE_PRIORS_BY_TYPE), not in a separate class branch.
 export const RING_EXTENT = {
-  ice:    { inner: { mean: 1.20, sd: 0.10, min: 1.05, max: 1.5 },
-            outer: { mean: 2.30, sd: 0.20, min: 1.6,  max: 3.0 },
-            iceFraction: { mean: 0.92, sd: 0.05, min: 0.6, max: 0.99 } },
-  debris: { inner: { mean: 1.70, sd: 0.15, min: 1.3,  max: 2.1 },
-            outer: { mean: 2.10, sd: 0.20, min: 1.5,  max: 2.8 },
-            iceFraction: { mean: 0.15, sd: 0.10, min: 0,   max: 0.4 } },
+  inner: { mean: 1.40, sd: 0.15, min: 1.05, max: 2.0 },
+  outer: { mean: 2.20, sd: 0.20, min: 1.5,  max: 3.0 },
+};
+
+// ---------------------------------------------------------------------------
+// Ring resources — six 0..10 scalars per host planet type
+// ---------------------------------------------------------------------------
+
+// Rings carry the same six-resource grid as planets, moons, and belts.
+// Composition is the only physical attribute beyond extent — the
+// renderer derives ring brightness/color from the resource mix
+// (resVolatiles dominant → bright Saturn-class ice; resSilicates/Metals
+// dominant → dark Uranus/Neptune-class dust), so the priors here also
+// drive visual character.
+//
+// Anchors per host planet type:
+//   jupiter:     Saturn (resVolatiles ≈ 8/10 → bright icy) is the iconic
+//                case; Jupiter's main ring (silicate dust → low volatiles)
+//                is the alternate. Mean leans icy with a heavy rocky tail.
+//   neptune:     Both Sol ice giants have dark dusty rings (Uranus ε,
+//                Neptune Adams) — but their ring particles are still
+//                carbonaceous-ice mixes. Mean is mid-to-icy.
+//   sub_neptune: No Sol anchor; sits between jupiter and super_earth.
+//                Slight icy lean from formation in the volatile-rich outer
+//                disk.
+//   super_earth: J1407b-class hypothetical. Tidally-disrupted icy moon
+//                or captured cometary debris → mid; tidally-disrupted
+//                rocky moon → dusty. Mean balanced.
+//   rocky / hot_rocky: Very rare ring (occurrence <1%); when it happens
+//                it's debris from a tidally-disrupted asteroidal capture
+//                or impact ejecta, so heavily rocky / low volatiles.
+export const RING_RESOURCE_PRIORS_BY_TYPE = {
+  jupiter: {
+    resMetals:        { mean: 1, sd: 1, min: 0, max: 10 },
+    resSilicates:     { mean: 2, sd: 2, min: 0, max: 10 },
+    resVolatiles:     { mean: 7, sd: 2, min: 0, max: 10 },
+    resRareEarths:    { mean: 0, sd: 0, min: 0, max: 10 },
+    resRadioactives:  { mean: 0, sd: 0, min: 0, max: 10 },
+    resExotics:       { mean: 1, sd: 1, min: 0, max: 10 },
+  },
+  neptune: {
+    resMetals:        { mean: 2, sd: 2, min: 0, max: 10 },
+    resSilicates:     { mean: 3, sd: 2, min: 0, max: 10 },
+    resVolatiles:     { mean: 6, sd: 2, min: 0, max: 10 },
+    resRareEarths:    { mean: 0, sd: 0, min: 0, max: 10 },
+    resRadioactives:  { mean: 0, sd: 0, min: 0, max: 10 },
+    resExotics:       { mean: 1, sd: 1, min: 0, max: 10 },
+  },
+  sub_neptune: {
+    resMetals:        { mean: 2, sd: 2, min: 0, max: 10 },
+    resSilicates:     { mean: 3, sd: 2, min: 0, max: 10 },
+    resVolatiles:     { mean: 5, sd: 2, min: 0, max: 10 },
+    resRareEarths:    { mean: 0, sd: 0, min: 0, max: 10 },
+    resRadioactives:  { mean: 0, sd: 0, min: 0, max: 10 },
+    resExotics:       { mean: 1, sd: 1, min: 0, max: 10 },
+  },
+  super_earth: {
+    resMetals:        { mean: 3, sd: 2, min: 0, max: 10 },
+    resSilicates:     { mean: 4, sd: 2, min: 0, max: 10 },
+    resVolatiles:     { mean: 3, sd: 2, min: 0, max: 10 },
+    resRareEarths:    { mean: 1, sd: 1, min: 0, max: 10 },
+    resRadioactives:  { mean: 0, sd: 0, min: 0, max: 10 },
+    resExotics:       { mean: 1, sd: 1, min: 0, max: 10 },
+  },
+  rocky: {
+    resMetals:        { mean: 4, sd: 2, min: 0, max: 10 },
+    resSilicates:     { mean: 5, sd: 2, min: 0, max: 10 },
+    resVolatiles:     { mean: 1, sd: 1, min: 0, max: 10 },
+    resRareEarths:    { mean: 1, sd: 1, min: 0, max: 10 },
+    resRadioactives:  { mean: 0, sd: 0, min: 0, max: 10 },
+    resExotics:       { mean: 1, sd: 1, min: 0, max: 10 },
+  },
+  hot_rocky: {
+    resMetals:        { mean: 4, sd: 2, min: 0, max: 10 },
+    resSilicates:     { mean: 5, sd: 2, min: 0, max: 10 },
+    resVolatiles:     { mean: 0, sd: 0, min: 0, max: 10 },
+    resRareEarths:    { mean: 1, sd: 1, min: 0, max: 10 },
+    resRadioactives:  { mean: 0, sd: 0, min: 0, max: 10 },
+    resExotics:       { mean: 1, sd: 1, min: 0, max: 10 },
+  },
 };
 
 // ---------------------------------------------------------------------------

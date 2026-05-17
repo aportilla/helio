@@ -35,7 +35,6 @@ import {
   MOON_COUNT_BY_TYPE,
   BELT_OCCURRENCE_BY_CLASS,
   BELT_RESOURCE_PRIORS,
-  BELT_ICE_FRACTION,
   COMPANION_PLANET_SUPPRESSION,
   WATER_FRACTION_BY_CLASS,
   ICE_FRACTION_BY_CLASS,
@@ -293,26 +292,27 @@ console.log();
 // --- 4. Ring occurrence by planet type --------------------------------------
 
 console.log('=== Rings, by host planet type ===');
-console.log('  type        | planets |  rings    obs.rate    prior.p      z          obs.ice%  prior.ice%    obs.debris%  prior.debris%');
-console.log('  ------------+---------+-------    --------    -------      --------   --------  ----------    -----------  -------------');
-const ringsByType = {};  // type → { total, ice, debris }
+console.log('  type        | planets |  rings    obs.rate    prior.p      z         volatiles  rocky');
+console.log('  ------------+---------+-------    --------    -------      --------  ---------  -----');
+const ringsByType = {};  // type → { total, sumVolatiles, sumRocky }
 for (const b of bodies) {
   if (b.kind !== 'ring') continue;
   const host = bodies[b.hostBodyIdx];
   if (!host) continue;
   if (CURATED_HOSTS.has(host.hostId)) continue;
   const t = planetTypeOf(host);
-  if (!ringsByType[t]) ringsByType[t] = { total: 0, ice: 0, debris: 0 };
+  if (!ringsByType[t]) ringsByType[t] = { total: 0, sumVolatiles: 0, sumRocky: 0 };
   ringsByType[t].total += 1;
-  ringsByType[t][b.beltClass] = (ringsByType[t][b.beltClass] || 0) + 1;
+  ringsByType[t].sumVolatiles += (b.resVolatiles ?? 0);
+  ringsByType[t].sumRocky     += (b.resMetals ?? 0) + (b.resSilicates ?? 0) + (b.resRareEarths ?? 0);
 }
 for (const t of PLANET_TYPES) {
   const planets = typeCount[t] || 0;
-  const rc = ringsByType[t] || { total: 0, ice: 0, debris: 0 };
+  const rc = ringsByType[t] || { total: 0, sumVolatiles: 0, sumRocky: 0 };
   const p = RING_OCCURRENCE_BY_TYPE[t];
   const obsRate = planets ? rc.total / planets : 0;
-  const obsIce = rc.total ? rc.ice / rc.total : 0;
-  const obsDebris = rc.total ? rc.debris / rc.total : 0;
+  const avgVol = rc.total ? rc.sumVolatiles / rc.total : 0;
+  const avgRocky = rc.total ? rc.sumRocky / rc.total : 0;
   console.log(
     '  ' + pad(t, 11) +
     ' |' + pad(planets, 8, true) +
@@ -320,10 +320,8 @@ for (const t of PLANET_TYPES) {
     '   ' + pad((obsRate * 100).toFixed(2) + '%', 8, true) +
     '   ' + pad((p.p * 100).toFixed(2) + '%', 7, true) +
     fmtZ(zBinom(rc.total, planets, p.p), Math.min(planets * p.p, planets * (1 - p.p))) +
-    '   ' + pad((obsIce * 100).toFixed(0) + '%', 5, true) +
-    '     ' + pad((p.weights.ice * 100).toFixed(0) + '%', 5, true) +
-    '       ' + pad((obsDebris * 100).toFixed(0) + '%', 5, true) +
-    '       ' + pad((p.weights.debris * 100).toFixed(0) + '%', 5, true),
+    '   ' + pad(avgVol.toFixed(1), 7, true) +
+    '   ' + pad(avgRocky.toFixed(1), 5, true),
   );
 }
 console.log();
@@ -360,46 +358,52 @@ for (const t of PLANET_TYPES) {
 }
 console.log();
 
-// --- 6. Belt occurrence by stellar class ------------------------------------
+// --- 6. Belt occurrence by stellar class + context --------------------------
 
 // Every non-curated star is architect- or overlay-touched today, so the
 // belt-roll population is "stars with a class supported by the priors,
 // minus curated hosts (Sol's belts are catalog-canonical)."
 const eligibleStars = stars.filter(s => s.cls && !CURATED_HOSTS.has(s.id));
 
-console.log('=== Belts, by stellar class (architect + overlay) ===');
+// Belt context (warm / cold) isn't stored as a public field — derive
+// it from the belt id, which the architect emits as
+// `${starId}-belt-${context}`.
+const BELT_CONTEXTS = ['warm', 'cold'];
+function beltContextOf(belt) {
+  for (const c of BELT_CONTEXTS) if (belt.id.endsWith(`-belt-${c}`)) return c;
+  return null;
+}
+
+console.log('=== Belts, by stellar class + context (architect + overlay) ===');
 console.log('  z column: standard deviations from the prior. `*` flags |z|≥2 when min(np, n(1-p))≥5.');
-console.log('  cls | systems |  ast.obs  ast.prior   z         ice.obs  ice.prior   z         deb.obs  deb.prior   z');
-console.log('  ----+---------+--------- ----------  --------- --------  ---------  --------- --------  ---------  ---------');
+console.log('  cls | systems |  warm.obs  warm.prior   z          cold.obs  cold.prior   z');
+console.log('  ----+---------+----------  ----------   ---------  --------  ----------   ---------');
 const beltsByCls = {};
 for (const star of eligibleStars) {
   const cls = star.cls || '?';
-  if (!beltsByCls[cls]) beltsByCls[cls] = { systems: 0, asteroid: 0, ice: 0, debris: 0 };
+  if (!beltsByCls[cls]) beltsByCls[cls] = { systems: 0, warm: 0, cold: 0 };
   beltsByCls[cls].systems += 1;
   for (const bi of star.belts) {
     const belt = bodies[bi];
     if (!belt || belt.source !== 'procgen') continue;
-    beltsByCls[cls][belt.beltClass] = (beltsByCls[cls][belt.beltClass] || 0) + 1;
+    const ctx = beltContextOf(belt);
+    if (ctx) beltsByCls[cls][ctx] += 1;
   }
 }
 for (const cls of STELLAR_CLASSES) {
-  const row = beltsByCls[cls] || { systems: 0, asteroid: 0, ice: 0, debris: 0 };
+  const row = beltsByCls[cls] || { systems: 0, warm: 0, cold: 0 };
   const p = BELT_OCCURRENCE_BY_CLASS[cls];
   const n = Math.max(1, row.systems);
-  const obsA = row.asteroid / n, obsI = row.ice / n, obsD = row.debris / n;
-  console.log(
-    '  ' + pad(cls, 4) +
-    '| ' + pad(row.systems, 7, true) +
-    ' | ' + pad((obsA * 100).toFixed(2) + '%', 7, true) +
-    '   ' + pad((p.asteroid * 100).toFixed(2) + '%', 6, true) +
-    fmtZ(zBinom(row.asteroid, row.systems, p.asteroid), Math.min(row.systems * p.asteroid, row.systems * (1 - p.asteroid))) +
-    '  ' + pad((obsI * 100).toFixed(2) + '%', 6, true) +
-    '   ' + pad((p.ice * 100).toFixed(2) + '%', 6, true) +
-    fmtZ(zBinom(row.ice, row.systems, p.ice), Math.min(row.systems * p.ice, row.systems * (1 - p.ice))) +
-    '  ' + pad((obsD * 100).toFixed(2) + '%', 6, true) +
-    '   ' + pad((p.debris * 100).toFixed(2) + '%', 6, true) +
-    fmtZ(zBinom(row.debris, row.systems, p.debris), Math.min(row.systems * p.debris, row.systems * (1 - p.debris))),
-  );
+  const cells = BELT_CONTEXTS.map(ctx => {
+    const obs = row[ctx] / n;
+    const pri = p[ctx];
+    return (
+      '  ' + pad((obs * 100).toFixed(2) + '%', 7, true) +
+      '   ' + pad((pri * 100).toFixed(2) + '%', 7, true) +
+      fmtZ(zBinom(row[ctx], row.systems, pri), Math.min(row.systems * pri, row.systems * (1 - pri)))
+    );
+  }).join('  ');
+  console.log('  ' + pad(cls, 4) + '| ' + pad(row.systems, 7, true) + ' |' + cells);
 }
 console.log();
 
@@ -488,26 +492,27 @@ for (const cls of Object.keys(PLANET_RESOURCE_PRIORS_BY_CLASS).sort()) {
 }
 console.log();
 
-console.log('=== Resource means, by belt class (procgen belts, 0-10 scale) ===');
-console.log('  class       |  n      met  sil  vol  rare radio exo    (priors in brackets)');
-const beltResByClass = {};
+console.log('=== Resource means, by belt context (procgen belts, 0-10 scale) ===');
+console.log('  context           |  n      met  sil  vol  rare radio exo    (priors in brackets)');
+const beltResByCtx = {};
 for (const b of bodies) {
   if (b.kind !== 'belt' || b.source !== 'procgen') continue;
-  if (!b.beltClass) continue;
-  if (!beltResByClass[b.beltClass]) {
-    beltResByClass[b.beltClass] = { n: 0, sums: Object.fromEntries(RES.map(f => [f, 0])) };
+  const ctx = beltContextOf(b);
+  if (!ctx) continue;
+  if (!beltResByCtx[ctx]) {
+    beltResByCtx[ctx] = { n: 0, sums: Object.fromEntries(RES.map(f => [f, 0])) };
   }
-  beltResByClass[b.beltClass].n += 1;
-  for (const f of RES) if (b[f] != null) beltResByClass[b.beltClass].sums[f] += b[f];
+  beltResByCtx[ctx].n += 1;
+  for (const f of RES) if (b[f] != null) beltResByCtx[ctx].sums[f] += b[f];
 }
-for (const cls of Object.keys(BELT_RESOURCE_PRIORS).sort()) {
-  const r = beltResByClass[cls];
-  const p = BELT_RESOURCE_PRIORS[cls];
+for (const ctx of BELT_CONTEXTS) {
+  const r = beltResByCtx[ctx];
+  const p = BELT_RESOURCE_PRIORS[ctx];
   if (!r || !r.n) continue;
   const obs = RES.map(f => (r.sums[f] / r.n).toFixed(1).padStart(3));
   const prior = RES.map(f => p[f].mean.toString().padStart(3));
   console.log(
-    '  ' + pad(cls, 11) +
+    '  ' + pad(ctx, 17) +
     ' | ' + pad(r.n, 4, true) +
     '   ' + obs.join('  ') +
     '   [' + prior.join(' ') + ']',
@@ -515,58 +520,60 @@ for (const cls of Object.keys(BELT_RESOURCE_PRIORS).sort()) {
 }
 console.log();
 
-// --- 9b. Belt ice fraction + largest body + shepherd coverage ---------------
+// --- 9b. Belt largest body + shepherd coverage ------------------------------
 
-console.log('=== Belt iceFraction + largestBodyKm, by class (procgen belts) ===');
-console.log('  class    |  n     ice.mean  ice.sd   ice.prior.mean  | largest.geomean.km  largest.range.km');
+console.log('=== Belt largestBodyKm, by context × shepherding (procgen belts) ===');
+console.log('  context  shepherded |  n     geomean.km    range.km');
 const beltExtras = {};
 for (const b of bodies) {
   if (b.kind !== 'belt' || b.source !== 'procgen') continue;
-  if (!b.beltClass) continue;
-  if (!beltExtras[b.beltClass]) beltExtras[b.beltClass] = { iceArr: [], logKm: [] };
-  if (b.iceFraction != null)    beltExtras[b.beltClass].iceArr.push(b.iceFraction);
-  if (b.largestBodyKm != null)  beltExtras[b.beltClass].logKm.push(Math.log10(b.largestBodyKm));
+  const ctx = beltContextOf(b);
+  if (!ctx) continue;
+  const key = `${ctx}:${b.shepherdBodyIdx != null ? 'yes' : 'no'}`;
+  if (!beltExtras[key]) beltExtras[key] = { logKm: [] };
+  if (b.largestBodyKm != null) beltExtras[key].logKm.push(Math.log10(b.largestBodyKm));
 }
-for (const cls of Object.keys(BELT_ICE_FRACTION).sort()) {
-  const r = beltExtras[cls];
-  if (!r || !r.iceArr.length) continue;
-  const ice = meanStd(r.iceArr);
-  const ipri = BELT_ICE_FRACTION[cls];
-  const logMean = r.logKm.reduce((a, b) => a + b, 0) / r.logKm.length;
-  const kmGeomean = Math.pow(10, logMean);
-  const kmMin = Math.pow(10, Math.min(...r.logKm));
-  const kmMax = Math.pow(10, Math.max(...r.logKm));
-  console.log(
-    '  ' + pad(cls, 8) +
-    ' | ' + pad(r.iceArr.length, 4, true) +
-    '  ' + pad(ice.mean.toFixed(3), 7, true) +
-    '   ' + pad(ice.sd.toFixed(3), 5, true) +
-    '    ' + pad(ipri.mean.toFixed(2), 5, true) +
-    '            | ' + pad(kmGeomean.toFixed(1), 12, true) +
-    '       ' + pad(kmMin.toFixed(1) + '–' + kmMax.toFixed(1), 16, true),
-  );
+for (const ctx of BELT_CONTEXTS) {
+  for (const shep of ['yes', 'no']) {
+    const r = beltExtras[`${ctx}:${shep}`];
+    if (!r || !r.logKm.length) continue;
+    const logMean = r.logKm.reduce((a, b) => a + b, 0) / r.logKm.length;
+    const kmGeomean = Math.pow(10, logMean);
+    const kmMin = Math.pow(10, Math.min(...r.logKm));
+    const kmMax = Math.pow(10, Math.max(...r.logKm));
+    console.log(
+      '  ' + pad(ctx, 8) +
+      '    ' + pad(shep, 3) +
+      '     | ' + pad(r.logKm.length, 4, true) +
+      '   ' + pad(kmGeomean.toFixed(1), 9, true) +
+      '       ' + pad(kmMin.toFixed(1) + '–' + kmMax.toFixed(1), 16, true),
+    );
+  }
 }
 console.log();
 
-// Shepherd coverage — what fraction of asteroid/ice belts landed adjacent
-// to a giant vs took the giantless penalty path. Debris always reports 0%
-// by design (collisional dust doesn't shepherd). High coverage on
-// asteroid/ice indicates most procgen systems are spawning at least one
-// giant; low coverage flags either over-penalty or under-supply of giants.
+// Shepherd coverage — what fraction of belts landed adjacent to a
+// giant vs took the giantless penalty path. Shepherded belts pull
+// largestBodyKm from the parent-body scale; free-float belts pull
+// from the dust-cascade scale. High coverage indicates most procgen
+// systems are spawning at least one giant; low coverage flags either
+// over-penalty or under-supply of giants.
 console.log('=== Belt shepherd coverage (procgen belts) ===');
-console.log('  class    |  n      shepherded   pct');
+console.log('  context           |  n      shepherded   pct');
 const shepCov = {};
 for (const b of bodies) {
   if (b.kind !== 'belt' || b.source !== 'procgen') continue;
-  if (!b.beltClass) continue;
-  if (!shepCov[b.beltClass]) shepCov[b.beltClass] = { n: 0, shepherded: 0 };
-  shepCov[b.beltClass].n += 1;
-  if (b.shepherdBodyIdx != null) shepCov[b.beltClass].shepherded += 1;
+  const ctx = beltContextOf(b);
+  if (!ctx) continue;
+  if (!shepCov[ctx]) shepCov[ctx] = { n: 0, shepherded: 0 };
+  shepCov[ctx].n += 1;
+  if (b.shepherdBodyIdx != null) shepCov[ctx].shepherded += 1;
 }
-for (const cls of Object.keys(shepCov).sort()) {
-  const r = shepCov[cls];
+for (const ctx of BELT_CONTEXTS) {
+  const r = shepCov[ctx];
+  if (!r) continue;
   console.log(
-    '  ' + pad(cls, 8) +
+    '  ' + pad(ctx, 17) +
     ' | ' + pad(r.n, 4, true) +
     '   ' + pad(r.shepherded, 5, true) +
     '       ' + pct(r.shepherded, r.n),

@@ -20,9 +20,9 @@ export function picksEqual(a: DiagramPick | null, b: DiagramPick | null): boolea
 }
 
 // PlanetsLayer publishes one entry per planet after its layout pass;
-// MoonsLayer + IceRingsLayer + DebrisRingsLayer consume it to position
-// elements relative to their host planets. Map key is the planet's
-// bodyIdx (so consumers can look up by host without an indexOf scan).
+// MoonsLayer + RingsLayer consume it to position elements relative to
+// their host planets. Map key is the planet's bodyIdx (so consumers
+// can look up by host without an indexOf scan).
 export interface PlanetCenter {
   cx: number;
   cy: number;

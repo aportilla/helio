@@ -1,10 +1,9 @@
 // Blob/chunk primitives — shape libraries, baking, sampling, and the
-// shared indexed-triangle Mesh pool wrapper. Belts and debris-rings
-// layers both build on these; ice rings render through their own
-// triangle-strip path (see geom/ring.ts + layers/ice-rings.ts).
+// shared indexed-triangle Mesh pool wrapper. Only the belts layer uses
+// these now; rings render through a triangle-strip annulus (see
+// geom/ring.ts + layers/rings.ts).
 
 import { BufferAttribute, BufferGeometry, Mesh, ShaderMaterial } from 'three';
-import type { BeltClass } from '../../../data/stars';
 import { makeBlobMaterial } from '../../materials';
 
 // Two libraries of irregular convex polygon silhouettes — `potato`
@@ -39,8 +38,8 @@ const POTATO_SHAPES: ReadonlyArray<ReadonlyArray<readonly [number, number]>> = [
 
 // Crystal shapes — 3-5 vertices, mixed radii (some flats, some sharp
 // points) so the silhouette reads as a faceted shard rather than a
-// rounded blob. Used by ice belts + (in principle) ice rings if they
-// ever switch to chunks.
+// rounded blob. Used by icy-leaning belt chunks (chosen by `shapesFor`
+// when bodyIcyness > 0.5).
 const CRYSTAL_SHAPES: ReadonlyArray<ReadonlyArray<readonly [number, number]>> = [
   // Asymmetric pentagon shard
   [[1.00, 0.00], [0.25, 0.95], [-0.85, 0.25], [-0.40, -0.65], [0.55, -0.70]],
@@ -58,8 +57,12 @@ const CRYSTAL_SHAPES: ReadonlyArray<ReadonlyArray<readonly [number, number]>> = 
 
 export type ShapeLibrary = ReadonlyArray<ReadonlyArray<readonly [number, number]>>;
 
-export function shapesFor(beltClass: BeltClass | null): ShapeLibrary {
-  return beltClass === 'ice' ? CRYSTAL_SHAPES : POTATO_SHAPES;
+// Belt chunks pick a shape library based on icyness: volatile-dominant
+// belts read as faceted ice shards (CRYSTAL_SHAPES); rocky-dominant
+// belts read as weathered boulders (POTATO_SHAPES). The 0.5 cut is the
+// midpoint of the bodyIcyness 0..1 scalar.
+export function shapesFor(icyness: number): ShapeLibrary {
+  return icyness > 0.5 ? CRYSTAL_SHAPES : POTATO_SHAPES;
 }
 
 // Per-chunk spec produced by the position samplers and consumed by

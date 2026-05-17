@@ -29,13 +29,13 @@ import {
   BELT_OCCURRENCE_BY_CLASS,
   BELT_PLACEMENT,
   BELT_RESOURCE_PRIORS,
-  BELT_ICE_FRACTION,
-  BELT_POPULATION,
+  BELT_LARGEST_BODY_KM,
   BELT_GIANT_ADJACENCY,
   GIANTLESS_BELT_PENALTY,
   SHEPHERD_PLANET_TYPES,
   RING_OCCURRENCE_BY_TYPE,
   RING_EXTENT,
+  RING_RESOURCE_PRIORS_BY_TYPE,
 } from './procgen-priors.mjs';
 
 // =============================================================================
@@ -71,11 +71,12 @@ function moonPrng(planetId, mIdx, salt) {
   return mulberry32(hash32(`${planetId}:moon${mIdx}:${salt}:${PROCGEN_VERSION}`));
 }
 
-// Per-(star, beltClass, salt) PRNG. Belts are system-level structural
-// features — one of each class per star at most — so the slot key is
-// the class name rather than an index.
-function beltPrng(starId, beltClass, salt) {
-  return mulberry32(hash32(`${starId}:belt:${beltClass}:${salt}:${PROCGEN_VERSION}`));
+// Per-(star, context, salt) PRNG. Belts are system-level structural
+// features — one per context (discrete_warm, discrete_cold,
+// collisional_warm, collisional_cold) per star at most — so the slot
+// key is the context name rather than an index.
+function beltPrng(starId, context, salt) {
+  return mulberry32(hash32(`${starId}:belt:${context}:${salt}:${PROCGEN_VERSION}`));
 }
 
 // Per-(planet, salt) PRNG for ring sampling. Like moonPrng, keyed off
@@ -145,8 +146,8 @@ function makeBody(props) {
     hostStarIdx: null,
     hostBodyIdx: null,
     planetType: null,
-    worldClass: null, beltClass: null,
-    populationModel: null, largestBodyKm: null,
+    worldClass: null,
+    largestBodyKm: null,
     // shepherdId is the architect's deferred form of shepherdBodyIdx —
     // it stores the giant's *string id* because the Body's array
     // position isn't known until attachBodies runs. build-catalog
@@ -235,13 +236,9 @@ export function generateMoons(planet, planetType) {
 // Belts
 // =============================================================================
 
-// Roman numeral for the IAU-style "II Belt" naming below. Caps at IV —
-// no system today has more than 3 belt classes, so this is plenty.
-const BELT_NUMERAL = { asteroid: 'I', debris: 'II', ice: 'III' };
-
-// Descriptive belt name keyed off the band's center distance and class:
-// e.g. "Inner Asteroid Belt", "Outer Ice Belt". Used for procgen rows
-// where there's no curated colloquial name. Bands at < 1 AU are "Hot",
+// Descriptive belt name keyed off the band's center distance:
+// e.g. "Inner Belt", "Outer Debris Field". Used for procgen rows where
+// there's no curated colloquial name. Bands at < 1 AU are "Hot",
 // 1–5 AU "Inner", 5–20 AU "Middle", 20–100 AU "Outer", >100 AU "Distant".
 function describeBeltLocation(centerAu) {
   if (centerAu < 1)   return 'Hot';
@@ -251,11 +248,14 @@ function describeBeltLocation(centerAu) {
   return 'Distant';
 }
 
-const BELT_CLASS_LABEL = {
-  asteroid: 'Asteroid Belt',
-  ice:      'Ice Belt',
-  debris:   'Debris Field',
-};
+// Composition adjective derived from the dominant resource axis:
+// volatiles → "Icy", rocky resources → "Rocky". Used in belt names
+// so a glance at "Sol Outer Icy Belt" reads what's in it.
+function describeBeltComposition(resources) {
+  const v = resources.resVolatiles ?? 0;
+  const rocky = (resources.resMetals ?? 0) + (resources.resSilicates ?? 0) + (resources.resRareEarths ?? 0);
+  return v > rocky ? 'Icy' : 'Rocky';
+}
 
 // Identify the giant(s) in a placed-planet list (innermost + outermost).
 // SHEPHERD_PLANET_TYPES gates membership; sub_neptune mass is enough to
@@ -272,14 +272,16 @@ function findGiants(placedPlanets) {
   };
 }
 
-// Generate 0..3 belts for one star (asteroid, ice, debris — each rolled
-// independently). Returns Body[] ready to concatenate with the planet
+// Generate 0..2 belts for one star, one roll per BELT_CONTEXTS entry
+// (warm, cold). Returns Body[] ready to concatenate with the planet
 // stream. `placedPlanets` is the list of planets already laid down for
 // this system (architect + catalog combined for the overlay path) —
-// asteroid + ice belts use it to anchor adjacent to the system's giants
-// and record a shepherd. Without a giant the occurrence is multiplied
-// by GIANTLESS_BELT_PENALTY[beltClass] before the roll, and placement
-// falls back to BELT_PLACEMENT's system-edge-scaled band.
+// belts use it to anchor adjacent to the system's giants and record a
+// shepherd. Without a giant the occurrence is multiplied by
+// GIANTLESS_BELT_PENALTY[context] before the roll, and placement falls
+// back to BELT_PLACEMENT's system-edge-scaled band. Shepherded belts
+// get a larger-parent-body size draw; free-float belts get a dust-
+// cascade-scale size draw — see BELT_LARGEST_BODY_KM.
 //
 // Exported so the catalog backfill in build-catalog.mjs could add belts
 // to partially-observed catalog stars later (v1 only emits during
@@ -293,34 +295,27 @@ export function generateBelts(star, placedPlanets = []) {
   const { innermost: innerGiant, outermost: outerGiant } = findGiants(placedPlanets);
 
   const belts = [];
-  for (const beltClass of Object.keys(occurrence)) {
-    // Giantless penalty: asteroid + ice belts need a shepherding giant
-    // to stay dynamically stable. Debris is unaffected (collisional dust
-    // doesn't require a shepherd).
-    const hasShepherd = beltClass === 'asteroid' ? !!innerGiant
-                      : beltClass === 'ice'      ? !!outerGiant
-                      : true;
-    const penalty = hasShepherd ? 1.0 : GIANTLESS_BELT_PENALTY[beltClass];
-    const effectiveRate = occurrence[beltClass] * penalty;
+  for (const context of Object.keys(occurrence)) {
+    // Shepherd availability gates both the occurrence rate (no
+    // shepherd → giantless penalty) and the largestBodyKm draw
+    // (shepherded → parent-body scale; free-float → dust-cascade scale).
+    const shepherd = context === 'warm' ? innerGiant : outerGiant;
+    const hasShepherd = !!shepherd;
+    const penalty = hasShepherd ? 1.0 : GIANTLESS_BELT_PENALTY[context];
+    const effectiveRate = occurrence[context] * penalty;
 
-    const rollPrng = beltPrng(star.id, beltClass, 'occur');
+    const rollPrng = beltPrng(star.id, context, 'occur');
     if (rollPrng() >= effectiveRate) continue;
 
-    // Placement: shepherded asteroid/ice belts anchor against the giant;
-    // debris (and giantless belts) fall back to the system-edge band
-    // from BELT_PLACEMENT.
-    const placement = BELT_PLACEMENT[beltClass];
+    // Placement: anchored to the shepherd when one exists, otherwise
+    // a fallback band keyed to the system's outer edge.
+    const placement = BELT_PLACEMENT[context];
     let innerAu, outerAu, shepherdId;
-    if (beltClass === 'asteroid' && innerGiant) {
-      const adj = BELT_GIANT_ADJACENCY.asteroid;
-      innerAu = innerGiant.semiMajorAu * adj.innerFrac;
-      outerAu = innerGiant.semiMajorAu * adj.outerFrac;
-      shepherdId = innerGiant.id;
-    } else if (beltClass === 'ice' && outerGiant) {
-      const adj = BELT_GIANT_ADJACENCY.ice;
-      innerAu = outerGiant.semiMajorAu * adj.innerFrac;
-      outerAu = outerGiant.semiMajorAu * adj.outerFrac;
-      shepherdId = outerGiant.id;
+    if (hasShepherd) {
+      const adj = BELT_GIANT_ADJACENCY[context];
+      innerAu = shepherd.semiMajorAu * adj.innerFrac;
+      outerAu = shepherd.semiMajorAu * adj.outerFrac;
+      shepherdId = shepherd.id;
     } else {
       innerAu = geom.outerEdgeAu * placement.innerFrac;
       outerAu = geom.outerEdgeAu * placement.outerFrac;
@@ -328,56 +323,48 @@ export function generateBelts(star, placedPlanets = []) {
     }
     const centerAu = (innerAu + outerAu) / 2;
 
-    // Mass: log-uniform between placement.mass.min and .max. Mass priors
-    // are class-keyed (BELT_PLACEMENT) and don't shift with the placement
-    // strategy — a shepherded asteroid belt is still asteroid-class mass.
-    const massPrng = beltPrng(star.id, beltClass, 'mass');
+    // Mass: log-uniform between placement.mass.min and .max.
+    const massPrng = beltPrng(star.id, context, 'mass');
     const logMin = Math.log10(placement.mass.min);
     const logMax = Math.log10(placement.mass.max);
     const massEarth = Math.pow(10, logMin + massPrng() * (logMax - logMin));
 
     // Resources: per-field truncated normal from BELT_RESOURCE_PRIORS.
-    const resPriors = BELT_RESOURCE_PRIORS[beltClass];
+    // Carries composition signal — the renderer reads it back to lerp
+    // chunk color between rocky-tan and icy-cyan.
+    const resPriors = BELT_RESOURCE_PRIORS[context];
     const resources = {};
     for (const field of Object.keys(resPriors)) {
-      const prng = beltPrng(star.id, beltClass, `res_${field}`);
+      const prng = beltPrng(star.id, context, `res_${field}`);
       resources[field] = Math.round(sampleTruncated(prng, resPriors[field]));
     }
 
-    // Per-system ice/volatile mass fraction. Sampled from priors keyed
-    // off beltClass — see BELT_ICE_FRACTION for class anchors. Lets a
-    // "water-rich C-type-dominated asteroid belt" or a "bone-dry warm
-    // debris field" emerge from the rolls rather than be hard-coded.
-    const icePrng = beltPrng(star.id, beltClass, 'ice');
-    const iceFraction = Number(sampleTruncated(icePrng, BELT_ICE_FRACTION[beltClass]).toFixed(3));
-
-    // Population structure — populationModel is class-fixed (asteroid +
-    // ice are 'discrete', debris is 'collisional'); largestBodyKm is a
-    // log-uniform sample within the class's anchor range. See
-    // BELT_POPULATION for the inventory anchors.
-    const popSpec = BELT_POPULATION[beltClass];
-    const sizePrng = beltPrng(star.id, beltClass, 'largest');
-    const logKmMin = Math.log10(popSpec.largestBodyKm.min);
-    const logKmMax = Math.log10(popSpec.largestBodyKm.max);
+    // largestBodyKm: log-uniform within the shepherding-conditional
+    // range. Shepherded belts pull from the parent-body scale (Ceres/
+    // Pluto class); free-float belts pull from the dust-cascade scale
+    // (tens of km max). Captures the real bimodality of belt
+    // populations without exposing a discrete enum.
+    const kmRange = BELT_LARGEST_BODY_KM[context][hasShepherd ? 'shepherded' : 'freeFloat'];
+    const sizePrng = beltPrng(star.id, context, 'largest');
+    const logKmMin = Math.log10(kmRange.min);
+    const logKmMax = Math.log10(kmRange.max);
     const largestBodyKm = Math.pow(10, logKmMin + sizePrng() * (logKmMax - logKmMin));
 
-    const formal = `${star.name} ${describeBeltLocation(centerAu)} ${BELT_CLASS_LABEL[beltClass]}`;
+    const composition = describeBeltComposition(resources);
+    const formal = `${star.name} ${describeBeltLocation(centerAu)} ${composition} Belt`;
     belts.push(makeBody({
-      id: `${star.id}-belt-${beltClass}`,
+      id: `${star.id}-belt-${context}`,
       hostId: star.id,
       kind: 'belt',
       formalName: formal,
       name: formal,
       source: 'procgen',
-      beltClass,
-      populationModel: popSpec.populationModel,
       largestBodyKm: Number(largestBodyKm.toFixed(1)),
       shepherdId,
       semiMajorAu: Number(centerAu.toFixed(3)),
       innerAu: Number(innerAu.toFixed(3)),
       outerAu: Number(outerAu.toFixed(3)),
       massEarth: Number(massEarth.toFixed(5)),
-      iceFraction,
       ...resources,
       _unknowns: [],
     }));
@@ -399,23 +386,33 @@ export function generateRing(planet, planetType) {
   const rollPrng = ringPrng(planet.id, 'occur');
   if (rollPrng() >= spec.p) return null;
 
-  // Class: weighted sample over { ice, debris }.
-  const classPrng = ringPrng(planet.id, 'class');
-  const ringClass = sampleWeighted(classPrng, spec.weights);
-  const extent = RING_EXTENT[ringClass];
-  if (!extent) return null;
-
   const innerPrng = ringPrng(planet.id, 'inner');
   const outerPrng = ringPrng(planet.id, 'outer');
-  const icePrng   = ringPrng(planet.id, 'ice');
-  let inner = sampleTruncated(innerPrng, extent.inner);
-  let outer = sampleTruncated(outerPrng, extent.outer);
+  let inner = sampleTruncated(innerPrng, RING_EXTENT.inner);
+  let outer = sampleTruncated(outerPrng, RING_EXTENT.outer);
   // If the outer sample lands below the inner, swap (cleaner than
   // re-rolling, preserves determinism).
   if (outer < inner) { const t = inner; inner = outer; outer = t; }
 
-  const iceFraction = Number(sampleTruncated(icePrng, extent.iceFraction).toFixed(3));
-  const formal = `${planet.formalName} ${ringClass === 'ice' ? 'Ice' : 'Debris'} Ring`;
+  // Composition lives in the resource grid. The renderer reads
+  // resVolatiles vs. rocky resources to lerp ring brightness/color
+  // between bright icy (Saturn-class) and dark dusty (Uranus/Neptune-
+  // class), so this draw also drives visual character.
+  const resPriors = RING_RESOURCE_PRIORS_BY_TYPE[planetType];
+  const resources = {};
+  if (resPriors) {
+    for (const field of Object.keys(resPriors)) {
+      const fSpec = resPriors[field];
+      if (fSpec.max === 0 || (fSpec.mean === 0 && fSpec.sd === 0)) {
+        resources[field] = 0;
+        continue;
+      }
+      const rp = ringPrng(planet.id, `res:${field}`);
+      resources[field] = Math.round(sampleTruncated(rp, fSpec));
+    }
+  }
+
+  const formal = `${planet.formalName} Ring`;
   return makeBody({
     id: `${planet.id}-ring`,
     hostId: planet.id,
@@ -423,10 +420,9 @@ export function generateRing(planet, planetType) {
     formalName: formal,
     name: formal,
     source: 'procgen',
-    beltClass: ringClass,
     innerPlanetRadii: Number(inner.toFixed(3)),
     outerPlanetRadii: Number(outer.toFixed(3)),
-    iceFraction,
+    ...resources,
     _unknowns: [],
   });
 }

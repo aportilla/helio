@@ -2,8 +2,11 @@
 // counts and per-chunk offsets bake at construction so layout only
 // translates each cluster around its slot center (no re-roll on resize).
 
-import { BufferAttribute, Scene } from 'three';
-import { BELT_CLASS_COLOR, BODIES, WORLD_CLASS_UNKNOWN_COLOR } from '../../../data/stars';
+import { BufferAttribute, Color, Scene } from 'three';
+import {
+  BELT_RING_COLOR_ICY, BELT_RING_COLOR_ROCKY,
+  BODIES, bodyIcyness,
+} from '../../../data/stars';
 import {
   BELT_CHUNKS_MAX, BELT_CHUNKS_MIN, BELT_CHUNK_SIZES, BELT_HEIGHT_FACTOR,
   BELT_SLOT_WIDTH, PLANET_DISC_MIN, RENDER_ORDER_BELT, Z_BELT, Z_STRIDE,
@@ -109,8 +112,9 @@ export class BeltsLayer {
 // sampleBeltChunks, bake each chunk's polygon vertices, and concatenate
 // into one indexed triangle mesh. Chunk counts scale log-uniformly with
 // belt mass; smallest masses bottom out at BELT_CHUNKS_MIN, largest
-// approach BELT_CHUNKS_MAX. Asteroid + debris belts pull from POTATO
-// shapes; ice belts use CRYSTAL shapes.
+// approach BELT_CHUNKS_MAX. Per-belt color and shape library both
+// derive from `bodyIcyness` (computed from the resource grid) — icy
+// belts read as faceted cyan shards, rocky belts as tan boulders.
 function buildBeltPool(
   belts: ReadonlyArray<{ bodyIdx: number; rowIdx: number }>,
   heightPx: number,
@@ -129,10 +133,11 @@ function buildBeltPool(
     const t = Math.max(0, Math.min(1, (logMass + 4) / 3.5));
     const N = Math.round(BELT_CHUNKS_MIN + t * (BELT_CHUNKS_MAX - BELT_CHUNKS_MIN));
 
-    const col = belt.beltClass ? BELT_CLASS_COLOR[belt.beltClass] : WORLD_CLASS_UNKNOWN_COLOR;
+    const icyness = bodyIcyness(belt);
+    const col = new Color().copy(BELT_RING_COLOR_ROCKY).lerp(BELT_RING_COLOR_ICY, icyness);
     const halfW = BELT_SLOT_WIDTH / 2;
     const halfH = heightPx / 2;
-    const shapes = shapesFor(belt.beltClass);
+    const shapes = shapesFor(icyness);
     const chunks = sampleBeltChunks(rng, N, halfW, halfH, BELT_CHUNK_SIZES, shapes);
 
     const slotStart = cursor;

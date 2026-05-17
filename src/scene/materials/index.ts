@@ -13,6 +13,6 @@ export {
 export {
   makeBlobMaterial,
   makeFlatStarsMaterial,
-  makeIceRingMaterial,
+  makeRingMaterial,
   makeStarMeshMaterial,
 } from './system';

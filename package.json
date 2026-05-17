@@ -11,7 +11,11 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check": "node scripts/check.mjs",
+    "audit:procgen": "node scripts/audit-procgen.mjs",
+    "inspect:body": "node scripts/inspect-body.mjs",
+    "inspect:csv": "node scripts/inspect-csv.mjs"
   },
   "dependencies": {
     "three": "^0.184.0"

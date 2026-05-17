@@ -1,6 +1,6 @@
 # scripts/ — star catalog tooling
 
-Scripts for seeding, repairing, and extending the per-bracket CSVs in `src/data/`. All are throwaway-safe ESM scripts run with `node scripts/<name>.mjs`. None are wired into the build — they exist for catalog maintenance.
+Scripts for seeding, repairing, and extending the per-bracket CSVs in `src/data/`, plus the procgen pipeline that builds `src/data/catalog.generated.json`. ESM scripts run with `node scripts/<name>.mjs`. The build pipeline (`build-catalog.mjs`) and validation helpers (`check.mjs`, `audit-procgen.mjs`, `inspect-body.mjs`, `inspect-csv.mjs`) have npm aliases — everything else is invoked directly.
 
 ## Source-of-truth policy
 
@@ -30,10 +30,32 @@ If a CSV gets corrupted (e.g. by a scraper bug), the recovery path is to clear t
 | `lib/astrophysics.mjs` | Shared physical-relation approximations (`luminositySun(M)`, `insolation(M, a)`) used by both the procgen Architect and Filler. Piecewise mass-luminosity (M dwarfs vs FGK+). |
 | `lib/procgen-priors.mjs` | Data file — the entire tuning surface for body procgen. Per-class planet counts, orbital geometry, insolation-zone weights, type multipliers, mass/radius specs, moon counts, belt occurrence + placement + resource priors, ring occurrence + extent. No code, just exports. Edit + re-run `npm run build:catalog`. |
 | `lib/procgen-architect.mjs` | System Architect — top-down procgen. For each star with zero catalog planets, samples a full planetary system (planets + moons + rings + belts) from the priors. Also exports `generateOverlay` (partial-system overlay — adds outer procgen siblings + system belts to catalog-anchored stars) and `generateMoons` / `generateRing` (per-planet backfill on catalog rows). |
-| `audit-procgen.mjs` | Read-only report on procgen distributions vs. `procgen-priors.mjs`. Reports observed planet count per stellar class, planet-type mix, ring rates by host type, moon counts by type, and belt rates by stellar class — each with a z-score against the corresponding prior so real misses surface above sample noise. Run after `npm run build:catalog` to validate prior tweaks. |
+| `audit-procgen.mjs` | Read-only report on procgen distributions vs. `procgen-priors.mjs`. Reports observed planet count per stellar class, planet-type mix, ring rates by host type, moon counts by type, and belt rates by stellar class — each with a z-score against the corresponding prior so real misses surface above sample noise. Run after `npm run build:catalog` to validate prior tweaks. Alias: `npm run audit:procgen`. |
+| `check.mjs` | Validation umbrella for the iterative edit loop. Runs `build:catalog` → `tsc --noEmit` → `audit-procgen` in sequence and fails fast on the first non-zero exit. Catches schema regressions, type errors, and out-of-envelope distribution shifts in one command. Alias: `npm run check`. |
+| `inspect-body.mjs` | Pretty-print one body's post-procgen record from `catalog.generated.json` — host, orbital geometry, worldClass / extent, atmosphere, biosphere, resources, derived icyness (belts + rings), moons + ring (planets). Suggests near-matches on typo. Alias: `npm run inspect:body <id>` (e.g. `inspect:body saturn-ring`). |
+| `inspect-csv.mjs` | Pretty-print one row from a CSV (`bodies.csv` by default; `--csv=<path>` overrides) with column names spelled out and the three CSV-side cell states distinguished — literal value, `(n/a)` (does-not-apply), `(empty — procgen)` (Filler target). Useful when authoring curated rows or verifying column alignment after a schema tweak. Alias: `npm run inspect:csv <id>`. |
 | `lib/procgen.mjs` | Body Filler — bottom-up procgen. Walks empty cells in topological order: `radiusEarth` from a mass-radius relation, then the `worldClass` cascade (`avgSurfaceTempK`, `surfacePressureBar`), then `periodDays ↔ semiMajorAu` via Kepler's third law (bidirectional, so RV and transit discoveries both round-trip), then orbital flavor (eccentricity / inclination / axial tilt / orbital phase). Exports `radiusFromMass`, `worldClassFor`, `planetTypeFor` for the moon-and-ring backfill pass to reuse. Imported by `build-catalog.mjs`. Belts and rings bypass the Filler — their structural fields are baked at architect time, not derived from physics. |
 
 The local stellarcatalog listing defaults to `~/Documents/catalog.html` (override with `--catalog=PATH` on any script that uses it). The cache for fetched detail pages lives at `.cache/stellarcatalog/` (gitignored).
+
+## Validation workflow
+
+After editing priors, the architect, the Filler, the runtime body schema, or `bodies.csv`:
+
+```bash
+npm run check               # build:catalog + tsc --noEmit + audit-procgen
+```
+
+That's the universal "did I break anything" sweep. The audit step prints z-scores per (prior × observed) cell — anomalies are marked `*` when statistically significant, so an out-of-envelope distribution surfaces above sample noise.
+
+When validating that a *specific* body landed the right values:
+
+```bash
+npm run inspect:body saturn-ring       # post-procgen record from catalog.generated.json
+npm run inspect:csv  saturn-ring       # raw CSV row (literal / n/a / empty distinguished)
+```
+
+`inspect:body` reads the snapshot the runtime ships, so what's printed is what the renderer + info card see. `inspect:csv` reads the authoring source — use it to confirm column alignment after a schema tweak or to verify that a curated row hasn't drifted into stale enum values that the validator would reject.
 
 ## Common workflows
 
