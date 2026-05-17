@@ -22,6 +22,7 @@ import {
   dominantResources, isBandedAtmosphere, topGases,
 } from '../../data/stars';
 import { hash32 } from './geom/prng';
+import { bodyVisualTiltRad } from './geom/ring';
 import { PROCEDURAL_TEXTURE_MIN_PX } from './layout/constants';
 
 // Fraction of total surface weight reserved for the world-class base
@@ -43,15 +44,14 @@ const SURFACE_WITH_CHROMOPHORE_RES1   = 0.25;
 const SURFACE_WITH_CHROMOPHORE_CHROMO = 0.25;
 
 // How strongly banded-mode palette entries collapse toward their
-// weighted mean. 0 = today's full-contrast alternation (e.g. 3 blue
-// bands + 1 white band reads as alternating blue/white strips);
-// 1 = single flat color (all bands identical). 0.75 keeps the
-// atmosphere reading as its dominant tone with small per-band
-// variation — three light-blue bands with subtle tonal shifts rather
-// than blue-then-white. The visually-weighted `topGases` weights
-// already up-rank chromophores and condensables, so the mean honors
-// "what you see" rather than molar fraction.
-const BAND_BLEND_TOWARD_MEAN = 0.75;
+// weighted mean. 0 = full-contrast alternation (e.g. 3 blue bands +
+// 1 white band reads as alternating blue/white strips); 1 = single
+// flat color. 0.85 leans heavily toward a single dominant tone with
+// only subtle per-band hue shifts — the shader's many-band non-uniform
+// strip layout already produces strong perceived variation through
+// band-width jitter and boundary warp, so the palette can stay tight
+// without the disc reading as monochrome.
+const BAND_BLEND_TOWARD_MEAN = 0.85;
 
 export type DiscMode = 0 | 1;  // 0 = surface, 1 = banded
 
@@ -63,6 +63,12 @@ export interface DiscPalette {
   readonly weights: readonly [number, number, number];
   readonly mode: DiscMode;
   readonly seed: number;  // [0..1)
+  // Render tilt in radians — rotates the banded-mode strip axis so
+  // bands run parallel to the planet's equator (and, for ringed giants,
+  // to the ring plane via the shared bodyVisualTiltRad helper). Unused
+  // by surface mode but plumbed uniformly so per-vertex attributes
+  // stay schema-stable.
+  readonly tilt: number;
 }
 
 // Pull the world-class color or unknown-grey fallback. Same precedence
@@ -220,6 +226,7 @@ export function buildDiscPalette(
     weights: [w0, w1, w2] as const,
     mode: banded ? 1 : 0,
     seed,
+    tilt: bodyVisualTiltRad(body),
   };
 }
 

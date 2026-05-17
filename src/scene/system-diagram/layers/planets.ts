@@ -54,6 +54,7 @@ export class PlanetsLayer {
     const weights   = new Float32Array(P * 3);
     const modes     = new Float32Array(P);
     const seeds     = new Float32Array(P);
+    const tilts     = new Float32Array(P);
     this.planetIndices.forEach((bIdx, i) => {
       const b = BODIES[bIdx];
       const discPx = this.planetDiscPx[i];
@@ -72,6 +73,7 @@ export class PlanetsLayer {
       weights[i * 3 + 2] = disc.weights[2];
       modes[i] = disc.mode;
       seeds[i] = disc.seed;
+      tilts[i] = disc.tilt;
       // aSize carries the final pixel diameter; uDiscScale = 1.0 so the
       // shader's floor(aSize * 1.0 + 0.5) is a no-op pass-through.
       sizesAttr[i] = discPx;
@@ -86,6 +88,7 @@ export class PlanetsLayer {
     this.geometry.setAttribute('aWeights',  new BufferAttribute(weights, 3));
     this.geometry.setAttribute('aMode',     new BufferAttribute(modes, 1));
     this.geometry.setAttribute('aSeed',     new BufferAttribute(seeds, 1));
+    this.geometry.setAttribute('aTilt',     new BufferAttribute(tilts, 1));
     this.material = makePlanetMaterial(1.0);
     this.points = new Points(this.geometry, this.material);
     this.points.renderOrder = RENDER_ORDER_PLANET;

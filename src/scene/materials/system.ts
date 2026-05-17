@@ -5,6 +5,7 @@
 // system view is a static screen layout, not a navigable 3D space.
 
 import { Color, ShaderMaterial, Vector2 } from 'three';
+import { RING_MINOR_OVER_MAJOR } from '../system-diagram/layout/constants';
 import { glsl, RASTER_PAD, snappedMaterials } from './shared';
 
 // Planet + moon disc material. Renders a pixel-crisp disc whose interior
@@ -17,10 +18,15 @@ import { glsl, RASTER_PAD, snappedMaterials } from './shared';
 //     cover rather than per-pixel speckle. Driven CPU-side by the
 //     world-class color + 2 dominant resources from the body's resource
 //     grid.
-//   - **Banded mode (aMode = 1)** — latitude-quantized strips, each band
-//     picking a palette entry by a per-band hash. Driven by the top 3
-//     atmospheric gases. Used for gas/ice giants and Venus-class worlds
-//     where the atmosphere visually replaces the surface.
+//   - **Banded mode (aMode = 1)** — Jupiter-style atmospheric zones.
+//     The disc is rotated into a band-aligned frame using the planet's
+//     axial tilt (so bands run parallel to any rings — see
+//     bodyVisualTiltRad in geom/ring.ts), divided into a radius-scaled
+//     count of non-uniform-width strips with seed-jittered edges, and
+//     each fragment's band assignment is perturbed by a chunky
+//     horizontal warp so band boundaries undulate like turbulent zonal
+//     flow rather than slicing the disc as straight lines. Each band
+//     picks from the body's top 3 atmospheric gases by per-band hash.
 //
 // Per-vertex attributes drive both modes:
 //   aPalette0/1/2  — three RGB palette entries
@@ -29,6 +35,9 @@ import { glsl, RASTER_PAD, snappedMaterials } from './shared';
 //   aMode          — 0 = surface, 1 = banded
 //   aSeed          — per-body [0..1) random; salts every hash so two
 //                    planets with the same palette still texture differently
+//   aTilt          — banded-mode rotation in radians. Surface-mode discs
+//                    ignore it but still carry the attribute so the layer
+//                    schema stays uniform across modes.
 //
 // Pixel-crisp constraints (see README §Pixel-perfect rendering):
 //   - The disc still does parity-aware center snap so `gl_FragCoord -
@@ -57,6 +66,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       attribute vec3  aWeights;
       attribute float aMode;
       attribute float aSeed;
+      attribute float aTilt;
       varying float vRadius;
       varying vec2  vCenter;
       varying float vHovered;
@@ -66,6 +76,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       varying vec3  vWeights;
       varying float vMode;
       varying float vSeed;
+      varying float vTilt;
       uniform float uDiscScale;
       uniform vec2  uViewport;
       void main() {
@@ -76,6 +87,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
         vWeights  = aWeights;
         vMode     = aMode;
         vSeed     = aSeed;
+        vTilt     = aTilt;
 
         // Integer-pixel disc diameter. Floor + 0.5 → round-to-nearest.
         float sz = floor(aSize * uDiscScale + 0.5);
@@ -108,12 +120,39 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       varying vec3  vWeights;
       varying float vMode;
       varying float vSeed;
+      varying float vTilt;
 
-      // Bands across the disc in banded mode. Disc lat spans [-1, 1] so
-      // floor(lat * BAND_COUNT) yields 2*BAND_COUNT distinct strips —
-      // BAND_COUNT=3 → 6 visible bands, ~1/6 of disc diameter each
-      // (≈7 px on a 40 px disc, ≈20 px on a 120 px gas giant).
-      const float BAND_COUNT = 3.0;
+      // Banded-mode density: bands per radius pixel. Tuned so a
+      // Uranus-class disc (~43 px radius) gets ~30 bands; Jupiter
+      // (~60 px radius) lands at ~42, smallest banded body (20 px
+      // radius) at ~14. Per-disc band count is derived from vRadius at
+      // fragment time — keeps band height in screen pixels roughly
+      // constant across disc sizes so tiny moons don't render bands as
+      // single-pixel barber stripes and gas giants don't read as
+      // 8-strip cartoons.
+      //
+      // MAX_BAND_COUNT is the loop cap GLSL ES requires as a constant;
+      // an early break uses the actual per-disc bandCount inside.
+      const float BAND_DENSITY = 0.7;
+      const int MAX_BAND_COUNT = 50;
+
+      // Boundary-warp constants. WARP_CHUNK_PX = integer-px width of
+      // one along-band warp step (3 px → coarse pixel-art stair-step
+      // wobble rather than per-pixel hash noise). Warp amplitude is
+      // derived per-disc from band size below so the wobble stays
+      // visible without leaping narrow bands at any disc radius.
+      const float WARP_CHUNK_PX = 3.0;
+
+      // Perspective foreshortening for banded mode — the disc is treated
+      // as the projection of a sphere whose rotation axis is tipped
+      // forward (toward the viewer) by arcsin(POLE_SIN). POLE_SIN is
+      // pinned to RING_MINOR_OVER_MAJOR so the bands curve as latitude
+      // lines viewed from the same oblique angle the ring annulus uses
+      // — a ringed giant's bands and ring share one coherent vantage
+      // point rather than reading as a sphere wearing a flat-stamped
+      // texture next to a top-down ring.
+      const float POLE_SIN = ${glsl(RING_MINOR_OVER_MAJOR)};
+      const float POLE_COS = sqrt(1.0 - POLE_SIN * POLE_SIN);
 
       // Surface-mode worley cell pitch in buffer pixels. A 60-px planet
       // disc gets ~15 cells across; jittered cell centers make the
@@ -180,13 +219,80 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
           float h = hash21(winnerCell + vec2(vSeed * 1009.0, vSeed * 2017.0));
           col = pickFromPalette(h);
         } else {
-          // Banded atmosphere — quantize latitude into discrete strips,
-          // each picking one palette entry by a per-band hash. The seed
-          // offset shifts band boundaries so two same-class giants don't
-          // comb-align.
-          float lat = d.y / vRadius;
-          float band = floor(lat * BAND_COUNT + vSeed * BAND_COUNT);
-          float h = hash11(band + vSeed * 41.0);
+          // Banded atmosphere — Jupiter-style zonal flow.
+          //
+          // 1. Rotate disc-local d by -vTilt so ly runs across-band
+          //    (acts as latitude) and lx runs along-band. vTilt is
+          //    derived from the host planet's axialTiltDeg by
+          //    bodyVisualTiltRad, so the band axis matches the ring
+          //    plane on ringed giants.
+          float cT = cos(vTilt);
+          float sT = sin(vTilt);
+          float lx =  d.x * cT + d.y * sT;
+          float ly = -d.x * sT + d.y * cT;
+
+          // 2. Sphere projection: reconstruct the forward-hemisphere
+          //    surface normal at this fragment, then take its dot with
+          //    the band-aligned pole (tipped forward by arcsin(POLE_SIN)
+          //    so we peek over the top of the planet, same vantage the
+          //    ring annulus is drawn from). latSin then varies as the
+          //    sine of latitude on the visible sphere — bands trace
+          //    out latitude-line arcs that smile across the disc rather
+          //    than straight horizontal strips.
+          float nx = lx / vRadius;
+          float ny = ly / vRadius;
+          float nz = sqrt(max(0.0, 1.0 - nx * nx - ny * ny));
+          float latSin = ny * POLE_COS + nz * POLE_SIN;
+
+          // 3. Per-disc band count from vRadius. Floor at 6 keeps
+          //    sub-Uranus banded bodies (Venus-class rocky worlds) from
+          //    rendering as 1-2 strips; cap at MAX_BAND_COUNT prevents
+          //    the loops below from running past their compile-time
+          //    upper bound.
+          int bandCount = int(clamp(floor(vRadius * BAND_DENSITY + 0.5), 6.0, float(MAX_BAND_COUNT)));
+          float bandCountF = float(bandCount);
+
+          // 4. Boundary warp: integer along-band chunks each pick a
+          //    per-chunk lat offset, so band edges undulate in coarse
+          //    pixel-art stair-steps. Warp amplitude scales with band
+          //    height (vRadius / bandCount) so the wobble stays
+          //    proportional — always ~75% of an average band's height,
+          //    visible at every disc size without leaping bands.
+          float warpAmpPx = vRadius / bandCountF * 0.75;
+          float chunkX = floor(lx / WARP_CHUNK_PX);
+          float warp = (hash11(chunkX + vSeed * 31.0) - 0.5) * 2.0 * warpAmpPx / vRadius;
+          float lat = clamp(latSin + warp, -1.0, 1.0);
+
+          // 5. Non-uniform band edges. Each band has width 0.5 + 1.5 *
+          //    hash11(i + seed*7) so seed-driven jitter alternates
+          //    narrow lanes with wide zones. Two-pass: first sum the
+          //    weights to get the total normalization, then walk the
+          //    cumulative sum to find which band our warped lat lands
+          //    in. Loops are bounded by the compile-time MAX_BAND_COUNT
+          //    constant (GLSL ES requirement) with an early break on
+          //    the per-disc bandCount.
+          float totalW = 0.0;
+          for (int i = 0; i < MAX_BAND_COUNT; i++) {
+            if (i >= bandCount) break;
+            totalW += 0.5 + 1.5 * hash11(float(i) + vSeed * 7.0);
+          }
+          float pos = (lat + 1.0) * 0.5 * totalW;
+          float accum = 0.0;
+          float bandIdx = 0.0;
+          for (int i = 0; i < MAX_BAND_COUNT; i++) {
+            if (i >= bandCount) break;
+            accum += 0.5 + 1.5 * hash11(float(i) + vSeed * 7.0);
+            if (pos >= accum) bandIdx = float(i + 1);
+          }
+          // Clamp the last-band edge case (pos can land just past accum
+          // from float drift; without this the warped poles flicker to
+          // bandIdx = bandCount which has no palette mapping defined).
+          bandIdx = min(bandIdx, bandCountF - 1.0);
+
+          // 6. Per-band palette pick. The * 41.0 salt keeps the
+          //    band→palette hash uncorrelated from the * 7.0 salt
+          //    used for band widths above.
+          float h = hash11(bandIdx + vSeed * 41.0);
           col = pickFromPalette(h);
         }
 

@@ -1,15 +1,40 @@
 // Ring ellipse math — shared by both ring render paths (ice annulus
 // meshes in layers/ice-rings.ts and debris chunk pools in
 // layers/debris-rings.ts) and by the picker's tilted-ellipse hit test.
+// `bodyVisualTiltRad` is also consumed by disc-palette.ts so a banded
+// gas giant's atmospheric bands run parallel to its ring plane.
 
 import type { Body } from '../../../data/stars';
 import { RING_MINOR_OVER_MAJOR, RING_TILT_DEG_MAX, RING_WIDTH_VIZ_SCALE } from '../layout/constants';
 import { hash32, mulberry32 } from './prng';
 
-// Compute the ring's ellipse parameters: per-planet pixel radii +
-// tilt, derived from the ring body's innerPlanetRadii / outerPlanetRadii
-// and a seeded tilt off the ring's id.
-export function ringEllipseParams(ring: Body, hostDiscPx: number): { innerR: number; outerR: number; tiltRad: number } {
+// Map astronomical axialTiltDeg → visual render tilt. Real values span
+// 3° (Jupiter), 23.4° (Earth), 26.7° (Saturn), 97.8° (Uranus retrograde);
+// scaling by 0.5 keeps Jupiter visibly straighter than Saturn at the
+// pixel level, then clamping to ±RING_TILT_DEG_MAX prevents retrograde
+// rotators from breaking the back/front ring split.
+const AXIAL_TILT_VIZ_SCALE = 0.5;
+
+// Resolve a body's render tilt in radians. Drives both the planet's
+// banded atmosphere orientation and any rings around it, so the two
+// always read as physically coupled. Bodies missing axialTiltDeg fall
+// back to a seeded random in ±RING_TILT_DEG_MAX so they don't all
+// comb-align at 0.
+export function bodyVisualTiltRad(body: Body): number {
+  if (body.axialTiltDeg !== null) {
+    const scaled = body.axialTiltDeg * AXIAL_TILT_VIZ_SCALE;
+    const clamped = Math.max(-RING_TILT_DEG_MAX, Math.min(RING_TILT_DEG_MAX, scaled));
+    return clamped * Math.PI / 180;
+  }
+  const rng = mulberry32(hash32(`visual-tilt:${body.id}`));
+  return (rng() - 0.5) * 2 * RING_TILT_DEG_MAX * Math.PI / 180;
+}
+
+// Compute the ring's ellipse parameters: per-planet pixel radii + tilt.
+// Radii come from the ring body's innerPlanetRadii / outerPlanetRadii;
+// tilt comes from the HOST PLANET (rings sit in the planet's equatorial
+// plane by physics) so a ringed giant's bands and rings always align.
+export function ringEllipseParams(ring: Body, hostPlanet: Body, hostDiscPx: number): { innerR: number; outerR: number; tiltRad: number } {
   const innerFrac = ring.innerPlanetRadii ?? 1.1;
   const outerFrac = ring.outerPlanetRadii ?? 2.0;
   const planetRadius = hostDiscPx / 2;
@@ -18,11 +43,7 @@ export function ringEllipseParams(ring: Body, hostDiscPx: number): { innerR: num
   // the planet rim); the outer edge moves toward the inner by
   // (1 - RING_WIDTH_VIZ_SCALE) of the CSV band width.
   const outerR = innerR + (outerFrac - innerFrac) * planetRadius * RING_WIDTH_VIZ_SCALE;
-  // Tilt: uniform over ±RING_TILT_DEG_MAX, seeded so the same ring
-  // tilts the same way every reload. Per-ring (not per-system) so two
-  // ringed planets in the same star system don't comb-align.
-  const tiltRng = mulberry32(hash32(`ring-tilt:${ring.id}`));
-  const tiltRad = (tiltRng() - 0.5) * 2 * RING_TILT_DEG_MAX * Math.PI / 180;
+  const tiltRad = bodyVisualTiltRad(hostPlanet);
   return { innerR, outerR, tiltRad };
 }
 

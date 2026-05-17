@@ -53,7 +53,7 @@ export class RingsLayer {
       const planet = BODIES[item.bodyIdx];
       if (planet.ring == null) continue;
       const ring = BODIES[planet.ring];
-      const built = buildRing(ring, planet.ring, item.bodyIdx, item.widthPx);
+      const built = buildRing(ring, planet, planet.ring, item.bodyIdx, item.widthPx);
       this.rings.push(built);
       this.ringByBodyIdx.set(built.bodyIdx, built);
       scene.add(built.backMesh);
@@ -108,8 +108,8 @@ export class RingsLayer {
   }
 }
 
-function buildRing(ring: Body, ringBodyIdx: number, hostBodyIdx: number, hostDiscPx: number): Ring {
-  const { innerR, outerR, tiltRad } = ringEllipseParams(ring, hostDiscPx);
+function buildRing(ring: Body, hostPlanet: Body, ringBodyIdx: number, hostBodyIdx: number, hostDiscPx: number): Ring {
+  const { innerR, outerR, tiltRad } = ringEllipseParams(ring, hostPlanet, hostDiscPx);
   const t = bodyIcyness(ring);
   const color = new Color().copy(BELT_RING_COLOR_ROCKY).lerp(BELT_RING_COLOR_ICY, t);
   const alpha = RING_ALPHA_DUSTY + (RING_ALPHA_ICY - RING_ALPHA_DUSTY) * t;
