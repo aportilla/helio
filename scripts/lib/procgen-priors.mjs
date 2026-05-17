@@ -82,6 +82,34 @@ export const STELLAR_CLASSES = ['O', 'B', 'A', 'F', 'G', 'K', 'M', 'WD', 'BD'];
 // Dressing & Charbonneau estimate. WD low because most planets are
 // ejected or destroyed during the post-main-sequence phase; survivors are
 // rare but documented.
+// Per-companion planet-count suppression multiplier. Companions in tight
+// stellar binaries have narrow stability windows for S-type (single-star
+// circumstellar) planets, and most planetesimals get scattered out of the
+// system during formation. Wang et al. 2014 and Kraus et al. 2016 measured
+// ~50% planet-occurrence suppression for stellar companions inside ~50 AU,
+// stronger for tighter pairs. Our cluster builder doesn't carry per-pair
+// AU separation (it works in light-year space), so we use rank-in-cluster
+// as a proxy: cluster members are dominantly co-located within ~50 AU
+// once they share a sub-light-year position, so the suppression applies.
+// Wide-separation companions (Proxima Cen ~13,000 AU from α Cen AB) would
+// be exempt in reality but we don't distinguish them yet — accepted v1
+// scope, may revisit with a sampled-separation lookup later.
+//
+// Primary = heaviest member (`cluster.members[0]`) — always 1.0, unchanged
+// from independent-roll behavior. Secondary = 2nd-heaviest. Tertiary+ =
+// anything past that. Singleton-cluster stars are 'primary' by default →
+// no behavior change for ~82% of the catalog.
+//
+// Anchors: α Cen AB (G+K, ~11-36 AU binary) has zero confirmed planets
+// despite extensive search; the 0.3 secondary rate produces a low but
+// non-zero expected count that reads as "barren but not impossible."
+// Kraus 2016's binary-suppression curve at <50 AU sits near 0.3-0.5.
+export const COMPANION_PLANET_SUPPRESSION = {
+  primary:       1.0,
+  secondary:     0.3,
+  tertiary_plus: 0.2,
+};
+
 export const PLANET_COUNT_BY_CLASS = {
   O:  { mean: 2,   sd: 1.5, min: 0, max: 5  },  // massive, short-lived; observation-limited
   B:  { mean: 2,   sd: 1.5, min: 0, max: 5  },
@@ -338,10 +366,23 @@ export const WATER_BUDGET_THRESHOLDS = mergeTunes(
 // despite a same-system neighbor at e=0.32). A single normal can't
 // capture this — it either undercounts the tail or overcounts the bulk.
 // Sampled by sampleMixture in prng.mjs.
-export const ECCENTRICITY = {
+const ECCENTRICITY_REALISTIC = {
   primary:   { mean: 0.04, sd: 0.05, min: 0, max: 0.9, weight: 0.95 },
   secondary: { mean: 0.40, sd: 0.20, min: 0, max: 0.9, weight: 0.05 },
 };
+
+// Gameplay tune: cap the eccentric mode's max at 0.6. Real Kepler
+// data extends to e=0.93 (HD 80606b) but for 4X gameplay a planet whose
+// perihelion-to-aphelion insolation varies by 30× has habitability
+// windows too short to design a colonization mechanic around. The 0.6
+// ceiling keeps the dramatic-orbit flavor (still e=0.5 worlds, still
+// noticeable seasons) while removing the unplayable tail. The bulk
+// 95% near-circular mode is untouched.
+const ECCENTRICITY_TUNE = {
+  secondary: { max: 0.6 },
+};
+
+export const ECCENTRICITY = mergeTunes(ECCENTRICITY_REALISTIC, ECCENTRICITY_TUNE);
 
 // Inclination off the host's invariant plane, degrees. Real systems are
 // near-coplanar (sigma ~1–3°); the long tail covers misaligned hot
@@ -367,7 +408,7 @@ export const ORBITAL_PHASE_DEG = { min: 0, max: 360 };
 // the version reseeds the whole galaxy without changing CSV ids. Per-
 // generator suffixes can be layered on top by individual generators that
 // want to be re-rollable independently.
-export const PROCGEN_VERSION = 'v4';
+export const PROCGEN_VERSION = 'v6';
 
 // ---------------------------------------------------------------------------
 // Belts (asteroid / ice / debris) — system-level structural bands
@@ -419,7 +460,7 @@ export const BELT_PLACEMENT = {
 // rounded to integer, clamped [0, 10]. Asteroid belts skew metals/
 // silicates; ice belts dominate on volatiles; debris fields sit in the
 // middle with elevated exotics (processed-material proxy).
-export const BELT_RESOURCE_PRIORS = {
+const BELT_RESOURCE_PRIORS_REALISTIC = {
   asteroid: {
     resMetals:        { mean: 7, sd: 2, min: 0, max: 10 },
     resSilicates:     { mean: 6, sd: 2, min: 0, max: 10 },
@@ -445,6 +486,29 @@ export const BELT_RESOURCE_PRIORS = {
     resExotics:       { mean: 3, sd: 2, min: 0, max: 10 },
   },
 };
+
+// Gameplay tune: belts should be strategic mining targets that DOMINATE
+// their resource niche, not generic "any-resource" sources roughly equal
+// to planet surface mining. The realistic priors give a rocky planet
+// (5/6/3/4/3/1) higher per-cell metal yield than an asteroid belt
+// (7/6/1/4/3/1) once volumetric extraction factors in — so a player
+// thinking "where do I send the mining fleet" picks planets every time
+// and belts feel decorative. Bumps:
+//   - asteroid resMetals 7→8 (asteroid belt = THE strategic metal source)
+//   - ice resVolatiles 9→10 (ice belts = THE volatile source, max scale)
+//   - debris resExotics 3→5 (debris fields = THE processed-material source)
+// Each tune makes one belt class the unambiguous best option for one
+// resource category. Other resources untouched.
+const BELT_RESOURCE_PRIORS_TUNE = {
+  asteroid: { resMetals:    { mean: 8  } },
+  ice:      { resVolatiles: { mean: 10 } },
+  debris:   { resExotics:   { mean: 5  } },
+};
+
+export const BELT_RESOURCE_PRIORS = mergeTunes(
+  BELT_RESOURCE_PRIORS_REALISTIC,
+  BELT_RESOURCE_PRIORS_TUNE,
+);
 
 // ---------------------------------------------------------------------------
 // Rings — per-planet ring systems (0 or 1)
@@ -479,10 +543,18 @@ const RING_OCCURRENCE_BY_TYPE_REALISTIC = {
 // pushes AWAY from realistic toward game-feel; here, the realistic rate
 // is more aspirational than perceptually useful, and the tune brings us
 // back to "what the renderer can carry at this scale."
+//
+// Exception: super_earth gets bumped UP toward physical-presence (0.05 →
+// 0.07) rather than filtered down. A ringed Earth-mass world is one of
+// the most iconic "settle here, look at the sky" beats in SF, and at the
+// previous 0.025 game rate we had zero ringed temperate Earth-analogs in
+// the entire galaxy. At 0.07 the galaxy gets ~95 ringed super-earths,
+// some fraction of which land in the temperate band — recurring enough
+// to feel like a real planet-class rather than a paper rarity.
 const RING_OCCURRENCE_BY_TYPE_TUNE = {
   hot_rocky:   { p: 0.002 },
   rocky:       { p: 0.005 },
-  super_earth: { p: 0.025 },
+  super_earth: { p: 0.07  },
   sub_neptune: { p: 0.06  },
   neptune:     { p: 0.20  },
   jupiter:     { p: 0.30  },
@@ -599,13 +671,28 @@ export const ROTATION_PERIOD_HOURS_BY_CLASS = {
 };
 
 // Tidal-locking probability ramps with `tidalLockProxy(M_star, a_AU)` from
-// astrophysics.mjs. proxy ≤ PROXY_LOCKED → locked with probability ~1;
-// proxy ≥ PROXY_FREE → never locked. Log-interpolated between.
+// astrophysics.mjs. proxy ≤ proxyLocked → locked with probability ~1;
+// proxy ≥ proxyFree → never locked. Log-interpolated between.
 //
-// PROXY_LOCKED 0.005 ≈ "locks within ~10 Myr around any host" (Mercury,
-// M-dwarf HZ planets); PROXY_FREE 2 ≈ "longer than the universe's age"
+// proxyLocked 0.005 ≈ "locks within ~10 Myr around any host" (Mercury,
+// M-dwarf HZ planets); proxyFree 2 ≈ "longer than the universe's age"
 // (Earth = 1, Mars = 4.5 — already free-rotating in reality).
-export const TIDAL_LOCK_RANGE = { proxyLocked: 0.005, proxyFree: 2.0 };
+const TIDAL_LOCK_RANGE_REALISTIC = { proxyLocked: 0.005, proxyFree: 2.0 };
+
+// Gameplay tune: tighten proxyLocked from 0.005 → 0.001. Astrophysically
+// the M-dwarf HZ catalog SHOULD be near-universally tide-locked — orbital
+// timescales there are short enough that synchronous rotation is the
+// inevitable outcome. But M-dwarfs are 61% of our catalog and tide-locked
+// terrestrials are colonization-hostile (eternal day/night, atmospheric
+// freeze-out on the dark hemisphere, no dynamo-protective rotation). The
+// tighter threshold means ~30% of M-dwarf HZ worlds break free into
+// Earth-like rotation periods, opening the bulk of the catalog to
+// playable colonization without invalidating Mercury or TRAPPIST-1b.
+const TIDAL_LOCK_RANGE_TUNE = {
+  proxyLocked: 0.001,
+};
+
+export const TIDAL_LOCK_RANGE = mergeTunes(TIDAL_LOCK_RANGE_REALISTIC, TIDAL_LOCK_RANGE_TUNE);
 
 // ---------------------------------------------------------------------------
 // Surface temperature extremes — min/max around avgSurfaceTempK
@@ -655,6 +742,72 @@ export const MAGNETIC_FIELD_GAUSS_BY_CLASS = {
   ice_giant: { mean: 0.2,  sd: 0.1,  min: 0.05, max: 0.5 },
   gas_giant: { mean: 2.5,  sd: 1.5,  min: 0.5,  max: 6.0 },  // Jupiter 4.3, Saturn 0.2
 };
+
+// Per-class multiplier on the dynamo scaling in magneticFieldGaussFor:
+//   field = base × tectonicActivity × √(24/rot) × multiplier
+// Realistic = 1.0 across the board — Mars (low tect, dead core) lands at
+// near-zero G, Earth (high tect, 24h rotation) lands near base. Gas giants
+// are unaffected by the tect/rot path so this multiplier doesn't apply
+// to them in code; listed here for completeness.
+const MAGNETIC_DYNAMO_MULTIPLIER_BY_CLASS_REALISTIC = {
+  rocky: 1.0, ocean: 1.0, desert: 1.0, ice: 1.0, lava: 1.0,
+  gas_dwarf: 1.0, ice_giant: 1.0, gas_giant: 1.0,
+};
+
+// Gameplay tune: habitability floor on water-bearing terrestrials. The
+// realistic dynamo chain correctly produces Mars-class weak fields on
+// most rocky worlds (tect ~0.5, rot ~26h → 0.48× multiplier on the base
+// 0.4 G prior → mean rocky field ~0.19 G). That's astronomically right
+// but means ~70% of rocky/ocean worlds have stripped atmospheres and
+// hostile colonization conditions — the 4X player is bouncing off worlds
+// they should be able to settle. Lifting rocky/ocean by 1.7× pulls the
+// rocky mean to ~0.32 G — Earth's 0.5 G is now within one sd, not a 2σ
+// outlier. Desert (Mars-class) stays untouched — dead cores should read
+// as dead. Lava worlds also untouched — their fields are tidal-heating-
+// driven, not relevant for colonization mechanics.
+const MAGNETIC_DYNAMO_MULTIPLIER_BY_CLASS_TUNE = {
+  rocky: 1.7,
+  ocean: 1.7,
+};
+
+export const MAGNETIC_DYNAMO_MULTIPLIER_BY_CLASS = mergeTunes(
+  MAGNETIC_DYNAMO_MULTIPLIER_BY_CLASS_REALISTIC,
+  MAGNETIC_DYNAMO_MULTIPLIER_BY_CLASS_TUNE,
+);
+
+// ---------------------------------------------------------------------------
+// Greenhouse offset (K above radiative equilibrium at 1 bar)
+// ---------------------------------------------------------------------------
+
+// Per-class greenhouse offset at 1 bar surface pressure. The Filler in
+// procgen.mjs (avgSurfaceTempFor) multiplies by P_bar^0.3 so thin
+// atmospheres get negligible boost and thick atmospheres approach
+// Venus-class. Earth at P=1 gets the canonical +33 K.
+const GREENHOUSE_K_BY_CLASS_REALISTIC = {
+  rocky:  33,    // Earth +33K at 1 bar
+  ocean:  50,    // water vapor adds to Earth-class
+  desert:  5,    // thin atmosphere baseline
+  lava:   80,    // outgassed CO2 / SO2; pressure scaling reaches Venus-class
+  ice:     5,    // typically thin / no atmosphere
+};
+
+// Gameplay tune: nudge the rocky greenhouse from 33 → 40 K. A few
+// percent of procgen rocky worlds land in the 240–270 K avg-temp range —
+// astronomically "just past freezing" but unhabitable in 4X game terms.
+// Earth-fitted realism puts the offset at exactly 33 K; the +7 K tune
+// pulls those marginal rocky worlds across the 273 K threshold without
+// breaking Earth (its pressure×offset chain still lands at 288 K within
+// rounding once the pressure factor absorbs the bump). No tune on
+// ocean/desert/lava/ice — none of those classes have the "just barely
+// frozen" gameplay edge case that rocky does.
+const GREENHOUSE_K_BY_CLASS_TUNE = {
+  rocky: 40,
+};
+
+export const GREENHOUSE_K_BY_CLASS = mergeTunes(
+  GREENHOUSE_K_BY_CLASS_REALISTIC,
+  GREENHOUSE_K_BY_CLASS_TUNE,
+);
 
 // ---------------------------------------------------------------------------
 // Atmosphere composition — top-3 gases per world class
@@ -858,19 +1011,49 @@ const BIOSPHERE_BY_CLASS_REALISTIC = {
   },
 };
 
-// Gameplay tune: bump the speculative archetypes (silicate, cryogenic,
-// aerial) by 5–50× so they actually appear in a playthrough. Carbon
-// archetypes stay near their literature rates — they don't need a tune
-// to be interesting. Tune is the perception lens for exotic-life
-// rarity: realistic is "this would barely ever happen," tuned is
-// "this happens often enough that finding one is a memorable beat."
+// Gameplay tune: two layers of adjustment over realistic biosphere.
+//
+// (1) Exotic-archetype boost. Speculative archetypes (silicate, cryogenic,
+//     aerial) get bumped 5–50× so they actually appear in a playthrough.
+//     Carbon archetypes stay near their literature rates — they don't
+//     need an occurrence boost to be interesting; their interest comes
+//     from the tier-distribution shift below.
+//
+// (2) Tier-distribution shift on carbon_aqueous (rocky + ocean). The
+//     realistic tail is prebiotic-heavy because Earth itself was prebiotic
+//     for ~1 Gyr — astronomically that's where most worlds sit at any
+//     snapshot. But from a 4X discovery lens, "organic chemistry without
+//     replicating life" is the LEAST interesting tier; the player wants
+//     complex+gaian finds as recurring rewards, not once-per-galaxy
+//     unicorns. Realistic rocky tier split (55/30/12/3) becomes
+//     35/30/25/10; ocean (45/30/18/7) becomes 25/30/30/15. Galaxy goes
+//     from ~25 complex + ~11 gaian to ~46 complex + ~21 gaian — about
+//     2× the mid-to-late game discovery surface area without inflating
+//     the "any life" rate. Desert untouched (a desert world that supports
+//     gaian biology would re-class to rocky/ocean by the time it
+//     mattered, so the tier cap holds).
+//
+// (3) Aerial gas-world bump. Gas-giant atmospheric biospheres are a
+//     visually-distinctive category (different from any rocky-world
+//     life — they show up in atmospheric readouts, not surface). Pushing
+//     gas_dwarf 5%→8% and gas_giant 5%→10% adds ~30 more aerial worlds
+//     across the galaxy, making them a recurring exploration beat rather
+//     than a rare curiosity. Ice_giant stays at the lower 2% (Uranus/
+//     Neptune-class atmospheres are colder and less hospitable than
+//     warmer gas dwarf / gas giant interiors).
 const BIOSPHERE_BY_CLASS_TUNE = {
   rocky: {
     silicate: { occurrenceRate: 0.005 },
     sulfur:   { occurrenceRate: 0.02 },
+    carbon_aqueous: {
+      tierWeights: { prebiotic: 0.35, microbial: 0.30, complex: 0.25, gaian: 0.10 },
+    },
   },
   ocean: {
     sulfur:   { occurrenceRate: 0.03 },
+    carbon_aqueous: {
+      tierWeights: { prebiotic: 0.25, microbial: 0.30, complex: 0.30, gaian: 0.15 },
+    },
   },
   desert: {
     silicate: { occurrenceRate: 0.01 },
@@ -883,9 +1066,9 @@ const BIOSPHERE_BY_CLASS_TUNE = {
     silicate: { occurrenceRate: 0.03 },
     sulfur:   { occurrenceRate: 0.05 },
   },
-  gas_dwarf: { aerial: { occurrenceRate: 0.05 } },
+  gas_dwarf: { aerial: { occurrenceRate: 0.08 } },
   ice_giant: { aerial: { occurrenceRate: 0.02 } },
-  gas_giant: { aerial: { occurrenceRate: 0.05 } },
+  gas_giant: { aerial: { occurrenceRate: 0.10 } },
 };
 
 export const BIOSPHERE_BY_CLASS = mergeTunes(

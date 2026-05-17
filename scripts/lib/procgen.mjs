@@ -46,6 +46,8 @@ import {
   TIDAL_LOCK_RANGE,
   TEMP_SWING_FRAC_BY_CLASS,
   MAGNETIC_FIELD_GAUSS_BY_CLASS,
+  MAGNETIC_DYNAMO_MULTIPLIER_BY_CLASS,
+  GREENHOUSE_K_BY_CLASS,
   ATMOSPHERE_GASES_BY_CLASS,
   ATMOSPHERE_O2_BIOTIC_LIFT,
   ATMOSPHERE_MIN_PRESSURE_BAR,
@@ -182,21 +184,14 @@ export function planetTypeFor(worldClass, massEarth, S) {
 // Surface character (temperature, pressure)
 // =============================================================================
 
-// Greenhouse offset (K) above radiative equilibrium at Earth-class
-// surface pressure (1 bar). The per-class value gets multiplied by
-// pressureFactor = P_bar^0.3 so a Mars-thin desert (P=0.003) gets ~0.15×
-// its nominal offset (≈+0.8 K, correct), Earth gets ×1.0 (+33 K, correct),
-// and a Venus-class lava world at P=50 bar gets ×3.2 (+256 K — under
-// Venus's real +500 K but ×8 closer than the constant-offset version).
-// Exponent 0.3 sits between optically-thin linear scaling and the slow
-// log saturation of thick atmospheres.
-const GREENHOUSE_K_BY_CLASS = {
-  rocky:  33,    // Earth +33K at 1 bar
-  ocean:  50,    // water vapor adds to Earth-class
-  desert:  5,    // thin atmosphere baseline
-  lava:   80,    // outgassed CO2 / SO2; pressure scaling reaches toward Venus
-  ice:     5,    // typically thin / no atmosphere
-};
+// Greenhouse offset per worldClass lives in priors (GREENHOUSE_K_BY_CLASS)
+// so it can carry a realistic/tune split. The per-class value at 1 bar
+// gets multiplied here by pressureFactor = P_bar^0.3 so a Mars-thin desert
+// (P=0.003) gets ~0.15× its nominal offset (≈+0.8 K, correct), Earth gets
+// ×1.0 (+33 K, correct), and a Venus-class lava world at P=50 bar gets
+// ×3.2 (+256 K — under Venus's real +500 K but ×8 closer than the
+// constant-offset version). Exponent 0.3 sits between optically-thin
+// linear scaling and the slow log saturation of thick atmospheres.
 
 // Stefan-Boltzmann equilibrium temperature plus a worldClass greenhouse
 // offset scaled by surface pressure. Gas giants return cloud-top
@@ -343,10 +338,13 @@ function magneticFieldGaussFor(body) {
   if (wc === 'gas_giant' || wc === 'gas_dwarf' || wc === 'ice_giant') {
     return Number(base.toFixed(3));
   }
-  // Terrestrials: gate on core activity + rotation rate.
+  // Terrestrials: gate on core activity + rotation rate, with a per-class
+  // gameplay multiplier (realistic = 1.0; tune lifts rocky/ocean toward
+  // a habitability floor).
   const tect = body.tectonicActivity ?? 0.3;
   const rot = body.rotationPeriodHours ?? 24;
-  const dynamoScale = tect * Math.sqrt(24 / Math.max(rot, 4));
+  const gameplayMul = MAGNETIC_DYNAMO_MULTIPLIER_BY_CLASS[wc] ?? 1.0;
+  const dynamoScale = tect * Math.sqrt(24 / Math.max(rot, 4)) * gameplayMul;
   return Number(Math.max(0, base * dynamoScale).toFixed(4));
 }
 

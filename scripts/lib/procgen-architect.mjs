@@ -17,6 +17,7 @@ import { insolation } from './astrophysics.mjs';
 import {
   PROCGEN_VERSION,
   PLANET_COUNT_BY_CLASS,
+  COMPANION_PLANET_SUPPRESSION,
   ORBITAL_GEOMETRY_BY_CLASS,
   TYPE_WEIGHTS_BY_INSOLATION,
   TYPE_MULTIPLIER_BY_CLASS,
@@ -360,14 +361,25 @@ export function generateRing(planet, planetType) {
 // they emit no planets but their belt rolls still fire, so a debris-
 // disk-only star is representable (BD/WD with min=0 hit this branch
 // regularly).
-export function generateSystem(star) {
+//
+// `clusterRole` (primary/secondary/tertiary_plus) suppresses the sampled
+// planet count for tight-binary companions; defaults to 'primary' (no
+// suppression) so callers that don't know the role get unchanged behavior.
+export function generateSystem(star, clusterRole = 'primary') {
   const cls = star.cls;
   const countSpec = PLANET_COUNT_BY_CLASS[cls];
   if (!countSpec) return [];
 
-  // Planet count
+  // Planet count, suppressed by cluster role. Multi-star companions
+  // inside tight binaries have narrow planet-stability windows; the
+  // suppression multiplier reflects that. We let the post-suppression
+  // count fall to 0 even when countSpec.min ≥ 1 — the spec floor
+  // represents single-star occurrence; tight companions can legitimately
+  // be barren (α Cen A and B have zero confirmed planets).
   const countPrng = slotPrng(star.id, -1, 'planet_count');
-  const N = sampleTruncated(countPrng, countSpec, true);
+  const rawN = sampleTruncated(countPrng, countSpec, true);
+  const suppression = COMPANION_PLANET_SUPPRESSION[clusterRole] ?? 1.0;
+  const N = Math.max(0, Math.min(countSpec.max, Math.round(rawN * suppression)));
 
   // Orbit layout — start past the inner edge, walk outward by sampled
   // period ratios. Stop when we exceed the outer edge or hit N planets.
@@ -467,7 +479,7 @@ function buildPlanetAtOrbit(star, slotIdx, aAu, letter, saltPrefix = '') {
 // `catalogPlanets` is the array of catalog Body objects on this star (in
 // CSV order); their `semiMajorAu` anchors the outer walk. Returns a flat
 // array of new bodies (planets + moons + rings + belts).
-export function generateOverlay(star, catalogPlanets) {
+export function generateOverlay(star, catalogPlanets, clusterRole = 'primary') {
   const cls = star.cls;
   const countSpec = PLANET_COUNT_BY_CLASS[cls];
   const geom = ORBITAL_GEOMETRY_BY_CLASS[cls];
@@ -475,11 +487,14 @@ export function generateOverlay(star, catalogPlanets) {
 
   const out = [];
 
-  // Target planet count from the same prior the architect uses. Independent
-  // seed so a star moving between the architect and overlay code paths
-  // (would only happen if curation status changed) doesn't reuse a draw.
+  // Target planet count from the same prior the architect uses, with the
+  // same cluster-role suppression. Independent seed so a star moving
+  // between the architect and overlay code paths (would only happen if
+  // curation status changed) doesn't reuse a draw.
   const countPrng = slotPrng(star.id, -1, 'overlay_planet_count');
-  const N = sampleTruncated(countPrng, countSpec, true);
+  const rawN = sampleTruncated(countPrng, countSpec, true);
+  const suppression = COMPANION_PLANET_SUPPRESSION[clusterRole] ?? 1.0;
+  const N = Math.max(0, Math.min(countSpec.max, Math.round(rawN * suppression)));
   const existing = catalogPlanets.length;
   const toAdd = Math.max(0, N - existing);
 

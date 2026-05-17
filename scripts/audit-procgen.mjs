@@ -33,6 +33,8 @@ import {
   RING_OCCURRENCE_BY_TYPE,
   MOON_COUNT_BY_TYPE,
   BELT_OCCURRENCE_BY_CLASS,
+  BELT_RESOURCE_PRIORS,
+  COMPANION_PLANET_SUPPRESSION,
   WATER_FRACTION_BY_CLASS,
   ICE_FRACTION_BY_CLASS,
   ALBEDO_BY_CLASS,
@@ -55,7 +57,7 @@ const CATALOG_PATH = resolve(REPO_ROOT, 'src/data/catalog.generated.json');
 const CURATED_HOSTS = new Set(['sol']);
 
 const cat = JSON.parse(readFileSync(CATALOG_PATH, 'utf8'));
-const { stars, bodies } = cat;
+const { stars, bodies, clusters } = cat;
 
 const STELLAR_CLASSES = Object.keys(PLANET_COUNT_BY_CLASS);
 
@@ -164,6 +166,55 @@ for (const cls of STELLAR_CLASSES) {
     '       ' + pad(p.mean.toFixed(2), 5, true) +
     '       ' + pad(p.sd.toFixed(2), 4, true) +
     fmtZ(zMean(obs.mean, arr.length, p.mean, p.sd), arr.length),
+  );
+}
+console.log();
+
+// --- 2b. Planets per system, by cluster role --------------------------------
+//
+// Verifies that multi-star companion suppression (COMPANION_PLANET_SUPPRESSION
+// in procgen-priors.mjs) lands roughly where the multiplier predicts.
+// Primaries should match the per-class prior unchanged; secondary/tertiary
+// counts should sit near `multiplier × class-weighted-mean prior`.
+console.log('=== Planets per system, by cluster role ===');
+console.log('  role          | stars |  obs.mean  obs.sd     suppression   expected*');
+console.log('  --------------+-------+----------  ------     -----------   --------');
+const roleByStarIdx = new Map();
+for (const cluster of clusters) {
+  for (let i = 0; i < cluster.members.length; i++) {
+    const role = i === 0 ? 'primary' : i === 1 ? 'secondary' : 'tertiary_plus';
+    roleByStarIdx.set(cluster.members[i], role);
+  }
+}
+const countByRole = { primary: [], secondary: [], tertiary_plus: [] };
+const classDistByRole = { primary: {}, secondary: {}, tertiary_plus: {} };
+for (let i = 0; i < stars.length; i++) {
+  const role = roleByStarIdx.get(i) ?? 'primary';
+  countByRole[role].push(stars[i].planets.length);
+  const cls = stars[i].cls || '?';
+  classDistByRole[role][cls] = (classDistByRole[role][cls] || 0) + 1;
+}
+for (const role of ['primary', 'secondary', 'tertiary_plus']) {
+  const arr = countByRole[role];
+  if (!arr.length) continue;
+  const obs = meanStd(arr);
+  // Expected = sum over classes of (class_share × class_prior_mean) × suppression
+  const dist = classDistByRole[role];
+  const total = arr.length;
+  let weighted = 0;
+  for (const [cls, n] of Object.entries(dist)) {
+    const p = PLANET_COUNT_BY_CLASS[cls];
+    if (p) weighted += (n / total) * p.mean;
+  }
+  const mul = COMPANION_PLANET_SUPPRESSION[role];
+  const expected = weighted * mul;
+  console.log(
+    '  ' + pad(role, 13) +
+    ' |' + pad(arr.length, 6, true) +
+    ' |  ' + pad(obs.mean.toFixed(2), 6, true) +
+    '   ' + pad(obs.sd.toFixed(2), 4, true) +
+    '       ' + pad(mul.toFixed(2) + '×', 6, true) +
+    '        ' + pad(expected.toFixed(2), 5, true),
   );
 }
 console.log();
@@ -377,6 +428,33 @@ for (const b of bodies) {
 for (const cls of Object.keys(PLANET_RESOURCE_PRIORS_BY_CLASS).sort()) {
   const r = resByClass[cls];
   const p = PLANET_RESOURCE_PRIORS_BY_CLASS[cls];
+  if (!r || !r.n) continue;
+  const obs = RES.map(f => (r.sums[f] / r.n).toFixed(1).padStart(3));
+  const prior = RES.map(f => p[f].mean.toString().padStart(3));
+  console.log(
+    '  ' + pad(cls, 11) +
+    ' | ' + pad(r.n, 4, true) +
+    '   ' + obs.join('  ') +
+    '   [' + prior.join(' ') + ']',
+  );
+}
+console.log();
+
+console.log('=== Resource means, by belt class (procgen belts, 0-10 scale) ===');
+console.log('  class       |  n      met  sil  vol  rare radio exo    (priors in brackets)');
+const beltResByClass = {};
+for (const b of bodies) {
+  if (b.kind !== 'belt' || b.source !== 'procgen') continue;
+  if (!b.beltClass) continue;
+  if (!beltResByClass[b.beltClass]) {
+    beltResByClass[b.beltClass] = { n: 0, sums: Object.fromEntries(RES.map(f => [f, 0])) };
+  }
+  beltResByClass[b.beltClass].n += 1;
+  for (const f of RES) if (b[f] != null) beltResByClass[b.beltClass].sums[f] += b[f];
+}
+for (const cls of Object.keys(BELT_RESOURCE_PRIORS).sort()) {
+  const r = beltResByClass[cls];
+  const p = BELT_RESOURCE_PRIORS[cls];
   if (!r || !r.n) continue;
   const obs = RES.map(f => (r.sums[f] / r.n).toFixed(1).padStart(3));
   const prior = RES.map(f => p[f].mean.toString().padStart(3));

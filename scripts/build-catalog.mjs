@@ -807,10 +807,21 @@ async function main() {
     list.push(b);
     catalogPlanetsByStarId.set(b.hostId, list);
   }
+  // Cluster role per star drives planet-count suppression in the Architect.
+  // Primary = heaviest member of a cluster (cluster.members[0]), secondary
+  // = 2nd, tertiary+ = 3rd onward. Singleton-cluster stars (most of the
+  // catalog) are 'primary' → unchanged independent-roll behavior.
+  const roleByStarId = new Map();
+  for (const cluster of clusters) {
+    for (let i = 0; i < cluster.members.length; i++) {
+      const role = i === 0 ? 'primary' : i === 1 ? 'secondary' : 'tertiary_plus';
+      roleByStarId.set(placedStars[cluster.members[i]].id, role);
+    }
+  }
   const procgenBodies = [];
   for (const star of placedStars) {
     if (catalogPlanetsByStarId.has(star.id)) continue;
-    procgenBodies.push(...generateSystem(star));
+    procgenBodies.push(...generateSystem(star, roleByStarId.get(star.id) ?? 'primary'));
   }
 
   // Partial-system overlay — for each catalog-anchored star, add outer
@@ -825,7 +836,7 @@ async function main() {
     if (CURATED_SYSTEM_HOSTS.has(star.id)) continue;
     const catalogPlanets = catalogPlanetsByStarId.get(star.id);
     if (!catalogPlanets || catalogPlanets.length === 0) continue;
-    overlayBodies.push(...generateOverlay(star, catalogPlanets));
+    overlayBodies.push(...generateOverlay(star, catalogPlanets, roleByStarId.get(star.id) ?? 'primary'));
   }
 
   // Moon backfill — observed exoplanets almost never have moon coverage
