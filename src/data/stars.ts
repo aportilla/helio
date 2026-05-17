@@ -117,6 +117,26 @@ export type PlanetType =
 // because they're visually negligible and gameplay-irrelevant.
 export type BeltClass = 'asteroid' | 'ice' | 'debris';
 
+// Rings are physically restricted to 'ice' or 'debris' — an "asteroid
+// ring" is not a real configuration (a single planet can't accumulate a
+// belt of km-scale rocky bodies above its Roche limit; debris is the
+// rocky-equivalent). The architect and the bodies.csv validator both
+// enforce this; the type makes the constraint legible at use sites.
+export type RingClass = Extract<BeltClass, 'ice' | 'debris'>;
+
+// Population-structure axis for belts. Orthogonal to BeltClass (which
+// captures composition + location). 'discrete' = a small number of large
+// parent bodies dominate the mass distribution (Sol Main Belt: Ceres
+// alone is ~35% of Main Belt mass; Kuiper Belt: Pluto/Eris similar);
+// gameplay maps to "sortie to a specific named body." 'collisional' =
+// mass spread across a steep power-law size distribution dominated by
+// dust + small parents (debris disks); gameplay maps to "sweep-harvest
+// a region." This is the field that actually distinguishes an asteroid
+// belt (primordial planetesimal survivors) from a debris field (second-
+// generation collisional dust) — under the old schema they shared a
+// composition enum and were otherwise indistinguishable.
+export type PopulationModel = 'discrete' | 'collisional';
+
 // One planet or moon. Catalog-sourced rows come from
 // scripts/scrape-planets-from-stellarcatalog.mjs; hand-seeded Sol bodies and
 // (later) procgen output share the same shape. `kind` discriminates whether
@@ -160,6 +180,27 @@ export interface Body {
   readonly radiusEarth: number | null;
   // Belt / ring sub-class. Null for planet / moon kinds.
   readonly beltClass: BeltClass | null;
+  // Population structure for belts. Null for planet / moon / ring kinds.
+  // See PopulationModel: 'discrete' for primordial parent-body-dominated
+  // belts (asteroid, ice), 'collisional' for second-generation dust
+  // (debris).
+  readonly populationModel: PopulationModel | null;
+  // Diameter of the largest body in the belt, in km. For 'discrete'
+  // populations this is a meaningful "show up on the system map" anchor
+  // (Sol Main Belt's Ceres = 940 km; Kuiper Belt's Pluto = 2376 km).
+  // For 'collisional' populations the largest parent is small (debris
+  // disks have no Vesta-equivalent — their existence implies the
+  // collision cascade hasn't run out of material yet, which requires
+  // many small parents rather than a few large ones). Null on planets,
+  // moons, rings.
+  readonly largestBodyKm: number | null;
+  // Index into BODIES of the gas/ice giant that dynamically shepherds
+  // this belt (mean-motion resonance stabilizer for 'asteroid' and 'ice'
+  // classes; analog of Jupiter for Sol's Main Belt, Neptune for the
+  // Kuiper Belt). Null on debris fields (no shepherd needed —
+  // collisional dust isn't dynamically stabilized), on belts that
+  // formed without a giant in the system, and on planet/moon/ring kinds.
+  readonly shepherdBodyIdx: number | null;
   // Architect's mass/radius taxonomy. See `PlanetType` for semantics.
   readonly planetType: PlanetType | null;
   // Surface character. All null for belt / ring kinds (no surface).
@@ -269,6 +310,24 @@ export const BELT_CLASS_COLOR: Record<BeltClass, Color> = {
   ice:      new Color(0xb8d8e8),
   debris:   new Color(0x806848),
 };
+
+// Narrowing accessor for ring bodies. Rings store their composition
+// in the same `beltClass` column as belts (one column per row, shared
+// schema), but the value is constrained to RingClass — the build
+// validator and the architect both reject 'asteroid' for rings. This
+// accessor exposes the narrower type so ring-rendering code doesn't
+// have to handle an 'asteroid' branch that can never fire. Throws on
+// invariant violation (something bypassed both writers).
+export function ringClass(body: Body): RingClass {
+  if (body.kind !== 'ring') {
+    throw new Error(`ringClass: ${body.id} is kind=${body.kind}, not 'ring'`);
+  }
+  const c = body.beltClass;
+  if (c === null || c === 'asteroid') {
+    throw new Error(`ringClass: ${body.id} has invalid beltClass=${c}`);
+  }
+  return c;
+}
 
 // =============================================================================
 // Runtime spatial indices

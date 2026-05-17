@@ -459,7 +459,7 @@ export const ORBITAL_PHASE_DEG = { min: 0, max: 360 };
 // the version reseeds the whole galaxy without changing CSV ids. Per-
 // generator suffixes can be layered on top by individual generators that
 // want to be re-rollable independently.
-export const PROCGEN_VERSION = 'v6';
+export const PROCGEN_VERSION = 'v7';
 
 // ---------------------------------------------------------------------------
 // Belts (asteroid / ice / debris) — system-level structural bands
@@ -476,20 +476,45 @@ export const BELT_CLASSES = ['asteroid', 'ice', 'debris'];
 // pulled down from the underlying physical occurrence stats by an order
 // of magnitude — most stars have *some* belt structure, but only a
 // minority host one that reads as a navigable / mine-able landmark in
-// the game. Debris disks stay relatively elevated around A/B/F stars
-// since the famous ones (Vega, Fomalhaut, β Pic) are notable for a
-// reason: they're visually dramatic at our scale.
-export const BELT_OCCURRENCE_BY_CLASS = {
-  O:  { asteroid: 0.08, ice: 0.12, debris: 0.25 },
-  B:  { asteroid: 0.10, ice: 0.15, debris: 0.22 },
-  A:  { asteroid: 0.12, ice: 0.18, debris: 0.20 },
-  F:  { asteroid: 0.18, ice: 0.18, debris: 0.12 },
-  G:  { asteroid: 0.22, ice: 0.15, debris: 0.05 },
-  K:  { asteroid: 0.22, ice: 0.15, debris: 0.05 },
-  M:  { asteroid: 0.15, ice: 0.12, debris: 0.03 },
-  WD: { asteroid: 0.05, ice: 0.05, debris: 0.02 },
+// the game.
+//
+// Debris rates are anchored to Spitzer/Herschel survey statistics
+// (Su 2006, Thureau 2014, Chen 2014). The observational peak is at A
+// (Vega/Fomalhaut/β Pic territory); O drops back down because
+// photoevaporation clears primordial disks in 1–3 Myr; F/G/K trail off
+// as the dust depletes faster than collisions can replenish it.
+// WD rate captures metal-pollution-evidence disks (Zuckerman 2010 —
+// ~25–50% of WDs accrete tidally-disrupted debris) filtered to those
+// where the dust component is visible at our scale.
+//
+// Asteroid rates favor cool main-sequence stars where resonance traps
+// stay stable over the long stellar lifetime — K/M dominate, with M
+// bumped from a previous 0.15 since long-lived M dwarfs preserve
+// shepherded belts particularly well once a giant is in the system.
+const BELT_OCCURRENCE_BY_CLASS_REALISTIC = {
+  O:  { asteroid: 0.08, ice: 0.12, debris: 0.15 },
+  B:  { asteroid: 0.10, ice: 0.15, debris: 0.25 },
+  A:  { asteroid: 0.12, ice: 0.18, debris: 0.32 },
+  F:  { asteroid: 0.18, ice: 0.18, debris: 0.18 },
+  G:  { asteroid: 0.22, ice: 0.15, debris: 0.10 },
+  K:  { asteroid: 0.22, ice: 0.15, debris: 0.08 },
+  M:  { asteroid: 0.20, ice: 0.12, debris: 0.04 },
+  WD: { asteroid: 0.05, ice: 0.05, debris: 0.12 },
   BD: { asteroid: 0.05, ice: 0.05, debris: 0.02 },
 };
+
+// No gameplay tunes on belt occurrence today — the realistic rates above
+// already track survey statistics closely, and the perceptual filtering
+// happens at the renderer (sub-pixel belts wouldn't read anyway, but the
+// scale we draw at can carry the survey-anchored rates without flooding
+// the view). Structural placeholder kept for symmetry with ring /
+// resource priors so future game-feel adjustments have a clear home.
+const BELT_OCCURRENCE_BY_CLASS_TUNE = {};
+
+export const BELT_OCCURRENCE_BY_CLASS = mergeTunes(
+  BELT_OCCURRENCE_BY_CLASS_REALISTIC,
+  BELT_OCCURRENCE_BY_CLASS_TUNE,
+);
 
 // Belt extent in AU, scaled by stellar luminosity (∝ √L roughly — the
 // snow line and rocky-zone boundary both move outward with hotter
@@ -560,6 +585,94 @@ export const BELT_RESOURCE_PRIORS = mergeTunes(
   BELT_RESOURCE_PRIORS_REALISTIC,
   BELT_RESOURCE_PRIORS_TUNE,
 );
+
+// Volatile / water-ice mass fraction per belt class, sampled per system.
+// Distinct from beltClass: a body inside an asteroid belt is *mostly*
+// rocky but the population is heterogeneous (Sol's C-types — ~60% of the
+// outer Main Belt — carry 5–10% water in hydrated silicates; Ceres alone
+// is ~25% ice by mass). A per-system roll lets the schema produce a
+// "water-rich C-type-dominated belt" worth a flavor beat without
+// re-bucketing it as an ice belt.
+//
+// Anchors:
+//   asteroid: Main Belt bulk-average ~5%, with C-type-heavy outliers up
+//             to ~20% (Ceres-class). Tail clipped at 0.25.
+//   ice:      KBOs are 50–80% water + methane + N₂ ice by mass; pure-ice
+//             tail (Eris-class) approaches 0.95.
+//   debris:   wide-open prior reflecting the real population: warm
+//             silicate debris (HD 69830) is bone-dry, cold outer debris
+//             (β Pic's outer ring, Fomalhaut's main belt) can be quite
+//             icy. The roll picks the system's character.
+export const BELT_ICE_FRACTION = {
+  asteroid: { mean: 0.05, sd: 0.04, min: 0,    max: 0.25 },
+  ice:      { mean: 0.85, sd: 0.07, min: 0.50, max: 0.99 },
+  debris:   { mean: 0.15, sd: 0.12, min: 0,    max: 0.50 },
+};
+
+// Population structure per belt class — orthogonal axis to composition.
+// `populationModel` is fixed per class (compositional asteroid/ice belts
+// are always parent-body-dominated; debris is by definition collisional
+// dust). `largestBodyKm` is log-uniform sampled within the range that
+// matches real-world inventories of that population type.
+//
+// Anchors:
+//   asteroid: Ceres 940 km (Sol Main Belt's largest); range covers
+//             smaller belts (Vesta-class 525 km) up to the modest upper
+//             bound where a single body would dominate the dynamics.
+//   ice:      Pluto 2376 km, Eris 2326 km (KBO inventory); Quaoar /
+//             Sedna ~1000 km set the low end of "notable belt with a
+//             named parent body."
+//   debris:   collisional cascades require many small parents, not a few
+//             large ones; observed debris-disk parent populations top
+//             out at the tens-of-km scale (β Pic's parent bodies inferred
+//             from collision rates).
+export const BELT_POPULATION = {
+  asteroid: { populationModel: 'discrete',    largestBodyKm: { min: 100, max: 1000 } },
+  ice:      { populationModel: 'discrete',    largestBodyKm: { min: 500, max: 2500 } },
+  debris:   { populationModel: 'collisional', largestBodyKm: { min: 1,   max: 50   } },
+};
+
+// Giant adjacency placement. Asteroid + ice belts are dynamically tied
+// to a shepherding giant (planetType ∈ {sub_neptune, neptune, jupiter}):
+// the giant's gravity defines stable orbits via mean-motion resonances
+// and Kirkwood-gap-style clearing. Without a giant nearby, primordial
+// planetesimals either accrete into a small planet or scatter, so the
+// belt should sit *adjacent to* the giant rather than wherever the
+// system's outer-edge fraction suggests.
+//
+// Fractions are multiples of the shepherding giant's semiMajorAu:
+//   asteroid: anchored INWARD of the innermost giant. Sol Main Belt at
+//             2.7 AU = 0.52 × Jupiter's 5.2 AU; band 2.1–3.3 AU spans
+//             0.40–0.65×. Generalized here to 0.40–0.70×.
+//   ice:      anchored OUTWARD of the outermost giant. Kuiper Belt at
+//             ~40 AU = ~1.33 × Neptune's 30 AU; classical KBO band
+//             extends to ~50 AU = ~1.67×. Generalized to 1.30–1.85×.
+//
+// Debris is excluded — collisional dust isn't dynamically shepherded
+// and uses BELT_PLACEMENT (system-edge-scaled band) regardless of
+// whether a giant exists.
+export const BELT_GIANT_ADJACENCY = {
+  asteroid: { innerFrac: 0.40, outerFrac: 0.70 },
+  ice:      { innerFrac: 1.30, outerFrac: 1.85 },
+};
+
+// Occurrence multiplier applied when the system has no gas/ice giant.
+// Without a shepherd, asteroid + ice belts can still form from relic
+// planetesimals but are much rarer (Wyatt 2008 estimates <20% of the
+// giant-shepherded rate); debris fields are unaffected because they're
+// collisional dust, not dynamically anchored.
+export const GIANTLESS_BELT_PENALTY = {
+  asteroid: 0.15,
+  ice:      0.25,
+  debris:   1.0,
+};
+
+// Planet types that count as "giant" for belt shepherding. Sub-neptunes
+// included because at ~10 M⊕ they're heavy enough to dominate resonances
+// in the way a true Jupiter does — Sol's ice giants Uranus and Neptune
+// (analogous to sub-neptune/neptune classes here) shepherd the Kuiper
+// Belt without needing a Jupiter-mass body.
+export const SHEPHERD_PLANET_TYPES = new Set(['sub_neptune', 'neptune', 'jupiter']);
 
 // ---------------------------------------------------------------------------
 // Rings — per-planet ring systems (0 or 1)

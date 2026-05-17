@@ -35,6 +35,7 @@ import {
   MOON_COUNT_BY_TYPE,
   BELT_OCCURRENCE_BY_CLASS,
   BELT_RESOURCE_PRIORS,
+  BELT_ICE_FRACTION,
   COMPANION_PLANET_SUPPRESSION,
   WATER_FRACTION_BY_CLASS,
   ICE_FRACTION_BY_CLASS,
@@ -510,6 +511,65 @@ for (const cls of Object.keys(BELT_RESOURCE_PRIORS).sort()) {
     ' | ' + pad(r.n, 4, true) +
     '   ' + obs.join('  ') +
     '   [' + prior.join(' ') + ']',
+  );
+}
+console.log();
+
+// --- 9b. Belt ice fraction + largest body + shepherd coverage ---------------
+
+console.log('=== Belt iceFraction + largestBodyKm, by class (procgen belts) ===');
+console.log('  class    |  n     ice.mean  ice.sd   ice.prior.mean  | largest.geomean.km  largest.range.km');
+const beltExtras = {};
+for (const b of bodies) {
+  if (b.kind !== 'belt' || b.source !== 'procgen') continue;
+  if (!b.beltClass) continue;
+  if (!beltExtras[b.beltClass]) beltExtras[b.beltClass] = { iceArr: [], logKm: [] };
+  if (b.iceFraction != null)    beltExtras[b.beltClass].iceArr.push(b.iceFraction);
+  if (b.largestBodyKm != null)  beltExtras[b.beltClass].logKm.push(Math.log10(b.largestBodyKm));
+}
+for (const cls of Object.keys(BELT_ICE_FRACTION).sort()) {
+  const r = beltExtras[cls];
+  if (!r || !r.iceArr.length) continue;
+  const ice = meanStd(r.iceArr);
+  const ipri = BELT_ICE_FRACTION[cls];
+  const logMean = r.logKm.reduce((a, b) => a + b, 0) / r.logKm.length;
+  const kmGeomean = Math.pow(10, logMean);
+  const kmMin = Math.pow(10, Math.min(...r.logKm));
+  const kmMax = Math.pow(10, Math.max(...r.logKm));
+  console.log(
+    '  ' + pad(cls, 8) +
+    ' | ' + pad(r.iceArr.length, 4, true) +
+    '  ' + pad(ice.mean.toFixed(3), 7, true) +
+    '   ' + pad(ice.sd.toFixed(3), 5, true) +
+    '    ' + pad(ipri.mean.toFixed(2), 5, true) +
+    '            | ' + pad(kmGeomean.toFixed(1), 12, true) +
+    '       ' + pad(kmMin.toFixed(1) + '–' + kmMax.toFixed(1), 16, true),
+  );
+}
+console.log();
+
+// Shepherd coverage — what fraction of asteroid/ice belts landed adjacent
+// to a giant vs took the giantless penalty path. Debris always reports 0%
+// by design (collisional dust doesn't shepherd). High coverage on
+// asteroid/ice indicates most procgen systems are spawning at least one
+// giant; low coverage flags either over-penalty or under-supply of giants.
+console.log('=== Belt shepherd coverage (procgen belts) ===');
+console.log('  class    |  n      shepherded   pct');
+const shepCov = {};
+for (const b of bodies) {
+  if (b.kind !== 'belt' || b.source !== 'procgen') continue;
+  if (!b.beltClass) continue;
+  if (!shepCov[b.beltClass]) shepCov[b.beltClass] = { n: 0, shepherded: 0 };
+  shepCov[b.beltClass].n += 1;
+  if (b.shepherdBodyIdx != null) shepCov[b.beltClass].shepherded += 1;
+}
+for (const cls of Object.keys(shepCov).sort()) {
+  const r = shepCov[cls];
+  console.log(
+    '  ' + pad(cls, 8) +
+    ' | ' + pad(r.n, 4, true) +
+    '   ' + pad(r.shepherded, 5, true) +
+    '       ' + pct(r.shepherded, r.n),
   );
 }
 console.log();

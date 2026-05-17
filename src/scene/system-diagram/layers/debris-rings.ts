@@ -7,7 +7,7 @@
 // untilted y, so the silhouette matches the picker's half-test.
 
 import { BufferAttribute, Scene } from 'three';
-import { BELT_CLASS_COLOR, BODIES, WORLD_CLASS_UNKNOWN_COLOR, type Body } from '../../../data/stars';
+import { BELT_CLASS_COLOR, BODIES, ringClass, type Body } from '../../../data/stars';
 import {
   DEBRIS_RING_CHUNKS_MAX, DEBRIS_RING_CHUNKS_MIN, DEBRIS_RING_CHUNKS_PER_PX,
   DEBRIS_RING_CHUNK_SIZES, DEBRIS_RING_DIM,
@@ -52,7 +52,7 @@ export class DebrisRingsLayer {
       const planet = BODIES[item.bodyIdx];
       if (planet.ring == null) continue;
       const ring = BODIES[planet.ring];
-      if (ring.beltClass === 'ice') continue;
+      if (ringClass(ring) === 'ice') continue;
       specs.push({ ring, ringBodyIdx: planet.ring, hostBodyIdx: item.bodyIdx, hostDiscPx: item.widthPx });
     }
 
@@ -175,7 +175,8 @@ function buildDebrisRingPools(
     const b = outerR * RING_MINOR_OVER_MAJOR;
     const perim = Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)));
     const N = Math.round(Math.max(DEBRIS_RING_CHUNKS_MIN, Math.min(DEBRIS_RING_CHUNKS_MAX, perim * DEBRIS_RING_CHUNKS_PER_PX)));
-    const baseCol = ring.beltClass ? BELT_CLASS_COLOR[ring.beltClass] : WORLD_CLASS_UNKNOWN_COLOR;
+    const cls = ringClass(ring);
+    const baseCol = BELT_CLASS_COLOR[cls];
     const r = baseCol.r * DEBRIS_RING_DIM;
     const g = baseCol.g * DEBRIS_RING_DIM;
     const bcol = baseCol.b * DEBRIS_RING_DIM;
@@ -187,7 +188,7 @@ function buildDebrisRingPools(
     const frontOffs: { dx: number; dy: number }[] = [];
     const backStart = backCursor;
     const frontStart = frontCursor;
-    const shapes = shapesFor(ring.beltClass);
+    const shapes = shapesFor(cls);
     // Overlap rejection runs per back/front pool — a chunk on the front
     // at y=0+ε shouldn't collide with a back chunk at y=0-ε, but it can
     // collide with another front chunk nearby.

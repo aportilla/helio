@@ -29,6 +29,11 @@ import {
   BELT_OCCURRENCE_BY_CLASS,
   BELT_PLACEMENT,
   BELT_RESOURCE_PRIORS,
+  BELT_ICE_FRACTION,
+  BELT_POPULATION,
+  BELT_GIANT_ADJACENCY,
+  GIANTLESS_BELT_PENALTY,
+  SHEPHERD_PLANET_TYPES,
   RING_OCCURRENCE_BY_TYPE,
   RING_EXTENT,
 } from './procgen-priors.mjs';
@@ -141,6 +146,13 @@ function makeBody(props) {
     hostBodyIdx: null,
     planetType: null,
     worldClass: null, beltClass: null,
+    populationModel: null, largestBodyKm: null,
+    // shepherdId is the architect's deferred form of shepherdBodyIdx —
+    // it stores the giant's *string id* because the Body's array
+    // position isn't known until attachBodies runs. build-catalog
+    // resolves shepherdId → shepherdBodyIdx and strips this field.
+    shepherdId: null,
+    shepherdBodyIdx: null,
     avgSurfaceTempK: null, surfaceTempMinK: null, surfaceTempMaxK: null,
     waterFraction: null, iceFraction: null, albedo: null,
     magneticFieldGauss: null, tectonicActivity: null,
@@ -245,28 +257,80 @@ const BELT_CLASS_LABEL = {
   debris:   'Debris Field',
 };
 
+// Identify the giant(s) in a placed-planet list (innermost + outermost).
+// SHEPHERD_PLANET_TYPES gates membership; sub_neptune mass is enough to
+// anchor a belt's resonances even without a Jupiter-equivalent. Returns
+// null fields when no giants exist, signaling generateBelts to apply the
+// giantless penalty path.
+function findGiants(placedPlanets) {
+  const giants = placedPlanets
+    .filter(p => p.kind === 'planet' && p.planetType && SHEPHERD_PLANET_TYPES.has(p.planetType) && p.semiMajorAu != null)
+    .sort((a, b) => a.semiMajorAu - b.semiMajorAu);
+  return {
+    innermost: giants[0] ?? null,
+    outermost: giants[giants.length - 1] ?? null,
+  };
+}
+
 // Generate 0..3 belts for one star (asteroid, ice, debris — each rolled
 // independently). Returns Body[] ready to concatenate with the planet
-// stream. Exported so the catalog backfill in build-catalog.mjs could
-// add belts to partially-observed catalog stars later (v1 only emits
-// during generateSystem).
-export function generateBelts(star) {
+// stream. `placedPlanets` is the list of planets already laid down for
+// this system (architect + catalog combined for the overlay path) —
+// asteroid + ice belts use it to anchor adjacent to the system's giants
+// and record a shepherd. Without a giant the occurrence is multiplied
+// by GIANTLESS_BELT_PENALTY[beltClass] before the roll, and placement
+// falls back to BELT_PLACEMENT's system-edge-scaled band.
+//
+// Exported so the catalog backfill in build-catalog.mjs could add belts
+// to partially-observed catalog stars later (v1 only emits during
+// generateSystem and generateOverlay).
+export function generateBelts(star, placedPlanets = []) {
   const cls = star.cls;
   const occurrence = BELT_OCCURRENCE_BY_CLASS[cls];
   const geom = ORBITAL_GEOMETRY_BY_CLASS[cls];
   if (!occurrence || !geom) return [];
 
+  const { innermost: innerGiant, outermost: outerGiant } = findGiants(placedPlanets);
+
   const belts = [];
   for (const beltClass of Object.keys(occurrence)) {
-    const rollPrng = beltPrng(star.id, beltClass, 'occur');
-    if (rollPrng() >= occurrence[beltClass]) continue;
+    // Giantless penalty: asteroid + ice belts need a shepherding giant
+    // to stay dynamically stable. Debris is unaffected (collisional dust
+    // doesn't require a shepherd).
+    const hasShepherd = beltClass === 'asteroid' ? !!innerGiant
+                      : beltClass === 'ice'      ? !!outerGiant
+                      : true;
+    const penalty = hasShepherd ? 1.0 : GIANTLESS_BELT_PENALTY[beltClass];
+    const effectiveRate = occurrence[beltClass] * penalty;
 
+    const rollPrng = beltPrng(star.id, beltClass, 'occur');
+    if (rollPrng() >= effectiveRate) continue;
+
+    // Placement: shepherded asteroid/ice belts anchor against the giant;
+    // debris (and giantless belts) fall back to the system-edge band
+    // from BELT_PLACEMENT.
     const placement = BELT_PLACEMENT[beltClass];
-    const innerAu = geom.outerEdgeAu * placement.innerFrac;
-    const outerAu = geom.outerEdgeAu * placement.outerFrac;
+    let innerAu, outerAu, shepherdId;
+    if (beltClass === 'asteroid' && innerGiant) {
+      const adj = BELT_GIANT_ADJACENCY.asteroid;
+      innerAu = innerGiant.semiMajorAu * adj.innerFrac;
+      outerAu = innerGiant.semiMajorAu * adj.outerFrac;
+      shepherdId = innerGiant.id;
+    } else if (beltClass === 'ice' && outerGiant) {
+      const adj = BELT_GIANT_ADJACENCY.ice;
+      innerAu = outerGiant.semiMajorAu * adj.innerFrac;
+      outerAu = outerGiant.semiMajorAu * adj.outerFrac;
+      shepherdId = outerGiant.id;
+    } else {
+      innerAu = geom.outerEdgeAu * placement.innerFrac;
+      outerAu = geom.outerEdgeAu * placement.outerFrac;
+      shepherdId = null;
+    }
     const centerAu = (innerAu + outerAu) / 2;
 
-    // Mass: log-uniform between placement.mass.min and .max.
+    // Mass: log-uniform between placement.mass.min and .max. Mass priors
+    // are class-keyed (BELT_PLACEMENT) and don't shift with the placement
+    // strategy — a shepherded asteroid belt is still asteroid-class mass.
     const massPrng = beltPrng(star.id, beltClass, 'mass');
     const logMin = Math.log10(placement.mass.min);
     const logMax = Math.log10(placement.mass.max);
@@ -280,10 +344,22 @@ export function generateBelts(star) {
       resources[field] = Math.round(sampleTruncated(prng, resPriors[field]));
     }
 
-    // Ice fraction tags volatile-dominated belts so the renderer + game
-    // logic can treat "icy belt" generically without hardcoding the
-    // beltClass enum: ~0.85 for ice belts, ~0.1 for asteroid/debris.
-    const iceFraction = beltClass === 'ice' ? 0.85 : 0.1;
+    // Per-system ice/volatile mass fraction. Sampled from priors keyed
+    // off beltClass — see BELT_ICE_FRACTION for class anchors. Lets a
+    // "water-rich C-type-dominated asteroid belt" or a "bone-dry warm
+    // debris field" emerge from the rolls rather than be hard-coded.
+    const icePrng = beltPrng(star.id, beltClass, 'ice');
+    const iceFraction = Number(sampleTruncated(icePrng, BELT_ICE_FRACTION[beltClass]).toFixed(3));
+
+    // Population structure — populationModel is class-fixed (asteroid +
+    // ice are 'discrete', debris is 'collisional'); largestBodyKm is a
+    // log-uniform sample within the class's anchor range. See
+    // BELT_POPULATION for the inventory anchors.
+    const popSpec = BELT_POPULATION[beltClass];
+    const sizePrng = beltPrng(star.id, beltClass, 'largest');
+    const logKmMin = Math.log10(popSpec.largestBodyKm.min);
+    const logKmMax = Math.log10(popSpec.largestBodyKm.max);
+    const largestBodyKm = Math.pow(10, logKmMin + sizePrng() * (logKmMax - logKmMin));
 
     const formal = `${star.name} ${describeBeltLocation(centerAu)} ${BELT_CLASS_LABEL[beltClass]}`;
     belts.push(makeBody({
@@ -294,6 +370,9 @@ export function generateBelts(star) {
       name: formal,
       source: 'procgen',
       beltClass,
+      populationModel: popSpec.populationModel,
+      largestBodyKm: Number(largestBodyKm.toFixed(1)),
+      shepherdId,
       semiMajorAu: Number(centerAu.toFixed(3)),
       innerAu: Number(innerAu.toFixed(3)),
       outerAu: Number(outerAu.toFixed(3)),
@@ -415,9 +494,13 @@ export function generateSystem(star, clusterRole = 'primary', clusterPlanetBudge
   for (let i = 0; i < orbits.length; i++) {
     bodies.push(...buildPlanetAtOrbit(star, i, orbits[i], planetLetterAt(i)));
   }
-  // Belts roll independently of the planet stream — even a system with
-  // zero planet samples may still host belts (a debris-disk-only star).
-  bodies.push(...generateBelts(star));
+  // Belts roll independently of the planet stream, but their placement
+  // depends on it — asteroid/ice belts anchor against the system's
+  // giants. Pass in the planets we just built so generateBelts can find
+  // them. A zero-planet system still rolls belts (debris-disk-only
+  // configurations are valid) — they just take the giantless path.
+  const planets = bodies.filter(b => b.kind === 'planet');
+  bodies.push(...generateBelts(star, planets));
   return bodies;
 }
 
@@ -554,8 +637,14 @@ export function generateOverlay(star, catalogPlanets, clusterRole = 'primary', c
 
   // System-level belts. generateSystem fires these for architect-eligible
   // stars; catalog-anchored stars went through this path instead, so the
-  // overlay carries the same responsibility.
-  out.push(...generateBelts(star));
+  // overlay carries the same responsibility. Combine catalog planets +
+  // procgen siblings so giant detection sees the full picture (a system
+  // whose only giant is a catalog row shouldn't read as giantless).
+  const allPlanets = [
+    ...catalogPlanets,
+    ...out.filter(b => b.kind === 'planet'),
+  ];
+  out.push(...generateBelts(star, allPlanets));
 
   return out;
 }

@@ -501,6 +501,9 @@ const BELT_CLASSES = new Set(['asteroid', 'ice', 'debris']);
 // Uranus inner) are deliberately unmodeled (visually negligible, no
 // gameplay payoff), so rings are always 'ice' or 'debris'.
 const RING_CLASSES = new Set(['ice', 'debris']);
+// Population structure axis for belts. Orthogonal to BeltClass; only
+// meaningful for kind='belt' (rings + planets + moons stay null).
+const POPULATION_MODELS = new Set(['discrete', 'collisional']);
 
 // Stars whose body list is hand-curated and authoritative — the moon
 // backfill pass skips planets hosted by these so missing moons read as
@@ -543,6 +546,7 @@ const BODY_NUMERIC_FIELDS = [
   ['outer_au',               'outerAu'],
   ['inner_planet_radii',     'innerPlanetRadii'],
   ['outer_planet_radii',     'outerPlanetRadii'],
+  ['largest_body_km',        'largestBodyKm'],
 ];
 const BODY_STRING_FIELDS = [
   ['atm1', 'atm1'],
@@ -573,6 +577,8 @@ function parseCsvBodies(text, label) {
     source: colIdx('source'),
     world_class: colIdx('world_class'),
     belt_class: colIdx('belt_class'),
+    population_model: colIdx('population_model'),
+    shepherd_id: colIdx('shepherd_id'),
     biosphere_archetype: colIdx('biosphere_archetype'),
     biosphere_tier: colIdx('biosphere_tier'),
   };
@@ -618,6 +624,23 @@ function parseCsvBodies(text, label) {
     if ((kind === 'belt' || kind === 'ring') && beltClass === null) {
       throw new Error(`${label}: ${id} kind=${kind} requires a belt_class`);
     }
+    const populationModel = trackedCell('population_model', 'populationModel');
+    if (populationModel !== null) {
+      if (!POPULATION_MODELS.has(populationModel)) {
+        throw new Error(`${label}: ${id} invalid population_model=${populationModel}`);
+      }
+      if (kind !== 'belt') {
+        throw new Error(`${label}: ${id} population_model only valid on kind='belt' (got ${kind})`);
+      }
+    }
+    // shepherdId is a deferred reference resolved against the planet
+    // index later in attachBodies. Validation here is just shape (set
+    // only on belts; non-empty string). Existence-of-target check runs
+    // after the planet map is built.
+    const shepherdId = trackedCell('shepherd_id', 'shepherdId');
+    if (shepherdId !== null && kind !== 'belt') {
+      throw new Error(`${label}: ${id} shepherd_id only valid on kind='belt' (got ${kind})`);
+    }
     const biosphereArchetype = trackedCell('biosphere_archetype', 'biosphereArchetype');
     if (biosphereArchetype !== null && !BIOSPHERE_ARCHETYPES_SET.has(biosphereArchetype)) {
       throw new Error(`${label}: ${id} invalid biosphere_archetype=${biosphereArchetype}`);
@@ -648,6 +671,9 @@ function parseCsvBodies(text, label) {
       planetType: null,
       worldClass,
       beltClass,
+      populationModel,
+      shepherdId,
+      shepherdBodyIdx: null,
       biosphereArchetype,
       biosphereTier,
       moons: [],
@@ -713,6 +739,24 @@ function attachBodies(stars, rawBodies) {
   const planetIdxById = new Map();
   planets.forEach((p, i) => planetIdxById.set(p.id, i));
 
+  // Resolve belt shepherd references. shepherdId is the giant's string
+  // id (set either by a hand-curated CSV row or by the architect's
+  // generateBelts); shepherdBodyIdx is the giant's position in the
+  // combined `bodies` array. Planets occupy [0, planets.length), so the
+  // planet's local index here matches its index in the final array.
+  // Unresolvable ids warn-and-drop rather than failing the build,
+  // mirroring how missing star hosts are handled above.
+  for (const b of belts) {
+    if (!b.shepherdId) continue;
+    const idx = planetIdxById.get(b.shepherdId);
+    if (idx === undefined) {
+      console.warn(`${BODIES_FILE}: ${b.id} shepherd_id=${b.shepherdId} not found; clearing shepherd`);
+      b.shepherdId = null;
+      continue;
+    }
+    b.shepherdBodyIdx = idx;
+  }
+
   // Pass 2: resolve planet-hosted bodies (moons + rings). The combined
   // body array places planets first, then belts, then moons, then rings —
   // hostBodyIdx is rewritten with the planet's index in that combined
@@ -777,7 +821,12 @@ function attachBodies(stars, rawBodies) {
   for (const list of starBelts)   list.sort(cmp);
   for (const list of bodyMoons)   list.sort(cmp);
 
-  const finalBodies = bodies.map((b, i) => ({ ...b, moons: bodyMoons[i], ring: bodyRing[i] }));
+  // Strip shepherdId — it's a deferred string reference used only
+  // during build-time resolution; runtime consumers read shepherdBodyIdx.
+  const finalBodies = bodies.map((b, i) => {
+    const { shepherdId: _shepherdId, ...rest } = b;
+    return { ...rest, moons: bodyMoons[i], ring: bodyRing[i] };
+  });
   const finalStars = stars.map((s, i) => ({ ...s, planets: starPlanets[i], belts: starBelts[i] }));
   return { stars: finalStars, bodies: finalBodies };
 }

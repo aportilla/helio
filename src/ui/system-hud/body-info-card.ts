@@ -8,7 +8,7 @@
 // ephemeral; dismissal is the cursor leaving the disc.
 
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
-import { BODIES, STARS, type BeltClass, type BiosphereArchetype, type BiosphereTier, type Body, type WorldClass } from '../../data/stars';
+import { BODIES, STARS, ringClass, type BeltClass, type BiosphereArchetype, type BiosphereTier, type Body, type WorldClass } from '../../data/stars';
 import type { DiagramPick } from '../../scene/system-diagram';
 import { BasePanel } from '../base-panel';
 import { paintSurface } from '../painter';
@@ -47,6 +47,17 @@ const BELT_CLASS_LABEL: Record<BeltClass, string> = {
   asteroid: 'Asteroid',
   ice:      'Ice',
   debris:   'Debris',
+};
+
+// Population structure for belts — surfaces the orthogonal axis to
+// composition. 'Discrete' = a few large named parents dominate (sortie
+// targets); 'Collisional' = dust + many small parents (sweep harvest).
+// Distinguishes an asteroid belt (primordial, discrete) from a debris
+// field (second-generation, collisional) which otherwise share many of
+// the same compositional fields.
+const POPULATION_MODEL_LABEL: Record<'discrete' | 'collisional', string> = {
+  discrete:    'Discrete',
+  collisional: 'Collisional',
 };
 
 // Resource label table for the per-row mineral readouts on belts.
@@ -121,10 +132,21 @@ function rowsForBody(bodyIdx: number): BodyRow[] {
 function rowsForBelt(b: Body): BodyRow[] {
   const rows: BodyRow[] = [];
   if (b.beltClass) rows.push({ key: k('class'), val: BELT_CLASS_LABEL[b.beltClass] });
+  if (b.populationModel) rows.push({ key: k('pop'), val: POPULATION_MODEL_LABEL[b.populationModel] });
   if (b.innerAu !== null && b.outerAu !== null) {
     rows.push({ key: k('extent'), val: `${b.innerAu.toFixed(2)}–${b.outerAu.toFixed(2)} AU` });
   }
   if (b.massEarth !== null) rows.push({ key: k('mass'), val: `${b.massEarth.toFixed(4)} Mearth` });
+  // Largest body in km — surfaces the parent-body anchor that gives
+  // 'discrete' populations their gameplay handle (sortie to Ceres-class
+  // rather than sweep-harvest).
+  if (b.largestBodyKm !== null) rows.push({ key: k('largest'), val: `${b.largestBodyKm.toFixed(0)} km` });
+  // Dynamical shepherd: the gas/ice giant whose resonances stabilize
+  // this belt. Only set on asteroid + ice belts in giant-bearing
+  // systems; debris fields and giantless belts have no shepherd.
+  if (b.shepherdBodyIdx !== null) {
+    rows.push({ key: k('shepherd'), val: BODIES[b.shepherdBodyIdx].name });
+  }
   for (const r of RES_ROWS) {
     const v = b[r.field];
     if (v !== null) rows.push({ key: k(r.key), val: `${v}/10` });
@@ -138,7 +160,7 @@ function rowsForBelt(b: Body): BodyRow[] {
 // the mining-profile lens that makes sense for belts.
 function rowsForRing(b: Body): BodyRow[] {
   const rows: BodyRow[] = [];
-  if (b.beltClass) rows.push({ key: k('class'), val: BELT_CLASS_LABEL[b.beltClass] });
+  rows.push({ key: k('class'), val: BELT_CLASS_LABEL[ringClass(b)] });
   if (b.innerPlanetRadii !== null && b.outerPlanetRadii !== null) {
     rows.push({ key: k('extent'), val: `${b.innerPlanetRadii.toFixed(2)}–${b.outerPlanetRadii.toFixed(2)} R_p` });
   }

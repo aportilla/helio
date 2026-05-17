@@ -6,7 +6,7 @@
 // covers the whole annulus with a single uniform flip.
 
 import { BufferAttribute, BufferGeometry, Mesh, Scene, ShaderMaterial } from 'three';
-import { BELT_CLASS_COLOR, BODIES, type Body } from '../../../data/stars';
+import { BELT_CLASS_COLOR, BODIES, ringClass, type Body } from '../../../data/stars';
 import { makeIceRingMaterial } from '../../materials';
 import {
   ICE_RING_SEGMENTS, RENDER_ORDER_BACK_RING, RENDER_ORDER_FRONT_RING,
@@ -43,7 +43,7 @@ export class IceRingsLayer {
       const planet = BODIES[item.bodyIdx];
       if (planet.ring == null) continue;
       const ring = BODIES[planet.ring];
-      if (ring.beltClass !== 'ice') continue;
+      if (ringClass(ring) !== 'ice') continue;
       const built = buildIceRing(ring, planet.ring, item.bodyIdx, item.widthPx);
       this.rings.push(built);
       this.ringByBodyIdx.set(built.bodyIdx, built);
