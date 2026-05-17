@@ -154,6 +154,17 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       const float POLE_SIN = ${glsl(RING_MINOR_OVER_MAJOR)};
       const float POLE_COS = sqrt(1.0 - POLE_SIN * POLE_SIN);
 
+      // Per-band ± additive lightness perturbation. Keeps bands
+      // visually distinct when the palette entries collapse to nearly
+      // the same color — e.g. an H2/He gas giant with no chromophore,
+      // where the 3 palette slots all reduce to a single near-beige
+      // and a per-band hue pick would otherwise paint every strip the
+      // same RGB. 0.06 = ±6% value swing: invisible against a high-
+      // contrast Jovian palette (where the inter-gas hue gap is much
+      // larger), but resolves to readable cream / tan / dark-tan
+      // strips on a near-monochrome one.
+      const float BAND_LIGHTNESS_JITTER = 0.06;
+
       // Surface-mode worley cell pitch in buffer pixels. A 60-px planet
       // disc gets ~15 cells across; jittered cell centers make the
       // patch silhouettes non-grid-aligned, so the ground reads as
@@ -294,6 +305,13 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
           //    used for band widths above.
           float h = hash11(bandIdx + vSeed * 41.0);
           col = pickFromPalette(h);
+
+          // 7. Per-band lightness perturbation — see BAND_LIGHTNESS_JITTER
+          //    block above. Uniform RGB delta preserves hue; the * 67.0
+          //    salt keeps it uncorrelated from both band width (*7) and
+          //    palette pick (*41).
+          float lightJ = (hash11(bandIdx + vSeed * 67.0) - 0.5) * 2.0 * BAND_LIGHTNESS_JITTER;
+          col = clamp(col + vec3(lightJ), 0.0, 1.0);
         }
 
         // 1-px hover rim — same as the previous flat-disc material. The
