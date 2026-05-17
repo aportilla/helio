@@ -533,6 +533,7 @@ const BODY_NUMERIC_FIELDS = [
   ['atm1_frac',              'atm1Frac'],
   ['atm2_frac',              'atm2Frac'],
   ['atm3_frac',              'atm3Frac'],
+  ['chromophore_frac',       'chromophoreFrac'],
   ['res_metals',             'resMetals'],
   ['res_silicates',          'resSilicates'],
   ['res_volatiles',          'resVolatiles'],
@@ -549,6 +550,7 @@ const BODY_STRING_FIELDS = [
   ['atm1', 'atm1'],
   ['atm2', 'atm2'],
   ['atm3', 'atm3'],
+  ['chromophore_gas', 'chromophoreGas'],
 ];
 
 function cellOrNull(raw) {

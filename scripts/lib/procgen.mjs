@@ -51,6 +51,11 @@ import {
   ATMOSPHERE_GASES_BY_CLASS,
   ATMOSPHERE_O2_BIOTIC_LIFT,
   ATMOSPHERE_MIN_PRESSURE_BAR,
+  ICE_THICK_ATM_PROBABILITY,
+  ICE_THICK_ATM_MIN_MASS_EARTH,
+  ICE_THICK_ATM_PRESSURE_BAR,
+  OCEAN_MIN_MASS_EARTH,
+  CHROMOPHORE_BY_CLASS,
   PLANET_RESOURCE_PRIORS_BY_CLASS,
   BIOSPHERE_BY_CLASS,
   BIOSPHERE_GATE_INSOLATION,
@@ -162,7 +167,15 @@ export function worldClassFor(body, S) {
   // Thresholds in WATER_BUDGET_THRESHOLDS.temperate.
   const r_w = fieldPrng(body, 'water_budget')();
   if (r_w < WATER_BUDGET_THRESHOLDS.temperate.rockyMax) return 'rocky';
-  if (r_w < WATER_BUDGET_THRESHOLDS.temperate.oceanMax) return 'ocean';
+  if (r_w < WATER_BUDGET_THRESHOLDS.temperate.oceanMax) {
+    // Ocean classification requires sufficient mass to sustain the
+    // atmospheric pressure needed to keep surface water liquid against
+    // evaporation. Sub-Mars-mass would-be-oceans (Europa-class moons)
+    // can't hold thick atms — their water exists as frozen surface +
+    // possible subsurface ocean, which our taxonomy buckets as `ice`.
+    if ((body.massEarth ?? 0) < OCEAN_MIN_MASS_EARTH) return 'ice';
+    return 'ocean';
+  }
   return 'desert';
 }
 
@@ -231,6 +244,24 @@ function surfacePressureFor(body) {
   const baseline = PRESSURE_BAR_BY_CLASS[body.worldClass];
   if (baseline == null) return null;  // gas/ice giants land here — no surface
   const m = body.massEarth ?? 1.0;
+
+  // Ice worlds — mass-eligible bodies get a Titan-class retention roll.
+  // The class baseline (0.001 bar) puts every ice body in the airless
+  // category by default, but ~15% of Titan-mass-or-larger icies retain
+  // a thick atmosphere (Titan = 1.45 bar in Sol). The roll uses an
+  // isolated 'thickAtm' seed so adding/removing it doesn't perturb
+  // other fields. When it fires, the actual pressure draws from a
+  // separate 'thickAtmPressure' seed.
+  if (
+    body.worldClass === 'ice' &&
+    m >= ICE_THICK_ATM_MIN_MASS_EARTH &&
+    fieldPrng(body, 'thickAtm')() < ICE_THICK_ATM_PROBABILITY
+  ) {
+    return Number(
+      sampleTruncated(fieldPrng(body, 'thickAtmPressure'), ICE_THICK_ATM_PRESSURE_BAR).toFixed(3)
+    );
+  }
+
   return Number((baseline * Math.sqrt(Math.max(m, 0.001))).toFixed(3));
 }
 
@@ -432,6 +463,49 @@ function atmosphereFor(body) {
   return out;
 }
 
+// BIOSPHERE_TIERS order; used by chromophore gate matching.
+const BIOSPHERE_TIER_ORDER = ['none', 'prebiotic', 'microbial', 'complex', 'gaian'];
+
+// Returns true if the body matches the branch's gate. Null gate matches
+// everything (default branches). Multiple gate fields are AND-combined.
+function chromophoreGateMatches(body, S, gate) {
+  if (gate == null) return true;
+  if (gate.insolationAbove != null) {
+    if (S == null || S <= gate.insolationAbove) return false;
+  }
+  if (gate.insolationBelow != null) {
+    if (S == null || S >= gate.insolationBelow) return false;
+  }
+  if (gate.biosphereArchetype != null) {
+    if (body.biosphereArchetype !== gate.biosphereArchetype) return false;
+  }
+  if (gate.tierAtLeast != null) {
+    const idx = BIOSPHERE_TIER_ORDER.indexOf(body.biosphereTier ?? 'none');
+    const minIdx = BIOSPHERE_TIER_ORDER.indexOf(gate.tierAtLeast);
+    if (idx < 0 || minIdx < 0 || idx < minIdx) return false;
+  }
+  return true;
+}
+
+// Visually-dominant trace species. Walks CHROMOPHORE_BY_CLASS[worldClass]
+// in order and picks the first branch whose gate matches. Returns null
+// gas + null frac when no branch matches OR the body is airless (no
+// atmosphere can host an aerosol chromophore — chromophoreFrac of an
+// airless body would be meaningless).
+function chromophoreFor(body, S) {
+  if (body.surfacePressureBar != null && body.surfacePressureBar < ATMOSPHERE_MIN_PRESSURE_BAR) {
+    return { gas: null, frac: null };
+  }
+  const branches = CHROMOPHORE_BY_CLASS[body.worldClass];
+  if (!branches || branches.length === 0) return { gas: null, frac: null };
+  for (const branch of branches) {
+    if (!chromophoreGateMatches(body, S, branch.gate)) continue;
+    const frac = sampleTruncated(fieldPrng(body, 'chromophore'), branch.frac);
+    return { gas: branch.gas, frac: Number(frac.toFixed(5)) };
+  }
+  return { gas: null, frac: null };
+}
+
 // =============================================================================
 // Resources
 // =============================================================================
@@ -555,6 +629,7 @@ function fillBody(b, allBodies, stars) {
     tectonicActivity, rotationPeriodHours, magneticFieldGauss,
     surfacePressureBar,
     atm1, atm1Frac, atm2, atm2Frac, atm3, atm3Frac,
+    chromophoreGas, chromophoreFrac,
     resMetals, resSilicates, resVolatiles, resRareEarths, resRadioactives, resExotics,
     biosphereArchetype, biosphereTier,
     periodDays, semiMajorAu, eccentricity, inclinationDeg,
@@ -671,6 +746,17 @@ function fillBody(b, allBodies, stars) {
     if (unknowns.has('atm3')) { atm3 = a3?.gas ?? null; atm3Frac = a3?.frac ?? null; }
   }
 
+  // Chromophore — visually-dominant trace species, independent of the
+  // by-mass top 3. Reads worldClass + surfacePressureBar so it has to
+  // run after both are settled. Gameplay treats this as a small
+  // additional resource at its real fraction; the renderer applies a
+  // visibility boost (see CHROMOPHORE_VISUAL_BOOST in stars.ts).
+  if (unknowns.has('chromophoreGas') || unknowns.has('chromophoreFrac')) {
+    const c = chromophoreFor(working, S);
+    if (unknowns.has('chromophoreGas'))  chromophoreGas  = c.gas;
+    if (unknowns.has('chromophoreFrac')) chromophoreFrac = c.frac;
+  }
+
   // Resources — six 0..10 scalars.
   if (
     unknowns.has('resMetals') || unknowns.has('resSilicates') || unknowns.has('resVolatiles') ||
@@ -697,6 +783,7 @@ function fillBody(b, allBodies, stars) {
     tectonicActivity, rotationPeriodHours, magneticFieldGauss,
     surfacePressureBar,
     atm1, atm1Frac, atm2, atm2Frac, atm3, atm3Frac,
+    chromophoreGas, chromophoreFrac,
     resMetals, resSilicates, resVolatiles, resRareEarths, resRadioactives, resExotics,
     biosphereArchetype, biosphereTier,
     periodDays, semiMajorAu,

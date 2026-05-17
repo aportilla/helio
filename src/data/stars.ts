@@ -189,6 +189,17 @@ export interface Body {
   readonly atm2Frac: number | null;
   readonly atm3: string | null;
   readonly atm3Frac: number | null;
+  // Visually-dominant trace species — a gas whose chromophore or
+  // condensate signature paints the body's apparent color out of
+  // proportion to its molar fraction (Jupiter's NH3 ice clouds at
+  // ~0.03%, Earth's H2O clouds at <1%). Independent of atm1/atm2/atm3
+  // which stay top-by-mass for gameplay (terraforming, breathability,
+  // mining yields). The renderer folds chromophoreGas into its palette
+  // selection with a visibility boost; gameplay should treat it as a
+  // small additional resource present at its real fraction, not as a
+  // top-3 species. Null when the body has no notable chromophore.
+  readonly chromophoreGas: string | null;
+  readonly chromophoreFrac: number | null;
   // Resources — 0..10 indices, calibrated against Earth (5/6/7/5/4/0).
   readonly resMetals: number | null;
   readonly resSilicates: number | null;
@@ -270,6 +281,21 @@ export const WORLD_CLASS_COLOR: Record<WorldClass, Color> = {
 };
 export const WORLD_CLASS_UNKNOWN_COLOR = new Color(0x808080);
 
+// Optional per-class warm/cool tint applied to every palette entry by
+// the planet/moon shader's palette derivation. Compensates for the
+// gas-mix model's inability to represent chromophores (NH3 ice clouds +
+// tholin chromophores on Jupiter, etc.) — gas giants tint warm so they
+// read as ruddy Jovian rather than pale Saturnian-cream, even when H2
+// dominates the atm fractions and shares with Saturn. Bodies whose
+// class isn't in the table get no tint.
+//
+// `amount` lerps each palette entry by that fraction toward `color` —
+// 0 = no shift, 1 = palette entry replaced by tint. Keep amounts small
+// (≤0.3) so the gas-mix signal still reads through the tint.
+export const WORLD_CLASS_TINT: Partial<Record<WorldClass, { color: Color; amount: number }>> = {
+  gas_giant: { color: new Color(0xc88848), amount: 0.25 },  // warm amber → Jovian ruddy
+};
+
 // Endpoints of the rocky↔icy palette lerp shared by belts and rings.
 // `bodyIcyness` returns a 0..1 scalar from a body's resource grid
 // (resVolatiles vs. rocky resources); the renderer lerps between these.
@@ -290,6 +316,287 @@ export function bodyIcyness(body: Body): number {
   const denom = v + rocky;
   if (denom <= 0) return 0.5;
   return v / denom;
+}
+
+// All gases the procgen vocabulary can emit. Mirrors the keys of
+// ATMOSPHERE_GASES_BY_CLASS in scripts/lib/procgen-priors.mjs; any new
+// gas added there needs a hue here or planet rendering silently drops
+// it from the palette.
+//
+// SILICATE and DUST are condensable aerosols rather than true gases —
+// they only ever appear via the chromophore path (CHROMOPHORE_BY_CLASS),
+// never in ATMOSPHERE_GASES_BY_CLASS. SILICATE represents refractive
+// silicate cloud particles in hot-Jupiter / hot-sub-Neptune atmospheres
+// (Mg-Si-O condensates dredged from deep layers). DUST represents
+// suspended ferric-oxide aerosols on Mars-class desert worlds. Both
+// remain in the AtmGas type so the chromophore field doesn't need a
+// separate type — the bounded vocabulary stays bounded.
+export type AtmGas =
+  | 'N2' | 'O2' | 'CO2' | 'H2O' | 'CH4' | 'NH3'
+  | 'SO2' | 'Ar' | 'CO'  | 'H2'  | 'He'
+  | 'SILICATE' | 'DUST';
+
+// Archetypal hue per atmospheric gas. Picked to read at small disc sizes
+// as "what's in the air" rather than as photoreal sky color — the
+// rendering target is pixel-banded discs at 40-120 px, not a globe.
+export const GAS_COLOR: Record<AtmGas, Color> = {
+  N2:  new Color(0xb8c4d8),  // pale slate (mostly transparent in reality)
+  O2:  new Color(0x8ec0e4),  // cool blue
+  CO2: new Color(0xd8a878),  // dusty ochre (Venus)
+  H2O: new Color(0xe4ecf0),  // near-white cloud
+  CH4: new Color(0x6890d8),  // blue-cyan (Uranus/Neptune)
+  NH3: new Color(0xc89860),  // warm amber — Jovian NH3 ice / chromophore
+  SO2: new Color(0xc8a448),  // sulfurous yellow
+  Ar:  new Color(0xa8b0b8),  // grey neutral
+  CO:  new Color(0x988478),  // smoky brown
+  H2:  new Color(0xf0e4c8),  // pale Jovian
+  He:  new Color(0xf4e8d4),  // Jovian cream
+  // Aerosol-only species — these never appear via atm priors, but the
+  // GAS_COLOR fallback exists in case CHROMOPHORE_COLOR drift leaves a
+  // null lookup.
+  SILICATE: new Color(0x788098),  // refractive silicate-cloud grey-blue
+  DUST:     new Color(0xa86040),  // ferric oxide rust (Mars dust)
+};
+
+// Per-gas "visual potency" — how much each gas contributes to the disc's
+// apparent color *per unit molar fraction*. Decoupled from abundance
+// because the two correlate poorly: Uranus and Neptune are 95%+ H2/He
+// (transparent) and read as blue *because of* 1.5-2.3% CH4, which is a
+// strong red-light absorber. Mass-fraction-weighted color would paint
+// them as cream-and-trace-blue (wrong); potency-weighted color paints
+// them as mostly CH4 with cream accents (right).
+//
+// topGases() multiplies each gas's fraction by its potency before
+// renormalizing, so the displayed weights reflect visual contribution
+// rather than abundance. Tunable.
+// Multiplier applied to a body's `chromophoreFrac` before folding it
+// into topGases. Reflects that condensed-phase species (NH3 ice clouds,
+// H2O cloud decks, tholin aerosols) punch above their gas-phase fraction
+// — the visible signal is the cloud or aerosol surface, not the bulk
+// gas. Separate from GAS_POTENCY (per-molecule absorption strength)
+// because the two are independent physics:
+//   - potency       = how much one molecule of this gas absorbs
+//   - visual boost  = how much this trace species condenses into a
+//                     visually-dominant phase
+// A gas can be high in one and low in the other (CH4 absorbs strongly
+// as gas; NH3 condenses strongly into clouds). Tunable; ~75 gets Jupiter
+// to ~37% NH3 weight (~2 of 6 bands rendering as belt-brown) while
+// leaving Saturn's lower NH3 fraction at ~18% (one subtle band).
+export const CHROMOPHORE_VISUAL_BOOST = 75;
+
+// Color override when a gas appears via the chromophore path rather
+// than via atm1/2/3. Distinct because the chromophore signal is the
+// *condensed-phase product*, not the pure gas: Jupiter's brown belts
+// are NH4SH + tholin chromophores on NH3 ice clouds, not transparent
+// NH3 gas. Gases without an entry fall back to GAS_COLOR (clouds are
+// white either way; SO2 aerosols read similar to SO2 gas).
+//
+// Bodies where the same gas appears in both atm and chromophore slots
+// resolve via topGases' dedupe: the higher-weight entry wins, and the
+// chromophore boost makes that nearly always the chromophore path —
+// so the condensed-product color is what renders.
+export const CHROMOPHORE_COLOR: Partial<Record<AtmGas, Color>> = {
+  NH3: new Color(0xa05028),  // NH4SH + tholin brown — Jovian belt color
+  CH4: new Color(0xc88040),  // tholin orange — Titan haze (CH4 photolysis product)
+  // SILICATE + DUST are chromophore-only species; CHROMOPHORE_COLOR is
+  // their only render path so the value here is what actually paints.
+  SILICATE: new Color(0x788098),  // refractive silicate-cloud grey-blue — hot Jupiters / hot sub-Neptunes
+  DUST:     new Color(0xa86040),  // ferric oxide rust — Mars-class dust haze
+  // H2O defaults to GAS_COLOR (clouds are white)
+  // SO2 defaults to GAS_COLOR (sulfuric aerosols read similar to SO2 gas)
+};
+
+// Chromophores whose condensed-phase product forms an opaque aerosol
+// haze that visually occludes the surface, even at modest pressures.
+// Titan's CH4 → tholin haze and Venus's SO2 → sulfuric aerosols are
+// the canonical cases. H2O is intentionally absent — water cloud decks
+// allow surface visibility (Earth from space shows continents); we want
+// "ocean-like rocky with surface texture" not "opaque banded disc."
+export const HAZE_FORMING_CHROMOPHORES: ReadonlySet<AtmGas> = new Set(['CH4', 'SO2']);
+
+// Pressure threshold (bar) above which a haze-forming chromophore flips
+// the body into banded mode. Titan sits at 1.45 bar; this needs to be
+// below that. Set conservatively at 0.5 so an outlier sub-1-bar Titan-
+// analog still gets the right treatment, while Mars-class thin atms
+// (0.006 bar) stay in surface mode regardless of chromophore.
+const HAZE_BANDED_PRESSURE_BAR = 0.5;
+
+// Per-class set of gases that are present in the atmosphere but not
+// visible from above — buried under a cloud deck at the photic depth
+// the disc renderer is modeling. Gas-giant CH4 is the canonical case:
+// real Jupiter and Saturn carry CH4 at 0.3-0.5% by mass, but it sits
+// below the NH3 ice cloud layer, so the disc's apparent color comes
+// from the cloud tops + chromophores, not from CH4 absorption. Ice
+// giants have thinner / higher cloud cover and CH4 IS the visible
+// signal, so they're intentionally absent from the filter.
+//
+// topGases drops filtered gases from the candidate list before
+// scoring. The gas stays in atm1..3 for gameplay (CH4 really is in
+// Jupiter's atmosphere and can be mined as a deep-atmosphere resource)
+// — only the disc renderer ignores it.
+export const GAS_VISIBILITY_FILTER: Partial<Record<WorldClass, ReadonlySet<AtmGas>>> = {
+  gas_giant: new Set(['CH4']),
+  gas_dwarf: new Set(['CH4']),
+  // ice_giant intentionally absent — CH4 is the Uranus/Neptune blue.
+};
+
+export const GAS_POTENCY: Record<AtmGas, number> = {
+  // Transparent / weakly-scattering — present in the atmosphere but
+  // contribute little to the apparent color even at high fractions.
+  H2:  0.1,
+  He:  0.1,
+  N2:  0.1,
+  Ar:  0.1,
+  // Modest absorbers — visible at appreciable fractions.
+  O2:  1.0,
+  CO2: 1.0,
+  CO:  1.0,
+  // Cloud formers / strong condensates — visible signal disproportionate
+  // to fraction (NH3 ice clouds dominate Jupiter's bands; H2O cloud
+  // decks dominate Earth's appearance).
+  H2O: 3.0,
+  NH3: 3.0,
+  // Strong selective absorbers — visually dominant at trace levels.
+  // CH4 is the Uranus/Neptune blue; SO2 is the Venus sulfur haze.
+  CH4: 6.0,
+  SO2: 8.0,
+  // Aerosol-only — only meaningful via the chromophore path. Potency
+  // of 3 lets a 0.1% silicate/dust frac match a 3% H2O cloud-deck
+  // signal at the same boost level.
+  SILICATE: 3.0,
+  DUST:     3.0,
+};
+
+export type ResourceKey =
+  | 'resMetals' | 'resSilicates' | 'resVolatiles'
+  | 'resRareEarths' | 'resRadioactives' | 'resExotics';
+
+// Archetypal hue per resource. Surface texturing picks the 2 dominant
+// resources per body and speckles them over the world-class base color
+// so a metals-rich rocky reads visibly different from a volatiles-rich
+// ice world even though both share an underlying class.
+export const RESOURCE_COLOR: Record<ResourceKey, Color> = {
+  resMetals:       new Color(0x6c6c70),  // iron-grey
+  resSilicates:    new Color(0x9c7c5c),  // rust-tan
+  resVolatiles:    new Color(0xc8e0e8),  // pale ice
+  resRareEarths:   new Color(0xb46c8c),  // rose
+  resRadioactives: new Color(0xa8c460),  // yellow-green
+  resExotics:      new Color(0xa468c8),  // magenta
+};
+
+const RESOURCE_KEYS: readonly ResourceKey[] = [
+  'resMetals', 'resSilicates', 'resVolatiles',
+  'resRareEarths', 'resRadioactives', 'resExotics',
+];
+
+// Pressure (bar) above which a non-giant world's atmosphere visually
+// occludes its surface. Venus sits at ~90 bar so it clears easily;
+// Earth's 1 bar and Mars's 0.006 bar stay below. Tunable.
+const ATMOSPHERE_BANDED_PRESSURE_BAR = 10;
+
+// True when the body's atmosphere replaces its surface in the disc
+// render. Three triggers, in priority order:
+//   1. Gas/ice giants by class — no surface exists.
+//   2. Venus-class thick atmosphere (≥10 bar) — any composition.
+//   3. Titan-class haze-forming chromophore (CH4 → tholin, SO2 →
+//      sulfuric aerosol) at modest pressure (≥0.5 bar) — even though
+//      the bulk gas is transparent (Titan is mostly N2), the
+//      photochemistry product is opaque and obscures the surface.
+//      H2O is intentionally not in the haze-forming set; Earth's
+//      surface is visible through its cloud decks.
+export function isBandedAtmosphere(body: Body): boolean {
+  const wc = body.worldClass;
+  if (wc === 'gas_giant' || wc === 'gas_dwarf' || wc === 'ice_giant') return true;
+  const pressure = body.surfacePressureBar ?? 0;
+  if (pressure >= ATMOSPHERE_BANDED_PRESSURE_BAR) return true;
+  if (
+    pressure >= HAZE_BANDED_PRESSURE_BAR &&
+    body.chromophoreGas !== null &&
+    HAZE_FORMING_CHROMOPHORES.has(body.chromophoreGas as AtmGas)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+// Top 1-3 atmospheric gases for rendering, with each gas's contribution
+// computed as `fraction × potency`. The chromophore (if any) folds in
+// as an additional candidate with weight `chromophoreFrac × potency ×
+// CHROMOPHORE_VISUAL_BOOST` — see the const for why. The full candidate
+// list is then sorted by weight and trimmed to the top 3, so a body
+// whose chromophore outweighs its by-mass third gas (Jupiter: NH3
+// chromophore vs CH4 atm3) gets the chromophore in the palette.
+//
+// The output may reorder vs the CSV's atm1/atm2/atm3 ordering when a
+// low-fraction high-potency gas (CH4 on ice giants) outweighs a high-
+// fraction transparent gas (H2). Unknown gas names (procgen vocabulary
+// drift) are silently skipped; an empty result means the caller should
+// fall back to a solid world-class color.
+export function topGases(body: Body): Array<{ color: Color; weight: number }> {
+  // Tuple: [gas, frac, boost, isChromophore]. The chromophore path uses
+  // CHROMOPHORE_COLOR (condensed-product hue) where defined; atm slots
+  // use GAS_COLOR (clear-gas hue).
+  const candidates: Array<[string | null, number | null, number, boolean]> = [
+    [body.atm1, body.atm1Frac, 1, false],
+    [body.atm2, body.atm2Frac, 1, false],
+    [body.atm3, body.atm3Frac, 1, false],
+    [body.chromophoreGas, body.chromophoreFrac, CHROMOPHORE_VISUAL_BOOST, true],
+  ];
+  // Visibility filter — gases physically present but buried under a
+  // cloud deck at this world class don't contribute to the rendered
+  // color. See GAS_VISIBILITY_FILTER for the canonical case (gas-giant
+  // CH4 hidden beneath the NH3 ice layer).
+  const filtered: ReadonlySet<AtmGas> | undefined =
+    body.worldClass !== null ? GAS_VISIBILITY_FILTER[body.worldClass] : undefined;
+
+  // Dedupe by gas name so a body whose chromophore already appears in
+  // atm1..3 (e.g. an ice giant with CH4 as both top-by-mass and listed
+  // chromophore) doesn't get double-counted — keep the higher-weight
+  // entry, which will be the chromophore boost (and so will carry the
+  // condensed-product color, not the gas color).
+  const byGas = new Map<string, { color: Color; weight: number }>();
+  for (const [name, frac, boost, isChromophore] of candidates) {
+    if (name === null || frac === null) continue;
+    const gas = name as AtmGas;
+    if (filtered?.has(gas)) continue;
+    const col = (isChromophore ? CHROMOPHORE_COLOR[gas] : undefined) ?? GAS_COLOR[gas];
+    if (!col) continue;
+    const potency = GAS_POTENCY[gas] ?? 1;
+    const visualWeight = frac * potency * boost;
+    const prev = byGas.get(name);
+    if (!prev || visualWeight > prev.weight) {
+      byGas.set(name, { color: col, weight: visualWeight });
+    }
+  }
+  // Sort by visual weight, take top 3, renormalize. Putting the strongest
+  // visual signal at index 0 keeps "the solid-color fallback reads the
+  // body" honest — see buildDiscPalette's palette0 handling.
+  const out = [...byGas.values()]
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, 3);
+  const total = out.reduce((s, e) => s + e.weight, 0);
+  if (total > 0) for (const e of out) e.weight /= total;
+  return out;
+}
+
+// Top `count` resources (default 2) by value, with weights renormalized
+// to sum to 1. Empty when every res scalar is null/zero — caller falls
+// back to a solid world-class color.
+export function dominantResources(
+  body: Body,
+  count = 2,
+): Array<{ color: Color; weight: number }> {
+  const scored = RESOURCE_KEYS
+    .map(k => ({ key: k, value: body[k] ?? 0 }))
+    .filter(e => e.value > 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, count);
+  const total = scored.reduce((s, e) => s + e.value, 0);
+  if (total <= 0) return [];
+  return scored.map(e => ({
+    color: RESOURCE_COLOR[e.key],
+    weight: e.value / total,
+  }));
 }
 
 // =============================================================================

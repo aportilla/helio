@@ -12,8 +12,9 @@
 // character, atmosphere, resources, biosphere are left as `_unknowns`
 // for the Filler (procgen.mjs) to derive.
 
-import { hash32, mulberry32, sampleNormal, sampleTruncated, sampleMixture, samplePoisson } from './prng.mjs';
+import { hash32, mulberry32, sampleNormal, samplePhysical, sampleTruncated, sampleMixture, samplePoisson } from './prng.mjs';
 import { insolation } from './astrophysics.mjs';
+import { radiusFromMass } from './procgen.mjs';
 import {
   PROCGEN_VERSION,
   PLANET_COUNT_BY_CLASS,
@@ -22,7 +23,11 @@ import {
   TYPE_WEIGHTS_BY_INSOLATION,
   TYPE_MULTIPLIER_BY_CLASS,
   PHYSICAL_SPEC_BY_TYPE,
+  RADIUS_SCATTER_SIGMA_LOG,
+  RADIUS_CLAMP_BY_TYPE,
   MOON_COUNT_BY_TYPE,
+  MOON_MASS_LOG_EARTH,
+  MOON_MAX_HOST_MASS_RATIO,
   ECCENTRICITY,
   INCLINATION_DEG,
   AXIAL_TILT_DEG,
@@ -131,6 +136,7 @@ const FILLER_TARGET_FIELDS = [
   'magneticFieldGauss', 'tectonicActivity',
   'surfacePressureBar',
   'atm1', 'atm1Frac', 'atm2', 'atm2Frac', 'atm3', 'atm3Frac',
+  'chromophoreGas', 'chromophoreFrac',
   'resMetals', 'resSilicates', 'resVolatiles',
   'resRareEarths', 'resRadioactives', 'resExotics',
   'biosphereArchetype', 'biosphereTier',
@@ -159,6 +165,7 @@ function makeBody(props) {
     magneticFieldGauss: null, tectonicActivity: null,
     surfacePressureBar: null,
     atm1: null, atm1Frac: null, atm2: null, atm2Frac: null, atm3: null, atm3Frac: null,
+    chromophoreGas: null, chromophoreFrac: null,
     resMetals: null, resSilicates: null, resVolatiles: null,
     resRareEarths: null, resRadioactives: null, resExotics: null,
     biosphereArchetype: null, biosphereTier: null,
@@ -199,8 +206,20 @@ export function generateMoons(planet, planetType) {
     const incPrng = moonPrng(planet.id, mIdx, 'inc');
     const tiltPrng = moonPrng(planet.id, mIdx, 'tilt');
 
-    // Mass: log-uniform between Enceladus-tiny and Ganymede-large.
-    const massEarth = Math.pow(10, -5 + massPrng() * (Math.log10(0.025) + 5));
+    // Mass: truncated log-normal centered on Europa-class with a tail
+    // extending to Earth-mass+. Each moon's upper bound is further capped
+    // by the host's Hill-sphere-style stability ratio so an Earth-mass
+    // moon can only form around a Saturn+ host. See MOON_MASS_LOG_EARTH
+    // and MOON_MAX_HOST_MASS_RATIO in procgen-priors.mjs for the
+    // distribution shape and the cap rationale.
+    const hostCapLog = Math.log10(Math.max(planet.massEarth * MOON_MAX_HOST_MASS_RATIO, 1e-5));
+    const massSpec = {
+      mean: MOON_MASS_LOG_EARTH.mean,
+      sd:   MOON_MASS_LOG_EARTH.sd,
+      min:  MOON_MASS_LOG_EARTH.min,
+      max:  Math.min(MOON_MASS_LOG_EARTH.max, hostCapLog),
+    };
+    const massEarth = Math.pow(10, sampleTruncated(massPrng, massSpec));
     const radiusEarth = Math.pow(massEarth * 5.5 / 3.0, 1 / 3);  // ρ≈3 g/cm³ vs Earth's 5.5
 
     // Orbital distance: starts inside Roche-ish, spreads out with each slot
@@ -517,8 +536,18 @@ function buildPlanetAtOrbit(star, slotIdx, aAu, letter, saltPrefix = '') {
 
   const massPrng = slotPrng(star.id, slotIdx, saltPrefix + 'mass');
   const radiusPrng = slotPrng(star.id, slotIdx, saltPrefix + 'radius');
-  const massEarth = sampleTruncated(massPrng, physSpec.massEarth);
-  const radiusEarth = sampleTruncated(radiusPrng, physSpec.radiusEarth);
+  // Mass first — dispatched via samplePhysical so jupiter's log-normal
+  // spec sampling kicks in while terrestrial linear specs stay
+  // truncated-normal. Radius is then DERIVED from mass via the Otegi
+  // relation plus a per-type log-scatter, keeping density physically
+  // consistent (no more 1.6-R⊕ rocky worlds at 0.5 M⊕ from independent
+  // sampling). Final radius is clamped to per-type bounds.
+  const massEarth = samplePhysical(massPrng, physSpec.massEarth);
+  const meanRadius = radiusFromMass(massEarth) ?? 1.0;
+  const sigma = RADIUS_SCATTER_SIGMA_LOG[planetType] ?? 0.1;
+  const clamp = RADIUS_CLAMP_BY_TYPE[planetType] ?? { min: 0.1, max: 30 };
+  const noisy = meanRadius * Math.exp(sampleNormal(radiusPrng, 0, sigma));
+  const radiusEarth = Math.max(clamp.min, Math.min(clamp.max, noisy));
 
   const eccPrng = slotPrng(star.id, slotIdx, saltPrefix + 'eccentricity');
   const incPrng = slotPrng(star.id, slotIdx, saltPrefix + 'inclination');

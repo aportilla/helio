@@ -157,8 +157,8 @@ export class SystemScene {
     this.bufferH = buf.y;
 
     // Push the new buffer dims into every pixel-snapped material's uViewport
-    // — including the diagram's flat stars material registered via
-    // makeFlatStarsMaterial.
+    // — including the diagram's planet/moon material registered via
+    // makePlanetMaterial.
     setSnappedLineViewport(this.bufferW, this.bufferH);
     this.diagram.resize(this.bufferW, this.bufferH);
     this.hud.resize(this.bufferW, this.bufferH);

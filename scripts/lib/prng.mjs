@@ -47,6 +47,33 @@ export function sampleTruncated(prng, spec, round = false) {
   return round ? Math.round(clamped) : clamped;
 }
 
+// Sample log-normal in natural log space, interpreting `spec.mean` as
+// the median (geometric mean) and `spec.sd / spec.mean` as the log-space
+// stdev — the convention called out in PHYSICAL_SPEC_BY_TYPE comments
+// ("the Architect should sample log(value) ~ N(log(mean), sd / mean)").
+// Clamps the linear-space result to [min, max]. Use for priors whose
+// realistic distribution is heavy-tailed in linear space (gas-giant mass
+// with sd ≈ mean is the canonical case — linear truncated normal
+// under-produces the super-Jupiter tail because the upper half of the
+// distribution gets compressed into [mean, max] in linear space rather
+// than spreading across [mean, max] in log space).
+export function sampleLogTruncated(prng, spec, round = false) {
+  const logMean = Math.log(spec.mean);
+  const logSd = spec.sd / spec.mean;
+  const v = Math.exp(sampleNormal(prng, logMean, logSd));
+  const clamped = Math.max(spec.min, Math.min(spec.max, v));
+  return round ? Math.round(clamped) : clamped;
+}
+
+// Dispatch by `spec.log`: log-normal if truthy, otherwise linear
+// truncated normal. Lets PHYSICAL_SPEC_BY_TYPE flag the gas-giant mass
+// as log-distributed without forcing every caller to branch.
+export function samplePhysical(prng, spec, round = false) {
+  return spec.log
+    ? sampleLogTruncated(prng, spec, round)
+    : sampleTruncated(prng, spec, round);
+}
+
 // Sample from a mixture of truncated normals. `spec` is an object mapping
 // mode names to `{ mean, sd, min, max, weight }`. Weights need not sum to
 // 1 — the sampler normalizes. Used for priors whose true distribution is

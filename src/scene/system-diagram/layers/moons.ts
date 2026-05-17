@@ -6,8 +6,9 @@
 // same way across reloads.
 
 import { BufferAttribute, BufferGeometry, Points, Scene, ShaderMaterial } from 'three';
-import { BODIES, WORLD_CLASS_COLOR, WORLD_CLASS_UNKNOWN_COLOR } from '../../../data/stars';
-import { makeFlatStarsMaterial } from '../../materials';
+import { BODIES } from '../../../data/stars';
+import { makePlanetMaterial } from '../../materials';
+import { buildDiscPalette, lerpTowardWhite } from '../disc-palette';
 import {
   MOON_BRIGHTEN, MOON_DISC_BASE, MOON_DISC_MAX, MOON_DISC_MIN, MOON_EDGE_BIAS,
   RENDER_ORDER_BACK_MOON, RENDER_ORDER_FRONT_MOON,
@@ -232,26 +233,48 @@ function distributeMoonAngles(
 function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   const N = slots.length;
   const positions = new Float32Array(N * 3);
-  const colors    = new Float32Array(N * 3);
   const sizesAttr = new Float32Array(N);
   // Hover flag per moon; flipped to 1 by MoonsLayer.setHovered.
   const hoveredAttr = new Float32Array(N);
+  // Procedural-texture inputs — same shape as PlanetsLayer. Every
+  // palette entry is lifted toward white by MOON_BRIGHTEN so the moon's
+  // rim doesn't merge into a same-class parent at the inner overlap.
+  const palette0  = new Float32Array(N * 3);
+  const palette1  = new Float32Array(N * 3);
+  const palette2  = new Float32Array(N * 3);
+  const weights   = new Float32Array(N * 3);
+  const modes     = new Float32Array(N);
+  const seeds     = new Float32Array(N);
   slots.forEach((slot, i) => {
     const b = BODIES[slot.bodyIdx];
-    const col = b.worldClass !== null
-      ? (WORLD_CLASS_COLOR[b.worldClass] ?? WORLD_CLASS_UNKNOWN_COLOR)
-      : WORLD_CLASS_UNKNOWN_COLOR;
-    colors[i * 3 + 0] = col.r + (1 - col.r) * MOON_BRIGHTEN;
-    colors[i * 3 + 1] = col.g + (1 - col.g) * MOON_BRIGHTEN;
-    colors[i * 3 + 2] = col.b + (1 - col.b) * MOON_BRIGHTEN;
+    const disc = buildDiscPalette(b, slot.discPx, c => lerpTowardWhite(c, MOON_BRIGHTEN));
+    palette0[i * 3 + 0] = disc.palette[0];
+    palette0[i * 3 + 1] = disc.palette[1];
+    palette0[i * 3 + 2] = disc.palette[2];
+    palette1[i * 3 + 0] = disc.palette[3];
+    palette1[i * 3 + 1] = disc.palette[4];
+    palette1[i * 3 + 2] = disc.palette[5];
+    palette2[i * 3 + 0] = disc.palette[6];
+    palette2[i * 3 + 1] = disc.palette[7];
+    palette2[i * 3 + 2] = disc.palette[8];
+    weights[i * 3 + 0] = disc.weights[0];
+    weights[i * 3 + 1] = disc.weights[1];
+    weights[i * 3 + 2] = disc.weights[2];
+    modes[i] = disc.mode;
+    seeds[i] = disc.seed;
     sizesAttr[i] = slot.discPx;
   });
   const geometry = new BufferGeometry();
   geometry.setAttribute('position', new BufferAttribute(positions, 3));
-  geometry.setAttribute('color',    new BufferAttribute(colors, 3));
   geometry.setAttribute('aSize',    new BufferAttribute(sizesAttr, 1));
   geometry.setAttribute('aHovered', new BufferAttribute(hoveredAttr, 1));
-  const material = makeFlatStarsMaterial(1.0);
+  geometry.setAttribute('aPalette0', new BufferAttribute(palette0, 3));
+  geometry.setAttribute('aPalette1', new BufferAttribute(palette1, 3));
+  geometry.setAttribute('aPalette2', new BufferAttribute(palette2, 3));
+  geometry.setAttribute('aWeights',  new BufferAttribute(weights, 3));
+  geometry.setAttribute('aMode',     new BufferAttribute(modes, 1));
+  geometry.setAttribute('aSeed',     new BufferAttribute(seeds, 1));
+  const material = makePlanetMaterial(1.0);
   const points = new Points(geometry, material);
   points.renderOrder = renderOrder;
   // Stale-bounding-sphere workaround — same as planetPoints. Moon

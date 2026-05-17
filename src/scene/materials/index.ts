@@ -12,7 +12,7 @@ export {
 } from './galaxy';
 export {
   makeBlobMaterial,
-  makeFlatStarsMaterial,
+  makePlanetMaterial,
   makeRingMaterial,
   makeStarMeshMaterial,
 } from './system';

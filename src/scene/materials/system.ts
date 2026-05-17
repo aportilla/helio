@@ -7,17 +7,39 @@
 import { Color, ShaderMaterial, Vector2 } from 'three';
 import { glsl, RASTER_PAD, snappedMaterials } from './shared';
 
-// Flat 2D stars material — system-view variant. Strips every concept that
-// only makes sense in the perspective galaxy view: depth attenuation,
-// pivot-dim, selection/candidate bypass, focus-target snap. Keeps the
-// pixel-crisp disc rendering: integer-pixel size, parity-aware center
-// snap, fragment-shader disc discard from gl_FragCoord − vCenter.
+// Planet + moon disc material. Renders a pixel-crisp disc whose interior
+// is one of two procedural textures:
 //
-// Designed to render under an OrthographicCamera at 1 unit = 1 buffer pixel
-// (vertex positions are buffer-pixel coords). aSize is the per-star pxSize
-// from data/stars.ts; uDiscScale is the global multiplier that takes those
-// galaxy-tuned values up to system-view diagram size.
-export function makeFlatStarsMaterial(initialDiscScale: number): ShaderMaterial {
+//   - **Surface mode (aMode = 0)** — per-fragment palette pick from a
+//     hash keyed on the integer pixel coord (so the texture is sharp
+//     pixel-art, not noise). Driven CPU-side by the world-class color +
+//     2 dominant resources from the body's resource grid.
+//   - **Banded mode (aMode = 1)** — latitude-quantized strips, each band
+//     picking a palette entry by a per-band hash. Driven by the top 3
+//     atmospheric gases. Used for gas/ice giants and Venus-class worlds
+//     where the atmosphere visually replaces the surface.
+//
+// Per-vertex attributes drive both modes:
+//   aPalette0/1/2  — three RGB palette entries
+//   aWeights       — three [0..1] weights (sum to ~1; the picker treats
+//                    zero-weight slots as ineligible)
+//   aMode          — 0 = surface, 1 = banded
+//   aSeed          — per-body [0..1) random; salts every hash so two
+//                    planets with the same palette still texture differently
+//
+// Pixel-crisp constraints (see README §Pixel-perfect rendering):
+//   - The disc still does parity-aware center snap so `gl_FragCoord -
+//     vCenter` lands at symmetric pixel offsets.
+//   - The fragment hash takes `floor(d)` so all sub-pixel positions
+//     within one rendered pixel resolve to the same palette entry — the
+//     texture is integer-pixel grained.
+//   - No AA, no gradients, no inter-palette blending.
+//
+// Designed for an OrthographicCamera at 1 unit = 1 buffer pixel (vertex
+// positions are buffer-pixel coords). `aSize` is the per-body disc
+// diameter; `uDiscScale` is a global multiplier (planets + moons pass 1.0,
+// the diagram already bakes its own sizing).
+export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
   const m = new ShaderMaterial({
     uniforms: {
       uDiscScale: { value: initialDiscScale },
@@ -26,31 +48,43 @@ export function makeFlatStarsMaterial(initialDiscScale: number): ShaderMaterial 
     vertexShader: `
       attribute float aSize;
       attribute float aHovered;
-      varying vec3 vColor;
+      attribute vec3  aPalette0;
+      attribute vec3  aPalette1;
+      attribute vec3  aPalette2;
+      attribute vec3  aWeights;
+      attribute float aMode;
+      attribute float aSeed;
       varying float vRadius;
-      varying vec2 vCenter;
+      varying vec2  vCenter;
       varying float vHovered;
+      varying vec3  vPalette0;
+      varying vec3  vPalette1;
+      varying vec3  vPalette2;
+      varying vec3  vWeights;
+      varying float vMode;
+      varying float vSeed;
       uniform float uDiscScale;
-      uniform vec2 uViewport;
+      uniform vec2  uViewport;
       void main() {
-        vColor = color;
-        vHovered = aHovered;
-        // Integer-pixel disc diameter. No depth attenuation — this is a
-        // flat diagram, every star renders at its table size scaled by the
-        // global knob. Floor + 0.5 → round-to-nearest.
+        vHovered  = aHovered;
+        vPalette0 = aPalette0;
+        vPalette1 = aPalette1;
+        vPalette2 = aPalette2;
+        vWeights  = aWeights;
+        vMode     = aMode;
+        vSeed     = aSeed;
+
+        // Integer-pixel disc diameter. Floor + 0.5 → round-to-nearest.
         float sz = floor(aSize * uDiscScale + 0.5);
-        // Same rasterizer padding as the perspective stars shader (see
-        // RASTER_PAD in shared.ts); the fragment shader's discard test
-        // does the real bounding.
+        // Rasterizer padding (see RASTER_PAD in shared.ts); the fragment
+        // discard test does the real bounding.
         gl_PointSize = sz + ${glsl(RASTER_PAD)};
         vRadius = sz * 0.5;
 
         // Parity-aware snap of the projected center to the pixel grid:
         // even sz → integer (pixel boundary), odd sz → integer + 0.5
-        // (pixel center). Identical algorithm to the perspective stars
-        // shader; under ortho the projection adds no FP noise, but the
-        // parity snap is still load-bearing so disc pixels land symmetric
-        // about the center.
+        // (pixel center). Load-bearing for symmetric disc rasterization
+        // under the gl_FragCoord − vCenter offset path.
         float oddOff = mod(sz, 2.0) * 0.5;
         vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         vec2 ndc = clip.xy / clip.w;
@@ -62,30 +96,81 @@ export function makeFlatStarsMaterial(initialDiscScale: number): ShaderMaterial 
       }
     `,
     fragmentShader: `
-      varying vec3 vColor;
       varying float vRadius;
-      varying vec2 vCenter;
+      varying vec2  vCenter;
       varying float vHovered;
+      varying vec3  vPalette0;
+      varying vec3  vPalette1;
+      varying vec3  vPalette2;
+      varying vec3  vWeights;
+      varying float vMode;
+      varying float vSeed;
+
+      // Bands across the disc in banded mode. Disc lat spans [-1, 1] so
+      // floor(lat * BAND_COUNT) yields 2*BAND_COUNT distinct strips —
+      // BAND_COUNT=3 → 6 visible bands, ~1/6 of disc diameter each
+      // (≈7 px on a 40 px disc, ≈20 px on a 120 px gas giant).
+      const float BAND_COUNT = 3.0;
+
+      float hash11(float x) {
+        return fract(sin(x * 12.9898 + 78.233) * 43758.5453);
+      }
+      float hash21(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+      }
+
+      // Pick one of three palette entries by a 0..1 hash, weighted by
+      // vWeights. Skips zero-weight slots automatically. Defensive
+      // fallback: weights summing to zero → palette0 (the world-class
+      // base color is always plumbed there).
+      vec3 pickFromPalette(float h) {
+        float w = vWeights.x + vWeights.y + vWeights.z;
+        if (w <= 0.0) return vPalette0;
+        float t = h * w;
+        if (t < vWeights.x) return vPalette0;
+        if (t < vWeights.x + vWeights.y) return vPalette1;
+        return vPalette2;
+      }
+
       void main() {
         vec2 d = gl_FragCoord.xy - vCenter;
         float r = length(d);
         if (r > vRadius) discard;
-        // 1px white outline at the rim when hovered. The discard above
-        // bounds the disc; this swap stamps the outermost pixel ring
-        // (where r > vRadius - 1) to white so the hovered body reads
-        // distinct from anything it overlaps. Same natural pixel-disc
-        // ring shape as the body — no AA, no extra geometry.
-        vec3 col = (vHovered > 0.5 && r > vRadius - 1.0) ? vec3(1.0) : vColor;
+
+        vec3 col;
+        if (vMode < 0.5) {
+          // Surface — per-integer-pixel hash, salted by per-body seed so
+          // two same-palette planets get distinct textures. floor(d)
+          // collapses sub-pixel positions to one hash value → integer-
+          // pixel texture grain.
+          vec2 q = floor(d);
+          float h = hash21(q + vec2(vSeed * 1009.0, vSeed * 2017.0));
+          col = pickFromPalette(h);
+        } else {
+          // Banded atmosphere — quantize latitude into discrete strips,
+          // each picking one palette entry by a per-band hash. The seed
+          // offset shifts band boundaries so two same-class giants don't
+          // comb-align.
+          float lat = d.y / vRadius;
+          float band = floor(lat * BAND_COUNT + vSeed * BAND_COUNT);
+          float h = hash11(band + vSeed * 41.0);
+          col = pickFromPalette(h);
+        }
+
+        // 1-px hover rim — same as the previous flat-disc material. The
+        // discard above bounds the disc; this swap stamps the outermost
+        // pixel ring (where r > vRadius - 1) to white when hovered, so
+        // the body reads distinct from anything it overlaps.
+        if (vHovered > 0.5 && r > vRadius - 1.0) col = vec3(1.0);
+
         gl_FragColor = vec4(col, 1.0);
       }
     `,
-    vertexColors: true,
     transparent: false,
-    // depthWrite intentionally true here — the system diagram threads
-    // a per-vertex z based on each planet's row index so each planet's
+    // depthWrite intentionally true — the system diagram threads a
+    // per-vertex z based on each planet's row index so each planet's
     // stack (back-ring / back-moon / disc / front-ring / front-moon)
-    // renders as a single z-layer above or below its neighbors. With
-    // depthWrite off this ordering would collapse back to draw order.
+    // renders as a single z-layer above or below its neighbors.
     depthWrite: true,
   });
   snappedMaterials.push(m);
@@ -129,7 +214,7 @@ export function makeBlobMaterial(): ShaderMaterial {
     `,
     vertexColors: true,
     transparent: false,
-    // See makeFlatStarsMaterial — the system diagram uses vertex z to
+    // See makePlanetMaterial — the system diagram uses vertex z to
     // bundle each planet's elements as one z-layer; the chunks need to
     // write depth too so adjacent planets' rings/discs occlude this
     // pool correctly.
@@ -178,7 +263,7 @@ export function makeRingMaterial(color: Color, alpha: number): ShaderMaterial {
       }
     `,
     transparent,
-    // See makeFlatStarsMaterial — ring meshes ride the per-planet z
+    // See makePlanetMaterial — ring meshes ride the per-planet z
     // stride too. The back / front mesh pair sits at z slightly
     // bracketing the host planet's z so the planet disc paints over
     // the back half and the front half overpaints the planet.

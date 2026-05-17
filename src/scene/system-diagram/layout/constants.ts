@@ -88,6 +88,13 @@ export const MOON_EDGE_BIAS = 0;
 // channels already near 1.
 export const MOON_BRIGHTEN = 0.15;
 
+// Disc-diameter floor (env-px) below which a body forces flat fill
+// rather than running the procedural surface/banded texture. At smaller
+// sizes the per-pixel palette pick reads as screen-door noise instead
+// of texture, and bands collapse to barber-pole stripes. The smallest
+// moons (10 px) land below this and render as one solid palette entry.
+export const PROCEDURAL_TEXTURE_MIN_PX = 16;
+
 // --- Belts ---
 
 // Belts occupy a row slot like a planet, but render as a vertical

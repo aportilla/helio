@@ -4,8 +4,9 @@
 // rings consume to anchor relative to their host.
 
 import { BufferAttribute, BufferGeometry, Points, Scene, ShaderMaterial } from 'three';
-import { BODIES, WORLD_CLASS_COLOR, WORLD_CLASS_UNKNOWN_COLOR } from '../../../data/stars';
-import { makeFlatStarsMaterial } from '../../materials';
+import { BODIES } from '../../../data/stars';
+import { makePlanetMaterial } from '../../materials';
+import { buildDiscPalette } from '../disc-palette';
 import { RENDER_ORDER_PLANET, Z_PLANET, Z_STRIDE } from '../layout/constants';
 import type { RowSlot } from '../layout/row';
 import type { DiagramPick, PlanetCenterIndex } from '../types';
@@ -41,30 +42,51 @@ export class PlanetsLayer {
 
     const P = this.planetIndices.length;
     const positions = new Float32Array(P * 3);
-    const colors    = new Float32Array(P * 3);
     const sizesAttr = new Float32Array(P);
     // aHovered carries the per-vertex hover flag (0 or 1) consumed by
     // the fragment shader's outline branch. Starts all-zero; setHovered
     // flips one entry at a time.
     const hovered   = new Float32Array(P);
+    // Procedural-texture inputs — see disc-palette.ts and makePlanetMaterial.
+    const palette0  = new Float32Array(P * 3);
+    const palette1  = new Float32Array(P * 3);
+    const palette2  = new Float32Array(P * 3);
+    const weights   = new Float32Array(P * 3);
+    const modes     = new Float32Array(P);
+    const seeds     = new Float32Array(P);
     this.planetIndices.forEach((bIdx, i) => {
       const b = BODIES[bIdx];
-      const col = b.worldClass !== null
-        ? (WORLD_CLASS_COLOR[b.worldClass] ?? WORLD_CLASS_UNKNOWN_COLOR)
-        : WORLD_CLASS_UNKNOWN_COLOR;
-      colors[i * 3 + 0] = col.r;
-      colors[i * 3 + 1] = col.g;
-      colors[i * 3 + 2] = col.b;
+      const discPx = this.planetDiscPx[i];
+      const disc = buildDiscPalette(b, discPx);
+      palette0[i * 3 + 0] = disc.palette[0];
+      palette0[i * 3 + 1] = disc.palette[1];
+      palette0[i * 3 + 2] = disc.palette[2];
+      palette1[i * 3 + 0] = disc.palette[3];
+      palette1[i * 3 + 1] = disc.palette[4];
+      palette1[i * 3 + 2] = disc.palette[5];
+      palette2[i * 3 + 0] = disc.palette[6];
+      palette2[i * 3 + 1] = disc.palette[7];
+      palette2[i * 3 + 2] = disc.palette[8];
+      weights[i * 3 + 0] = disc.weights[0];
+      weights[i * 3 + 1] = disc.weights[1];
+      weights[i * 3 + 2] = disc.weights[2];
+      modes[i] = disc.mode;
+      seeds[i] = disc.seed;
       // aSize carries the final pixel diameter; uDiscScale = 1.0 so the
       // shader's floor(aSize * 1.0 + 0.5) is a no-op pass-through.
-      sizesAttr[i] = this.planetDiscPx[i];
+      sizesAttr[i] = discPx;
     });
     this.geometry = new BufferGeometry();
     this.geometry.setAttribute('position', new BufferAttribute(positions, 3));
-    this.geometry.setAttribute('color',    new BufferAttribute(colors, 3));
     this.geometry.setAttribute('aSize',    new BufferAttribute(sizesAttr, 1));
     this.geometry.setAttribute('aHovered', new BufferAttribute(hovered, 1));
-    this.material = makeFlatStarsMaterial(1.0);
+    this.geometry.setAttribute('aPalette0', new BufferAttribute(palette0, 3));
+    this.geometry.setAttribute('aPalette1', new BufferAttribute(palette1, 3));
+    this.geometry.setAttribute('aPalette2', new BufferAttribute(palette2, 3));
+    this.geometry.setAttribute('aWeights',  new BufferAttribute(weights, 3));
+    this.geometry.setAttribute('aMode',     new BufferAttribute(modes, 1));
+    this.geometry.setAttribute('aSeed',     new BufferAttribute(seeds, 1));
+    this.material = makePlanetMaterial(1.0);
     this.points = new Points(this.geometry, this.material);
     this.points.renderOrder = RENDER_ORDER_PLANET;
     // Three.js computes the bounding sphere from the initial all-zero

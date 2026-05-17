@@ -294,33 +294,58 @@ export const TYPE_MULTIPLIER_BY_CLASS = {
   BD: { hot_rocky: 1.5, rocky: 1.2, super_earth: 0.8, sub_neptune: 0.5, neptune: 0.2, jupiter: 0.1 },
 };
 
-// Mass and radius sampling specs per planet type.
+// Mass sampling specs per planet type.
 //
-// Mass in M⊕, radius in R⊕. Real distributions are log-normal; the
-// Architect should sample log(value) ~ N(log(mean), sd / mean) and then
-// clamp to [min, max]. (Quick approximation: linear normal works fine
-// for low SD/mean ratios — fine for terrestrial types, less so for
-// gas giants where SD ≈ mean.) Comments call out the calibration anchor.
+// Mass in M⊕. Real distributions are log-normal; specs flagged with
+// `log: true` get sampled via sampleLogTruncated (jupiter, where
+// sd≈mean makes linear sampling under-produce the super-Jupiter tail).
+// Terrestrial specs stay linear — sd/mean is small enough that linear
+// and log-normal produce nearly identical output.
+//
+// Radius is NOT sampled independently — see massToRadiusWithScatter
+// in procgen.mjs. The Architect derives radius from mass via the
+// Otegi mass-radius relation plus a per-type log-scatter, keeping
+// density physically consistent.
 export const PHYSICAL_SPEC_BY_TYPE = {
   // Mercury, Venus close-in analogs. Small + dense.
-  hot_rocky:   { massEarth: { mean: 0.6, sd: 0.7, min: 0.05, max: 4  },
-                 radiusEarth: { mean: 0.8, sd: 0.4, min: 0.3, max: 1.6 } },
+  hot_rocky:   { massEarth: { mean: 0.6, sd: 0.7, min: 0.05, max: 4    } },
   // Earth, Mars, Venus. The "Earth-like" prior.
-  rocky:       { massEarth: { mean: 1.0, sd: 0.8, min: 0.1,  max: 4  },
-                 radiusEarth: { mean: 1.0, sd: 0.4, min: 0.4, max: 1.8 } },
-  // Kepler-22b, GJ 1214b-class. 1.5–2.5 R⊕, ambiguous composition.
-  super_earth: { massEarth: { mean: 5,   sd: 3,   min: 1.5,  max: 12 },
-                 radiusEarth: { mean: 1.7, sd: 0.4, min: 1.2, max: 2.5 } },
+  rocky:       { massEarth: { mean: 1.0, sd: 0.8, min: 0.1,  max: 4    } },
+  // Kepler-22b, GJ 1214b-class. Ambiguous composition.
+  super_earth: { massEarth: { mean: 5,   sd: 3,   min: 1.5,  max: 12   } },
   // GJ 436b, K2-18b. The "mini-Neptune" plateau just above radius valley.
-  sub_neptune: { massEarth: { mean: 12,  sd: 8,   min: 5,    max: 30 },
-                 radiusEarth: { mean: 2.8, sd: 0.6, min: 2,   max: 4   } },
+  sub_neptune: { massEarth: { mean: 12,  sd: 8,   min: 5,    max: 30   } },
   // Uranus/Neptune analogs.
-  neptune:     { massEarth: { mean: 25,  sd: 15,  min: 15,   max: 60 },
-                 radiusEarth: { mean: 4.5, sd: 1,   min: 3.5, max: 6.5 } },
-  // Jupiter through hot-Jupiter superjovians. SD ~ mean reflects the
-  // wide spread; log-normal sampling recommended.
-  jupiter:     { massEarth: { mean: 250, sd: 250, min: 60,   max: 3000 },
-                 radiusEarth: { mean: 12,  sd: 3,   min: 8,   max: 20  } },
+  neptune:     { massEarth: { mean: 25,  sd: 15,  min: 15,   max: 60   } },
+  // Jupiter through hot-Jupiter superjovians. sd ≈ mean is the
+  // canonical log-normal case — flag log so sampleLogTruncated kicks in.
+  jupiter:     { massEarth: { mean: 250, sd: 250, min: 60,   max: 3000, log: true } },
+};
+
+// Per-type log-scatter (multiplicative spread) around the Otegi mean
+// mass-radius relation. radius = radiusFromMass(mass) × exp(N(0, σ)),
+// then clamped to a sane bound. Real exoplanet scatter at fixed mass
+// runs ~0.1-0.2 dex (factor 1.25-1.6) from composition variation; we
+// pick per-type σ to match observed cloud width.
+export const RADIUS_SCATTER_SIGMA_LOG = {
+  hot_rocky:   0.08,  // tight — rocky composition is well-constrained
+  rocky:       0.10,
+  super_earth: 0.12,  // some volatile / silicate ambiguity
+  sub_neptune: 0.15,  // wide — H/He envelope mass varies
+  neptune:     0.12,
+  jupiter:     0.10,  // tight — degeneracy pressure pins R near 11 R⊕
+};
+
+// Clamp bounds (R⊕) for the post-scatter radius so a heavy-tail draw
+// can't produce 50-R⊕ giants. Per-type since the floor and ceiling
+// differ by class.
+export const RADIUS_CLAMP_BY_TYPE = {
+  hot_rocky:   { min: 0.3, max: 1.8 },
+  rocky:       { min: 0.4, max: 1.8 },
+  super_earth: { min: 1.2, max: 2.5 },
+  sub_neptune: { min: 2.0, max: 4.0 },
+  neptune:     { min: 3.5, max: 6.5 },
+  jupiter:     { min: 8.0, max: 20.0 },
 };
 
 // Moon count per planet type. Sampled as Poisson(mean) and clamped to
@@ -364,6 +389,29 @@ export const MOON_COUNT_BY_TYPE = mergeTunes(
   MOON_COUNT_BY_TYPE_REALISTIC,
   MOON_COUNT_BY_TYPE_TUNE,
 );
+
+// Moon mass distribution — truncated log-normal in M⊕, sampled per moon.
+// Centered on Europa-class (10⁻³ M⊕) so the bulk matches Sol; sd=1.5 in
+// log space gives a tail extending to Earth-mass and beyond, capped by
+// host dynamics. Lower clamp at 10⁻⁵ M⊕ (sub-Enceladus). Upper clamp at
+// log10(2 M⊕) = 0.3 so super-Earths can never be moons (they'd be binary
+// planets, not moons).
+//
+// Tail distribution under N(-3, 1.5, [-5, 0.3]):
+//   ~50% below Europa (1e-3 M⊕)
+//   ~14% above Ganymede (2.5e-2)
+//   ~2.5% above Mars (1e-1)
+//   ~0.3% above Earth (1)
+// On top of this, each moon's upper bound is further capped by its
+// host's mass × MOON_MAX_HOST_MASS_RATIO so a giant moon can only form
+// around a giant host (Earth-mass moons need a Saturn-plus host).
+export const MOON_MASS_LOG_EARTH = { mean: -3, sd: 1.5, min: -5, max: 0.3 };
+
+// Maximum moon-to-host mass ratio for stable orbital dynamics. Earth/
+// Moon sits at 1.2%; Pluto/Charon at 12% behaves as a binary, not a
+// moon. 3% is a conservative-stable cap that allows mass-comparable
+// satellites without crossing into binary-planet territory.
+export const MOON_MAX_HOST_MASS_RATIO = 0.03;
 
 // ---------------------------------------------------------------------------
 // Surface character thresholds (read by the Filler, not the Architect)
@@ -459,7 +507,7 @@ export const ORBITAL_PHASE_DEG = { min: 0, max: 360 };
 // the version reseeds the whole galaxy without changing CSV ids. Per-
 // generator suffixes can be layered on top by individual generators that
 // want to be re-rollable independently.
-export const PROCGEN_VERSION = 'v7';
+export const PROCGEN_VERSION = 'v8';
 
 // ---------------------------------------------------------------------------
 // Belts — system-level structural bands
@@ -1080,6 +1128,119 @@ export const ATMOSPHERE_O2_BIOTIC_LIFT = {
 // for surface chemistry; the Filler skips atm fill when surfacePressureBar
 // is below this floor.
 export const ATMOSPHERE_MIN_PRESSURE_BAR = 0.01;
+
+// Titan-class thick-atmosphere retention for ice worlds. The default
+// pressure baseline for class='ice' (PRESSURE_BAR_BY_CLASS in procgen.mjs)
+// is 0.001 bar — Europa/Pluto/Triton airless. But some icy bodies retain
+// thick atmospheres against thermal escape: Titan sits at 1.45 bar,
+// dominated by N2 + CH4 photolysis tholins. Without an explicit roll,
+// procgen produces zero Titan-likes because the baseline-times-mass
+// scaling can't reach a thick atm. This roll fires per-body and elevates
+// the pressure into Titan's range when it hits.
+//
+// Sol reality: 1 in ~5 mass-eligible icy bodies (Titan/Triton/Europa/
+// Ganymede/Callisto/Io — Io is class lava in our taxonomy). 15% is a
+// gameplay-tuned bump above that so players encounter Titan-likes
+// regularly across the catalog without making them feel common.
+export const ICE_THICK_ATM_PROBABILITY = 0.15;
+
+// Minimum body mass (M⊕) for the Titan-class retention roll. Below this,
+// escape velocity is too low to hold a meaningful atmosphere even at
+// ice-world temperatures (Triton at 0.0036 M⊕ falls short; Titan at
+// 0.0225 M⊕ qualifies). Anchored on Titan/Triton.
+export const ICE_THICK_ATM_MIN_MASS_EARTH = 0.01;
+
+// Pressure spec (bar) when the Titan-class roll fires. Titan = 1.45.
+// Range covers Titan through hypothetical extra-thick analogs without
+// crossing into Venus-class territory (10+ bar).
+export const ICE_THICK_ATM_PRESSURE_BAR = { mean: 1.5, sd: 0.8, min: 0.5, max: 3 };
+
+// Minimum mass (M⊕) for a body to be classified as `ocean`. Below this,
+// the body can't sustain enough atmospheric pressure (typically <0.1 bar
+// for sub-Mars masses) to keep surface water from evaporating away —
+// liquid water's vapor pressure at temperate temps (~0.012 bar at 284K)
+// dominates the thin atmosphere and either escapes to space or
+// precipitates as ice. Sub-threshold bodies that would have been classified
+// as ocean are reclassified to `ice` instead, matching Europa/Enceladus
+// reality (subsurface oceans, frozen surfaces, no liquid surface water).
+// Mars (0.107 M⊕) is roughly the floor; we sit slightly below to allow
+// Mars-class candidates.
+export const OCEAN_MIN_MASS_EARTH = 0.08;
+
+// Per-class visually-dominant trace species. Each class maps to an
+// ordered list of branches; the Filler picks the first branch whose
+// gate matches the body. A null gate matches anything (used as the
+// default at the end of a list). An empty list = no chromophore for
+// this class (ice_giant — the by-mass CH4 already paints).
+//
+// Each branch names one species from the AtmGas vocabulary
+// (including the aerosol-only SILICATE / DUST) whose chromophore or
+// condensate signature paints the apparent color out of proportion to
+// its molar fraction. The Filler stamps `chromophoreGas` +
+// `chromophoreFrac` on bodies; the renderer folds them into topGases
+// with a visibility boost.
+//
+// Gate fields (any combination, all must match):
+//   insolationAbove / insolationBelow — bracket the body's S (W/m²/W·earth)
+//   biosphereArchetype — body's archetype must equal this
+//   tierAtLeast — body's tier must be ≥ this position in BIOSPHERE_TIERS
+//
+// Branches are walked in order — put the most-specific gates first
+// and a `gate: null` default at the end.
+//
+// `frac` is a truncated-normal spec; the Filler draws once per body.
+// Values reflect real-system fractions where available (Jupiter NH3:
+// ~0.026% by mass, Earth H2O: ~0.4% by volume).
+export const CHROMOPHORE_BY_CLASS = {
+  rocky: [
+    // Biotic temperate Earth-likes → H2O cloud decks. Gates on the
+    // biosphere chain so abiotic rockies don't suddenly all paint cloudy.
+    { gate: { biosphereArchetype: 'carbon_aqueous', tierAtLeast: 'microbial' },
+      gas: 'H2O', frac: { mean: 0.004, sd: 0.002, min: 0.001, max: 0.02 } },
+    // No default — abiotic rockies stay chromophore-null.
+  ],
+  ocean: [
+    { gate: null, gas: 'H2O', frac: { mean: 0.005, sd: 0.003, min: 0.001, max: 0.02 } },
+  ],
+  desert: [
+    // Mars-class dust haze. Low frac so it reads as a tint rather than
+    // a dominant band on the disc.
+    { gate: null, gas: 'DUST', frac: { mean: 0.001, sd: 0.0005, min: 0.0001, max: 0.005 } },
+  ],
+  ice: [
+    // Titan-class tholin haze. ATMOSPHERE_MIN_PRESSURE_BAR gate in
+    // chromophoreFor ensures airless ice worlds stay chromophore-null.
+    { gate: null, gas: 'CH4', frac: { mean: 0.02, sd: 0.01, min: 0.005, max: 0.05 } },
+  ],
+  lava: [
+    // Io / Venus-class SO2 sulfuric aerosols.
+    { gate: null, gas: 'SO2', frac: { mean: 0.001, sd: 0.0005, min: 0.0001, max: 0.005 } },
+  ],
+  gas_dwarf: [
+    // Hot sub-Neptune (S > 5 ≈ closer than Mercury for a Sun-class star):
+    // refractive silicate cloud particles dredged from hotter layers.
+    { gate: { insolationAbove: 5 },
+      gas: 'SILICATE', frac: { mean: 0.001, sd: 0.0005, min: 0.0001, max: 0.005 } },
+    // Cold Hycean (S < 0.3): H2 atmosphere with H2O clouds on a
+    // subsurface ocean — K2-18b candidates.
+    { gate: { insolationBelow: 0.3 },
+      gas: 'H2O', frac: { mean: 0.005, sd: 0.003, min: 0.001, max: 0.02 } },
+    // Default warm sub-Neptune → NH3 chromophore (Saturn-class).
+    { gate: null,
+      gas: 'NH3', frac: { mean: 0.0003, sd: 0.0002, min: 0.0001, max: 0.001 } },
+  ],
+  gas_giant: [
+    // Hot Jupiter — silicate cloud haze; reads grey-blue.
+    { gate: { insolationAbove: 5 },
+      gas: 'SILICATE', frac: { mean: 0.001, sd: 0.0005, min: 0.0001, max: 0.005 } },
+    // Cool / temperate Jupiter — NH3 cloud chromophore.
+    { gate: null,
+      gas: 'NH3', frac: { mean: 0.0003, sd: 0.0002, min: 0.0001, max: 0.001 } },
+  ],
+  // Ice giants paint via CH4 absorption directly (atm1 wins on potency);
+  // no additional chromophore needed.
+  ice_giant: [],
+};
 
 // ---------------------------------------------------------------------------
 // Resources — six 0..10 scalars per world class
