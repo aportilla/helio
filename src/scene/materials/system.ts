@@ -74,10 +74,13 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       attribute vec4  aCoverageScalars;
       attribute vec3  aBiomeColor;
       attribute vec3  aHazeColor;
-      // Atmospheric stroke widths/densities packed together.
+      // Per-fragment scalars not modeling fractional coverage. Packed
+      // together to stay under the GPU's gl_MaxVertexAttribs cap.
       // Layout: x = rimWidthPx (haze or rayleigh rim, 0..N integer px),
-      // y = cloudDensity (1.3c H2O patch coverage, 0..CLOUD_MAX).
-      attribute vec2  aAtmoStrokes;
+      // y = cloudDensity (1.3c H2O patch coverage, 0..CLOUD_MAX),
+      // z = surfaceAge (1.4 cratering — 0 ancient → 1 perpetually
+      //     refreshed; drives a per-cell lightness perturbation).
+      attribute vec3  aAtmoStrokes;
       varying float vRadius;
       varying vec2  vCenter;
       varying float vHovered;
@@ -96,6 +99,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       varying float vHazeTint;
       varying float vRimWidthPx;
       varying float vCloudDensity;
+      varying float vSurfaceAge;
       uniform float uDiscScale;
       uniform vec2  uViewport;
       void main() {
@@ -115,6 +119,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
         vHazeTint    = aCoverageScalars.w;
         vRimWidthPx  = aAtmoStrokes.x;
         vCloudDensity = aAtmoStrokes.y;
+        vSurfaceAge   = aAtmoStrokes.z;
 
         // Integer-pixel disc diameter. Floor + 0.5 → round-to-nearest.
         float sz = floor(aRenderMeta.x * uDiscScale + 0.5);
@@ -160,6 +165,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       varying float vHazeTint;
       varying float vRimWidthPx;
       varying float vCloudDensity;
+      varying float vSurfaceAge;
 
       // Banded-mode density: bands per radius pixel. Tuned so a
       // Uranus-class disc (~43 px radius) gets ~30 bands; Jupiter
@@ -291,6 +297,21 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       // visual: adjacent concentric bands blur into each other and the
       // rim reads as organic haze rather than clean stripes.
       const float INWARD_BAND_DITHER = 4.0;
+
+      // Phase 1.4 cratering — per-worley-cell uniform-RGB lightness
+      // perturbation. Amplitude scales with (1 - surfaceAge): an ancient
+      // body (Mercury / Luna / Callisto, surfaceAge ~ 0.05) gets the
+      // full swing and reads as mottled / pitted; a young body
+      // (Io / Enceladus / Earth, surfaceAge ~ 0.7-1.0) collapses toward
+      // zero and the disc stays smooth. Uniform RGB delta preserves hue
+      // — only lightness varies cell-to-cell — so an old icy moon
+      // (Callisto) gets dimmed-ice mottling and an old rocky body
+      // (Mercury) gets dimmed-rock mottling, both reading as the same
+      // "cratered surface" visual language. 0.12 = ±12% value swing on
+      // the ancient extreme; tuned so Mercury and Luna read clearly
+      // pitted at 40-60 px discs without breaking the pixel-crisp
+      // palette by clipping channels.
+      const float CRATER_MAX_AMPLITUDE = 0.12;
 
       float hash11(float x) {
         return fract(sin(x * 12.9898 + 78.233) * 43758.5453);
@@ -429,7 +450,30 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
                 }
               }
             }
+          }
 
+          // Phase 1.4 cratering — sits after the cap/ocean/land paint and
+          // BEFORE clouds/haze so atmospheric layers cover the perturbed
+          // surface. Applies to every surface branch (land, ocean, cap)
+          // so an old icy moon reads as mottled ice and an old rocky
+          // body reads as cratered rock — the lightness perturbation is
+          // the unifying "old surface" visual, not a class-specific
+          // texture. Salts (547, 569) are distinct primes from worley
+          // jitter (13/19, 23/29), continent (113/127), resource
+          // (1009/2017), biome (197/311), cloud (991/...), and inward-
+          // fade dither (829/853), so a "lucky" cell can't accidentally
+          // line up old + biome-y or old + ocean-y from a shared hash.
+          if (vSurfaceAge < 1.0) {
+            float craterAmount = (1.0 - vSurfaceAge) * CRATER_MAX_AMPLITUDE;
+            float cH = hash21(winnerCell + vec2(vSeed * 547.0, vSeed * 569.0));
+            float perturb = (cH - 0.5) * 2.0 * craterAmount;
+            col = clamp(col + vec3(perturb), 0.0, 1.0);
+          }
+
+          // Clouds sit outside the cap branch — they paint over land +
+          // ocean only. Cap region is filtered out by the non-cap latitude
+          // test below, matching the cap conditional above.
+          if (abs(latSinS) <= 1.0 - vIceFrac) {
             // Phase 1.3c H2O cloud patches — anisotropic worley cells in
             // the equator-aligned frame. Paints CLOUD_COLOR over land +
             // ocean cells (cap is excluded by construction — this branch

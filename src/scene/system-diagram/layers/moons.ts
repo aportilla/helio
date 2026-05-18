@@ -250,8 +250,10 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   const coverageScalars = new Float32Array(N * 4);
   const biomeColors = new Float32Array(N * 3);
   const hazeColors  = new Float32Array(N * 3);
-  // Packed atmospheric strokes: stride 2 = [rimWidthPx, cloudDensity].
-  const atmoStrokes = new Float32Array(N * 2);
+  // Packed per-fragment scalars: stride 3 = [rimWidthPx, cloudDensity,
+  // surfaceAge]. Two atmospheric, one surface; bundled to stay under the
+  // GPU's gl_MaxVertexAttribs cap.
+  const atmoStrokes = new Float32Array(N * 3);
   slots.forEach((slot, i) => {
     const b = BODIES[slot.bodyIdx];
     const disc = buildDiscPalette(b, slot.discPx, c => lerpTowardWhite(c, MOON_BRIGHTEN));
@@ -281,8 +283,9 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
     hazeColors[i * 3 + 0] = disc.hazeColor[0];
     hazeColors[i * 3 + 1] = disc.hazeColor[1];
     hazeColors[i * 3 + 2] = disc.hazeColor[2];
-    atmoStrokes[i * 2 + 0] = disc.rimWidthPx;
-    atmoStrokes[i * 2 + 1] = disc.cloudDensity;
+    atmoStrokes[i * 3 + 0] = disc.rimWidthPx;
+    atmoStrokes[i * 3 + 1] = disc.cloudDensity;
+    atmoStrokes[i * 3 + 2] = disc.surfaceAge;
   });
   const geometry = new BufferGeometry();
   geometry.setAttribute('position',     new BufferAttribute(positions, 3));
@@ -295,7 +298,7 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   geometry.setAttribute('aCoverageScalars', new BufferAttribute(coverageScalars, 4));
   geometry.setAttribute('aBiomeColor',  new BufferAttribute(biomeColors, 3));
   geometry.setAttribute('aHazeColor',   new BufferAttribute(hazeColors, 3));
-  geometry.setAttribute('aAtmoStrokes', new BufferAttribute(atmoStrokes, 2));
+  geometry.setAttribute('aAtmoStrokes', new BufferAttribute(atmoStrokes, 3));
   const material = makePlanetMaterial(1.0);
   const points = new Points(geometry, material);
   points.renderOrder = renderOrder;

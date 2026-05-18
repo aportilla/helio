@@ -172,6 +172,14 @@ export interface DiscPalette {
   // the body's chromophore isn't H2O, or on banded / tiny / no-atm
   // bodies — the shader uses that as the early-out.
   readonly cloudDensity: number;
+  // Phase 1.4 surface age [0..1]. 1 = perpetually refreshed (Io's lava,
+  // Enceladus's plumes); 0 = ancient unmodified (Mercury, Luna,
+  // Callisto). Drives a per-cell lightness perturbation in the surface
+  // branch — old surfaces gain visible cell-to-cell mottling, young
+  // surfaces stay smooth. Forced to 0.5 on banded bodies, sub-threshold
+  // discs, and bodies whose primary attribute is null — "missing
+  // signal" renders unobtrusively rather than as extreme young/old.
+  readonly surfaceAge: number;
 }
 
 function hazeChromophoreColor(gas: AtmGas): Color | null {
@@ -393,6 +401,11 @@ export function buildDiscPalette(
   // oceans or caps rather than throwing.
   const waterFrac = banded || tinyDisc ? 0 : (body.waterFraction ?? 0);
   const iceFrac   = banded || tinyDisc ? 0 : (body.iceFraction   ?? 0);
+  // Surface age — 0.5 is the "no signal" middle. Banded bodies never run
+  // the cratering branch (surface block is unreachable), but plumbing 0.5
+  // keeps the attribute schema uniform and renders missing-data surface
+  // bodies (procgen edge) as average-aged rather than extreme.
+  const surfaceAge = banded || tinyDisc ? 0.5 : (body.surfaceAge ?? 0.5);
 
   // Biome stipple paint — null on banded mode + tiny discs (same reason
   // as terrain scalars: stipple resolves as noise at sub-threshold disc
@@ -502,6 +515,7 @@ export function buildDiscPalette(
     hazeTint,
     rimWidthPx,
     cloudDensity,
+    surfaceAge,
   };
 }
 

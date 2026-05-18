@@ -63,8 +63,10 @@ export class PlanetsLayer {
     const coverageScalars = new Float32Array(P * 4);
     const biomeColors    = new Float32Array(P * 3);
     const hazeColors  = new Float32Array(P * 3);
-    // Packed atmospheric strokes: stride 2 = [rimWidthPx, cloudDensity].
-    const atmoStrokes = new Float32Array(P * 2);
+    // Packed per-fragment scalars: stride 3 = [rimWidthPx, cloudDensity,
+    // surfaceAge]. Two atmospheric, one surface; bundled together to keep
+    // the attribute count under the GPU's gl_MaxVertexAttribs cap.
+    const atmoStrokes = new Float32Array(P * 3);
     this.planetIndices.forEach((bIdx, i) => {
       const b = BODIES[bIdx];
       const discPx = this.planetDiscPx[i];
@@ -97,8 +99,9 @@ export class PlanetsLayer {
       hazeColors[i * 3 + 0] = disc.hazeColor[0];
       hazeColors[i * 3 + 1] = disc.hazeColor[1];
       hazeColors[i * 3 + 2] = disc.hazeColor[2];
-      atmoStrokes[i * 2 + 0] = disc.rimWidthPx;
-      atmoStrokes[i * 2 + 1] = disc.cloudDensity;
+      atmoStrokes[i * 3 + 0] = disc.rimWidthPx;
+      atmoStrokes[i * 3 + 1] = disc.cloudDensity;
+      atmoStrokes[i * 3 + 2] = disc.surfaceAge;
     });
     this.geometry = new BufferGeometry();
     this.geometry.setAttribute('position',     new BufferAttribute(positions, 3));
@@ -111,7 +114,7 @@ export class PlanetsLayer {
     this.geometry.setAttribute('aCoverageScalars', new BufferAttribute(coverageScalars, 4));
     this.geometry.setAttribute('aBiomeColor',  new BufferAttribute(biomeColors, 3));
     this.geometry.setAttribute('aHazeColor',   new BufferAttribute(hazeColors, 3));
-    this.geometry.setAttribute('aAtmoStrokes', new BufferAttribute(atmoStrokes, 2));
+    this.geometry.setAttribute('aAtmoStrokes', new BufferAttribute(atmoStrokes, 3));
     this.material = makePlanetMaterial(1.0);
     this.points = new Points(this.geometry, this.material);
     this.points.renderOrder = RENDER_ORDER_PLANET;
