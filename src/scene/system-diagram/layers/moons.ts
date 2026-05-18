@@ -248,6 +248,8 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   const tilts     = new Float32Array(N);
   const waterFracs = new Float32Array(N);
   const iceFracs   = new Float32Array(N);
+  const biomeColors    = new Float32Array(N * 3);
+  const biomeCoverages = new Float32Array(N);
   slots.forEach((slot, i) => {
     const b = BODIES[slot.bodyIdx];
     const disc = buildDiscPalette(b, slot.discPx, c => lerpTowardWhite(c, MOON_BRIGHTEN));
@@ -268,6 +270,10 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
     tilts[i] = disc.tilt;
     waterFracs[i] = disc.waterFrac;
     iceFracs[i] = disc.iceFrac;
+    biomeColors[i * 3 + 0] = disc.biomeColor[0];
+    biomeColors[i * 3 + 1] = disc.biomeColor[1];
+    biomeColors[i * 3 + 2] = disc.biomeColor[2];
+    biomeCoverages[i] = disc.biomeCoverage;
     sizesAttr[i] = slot.discPx;
   });
   const geometry = new BufferGeometry();
@@ -283,6 +289,8 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   geometry.setAttribute('aTilt',     new BufferAttribute(tilts, 1));
   geometry.setAttribute('aWaterFrac', new BufferAttribute(waterFracs, 1));
   geometry.setAttribute('aIceFrac',   new BufferAttribute(iceFracs, 1));
+  geometry.setAttribute('aBiomeColor',    new BufferAttribute(biomeColors, 3));
+  geometry.setAttribute('aBiomeCoverage', new BufferAttribute(biomeCoverages, 1));
   const material = makePlanetMaterial(1.0);
   const points = new Points(geometry, material);
   points.renderOrder = renderOrder;

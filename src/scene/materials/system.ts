@@ -69,6 +69,8 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       attribute float aTilt;
       attribute float aWaterFrac;
       attribute float aIceFrac;
+      attribute vec3  aBiomeColor;
+      attribute float aBiomeCoverage;
       varying float vRadius;
       varying vec2  vCenter;
       varying float vHovered;
@@ -81,6 +83,8 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       varying float vTilt;
       varying float vWaterFrac;
       varying float vIceFrac;
+      varying vec3  vBiomeColor;
+      varying float vBiomeCoverage;
       uniform float uDiscScale;
       uniform vec2  uViewport;
       void main() {
@@ -94,6 +98,8 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
         vTilt     = aTilt;
         vWaterFrac = aWaterFrac;
         vIceFrac   = aIceFrac;
+        vBiomeColor    = aBiomeColor;
+        vBiomeCoverage = aBiomeCoverage;
 
         // Integer-pixel disc diameter. Floor + 0.5 → round-to-nearest.
         float sz = floor(aSize * uDiscScale + 0.5);
@@ -129,6 +135,8 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       varying float vTilt;
       varying float vWaterFrac;
       varying float vIceFrac;
+      varying vec3  vBiomeColor;
+      varying float vBiomeCoverage;
 
       // Banded-mode density: bands per radius pixel. Tuned so a
       // Uranus-class disc (~43 px radius) gets ~30 bands; Jupiter
@@ -196,6 +204,16 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       // still reads as "frozen surface" rather than "missing pixels"
       // against a dark scene background.
       const vec3 ICE_COLOR = vec3(0.93, 0.97, 1.0);
+
+      // Biome stipple latitude window. Past BIOME_LAT_MAX (|sin lat| ≈
+      // sin(58°)) life thins to zero; BIOME_LAT_RAMP feathers the edge
+      // so the transition reads as "thinning toward the poles" rather
+      // than a hard band cutoff. The cap branch above already masks
+      // anything past 1 - iceFrac; this window narrows further so a
+      // capless Earth-class body's biome still doesn't crawl over its
+      // arctic regions where photosynthetic life would be marginal.
+      const float BIOME_LAT_MAX  = 0.85;
+      const float BIOME_LAT_RAMP = 0.15;
 
       float hash11(float x) {
         return fract(sin(x * 12.9898 + 78.233) * 43758.5453);
@@ -292,6 +310,29 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
             } else {
               float h = hash21(winnerCell + vec2(vSeed * 1009.0, vSeed * 2017.0));
               col = pickFromPalette(h);
+              // Biome stipple — per-pixel hash on disc-local integer
+              // pixel coords flips individual land pixels to the body's
+              // biome color (archetype × stellar shift; see
+              // biomePaintFor in stars.ts). Coverage density comes from
+              // biosphereTier — microbial sparse, gaian dense. Latitude
+              // taper concentrates the effect on the temperate band.
+              // Salts (197, 311) are distinct from the continent (113,
+              // 127) and resource (1009, 2017) hashes so a single pixel
+              // doesn't draw ocean/land and biome from the same noise
+              // stream. Skipped when coverage is zero (no biome, banded
+              // body, or sub-threshold disc) to save the hash cost.
+              if (vBiomeCoverage > 0.0) {
+                float taper = 1.0 - smoothstep(
+                  BIOME_LAT_MAX - BIOME_LAT_RAMP,
+                  BIOME_LAT_MAX,
+                  abs(latSinS)
+                );
+                float effective = vBiomeCoverage * taper;
+                if (effective > 0.0) {
+                  float bH = hash21(floor(d) + vec2(vSeed * 197.0, vSeed * 311.0));
+                  if (bH < effective) col = vBiomeColor;
+                }
+              }
             }
           }
         } else {

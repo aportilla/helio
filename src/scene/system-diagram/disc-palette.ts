@@ -25,7 +25,7 @@ import { Color } from 'three';
 import {
   AtmGas, Body, CHROMOPHORE_COLOR, GAS_COLOR,
   WORLD_CLASS_COLOR, WORLD_CLASS_TINT, WORLD_CLASS_UNKNOWN_COLOR,
-  dominantResources, isBandedAtmosphere, topGases,
+  biomePaintFor, dominantResources, isBandedAtmosphere, topGases,
 } from '../../data/stars';
 import { hash32 } from './geom/prng';
 import { bodyVisualTiltRad } from './geom/ring';
@@ -77,6 +77,16 @@ export interface DiscPalette {
   // none. Uses the same sphere-projection foreshortening as banded mode
   // so caps curve as latitude lines.
   readonly iceFrac: number;
+  // Biome stipple — pigment color (archetype × stellar shift; see
+  // biomePaintFor in stars.ts) packed as [r,g,b], and coverage density
+  // [0..1] keyed to biosphereTier. The shader's surface branch runs a
+  // per-pixel hash over the land cells: when hash < biomeCoverage * lat
+  // taper, the fragment flips from the resource pick to biomeColor. Zero
+  // coverage means "no stipple" — saves a hash test in the shader.
+  // Suppressed on banded bodies, tiny discs, and bodies with no
+  // biosphere or hosted by a class that can't support one.
+  readonly biomeColor: readonly [number, number, number];
+  readonly biomeCoverage: number;
 }
 
 // Pull the world-class color or unknown-grey fallback. Same precedence
@@ -241,6 +251,20 @@ export function buildDiscPalette(
   const waterFrac = banded || tinyDisc ? 0 : (body.waterFraction ?? 0);
   const iceFrac   = banded || tinyDisc ? 0 : (body.iceFraction   ?? 0);
 
+  // Biome stipple paint — null on banded mode + tiny discs (same reason
+  // as terrain scalars: stipple resolves as noise at sub-threshold disc
+  // sizes). The transformColor pass below applies to the resource
+  // palette entries but intentionally NOT to the biome color: the moon
+  // brighten lift is calibrated to keep the moon's *rim* readable against
+  // its parent, and washing biome pigments toward white at the same
+  // amount would turn an alien-purple gaian moon (rare but possible)
+  // into a pale lavender that no longer reads as "alive."
+  const biomePaint = banded || tinyDisc ? null : biomePaintFor(body);
+  const biomeColor: readonly [number, number, number] = biomePaint
+    ? [biomePaint.color.r, biomePaint.color.g, biomePaint.color.b]
+    : [0, 0, 0];
+  const biomeCoverage = biomePaint ? biomePaint.coverage : 0;
+
   // Per-class hue tint (gas-giant warm shift, etc.) runs first so the
   // caller-supplied transform (moon brighten) lerps from the tinted
   // color toward white rather than starting from the untinted base.
@@ -261,6 +285,8 @@ export function buildDiscPalette(
     tilt: bodyVisualTiltRad(body),
     waterFrac,
     iceFrac,
+    biomeColor,
+    biomeCoverage,
   };
 }
 

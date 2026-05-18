@@ -57,6 +57,8 @@ export class PlanetsLayer {
     const tilts     = new Float32Array(P);
     const waterFracs = new Float32Array(P);
     const iceFracs   = new Float32Array(P);
+    const biomeColors    = new Float32Array(P * 3);
+    const biomeCoverages = new Float32Array(P);
     this.planetIndices.forEach((bIdx, i) => {
       const b = BODIES[bIdx];
       const discPx = this.planetDiscPx[i];
@@ -78,6 +80,10 @@ export class PlanetsLayer {
       tilts[i] = disc.tilt;
       waterFracs[i] = disc.waterFrac;
       iceFracs[i] = disc.iceFrac;
+      biomeColors[i * 3 + 0] = disc.biomeColor[0];
+      biomeColors[i * 3 + 1] = disc.biomeColor[1];
+      biomeColors[i * 3 + 2] = disc.biomeColor[2];
+      biomeCoverages[i] = disc.biomeCoverage;
       // aSize carries the final pixel diameter; uDiscScale = 1.0 so the
       // shader's floor(aSize * 1.0 + 0.5) is a no-op pass-through.
       sizesAttr[i] = discPx;
@@ -95,6 +101,8 @@ export class PlanetsLayer {
     this.geometry.setAttribute('aTilt',     new BufferAttribute(tilts, 1));
     this.geometry.setAttribute('aWaterFrac', new BufferAttribute(waterFracs, 1));
     this.geometry.setAttribute('aIceFrac',   new BufferAttribute(iceFracs, 1));
+    this.geometry.setAttribute('aBiomeColor',    new BufferAttribute(biomeColors, 3));
+    this.geometry.setAttribute('aBiomeCoverage', new BufferAttribute(biomeCoverages, 1));
     this.material = makePlanetMaterial(1.0);
     this.points = new Points(this.geometry, this.material);
     this.points.renderOrder = RENDER_ORDER_PLANET;

@@ -296,6 +296,109 @@ export const WORLD_CLASS_TINT: Partial<Record<WorldClass, { color: Color; amount
   gas_giant: { color: new Color(0xc88848), amount: 0.25 },  // warm amber → Jovian ruddy
 };
 
+// =============================================================================
+// Biome paint — archetype × stellar class drives a pixel-stipple color
+// =============================================================================
+
+// Base pigment hue assuming G-class (Sun-like) starlight. The archetype
+// captures the *chemistry* of the biosphere; BIOME_STELLAR_SHIFT below
+// then rotates the hue to reflect the host star's actual spectrum.
+//
+// `null` archetypes don't paint a surface stipple: subsurface_aqueous
+// life is under ice (Europa/Enceladus) so it never reaches the visible
+// surface; aerial biospheres only appear on banded bodies, which take a
+// different render path entirely.
+export const BIOME_TINT_COLOR: Record<BiosphereArchetype, Color | null> = {
+  carbon_aqueous:     new Color(0x3a8a3a),   // Earth's chlorophyll forest green
+  subsurface_aqueous: null,                  // under-ice; no visible surface signal
+  aerial:             null,                  // banded mode only
+  cryogenic:          new Color(0x8b6f3f),   // hydrocarbon-cycle ochre (Titan-style)
+  silicate:           new Color(0x6b8070),   // mineral-metabolism sage-grey
+  sulfur:             new Color(0xa07020),   // sulfur-cycle mustard-brown
+};
+
+// Stellar-class hue rotation. Photosynthetic pigments evolve to absorb
+// the wavelengths the host star delivers most strongly; the *reflected*
+// color shifts accordingly (Kiang et al. on alien photosynthesis).
+// Earth at G is the calibration anchor (identity); cooler stars push
+// reflectance redder, hotter stars push it gold.
+//
+// Applied uniformly across archetypes for simplicity — sulfur/cryogenic
+// biospheres aren't photosynthetic, but their characteristic hues still
+// look "alien" when shifted by host class, and the alternative would
+// collapse 60% of catalog (M-dwarf systems) to indistinguishable color.
+//
+// `null` suppresses biome render entirely:
+//   - O, B: stellar lifetimes too short for biosphere evolution
+//   - WD, BD: insufficient luminosity for a surface biosphere
+export const BIOME_STELLAR_SHIFT: Record<SpectralClass, { color: Color; amount: number } | null> = {
+  O:  null,
+  B:  null,
+  A:  { color: new Color(0xd4a050), amount: 0.40 },   // warm gold — reflect red/orange under blue input
+  F:  { color: new Color(0xc8a868), amount: 0.25 },   // subtle warm shift from G baseline
+  G:  { color: new Color(0xffffff), amount: 0.00 },   // identity — Earth baseline
+  K:  { color: new Color(0xa04030), amount: 0.50 },   // rust-red under K-dwarf reddening
+  M:  { color: new Color(0x6a3088), amount: 0.70 },   // "Purple Earth" under M-dwarf red/IR
+  WD: null,
+  BD: null,
+};
+
+// Coverage density of the biome stipple keyed to biosphere tier. The
+// shader treats this as the probability that any individual land-cell
+// pixel flips to biome color. microbial reads as sparse moss patches;
+// gaian reads as dense canopy. prebiotic/none don't paint at all.
+export const BIOME_COVERAGE_BY_TIER: Record<BiosphereTier, number> = {
+  none:      0,
+  prebiotic: 0,
+  microbial: 0.20,
+  complex:   0.50,
+  gaian:     0.80,
+};
+
+// Channel-lerp helper local to the biome-paint pipeline. Mirrors the
+// `applyTint` pattern in disc-palette.ts but lives here so the helper
+// below is self-contained (stars.ts is the data layer; disc-palette
+// shouldn't have to re-implement the lerp).
+function lerpColor(base: Color, target: Color, amount: number): Color {
+  return new Color(
+    base.r + (target.r - base.r) * amount,
+    base.g + (target.g - base.g) * amount,
+    base.b + (target.b - base.b) * amount,
+  );
+}
+
+// Resolve a body's biome stipple paint: pigment hue (archetype) shifted
+// by host star spectral class, paired with the coverage density driven
+// by biosphereTier. Returns null when no stipple should render — sterile
+// bodies, prebiotic-only worlds, archetypes with no visible surface
+// signal, or hosts whose stellar class can't support a biosphere.
+//
+// Resolves through the host chain: planet → its host star; moon → its
+// host planet → that planet's host star. Hostless bodies (procgen edge)
+// return null rather than guessing.
+export function biomePaintFor(body: Body): { color: Color; coverage: number } | null {
+  if (body.biosphereArchetype === null) return null;
+  if (body.biosphereTier === null) return null;
+  const coverage = BIOME_COVERAGE_BY_TIER[body.biosphereTier];
+  if (coverage <= 0) return null;
+  const base = BIOME_TINT_COLOR[body.biosphereArchetype];
+  if (base === null) return null;
+
+  let starIdx: number | null = null;
+  if (body.kind === 'planet' && body.hostStarIdx !== null) {
+    starIdx = body.hostStarIdx;
+  } else if (body.kind === 'moon' && body.hostBodyIdx !== null) {
+    const host = BODIES[body.hostBodyIdx];
+    if (host !== undefined && host.hostStarIdx !== null) starIdx = host.hostStarIdx;
+  }
+  if (starIdx === null) return null;
+  const shift = BIOME_STELLAR_SHIFT[STARS[starIdx].cls];
+  if (shift === null) return null;
+
+  const color = shift.amount > 0 ? lerpColor(base, shift.color, shift.amount) : base;
+  return { color, coverage };
+}
+
 // Endpoints of the rocky↔icy palette lerp shared by belts and rings.
 // `bodyIcyness` returns a 0..1 scalar from a body's resource grid
 // (resVolatiles vs. rocky resources); the renderer lerps between these.
