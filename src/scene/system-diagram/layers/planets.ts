@@ -55,7 +55,6 @@ export class PlanetsLayer {
     const modes     = new Float32Array(P);
     const seeds     = new Float32Array(P);
     const tilts     = new Float32Array(P);
-    const albedos   = new Float32Array(P);
     const waterFracs = new Float32Array(P);
     const iceFracs   = new Float32Array(P);
     this.planetIndices.forEach((bIdx, i) => {
@@ -77,7 +76,6 @@ export class PlanetsLayer {
       modes[i] = disc.mode;
       seeds[i] = disc.seed;
       tilts[i] = disc.tilt;
-      albedos[i] = disc.albedo;
       waterFracs[i] = disc.waterFrac;
       iceFracs[i] = disc.iceFrac;
       // aSize carries the final pixel diameter; uDiscScale = 1.0 so the
@@ -95,7 +93,6 @@ export class PlanetsLayer {
     this.geometry.setAttribute('aMode',     new BufferAttribute(modes, 1));
     this.geometry.setAttribute('aSeed',     new BufferAttribute(seeds, 1));
     this.geometry.setAttribute('aTilt',     new BufferAttribute(tilts, 1));
-    this.geometry.setAttribute('aAlbedo',   new BufferAttribute(albedos, 1));
     this.geometry.setAttribute('aWaterFrac', new BufferAttribute(waterFracs, 1));
     this.geometry.setAttribute('aIceFrac',   new BufferAttribute(iceFracs, 1));
     this.material = makePlanetMaterial(1.0);
