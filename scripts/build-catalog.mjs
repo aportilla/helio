@@ -526,7 +526,6 @@ const BODY_NUMERIC_FIELDS = [
   ['surface_temp_max_k',     'surfaceTempMaxK'],
   ['water_fraction',         'waterFraction'],
   ['ice_fraction',           'iceFraction'],
-  ['albedo',                 'albedo'],
   ['magnetic_field_gauss',   'magneticFieldGauss'],
   ['tectonic_activity',      'tectonicActivity'],
   ['surface_pressure_bar',   'surfacePressureBar'],

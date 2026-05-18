@@ -14,13 +14,13 @@
 //   radiusEarth ← massEarth
 //   worldClass ← radiusEarth + insolation
 //   waterFraction, iceFraction ← worldClass
-//   albedo ← worldClass + iceFraction
 //   tectonicActivity ← worldClass + massEarth
 //   periodDays ↔ semiMajorAu (Kepler 3, bidirectional; needs host mass)
 //   rotationPeriodHours ← worldClass + tidal-lock proxy + periodDays
 //   magneticFieldGauss ← worldClass + tectonicActivity + rotationPeriodHours
 //   surfacePressureBar ← worldClass + massEarth        (must precede avgSurfaceTempK)
-//   avgSurfaceTempK ← worldClass + insolation + albedo + surfacePressureBar
+//   avgSurfaceTempK ← worldClass + insolation + iceFraction + surfacePressureBar
+//                     (Bond albedo derived locally — see effectiveBondAlbedo)
 //   eccentricity, inclinationDeg, axialTiltDeg, orbitalPhaseDeg ← seeded draws
 //   surfaceTempMinK, surfaceTempMaxK ← avg + worldClass + axial tilt + eccentricity
 //   biosphereArchetype, biosphereTier ← worldClass + insolation gate   (must precede atmosphere)
@@ -206,12 +206,30 @@ export function planetTypeFor(worldClass, massEarth, S) {
 // constant-offset version). Exponent 0.3 sits between optically-thin
 // linear scaling and the slow log saturation of thick atmospheres.
 
+// Bond albedo input to the Stefan-Boltzmann temp pass. Sampled per-class
+// and lifted toward ~1 by iceFraction (Enceladus 0.99 is essentially
+// "max ice"). Local to its one consumer — the renderer derives body
+// brightness from primary attributes (resources + water + ice + biome +
+// haze), so the scalar never needs to leave this function.
+function effectiveBondAlbedo(body) {
+  const spec = ALBEDO_BY_CLASS[body.worldClass];
+  if (spec == null) return 0.3;
+  let a = sampleTruncated(fieldPrng(body, 'albedo'), spec);
+  if (body.iceFraction != null && body.iceFraction > 0) {
+    a = a * (1 - body.iceFraction) + 0.95 * body.iceFraction;
+  }
+  // Three-decimal quantize matches the precision that previously made it
+  // back into the temp pass via the stored body.albedo column. Without it,
+  // a few hundred bodies' avgSurfaceTempK round 1 K differently.
+  return Number(Math.max(0, Math.min(1, a)).toFixed(3));
+}
+
 // Stefan-Boltzmann equilibrium temperature plus a worldClass greenhouse
 // offset scaled by surface pressure. Gas giants return cloud-top
 // equilibrium temp (no surface).
 function avgSurfaceTempFor(body, S) {
   if (S == null || body.worldClass == null) return null;
-  const A = body.albedo ?? 0.3;
+  const A = effectiveBondAlbedo(body);
   const tEq = Math.pow((S * SOLAR_CONSTANT * (1 - A)) / (4 * SIGMA_SB), 0.25);
   const wc = body.worldClass;
   if (wc === 'gas_giant' || wc === 'gas_dwarf' || wc === 'ice_giant') {
@@ -285,24 +303,6 @@ function iceFractionFor(body) {
   if (spec == null) return null;
   if (spec.max === 0) return 0;
   return Number(sampleTruncated(fieldPrng(body, 'iceFraction'), spec).toFixed(3));
-}
-
-// =============================================================================
-// Albedo
-// =============================================================================
-
-// Per-class base albedo, lifted toward 1 when ice covers most of the
-// surface (Enceladus 0.99 is essentially "max ice" for an ice world).
-// Crude but enough to keep avgSurfaceTempK self-consistent.
-function albedoFor(body) {
-  const spec = ALBEDO_BY_CLASS[body.worldClass];
-  if (spec == null) return null;
-  let a = sampleTruncated(fieldPrng(body, 'albedo'), spec);
-  // Ice fraction lifts albedo toward ~0.99 in proportion to coverage.
-  if (body.iceFraction != null && body.iceFraction > 0) {
-    a = a * (1 - body.iceFraction) + 0.95 * body.iceFraction;
-  }
-  return Number(Math.max(0, Math.min(1, a)).toFixed(3));
 }
 
 // =============================================================================
@@ -624,7 +624,7 @@ function fillBody(b, allBodies, stars) {
   // results within the same pass.
   let {
     radiusEarth, worldClass,
-    waterFraction, iceFraction, albedo,
+    waterFraction, iceFraction,
     avgSurfaceTempK, surfaceTempMinK, surfaceTempMaxK,
     tectonicActivity, rotationPeriodHours, magneticFieldGauss,
     surfacePressureBar,
@@ -649,7 +649,8 @@ function fillBody(b, allBodies, stars) {
   }
   working = { ...working, worldClass };
 
-  // Surface composition first — albedo depends on iceFraction.
+  // Surface composition — iceFraction also lifts the Bond albedo consumed
+  // by avgSurfaceTempFor downstream.
   if (unknowns.has('waterFraction')) {
     waterFraction = waterFractionFor(working);
   }
@@ -658,12 +659,6 @@ function fillBody(b, allBodies, stars) {
     iceFraction = iceFractionFor(working);
   }
   working = { ...working, iceFraction };
-
-  // Albedo (depends on iceFraction).
-  if (unknowns.has('albedo')) {
-    albedo = albedoFor(working);
-  }
-  working = { ...working, albedo };
 
   // Tectonics → Kepler → rotation → magnetic-field chain.
   if (unknowns.has('tectonicActivity')) {
@@ -778,7 +773,7 @@ function fillBody(b, allBodies, stars) {
   return {
     ...rest,
     radiusEarth, worldClass,
-    waterFraction, iceFraction, albedo,
+    waterFraction, iceFraction,
     avgSurfaceTempK, surfaceTempMinK, surfaceTempMaxK,
     tectonicActivity, rotationPeriodHours, magneticFieldGauss,
     surfacePressureBar,

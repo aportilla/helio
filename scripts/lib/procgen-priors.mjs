@@ -884,7 +884,7 @@ export const ICE_FRACTION_BY_CLASS = {
 };
 
 // ---------------------------------------------------------------------------
-// Albedo — surface reflectivity 0..1
+// Bond albedo — intermediate scalar for the Stefan-Boltzmann temp pass
 // ---------------------------------------------------------------------------
 
 // Bond albedo by world class. Anchors: Mercury 0.07 (dark basalt), Earth
@@ -892,8 +892,10 @@ export const ICE_FRACTION_BY_CLASS = {
 // (thick clouds — outlier we don't fit), Jupiter 0.34, Saturn 0.34,
 // Europa 0.67, Enceladus 0.99 (fresh ice).
 //
-// Note albedo feeds back into avgSurfaceTempK via Stefan-Boltzmann (already
-// wired in procgen.mjs), so the temp pass must run AFTER albedo is filled.
+// Consumed locally by effectiveBondAlbedo() inside avgSurfaceTempFor — not
+// stored on the body. Body brightness in the renderer is emergent from
+// primary attributes (resources + water + ice + biome + haze), so albedo
+// only ever existed as an input to the Stefan-Boltzmann derivation.
 export const ALBEDO_BY_CLASS = {
   rocky:     { mean: 0.30, sd: 0.10, min: 0.10, max: 0.55 },
   ocean:     { mean: 0.20, sd: 0.05, min: 0.10, max: 0.35 },

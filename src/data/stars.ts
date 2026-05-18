@@ -178,7 +178,6 @@ export interface Body {
   readonly surfaceTempMaxK: number | null;
   readonly waterFraction: number | null;
   readonly iceFraction: number | null;
-  readonly albedo: number | null;
   readonly magneticFieldGauss: number | null;
   readonly tectonicActivity: number | null;
   // Atmosphere — top three gases by fraction. atm1 is the dominant species.
