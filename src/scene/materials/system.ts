@@ -263,6 +263,17 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       // against a dark scene background.
       const vec3 ICE_COLOR = vec3(0.93, 0.97, 1.0);
 
+      // Globalness threshold separating the cap regime (warm /
+      // transitional bodies → surface-deposit caps at high latitude,
+      // pure ICE_COLOR) from the global regime (cold bodies → bulk
+      // cryosphere, scattered cells with surfaceAge controlling
+      // regolith burial). Pinned to the lower edge of frozenBoost's
+      // smoothstep so a body either stays fully in the cap regime
+      // (frozenBoost = 0) or transitions into the global regime
+      // (frozenBoost > 0) — no overlap. Mars at globalness ≈ 0.74 sits
+      // in cap; Europa / Triton at globalness = 1.0 sit in global.
+      const float CAP_GLOBALNESS_MAX = 0.8;
+
       // Biome stipple latitude window. Past BIOME_LAT_MAX (|sin lat| ≈
       // sin(58°)) life thins to zero; BIOME_LAT_RAMP feathers the edge
       // so the transition reads as "thinning toward the poles" rather
@@ -500,6 +511,19 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
           float lonF    = nzs * POLE_COS - nys * POLE_SIN;
           float lon     = atan(nxs, lonF);
 
+          // Latitude for cap / biome tests uses the un-inset projection
+          // so the visible disc rim covers the true sphere pole. The
+          // worley pass above wants the inset to bound cell foreshortening
+          // (cells pinch to nothing at the true limb), but the cap test
+          // wants |latSinDisc| to reach 1 at the disc edge along the
+          // band-aligned pole — otherwise small-iceFrac caps (Earth ~0.05,
+          // Mars ~0.03) fall under the visible-latitude ceiling and clip
+          // entirely. Computed from unscaled (nx, ny, nz) for that reason.
+          float nx = lxs / vRadius;
+          float ny = lys / vRadius;
+          float nz = sqrt(max(0.0, 1.0 - nx * nx - ny * ny));
+          float latSinDisc = ny * POLE_COS + nz * POLE_SIN;
+
           // Surface — sphere-projected worley/voronoi cells (1.5a).
           // Cell space is (lon, lat), scaled by vRadius / SURFACE_PATCH_PX
           // so disc-center cells stay at SURFACE_PATCH_PX while cells
@@ -565,30 +589,44 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
           //   old   (low age)  → resource on top (regolith), ice below.
           // Continuous lerp so a mid-age body mixes both reads.
 
-          // Per-fragment ice priority. Cap mode peaks at the poles
-          // (high |latSin|); global mode uses a per-cell hash so a cold
-          // body gets ice randomly scattered across all latitudes.
-          // Salts 701/719 stay distinct from every other surface pass —
-          // see "Hash-salt budget" in PLANET-RENDER-PLAN.md.
+          // Two physically distinct ice geometries, partitioned by
+          // vGlobalness:
+          //   Cap pattern (warm / transitional bodies, globalness <
+          //     CAP_GLOBALNESS_MAX) — surface deposit at high latitude.
+          //     Earth's water-ice caps, Mars's seasonal CO2 + water
+          //     polar caps. Independent of bulk surface composition;
+          //     paints pure ICE_COLOR (bypasses the surfaceAge blend
+          //     used by the global path below).
+          //   Global pattern (cold bodies, globalness ≥ CAP_GLOBALNESS_MAX)
+          //     — bulk cryosphere. Europa, Triton, Callisto. Random
+          //     scattered cells with effectiveIceFrac ramping to 1.0 at
+          //     extreme cold; surfaceAge controls how much ice sits on
+          //     top vs buried under regolith.
           //
-          // On a body cold enough that liquid surface water is
-          // thermodynamically impossible (T well below ~200 K), the
-          // entire surface IS frozen — the iceFraction "deficit"
-          // (1 − vIceFrac) manifests as linea cracks rather than as
-          // visible non-ice cells punching through the ice shell. The
-          // smoothstep on vGlobalness ramps effectiveIceFrac toward 1.0
-          // for those bodies (Europa, Ganymede, Callisto, Triton),
-          // while Mars-class transitional bodies (globalness ~0.7)
-          // keep the cap pattern at the CSV iceFraction value. The 0.8
-          // crossover lands at T ≈ 206 K — comfortably below Mars at
-          // 210 K, comfortably above Triton at 38 K.
-          float capPriority    = abs(latSinS);
+          // The partition lines up with frozenBoost's smoothstep, so a
+          // body is either fully in the cap regime (frozenBoost=0) or
+          // moving into the global regime (frozenBoost > 0). Salts
+          // 701/719 stay distinct from every other surface pass — see
+          // "Hash-salt budget" in PLANET-RENDER-PLAN.md.
+          bool  capActive      = vGlobalness < CAP_GLOBALNESS_MAX;
+          // Per-cell threshold jitter so the cap boundary follows the
+          // worley grid's jittered shapes instead of reading as a clean
+          // foreshortened ellipse. Cells near the boundary go in or out
+          // by hash; cells well inside / outside are unaffected. Amplitude
+          // scales with iceFrac so Mars's tiny cap (iceFrac 0.02) gets a
+          // ~±0.01 wobble while Earth's larger cap (iceFrac 0.10) gets
+          // ~±0.05 — clamped to keep very-small caps visible and very-
+          // large caps from dissolving into noise. Salts 233/239 distinct
+          // from every other surface pass.
+          float capJitterH    = hash21(winnerCell + vec2(vSeed * 233.0, vSeed * 239.0));
+          float capJitterAmp  = clamp(vIceFrac * 0.6, 0.01, 0.08);
+          float capJitter     = (capJitterH - 0.5) * 2.0 * capJitterAmp;
+          bool  capIcyHere    = capActive && (abs(latSinDisc) + capJitter) > (1.0 - vIceFrac);
           float cellHashIce    = hash21(winnerCell + vec2(vSeed * 701.0, vSeed * 719.0));
-          float globalPriority = cellHashIce;
-          float icePriority    = mix(capPriority, globalPriority, vGlobalness);
           float frozenBoost    = smoothstep(0.8, 1.0, vGlobalness);
           float effectiveIceFrac = mix(vIceFrac, 1.0, frozenBoost);
-          bool  icyHere        = icePriority > (1.0 - effectiveIceFrac);
+          bool  globalIcyHere  = !capActive && cellHashIce > (1.0 - effectiveIceFrac);
+          bool  icyHere        = capIcyHere || globalIcyHere;
 
           // CONTINENT_GROUP-sized blocks of worley cells share one
           // ocean/land coin flip. Salt offset from the resource-pick
@@ -641,7 +679,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
             float taper = 1.0 - smoothstep(
               BIOME_LAT_MAX - BIOME_LAT_RAMP,
               BIOME_LAT_MAX,
-              abs(latSinS)
+              abs(latSinDisc)
             );
             float effective = vBiomeCoverage * taper;
             if (effective > 0.0) {
@@ -665,10 +703,17 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
           vec3 subWeights = vWeights * subMask;
           vec3 resourceSubsurface = pickFromPalette(resH, subWeights);
 
-          // Default fragment color: layered stack order chosen by
-          // vSurfaceAge. icyHere==true puts ice into the mix; the
-          // lerp picks whether ice sits on top (young) or buried (old).
-          if (icyHere) {
+          // Default fragment color. Three branches:
+          //   capIcyHere   → pure ICE_COLOR (surface cap deposit; the
+          //     bulk surface age is irrelevant — Mars's caps are
+          //     seasonal surface ice, not regolith-buried cryosphere).
+          //   globalIcyHere → surfaceAge-blended ice/resource (young
+          //     icy body shows ice on top; old icy body shows resource
+          //     regolith on top with ice buried underneath).
+          //   else          → bulk resource surface.
+          if (capIcyHere) {
+            col = ICE_COLOR;
+          } else if (globalIcyHere) {
             col = mix(resourceSurface, ICE_COLOR, vSurfaceAge);
           } else {
             col = resourceSurface;
