@@ -118,6 +118,34 @@ const THEME_RAYLEIGH_COLOR: readonly [number, number, number] = [0.55, 0.75, 0.9
 // capped so an Earth-class body doesn't go fully overcast.
 const CLOUD_MAX_COVERAGE = 0.35;
 
+// Phase 1.6 ice-geometry temperature thresholds. globalness lerps from
+// 0 (cap-latitude pattern) at ICE_TEMP_CAP_K down to 1 (global pattern)
+// at ICE_TEMP_GLOBAL_K. Smoothstep curve between the two. Anchors:
+// Earth (288 K) lands at 0; Mars (210 K) at ~0.74 (mostly global but
+// iceFrac so small the visual is still cap-like); Europa (102 K)
+// saturates at 1; an ice-age Earth at ~240 K transitions through the
+// midpoint smoothly. The cap-vs-global signal comes from temperature
+// rather than insolation because the temperature is the actual driver
+// of where ice can exist on a body — insolation determines temperature
+// but greenhouse, albedo, and tidal heating all confound the direct
+// mapping.
+const ICE_TEMP_GLOBAL_K = 180;
+const ICE_TEMP_CAP_K    = 270;
+
+// Compute globalness from avgSurfaceTempK via a smoothstep curve.
+// Null temperature falls back to 0 (cap pattern — safest default for
+// a body with missing thermal data; the iceFrac value still gates
+// whether any ice renders at all).
+function globalnessForTemp(avgT: number | null): number {
+  if (avgT == null) return 0;
+  if (avgT <= ICE_TEMP_GLOBAL_K) return 1;
+  if (avgT >= ICE_TEMP_CAP_K)    return 0;
+  // Smoothstep: descending direction → 1 at cold edge, 0 at warm edge.
+  const t = (avgT - ICE_TEMP_GLOBAL_K) / (ICE_TEMP_CAP_K - ICE_TEMP_GLOBAL_K);
+  const sm = t * t * (3 - 2 * t);
+  return 1 - sm;
+}
+
 export type DiscMode = 0 | 1;  // 0 = surface, 1 = banded
 
 export interface DiscPalette {
@@ -174,12 +202,22 @@ export interface DiscPalette {
   readonly cloudDensity: number;
   // Phase 1.4 surface age [0..1]. 1 = perpetually refreshed (Io's lava,
   // Enceladus's plumes); 0 = ancient unmodified (Mercury, Luna,
-  // Callisto). Drives a per-cell lightness perturbation in the surface
-  // branch — old surfaces gain visible cell-to-cell mottling, young
-  // surfaces stay smooth. Forced to 0.5 on banded bodies, sub-threshold
-  // discs, and bodies whose primary attribute is null — "missing
-  // signal" renders unobtrusively rather than as extreme young/old.
+  // Callisto). Drives crater density in the surface branch and (with
+  // 1.6) the position of the ice layer in the three-layer stack — high
+  // ages put ice on top, low ages bury it under accumulated regolith.
+  // Forced to 0.5 on banded bodies, sub-threshold discs, and bodies
+  // whose primary attribute is null — "missing signal" renders
+  // unobtrusively rather than as extreme young/old.
   readonly surfaceAge: number;
+  // Phase 1.6 globalness [0..1]. Smoothstep on avgSurfaceTempK between
+  // ICE_TEMP_GLOBAL_K (cold → 1) and ICE_TEMP_CAP_K (warm → 0). Selects
+  // between the cap-latitude ice pattern (warm body, ice only at the
+  // poles) and the global ice pattern (cold body, ice everywhere
+  // proportional to iceFrac). The shader lerps between the two
+  // patterns by this scalar so a transitional body (ice-age Earth at
+  // ~240 K) reads as "caps expanding toward mid-latitudes" rather
+  // than snapping between modes.
+  readonly globalness: number;
 }
 
 function hazeChromophoreColor(gas: AtmGas): Color | null {
@@ -407,6 +445,13 @@ export function buildDiscPalette(
   // bodies (procgen edge) as average-aged rather than extreme.
   const surfaceAge = banded || tinyDisc ? 0.5 : (body.surfaceAge ?? 0.5);
 
+  // Globalness — drives the cap-vs-global ice pattern decision in the
+  // surface shader. Zero on banded bodies (no surface to ice) and tiny
+  // discs (no resolution for the lerp to matter). Derived from
+  // avgSurfaceTempK so the body's own thermal state — not an external
+  // class label — picks the geometry.
+  const globalness = banded || tinyDisc ? 0 : globalnessForTemp(body.avgSurfaceTempK);
+
   // Biome stipple paint — null on banded mode + tiny discs (same reason
   // as terrain scalars: stipple resolves as noise at sub-threshold disc
   // sizes). The transformColor pass below applies to the resource
@@ -516,6 +561,7 @@ export function buildDiscPalette(
     rimWidthPx,
     cloudDensity,
     surfaceAge,
+    globalness,
   };
 }
 

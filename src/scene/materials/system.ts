@@ -81,9 +81,11 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       // together to stay under the GPU's gl_MaxVertexAttribs cap.
       // Layout: x = rimWidthPx (haze or rayleigh rim, 0..N integer px),
       // y = cloudDensity (1.3c H2O patch coverage, 0..CLOUD_MAX),
-      // z = surfaceAge (1.4 cratering — 0 ancient → 1 perpetually
-      //     refreshed; drives a per-cell lightness perturbation).
-      attribute vec3  aAtmoStrokes;
+      // z = surfaceAge (1.5c cratering + 1.6 ice layer position —
+      //     0 ancient → 1 perpetually refreshed),
+      // w = globalness (1.6 ice geometry — 0 cap pattern, 1 global
+      //     pattern; lerped between by avgSurfaceTempK).
+      attribute vec4  aAtmoStrokes;
       varying float vRadius;
       varying vec2  vCenter;
       varying float vHovered;
@@ -103,6 +105,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       varying float vRimWidthPx;
       varying float vCloudDensity;
       varying float vSurfaceAge;
+      varying float vGlobalness;
       uniform float uDiscScale;
       uniform vec2  uViewport;
       void main() {
@@ -123,6 +126,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
         vRimWidthPx  = aAtmoStrokes.x;
         vCloudDensity = aAtmoStrokes.y;
         vSurfaceAge   = aAtmoStrokes.z;
+        vGlobalness   = aAtmoStrokes.w;
 
         // Integer-pixel disc diameter. Floor + 0.5 → round-to-nearest.
         float sz = floor(aRenderMeta.x * uDiscScale + 0.5);
@@ -169,6 +173,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       varying float vRimWidthPx;
       varying float vCloudDensity;
       varying float vSurfaceAge;
+      varying float vGlobalness;
 
       // Banded-mode density: bands per radius pixel. Tuned so a
       // Uranus-class disc (~43 px radius) gets ~30 bands; Jupiter
@@ -505,196 +510,204 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
             }
           }
 
-          // Layered fill, evaluated in priority order:
-          //   1. Polar cap — |latSin| past (1 - iceFrac). iceFrac=1 fills
-          //      the whole disc (Europa); iceFrac=0.1 leaves just the
-          //      pole rim (Earth); iceFrac=0 disables (Venus).
-          //   2. Ocean — coarse-cell hash < waterFrac flips this
-          //      continent cell to flat OCEAN_COLOR. Earth at 0.71 lands
-          //      ~71% of continent cells under sea level.
-          //   3. Land — existing resource-palette pick from the fine
-          //      worley winner cell.
-          if (abs(latSinS) > 1.0 - vIceFrac) {
-            col = ICE_COLOR;
+          // Phase 1.6 — ice is a contextual surface state composed onto
+          // the body's bulk surface, not its own latitude-band override.
+          // Three things drive the per-fragment composition:
+          //   icyHere           — does ice cover this fragment? Decided
+          //     by mixing a cap-latitude priority and a per-cell hash
+          //     priority via vGlobalness (warm → cap pattern; cold →
+          //     global random pattern; in between → hybrid).
+          //   resourceSurface   — the body's bulk character at this
+          //     fragment: ocean (waterFrac cell) or 1.5b region-masked
+          //     resource pick (+ biome stipple).
+          //   resourceSubsurface — the 1.5c complement-masked resource
+          //     pick, used by the crater branch as "what's underneath."
+          // Layer order is keyed off vSurfaceAge:
+          //   young (high age) → ice on top, resource below.
+          //   old   (low age)  → resource on top (regolith), ice below.
+          // Continuous lerp so a mid-age body mixes both reads.
+
+          // Per-fragment ice priority. Cap mode peaks at the poles
+          // (high |latSin|); global mode uses a per-cell hash so a cold
+          // body gets ice randomly scattered across all latitudes.
+          // Salts 701/719 stay distinct from every other surface pass —
+          // see "Hash-salt budget" in PLANET-RENDER-PLAN.md.
+          float capPriority    = abs(latSinS);
+          float cellHashIce    = hash21(winnerCell + vec2(vSeed * 701.0, vSeed * 719.0));
+          float globalPriority = cellHashIce;
+          float icePriority    = mix(capPriority, globalPriority, vGlobalness);
+          bool  icyHere        = icePriority > (1.0 - vIceFrac);
+
+          // CONTINENT_GROUP-sized blocks of worley cells share one
+          // ocean/land coin flip. Salt offset from the resource-pick
+          // hash so the two scales decorrelate.
+          vec2 contCell = floor(winnerCell / CONTINENT_GROUP);
+          float contH = hash21(contCell + vec2(vSeed * 113.0, vSeed * 127.0));
+          bool  waterHere = contH < vWaterFrac;
+
+          // Phase 1.5b — per-region resource-subset selection. The
+          // super-cell hash discretizes into one of REGION_BUCKET_COUNT
+          // non-empty subsets of {palette0, palette1, palette2}; the
+          // subset masks the body's weights so each region paints from
+          // a different combination of its top-3 resources. The
+          // complement of the same bucket drives the subsurface — what
+          // the crater branch exposes.
+          vec2 regionCell = floor(winnerCell / REGION_PATCH_FACTOR);
+          float regionH = hash21(regionCell + vec2(vSeed * 401.0, vSeed * 419.0));
+          float bucketF = clamp(floor(regionH * REGION_BUCKET_COUNT), 0.0, REGION_BUCKET_COUNT - 1.0);
+          int bucket = int(bucketF);
+          vec3 mask;
+          if      (bucket == 0) mask = vec3(1.0, 0.0, 0.0);
+          else if (bucket == 1) mask = vec3(0.0, 1.0, 0.0);
+          else if (bucket == 2) mask = vec3(0.0, 0.0, 1.0);
+          else if (bucket == 3) mask = vec3(1.0, 1.0, 0.0);
+          else if (bucket == 4) mask = vec3(1.0, 0.0, 1.0);
+          else if (bucket == 5) mask = vec3(0.0, 1.0, 1.0);
+          else                  mask = vec3(1.0, 1.0, 1.0);
+          vec3 regionWeights = vWeights * mask;
+          float resH = hash21(winnerCell + vec2(vSeed * 1009.0, vSeed * 2017.0));
+          vec3 landCol = pickFromPalette(resH, regionWeights);
+
+          // Biome stipple paints over land cells in the temperate band.
+          // Per-pixel hash flips individual land pixels to the body's
+          // biome color (archetype × stellar shift; see biomePaintFor).
+          // Salts (197, 311) distinct from continent / resource hashes
+          // so a single pixel doesn't draw the same noise stream twice.
+          // No-op when vBiomeCoverage is zero (no biome / banded /
+          // sub-threshold disc).
+          if (vBiomeCoverage > 0.0) {
+            float taper = 1.0 - smoothstep(
+              BIOME_LAT_MAX - BIOME_LAT_RAMP,
+              BIOME_LAT_MAX,
+              abs(latSinS)
+            );
+            float effective = vBiomeCoverage * taper;
+            if (effective > 0.0) {
+              float bH = hash21(floor(d) + vec2(vSeed * 197.0, vSeed * 311.0));
+              if (bH < effective) landCol = vBiomeColor;
+            }
+          }
+          vec3 resourceSurface = waterHere ? OCEAN_COLOR : landCol;
+
+          // Subsurface (complement bucket) — drives crater color. Same
+          // resource hash so the surface and subsurface picks correlate
+          // per cell; only the mask differs.
+          vec3 subMask;
+          if      (bucket == 0) subMask = vec3(0.0, 1.0, 1.0);
+          else if (bucket == 1) subMask = vec3(1.0, 0.0, 1.0);
+          else if (bucket == 2) subMask = vec3(1.0, 1.0, 0.0);
+          else if (bucket == 3) subMask = vec3(0.0, 0.0, 1.0);
+          else if (bucket == 4) subMask = vec3(0.0, 1.0, 0.0);
+          else if (bucket == 5) subMask = vec3(1.0, 0.0, 0.0);
+          else                  subMask = vec3(1.0, 1.0, 1.0);
+          vec3 subWeights = vWeights * subMask;
+          vec3 resourceSubsurface = pickFromPalette(resH, subWeights);
+
+          // Default fragment color: layered stack order chosen by
+          // vSurfaceAge. icyHere==true puts ice into the mix; the
+          // lerp picks whether ice sits on top (young) or buried (old).
+          if (icyHere) {
+            col = mix(resourceSurface, ICE_COLOR, vSurfaceAge);
           } else {
-            // CONTINENT_GROUP-sized blocks of worley cells share one
-            // ocean/land coin flip. Salt offset from the resource-pick
-            // hash so the two scales decorrelate.
-            vec2 contCell = floor(winnerCell / CONTINENT_GROUP);
-            float contH = hash21(contCell + vec2(vSeed * 113.0, vSeed * 127.0));
-            if (contH < vWaterFrac) {
-              col = OCEAN_COLOR;
-            } else {
-              // Phase 1.5b — per-region resource-subset selection.
-              // Aggregate REGION_PATCH_FACTOR fine worley cells per
-              // axis into a super-cell; the super-cell hash discretizes
-              // into one of REGION_BUCKET_COUNT non-empty subsets of
-              // {palette0, palette1, palette2}. AND the subset mask
-              // against the body's natural weights so the fine cell
-              // pick within the region paints from a different
-              // combination of the body's top-3 resources. Net visual:
-              // each region carries a distinct resource signature
-              // (Mercury's iron-grey, rare-earth rose, and silicate
-              // rust separate into spatial regions instead of mixing
-              // uniformly across the disc). Land-only — oceans and
-              // ice caps stay flat because their color isn't from the
-              // resource palette. Region edges inherit the fine
-              // worley pass's jittered shapes for free.
-              //
-              // Salts (401, 419) are distinct primes from worley
-              // jitter (13/19, 23/29), continent (113/127), resource
-              // (1009/2017), biome (197/311), cratering (547/569),
-              // cloud (991/...), and inward-fade dither (829/853).
-              vec2 regionCell = floor(winnerCell / REGION_PATCH_FACTOR);
-              float regionH = hash21(regionCell + vec2(vSeed * 401.0, vSeed * 419.0));
-              float bucketF = clamp(floor(regionH * REGION_BUCKET_COUNT), 0.0, REGION_BUCKET_COUNT - 1.0);
-              int bucket = int(bucketF);
-              vec3 mask;
-              if      (bucket == 0) mask = vec3(1.0, 0.0, 0.0);
-              else if (bucket == 1) mask = vec3(0.0, 1.0, 0.0);
-              else if (bucket == 2) mask = vec3(0.0, 0.0, 1.0);
-              else if (bucket == 3) mask = vec3(1.0, 1.0, 0.0);
-              else if (bucket == 4) mask = vec3(1.0, 0.0, 1.0);
-              else if (bucket == 5) mask = vec3(0.0, 1.0, 1.0);
-              else                  mask = vec3(1.0, 1.0, 1.0);
-              vec3 regionWeights = vWeights * mask;
+            col = resourceSurface;
+          }
 
-              float h = hash21(winnerCell + vec2(vSeed * 1009.0, vSeed * 2017.0));
-              col = pickFromPalette(h, regionWeights);
-              // Biome stipple — per-pixel hash on disc-local integer
-              // pixel coords flips individual land pixels to the body's
-              // biome color (archetype × stellar shift; see
-              // biomePaintFor in stars.ts). Coverage density comes from
-              // biosphereTier — microbial sparse, gaian dense. Latitude
-              // taper concentrates the effect on the temperate band.
-              // Salts (197, 311) are distinct from the continent (113,
-              // 127) and resource (1009, 2017) hashes so a single pixel
-              // doesn't draw ocean/land and biome from the same noise
-              // stream. Skipped when coverage is zero (no biome, banded
-              // body, or sub-threshold disc) to save the hash cost.
-              if (vBiomeCoverage > 0.0) {
-                float taper = 1.0 - smoothstep(
-                  BIOME_LAT_MAX - BIOME_LAT_RAMP,
-                  BIOME_LAT_MAX,
-                  abs(latSinS)
-                );
-                float effective = vBiomeCoverage * taper;
-                if (effective > 0.0) {
-                  float bH = hash21(floor(d) + vec2(vSeed * 197.0, vSeed * 311.0));
-                  if (bH < effective) col = vBiomeColor;
-                }
-              }
+          // Phase 1.5c — discrete crater features. Crater seed cells
+          // aggregate CRATER_PATCH_FACTOR² fine cells in the same
+          // sphere-projected frame as 1.5a/b. Scan the 3×3 neighborhood:
+          // existence hash against (1 - surfaceAge)², jittered center,
+          // power-law radius. Closest containing crater wins.
+          // Crater paint composes by layer order:
+          //   young (ice on top): crater reveals the body's
+          //     subsurface palette (impact punches through the ice
+          //     layer to expose the other resources beneath).
+          //   old (regolith on top): crater reveals ICE_COLOR where
+          //     ice exists at this fragment, else subsurface palette
+          //     (no ice to reveal).
+          // Per-crater color uses the CRATER's region bucket (not the
+          // fragment's), so a crater straddling a region boundary paints
+          // one uniform color rather than fracturing along the seam.
+          //
+          // Salt allocation (vSeed × prime, vSeed × prime):
+          //   existence:  (547, 569)
+          //   jitter X:   (587, 547)
+          //   jitter Y:   (569, 587)
+          //   radius:     (569, 547) — reversed pair distinct from existence
+          //   palette:    (587, 569)
+          vec2 craterCellPos  = cellPos / CRATER_PATCH_FACTOR;
+          vec2 craterCellId   = floor(craterCellPos);
+          vec2 craterCellFrac = craterCellPos - craterCellId;
+          float ageMissing    = 1.0 - vSurfaceAge;
+          float craterDensity = ageMissing * ageMissing * CRATER_DENSITY_MAX;
 
-              // Phase 1.5c — discrete crater features with layered
-              // resource model. Crater seed cells aggregate
-              // CRATER_PATCH_FACTOR² fine cells in the same sphere-
-              // projected frame as 1.5a/b. For each fragment, scan
-              // the 3×3 neighborhood of crater seed cells:
-              //   - hash existence against (1 - surfaceAge)² × max
-              //   - if present, hash jittered center + power-law
-              //     radius
-              //   - test fragment-to-center distance; closest crater
-              //     containing the fragment wins (handles overlap)
-              // The winning crater's color comes from its region's
-              // SUBSURFACE mask (complement of the 1.5b region
-              // bucket the crater's center lies in). Solid-color
-              // crater paint — one pickFromPalette draw per crater.
-              //
-              // Salt allocation (vSeed × prime, vSeed × prime):
-              //   existence:  (547, 569)
-              //   jitter X:   (587, 547)
-              //   jitter Y:   (569, 587)
-              //   radius:     (569, 547) — reversed pair distinct
-              //                            from existence
-              //   palette:    (587, 569)
-              vec2 craterCellPos  = cellPos / CRATER_PATCH_FACTOR;
-              vec2 craterCellId   = floor(craterCellPos);
-              vec2 craterCellFrac = craterCellPos - craterCellId;
-              float ageMissing    = 1.0 - vSurfaceAge;
-              float craterDensity = ageMissing * ageMissing * CRATER_DENSITY_MAX;
+          float bestDist  = 1e9;
+          vec2  bestCraterId = vec2(0.0);
+          bool  inCrater  = false;
 
-              float bestDist  = 1e9;
-              vec2  bestCraterId = vec2(0.0);
-              bool  inCrater  = false;
-
-              for (int dx = -1; dx <= 1; dx++) {
-                for (int dy = -1; dy <= 1; dy++) {
-                  vec2 off = vec2(float(dx), float(dy));
-                  vec2 nCell = craterCellId + off;
-
-                  float existH = hash21(nCell + vec2(vSeed * 547.0, vSeed * 569.0));
-                  if (existH > craterDensity) continue;
-
-                  float jx = hash21(nCell + vec2(vSeed * 587.0, vSeed * 547.0));
-                  float jy = hash21(nCell + vec2(vSeed * 569.0, vSeed * 587.0));
-                  vec2  cCenter = off + vec2(jx, jy);
-
-                  float rH = hash21(nCell + vec2(vSeed * 569.0, vSeed * 547.0));
-                  float radius = CRATER_RADIUS_MIN +
-                                 (CRATER_RADIUS_MAX - CRATER_RADIUS_MIN) * rH * rH;
-
-                  float dist = length(cCenter - craterCellFrac);
-                  if (dist < radius && dist < bestDist) {
-                    bestDist = dist;
-                    bestCraterId = nCell;
-                    inCrater = true;
-                  }
-                }
-              }
-
-              if (inCrater) {
-                // Recompute the winning crater's center in fine-cell
-                // (cellPos) units to find which 1.5b region contains
-                // it. Same hash salts as in the loop so jitter math
-                // matches exactly.
-                float bjx = hash21(bestCraterId + vec2(vSeed * 587.0, vSeed * 547.0));
-                float bjy = hash21(bestCraterId + vec2(vSeed * 569.0, vSeed * 587.0));
-                vec2  bestCenter = (bestCraterId + vec2(bjx, bjy)) * CRATER_PATCH_FACTOR;
-
-                // The region the CRATER landed in (not the
-                // fragment's region — they can differ when craters
-                // straddle region boundaries). Use the same region
-                // hash math as 1.5b so the surface and crater
-                // pipelines agree on bucket assignment.
-                vec2 cRegionCell = floor(bestCenter / REGION_PATCH_FACTOR);
-                float cRegionH = hash21(cRegionCell + vec2(vSeed * 401.0, vSeed * 419.0));
-                int cBucket = int(clamp(floor(cRegionH * REGION_BUCKET_COUNT), 0.0, REGION_BUCKET_COUNT - 1.0));
-
-                // Subsurface mask = complement of the surface bucket.
-                // Bucket 6 (natural mix) has no complement available,
-                // so it falls back to natural weights — craters in
-                // those regions lose contrast (acceptable; those
-                // regions weren't reading as regionally varied
-                // anyway).
-                vec3 subMask;
-                if      (cBucket == 0) subMask = vec3(0.0, 1.0, 1.0);
-                else if (cBucket == 1) subMask = vec3(1.0, 0.0, 1.0);
-                else if (cBucket == 2) subMask = vec3(1.0, 1.0, 0.0);
-                else if (cBucket == 3) subMask = vec3(0.0, 0.0, 1.0);
-                else if (cBucket == 4) subMask = vec3(0.0, 1.0, 0.0);
-                else if (cBucket == 5) subMask = vec3(1.0, 0.0, 0.0);
-                else                   subMask = vec3(1.0, 1.0, 1.0);
-
-                vec3 subWeights = vWeights * subMask;
-                float cPalH = hash21(bestCraterId + vec2(vSeed * 587.0, vSeed * 569.0));
-                col = pickFromPalette(cPalH, subWeights);
+          for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+              vec2 off = vec2(float(dx), float(dy));
+              vec2 nCell = craterCellId + off;
+              float existH = hash21(nCell + vec2(vSeed * 547.0, vSeed * 569.0));
+              if (existH > craterDensity) continue;
+              float jx = hash21(nCell + vec2(vSeed * 587.0, vSeed * 547.0));
+              float jy = hash21(nCell + vec2(vSeed * 569.0, vSeed * 587.0));
+              vec2  cCenter = off + vec2(jx, jy);
+              float rH = hash21(nCell + vec2(vSeed * 569.0, vSeed * 547.0));
+              float radius = CRATER_RADIUS_MIN + (CRATER_RADIUS_MAX - CRATER_RADIUS_MIN) * rH * rH;
+              float dist = length(cCenter - craterCellFrac);
+              if (dist < radius && dist < bestDist) {
+                bestDist = dist;
+                bestCraterId = nCell;
+                inCrater = true;
               }
             }
           }
 
-          // Clouds sit outside the cap branch — they paint over land +
-          // ocean only. Cap region is filtered out by the non-cap latitude
-          // test below, matching the cap conditional above.
-          if (abs(latSinS) <= 1.0 - vIceFrac) {
+          if (inCrater) {
+            // Recompute the crater's center in fine-cell (cellPos)
+            // units so we can identify which 1.5b region contains it.
+            // Per-crater region picks per-crater subsurface mask, so
+            // every fragment of one crater paints the same color.
+            float bjx = hash21(bestCraterId + vec2(vSeed * 587.0, vSeed * 547.0));
+            float bjy = hash21(bestCraterId + vec2(vSeed * 569.0, vSeed * 587.0));
+            vec2  bestCenter = (bestCraterId + vec2(bjx, bjy)) * CRATER_PATCH_FACTOR;
+            vec2  cRegionCell = floor(bestCenter / REGION_PATCH_FACTOR);
+            float cRegionH = hash21(cRegionCell + vec2(vSeed * 401.0, vSeed * 419.0));
+            int   cBucket = int(clamp(floor(cRegionH * REGION_BUCKET_COUNT), 0.0, REGION_BUCKET_COUNT - 1.0));
+            vec3  cSubMask;
+            if      (cBucket == 0) cSubMask = vec3(0.0, 1.0, 1.0);
+            else if (cBucket == 1) cSubMask = vec3(1.0, 0.0, 1.0);
+            else if (cBucket == 2) cSubMask = vec3(1.0, 1.0, 0.0);
+            else if (cBucket == 3) cSubMask = vec3(0.0, 0.0, 1.0);
+            else if (cBucket == 4) cSubMask = vec3(0.0, 1.0, 0.0);
+            else if (cBucket == 5) cSubMask = vec3(1.0, 0.0, 0.0);
+            else                   cSubMask = vec3(1.0, 1.0, 1.0);
+            float cPalH = hash21(bestCraterId + vec2(vSeed * 587.0, vSeed * 569.0));
+            vec3 craterRevealCol = pickFromPalette(cPalH, vWeights * cSubMask);
+
+            vec3 craterYoung = craterRevealCol;
+            vec3 craterOld   = icyHere ? ICE_COLOR : craterRevealCol;
+            col = mix(craterOld, craterYoung, vSurfaceAge);
+          }
+
+          // Clouds float above the body's surface. Suppressed on icy
+          // fragments since the visual (white-on-white) reads as noise
+          // at the pixel-art resolution; in practice the bodies that
+          // carry an H2O chromophore (Earth-class) only have icy
+          // fragments at the polar cap, so this is the same suppression
+          // the old cap-latitude gate provided.
+          if (!icyHere) {
             // Phase 1.3c H2O cloud patches — anisotropic worley cells in
             // the equator-aligned frame. Paints CLOUD_COLOR over land +
-            // ocean cells (cap is excluded by construction — this branch
-            // only runs when |latSinS| <= 1 - vIceFrac). Cells stretched
-            // east-west give a zonal-flow / wind-swept silhouette rather
-            // than axis-aligned grid squares. Salts (991/997 + 1013/1019
-            // + 1031/1033) are distinct primes from continent (113/127),
-            // resource (1009/2017), and biome (197/311) so cloud
-            // placement decorrelates from every other surface feature.
+            // ocean cells (icy fragments are excluded by the !icyHere
+            // gate above — clouds over white ice would read as noise).
+            // Cells stretched east-west give a zonal-flow / wind-swept
+            // silhouette rather than axis-aligned grid squares. Salts
+            // (991/997 + 1013/1019 + 1031/1033) are distinct primes
+            // from continent (113/127), resource (1009/2017), biome
+            // (197/311), and ice priority (701/719) so cloud placement
+            // decorrelates from every other surface feature.
             if (vCloudDensity > 0.0) {
               float cCT = cos(vTilt);
               float cST = sin(vTilt);
