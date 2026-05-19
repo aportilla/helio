@@ -18,13 +18,22 @@ import { colors, fonts, sizes } from '../theme';
 // data layer) because they're a presentation concern; if the catalog ever
 // adds a new world-class, TS will flag the missing entry here.
 const WORLD_CLASS_LABEL: Record<WorldClass, string> = {
-  rocky:     'Rocky',
-  ocean:     'Ocean',
-  desert:    'Desert',
-  lava:      'Lava',
-  gas_dwarf: 'Gas Dwarf',
-  gas_giant: 'Gas Giant',
-  ice_giant: 'Ice Giant',
+  // Terrestrial
+  rocky:       'Rocky',
+  solid_giant: 'Solid Giant',
+  desert:      'Desert',
+  ocean:       'Ocean',
+  ice:         'Ice',
+  iron:        'Iron',
+  lava:        'Lava',
+  magma_ocean: 'Magma Ocean',
+  chthonian:   'Chthonian',
+  // Gaseous
+  gas_dwarf:   'Gas Dwarf',
+  hycean:      'Hycean',
+  helium:      'Helium',
+  ice_giant:   'Ice Giant',
+  gas_giant:   'Gas Giant',
 };
 
 const BIOSPHERE_ARCHETYPE_LABEL: Record<BiosphereArchetype, string> = {
@@ -169,9 +178,10 @@ function rowsForBody(bodyIdx: number): BodyRow[] {
 }
 
 function hasInaccessibleSurface(b: Body): boolean {
-  return b.worldClass === 'gas_giant'
-      || b.worldClass === 'ice_giant'
-      || b.worldClass === 'gas_dwarf';
+  // Gaseous-bracket bodies have no accessible surface.
+  const wc = b.worldClass;
+  return wc === 'gas_giant' || wc === 'ice_giant' || wc === 'gas_dwarf'
+      || wc === 'hycean'    || wc === 'helium';
 }
 
 // Belt rows surface the band's extent, anchoring metadata, and the top

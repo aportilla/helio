@@ -16,7 +16,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hash32, mulberry32 } from './lib/prng.mjs';
-import { fillBodies, radiusFromMass, worldClassFor, planetTypeFor } from './lib/procgen.mjs';
+import { fillBodies, radiusFromMass, planetTypeFor } from './lib/procgen.mjs';
 import { generateSystem, generateMoons, generateRing, generateOverlay } from './lib/procgen-architect.mjs';
 import { MAX_PLANETS_PER_CLUSTER } from './lib/procgen-priors.mjs';
 import { insolation } from './lib/astrophysics.mjs';
@@ -485,7 +485,13 @@ function buildClusters(stars) {
 // runtime API is uniform `T | null` and consumers don't need to distinguish.
 
 const BODIES_FILE = 'bodies.csv';
-const WORLD_CLASSES = new Set(['rocky', 'ocean', 'ice', 'desert', 'lava', 'gas_dwarf', 'gas_giant', 'ice_giant']);
+const WORLD_CLASSES = new Set([
+  // Terrestrial
+  'rocky', 'solid_giant', 'desert', 'ocean', 'ice',
+  'iron', 'lava', 'magma_ocean', 'chthonian',
+  // Gaseous
+  'gas_dwarf', 'hycean', 'helium', 'ice_giant', 'gas_giant',
+]);
 // Biosphere is two orthogonal axes — archetype (what kind of life) and
 // tier (how developed). Sterile bodies carry tier='none' and archetype is
 // 'n/a' (curated) or null (procgen-skipped). 'none' is the only tier where
@@ -521,6 +527,8 @@ const BODY_NUMERIC_FIELDS = [
   ['axial_tilt_deg',         'axialTiltDeg'],
   ['mass_earth',             'massEarth'],
   ['radius_earth',           'radiusEarth'],
+  ['bulk_water_fraction',    'bulkWaterFraction'],
+  ['bulk_metal_fraction',    'bulkMetalFraction'],
   ['avg_surface_temp_k',     'avgSurfaceTempK'],
   ['surface_temp_min_k',     'surfaceTempMinK'],
   ['surface_temp_max_k',     'surfaceTempMaxK'],
@@ -934,16 +942,24 @@ async function main() {
     if (!host) continue;
     const r = planet.radiusEarth ?? radiusFromMass(planet.massEarth);
     if (r == null) continue;
-    const S = planet.semiMajorAu != null ? insolation(host.mass, planet.semiMajorAu) : null;
-    const wc = planet.worldClass ?? worldClassFor({ ...planet, radiusEarth: r }, S);
-    if (wc == null) continue;
-    const planetType = planetTypeFor(wc, planet.massEarth, S);
+    // RV-discovery catalog rows often carry periodDays but no semiMajorAu —
+    // the Filler will Kepler-derive it later, but the moon backfill runs
+    // before the Filler, so derive on the fly here to get a usable
+    // insolation for moon zone gating.
+    let aForS = planet.semiMajorAu;
+    if (aForS == null && planet.periodDays != null && host.mass > 0) {
+      aForS = Math.pow(Math.pow(planet.periodDays / 365.25, 2) * host.mass, 1 / 3);
+    }
+    const S = aForS != null ? insolation(host.mass, aForS) : null;
+    // planetType is dispatched directly on (mass, radius, S) — no longer
+    // routes through worldClass since class is derived late in the Filler.
+    const planetType = planetTypeFor(planet.massEarth, r, S);
     // Persist the derived type on the catalog planet so downstream consumers
     // (audit script, future gameplay code) see the same value the backfill
     // used. Curated-system planets skipped above stay planetType: null.
     planet.planetType = planetType;
     if (!catalogMoonHosts.has(planet.id)) {
-      backfillMoons.push(...generateMoons(planet, planetType));
+      backfillMoons.push(...generateMoons(planet, planetType, S));
     }
     // Ring backfill mirrors the moon backfill: the catalog is silent on
     // rings (transit + RV detection methods don't surface them), so we

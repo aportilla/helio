@@ -12,7 +12,7 @@
 // character, atmosphere, resources, biosphere are left as `_unknowns`
 // for the Filler (procgen.mjs) to derive.
 
-import { hash32, mulberry32, sampleNormal, samplePhysical, sampleTruncated, sampleMixture, samplePoisson } from './prng.mjs';
+import { hash32, mulberry32, sampleNormal, samplePhysical, sampleTruncated, sampleLogTruncated, sampleMixture, samplePoisson } from './prng.mjs';
 import { insolation } from './astrophysics.mjs';
 import { radiusFromMass } from './procgen.mjs';
 import {
@@ -28,6 +28,9 @@ import {
   MOON_COUNT_BY_TYPE,
   MOON_MASS_LOG_EARTH,
   MOON_MAX_HOST_MASS_RATIO,
+  FROST_LINE_S,
+  BULK_WATER_FRACTION_BY_ZONE,
+  BULK_METAL_FRACTION_BY_ZONE,
   ECCENTRICITY,
   INCLINATION_DEG,
   AXIAL_TILT_DEG,
@@ -74,6 +77,27 @@ function slotPrng(starId, slotIdx, salt) {
 // planet's id is the only stable handle that exists in both cases.
 function moonPrng(planetId, mIdx, salt) {
   return mulberry32(hash32(`${planetId}:moon${mIdx}:${salt}:${PROCGEN_VERSION}`));
+}
+
+// Sample a body's bulkWaterFraction (0..1 mass fraction in volatiles)
+// keyed off the insolation zone where the body sits / formed. Inner
+// zone (S ≥ FROST_LINE_S) draws low values; outer draws Galilean-class.
+// Sub-Mercury-or-airless bodies still draw the floor of their zone —
+// composition is set at formation and persists, even if surface state
+// later reads as "dry."
+function sampleBulkWaterFraction(prng, S) {
+  const zone = (S != null && S >= FROST_LINE_S) ? 'inner' : 'outer';
+  return Number(sampleLogTruncated(prng, BULK_WATER_FRACTION_BY_ZONE[zone]).toFixed(5));
+}
+
+// Refractory metals condense first in the protoplanetary disk; bodies
+// forming inside the frost line draw from a metal-rich distribution,
+// bodies forming outside draw from a silicate/ice-dominant one.
+// Independent per-body draw — moons sample independently, same posture
+// as bulkWater.
+function sampleBulkMetalFraction(prng, S) {
+  const zone = (S != null && S >= FROST_LINE_S) ? 'inner' : 'outer';
+  return Number(sampleLogTruncated(prng, BULK_METAL_FRACTION_BY_ZONE[zone]).toFixed(5));
 }
 
 // Per-(star, context, salt) PRNG. Belts are system-level structural
@@ -153,6 +177,8 @@ function makeBody(props) {
     hostBodyIdx: null,
     planetType: null,
     worldClass: null,
+    bulkWaterFraction: null,
+    bulkMetalFraction: null,
     largestBodyKm: null,
     // shepherdId is the architect's deferred form of shepherdBodyIdx —
     // it stores the giant's *string id* because the Body's array
@@ -190,7 +216,11 @@ function makeBody(props) {
 // reuse it when backfilling moons for catalog planets that arrived with
 // none — observed exoplanets rarely have moon coverage, but every body
 // should be explorable for the game.
-export function generateMoons(planet, planetType) {
+//
+// `S` is the host planet's insolation (moons inherit stellar flux); used
+// to gate the bulkWaterFraction zone draw. Defaults to null so the
+// backfill path can pass it in without breaking older callers.
+export function generateMoons(planet, planetType, S = null) {
   const spec = MOON_COUNT_BY_TYPE[planetType];
   if (!spec) return [];
   const countPrng = moonPrng(planet.id, -1, 'count');
@@ -205,6 +235,8 @@ export function generateMoons(planet, planetType) {
     const eccPrng = moonPrng(planet.id, mIdx, 'ecc');
     const incPrng = moonPrng(planet.id, mIdx, 'inc');
     const tiltPrng = moonPrng(planet.id, mIdx, 'tilt');
+    const bulkWaterPrng = moonPrng(planet.id, mIdx, 'bulk_water');
+    const bulkMetalPrng = moonPrng(planet.id, mIdx, 'bulk_metal');
 
     // Mass: truncated log-normal centered on Europa-class with a tail
     // extending to Earth-mass+. Each moon's upper bound is further capped
@@ -246,6 +278,8 @@ export function generateMoons(planet, planetType) {
       axialTiltDeg: Number(sampleTruncated(tiltPrng, AXIAL_TILT_DEG).toFixed(2)),
       massEarth: Number(massEarth.toFixed(4)),
       radiusEarth: Number(radiusEarth.toFixed(4)),
+      bulkWaterFraction: sampleBulkWaterFraction(bulkWaterPrng, S),
+      bulkMetalFraction: sampleBulkMetalFraction(bulkMetalPrng, S),
     }));
   }
   return moons;
@@ -553,6 +587,10 @@ function buildPlanetAtOrbit(star, slotIdx, aAu, letter, saltPrefix = '') {
   const incPrng = slotPrng(star.id, slotIdx, saltPrefix + 'inclination');
   const tiltPrng = slotPrng(star.id, slotIdx, saltPrefix + 'axial_tilt');
   const phasePrng = slotPrng(star.id, slotIdx, saltPrefix + 'orbital_phase');
+  const bulkWaterPrng = slotPrng(star.id, slotIdx, saltPrefix + 'bulk_water');
+  const bulkWaterFraction = sampleBulkWaterFraction(bulkWaterPrng, S);
+  const bulkMetalPrng = slotPrng(star.id, slotIdx, saltPrefix + 'bulk_metal');
+  const bulkMetalFraction = sampleBulkMetalFraction(bulkMetalPrng, S);
 
   // Kepler: P² = a³ / M_host_solar
   const periodDays = 365.25 * Math.sqrt(Math.pow(aAu, 3) / Math.max(star.mass, 0.01));
@@ -573,8 +611,10 @@ function buildPlanetAtOrbit(star, slotIdx, aAu, letter, saltPrefix = '') {
     axialTiltDeg: Number(sampleTruncated(tiltPrng, AXIAL_TILT_DEG).toFixed(2)),
     massEarth: Number(massEarth.toFixed(3)),
     radiusEarth: Number(radiusEarth.toFixed(3)),
+    bulkWaterFraction,
+    bulkMetalFraction,
   });
-  const out = [planet, ...generateMoons(planet, planetType)];
+  const out = [planet, ...generateMoons(planet, planetType, S)];
   const ring = generateRing(planet, planetType);
   if (ring) out.push(ring);
   return out;

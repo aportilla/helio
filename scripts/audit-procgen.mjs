@@ -36,17 +36,10 @@ import {
   BELT_OCCURRENCE_BY_CLASS,
   BELT_RESOURCE_PRIORS,
   COMPANION_PLANET_SUPPRESSION,
-  WATER_FRACTION_BY_CLASS,
-  ICE_FRACTION_BY_INSOLATION,
-  ICE_FRACTION_INSOLATION_BUCKETS,
-  ICE_FRACTION_CLASS_MUL,
-  SURFACE_AGE_BY_CLASS,
-  TECTONIC_ACTIVITY_BY_CLASS,
-  MAGNETIC_FIELD_GAUSS_BY_CLASS,
-  TEMP_SWING_FRAC_BY_CLASS,
-  PLANET_RESOURCE_PRIORS_BY_CLASS,
-  BIOSPHERE_BY_CLASS,
-  BIOSPHERE_GATE_INSOLATION,
+  FROST_LINE_S,
+  BULK_WATER_FRACTION_BY_ZONE,
+  TRIPLE_POINT_BAR,
+  BIOSPHERE_HABITATS,
   BIOSPHERE_ARCHETYPES,
   BIOSPHERE_TIERS,
 } from './lib/procgen-priors.mjs';
@@ -438,61 +431,119 @@ function auditScalar(field, priorTable, label) {
     );
   }
 }
-// iceFraction is insolation-keyed (not class-keyed) — its prior comes
-// from ICE_FRACTION_BY_INSOLATION buckets adjusted by an ICE_FRACTION_CLASS_MUL
-// multiplier. Audit grouped by (worldClass, insolation bucket) rather
-// than worldClass alone.
-function auditIceFraction() {
-  console.log('  --- iceFraction (by class × insolation bucket) ---');
-  console.log('  class       bucket      |  n      obs.mean  obs.sd     prior.mean  prior.sd   z');
-  const byKey = {};
+// Phase 3 closes the bug where small airless bodies rendered liquid
+// oceans and warm airless bodies rendered surface ice. Both cases
+// should be ≈ 0 once the cover formulas read (T, P, bulkWater).
+// Reports raw counts so a non-zero number is immediately visible.
+function auditCoverBugClosure() {
+  console.log('  --- Phase 3 bug-closure check (small airless + warm airless) ---');
+  let smallAirlessOcean = 0;
+  let warmAirlessIce    = 0;
+  let totalSmallAirless = 0;
+  let totalWarmAirless  = 0;
   for (const b of bodies) {
-    if (b.kind !== 'planet' || b.source !== 'procgen') continue;
-    if (b.worldClass == null || b.iceFraction == null) continue;
-    const mul = ICE_FRACTION_CLASS_MUL[b.worldClass];
-    if (mul == null) continue;
-    const S = b.insolation ?? null;  // bodies don't store S; fall through
-    // Reconstruct insolation bucket using avgSurfaceTempK as a proxy —
-    // exact S requires host-star walk which we skip in audit. Use the
-    // same temp-thresholds the cold gate uses: T < 200K ≈ cold.
-    let bucketName = 'cold';
-    if (b.avgSurfaceTempK != null) {
-      if      (b.avgSurfaceTempK > 450) bucketName = 'hot';
-      else if (b.avgSurfaceTempK > 270) bucketName = 'temperate';
-      else if (b.avgSurfaceTempK > 200) bucketName = 'cool';
-      else                              bucketName = 'cold';
+    if (b.kind !== 'planet' && b.kind !== 'moon') continue;
+    if (b.source !== 'procgen') continue;
+    if (b.massEarth == null || b.avgSurfaceTempK == null) continue;
+    const airless = (b.surfacePressureBar ?? 0) < TRIPLE_POINT_BAR;
+    const small   = b.massEarth < 0.1;
+    const warm    = b.avgSurfaceTempK > 280;
+    if (small && airless && b.avgSurfaceTempK > 250) {
+      totalSmallAirless += 1;
+      if ((b.waterFraction ?? 0) > 0.1) smallAirlessOcean += 1;
     }
-    const key = `${b.worldClass}|${bucketName}`;
-    if (!byKey[key]) byKey[key] = [];
-    byKey[key].push(b.iceFraction);
+    if (warm && airless) {
+      totalWarmAirless += 1;
+      if ((b.iceFraction ?? 0) > 0.1) warmAirlessIce += 1;
+    }
   }
-  for (const cls of Object.keys(ICE_FRACTION_CLASS_MUL).sort()) {
-    const mul = ICE_FRACTION_CLASS_MUL[cls];
-    if (mul === 0) continue;  // lava — always zero, skip
-    for (const bucket of Object.keys(ICE_FRACTION_BY_INSOLATION)) {
-      const arr = byKey[`${cls}|${bucket}`] || [];
-      if (!arr.length) continue;
-      const obs = meanStd(arr);
-      const base = ICE_FRACTION_BY_INSOLATION[bucket];
-      const p = { mean: Math.min(1, base.mean * mul), sd: base.sd };
-      console.log(
-        '  ' + pad(cls, 11) + ' ' + pad(bucket, 10) +
-        ' |' + pad(arr.length, 5, true) +
-        '   ' + pad(obs.mean.toFixed(3), 6, true) +
-        '   ' + pad(obs.sd.toFixed(3), 5, true) +
-        '      ' + pad(p.mean.toFixed(3), 5, true) +
-        '       ' + pad(p.sd.toFixed(3), 5, true) +
-        fmtZ(zMean(obs.mean, arr.length, p.mean, p.sd || 0.001), arr.length),
-      );
-    }
+  console.log('  small (M<0.1) + airless (P<triple) + temperate (T>250K) with waterFrac>0.1:');
+  console.log('    ' + smallAirlessOcean + ' / ' + totalSmallAirless + (smallAirlessOcean === 0 ? '  ✓' : '  ← bug not closed'));
+  console.log('  warm (T>280K) + airless (P<triple) with iceFrac>0.1:');
+  console.log('    ' + warmAirlessIce + ' / ' + totalWarmAirless + (warmAirlessIce === 0 ? '  ✓' : '  ← bug not closed'));
+}
+
+// Surface water/ice are now physics-derived (Phase 3) rather than
+// class-keyed truncated normals. Audit reports distribution by regime
+// so it's clear how often each derivation path fires.
+function auditSurfaceCover() {
+  console.log('  --- surface water/ice cover (by regime) ---');
+  let liquidGated = 0, frozenGlobal = 0, polarCap = 0, airlessOrDry = 0;
+  for (const b of bodies) {
+    if (b.kind !== 'planet' && b.kind !== 'moon') continue;
+    if (b.source !== 'procgen') continue;
+    if (b.worldClass == null || ['gas_giant', 'ice_giant', 'gas_dwarf'].includes(b.worldClass)) continue;
+    const w = b.waterFraction ?? 0;
+    const i = b.iceFraction ?? 0;
+    if (w > 0.05 && i < 0.5)     liquidGated += 1;
+    else if (i > 0.5)             frozenGlobal += 1;
+    else if (i > 0.01 && w < 0.05) polarCap += 1;
+    else                           airlessOrDry += 1;
+  }
+  console.log('  liquid-water cover (water>5% non-global):  ' + liquidGated);
+  console.log('  globally frozen (ice>50%):                  ' + frozenGlobal);
+  console.log('  polar caps (1% < ice ≤ 50%, water < 5%):    ' + polarCap);
+  console.log('  airless or dry (cover ≈ 0):                 ' + airlessOrDry);
+}
+
+// bulkWaterFraction is Architect-set, zone-keyed (inner / outer of the
+// frost line). Geometric stats per zone — the prior is log-space
+// `sampleLogTruncated`, so geometric mean lines up cleanly with the
+// `mean` field of BULK_WATER_FRACTION_BY_ZONE.
+function auditBulkWaterFraction() {
+  console.log('  --- bulkWaterFraction (by formation zone) ---');
+  console.log('  zone     |  n      obs.geo-mean   prior.mean   obs.min   obs.max');
+  const byZone = { inner: [], outer: [] };
+  for (const b of bodies) {
+    if ((b.kind !== 'planet' && b.kind !== 'moon') || b.source !== 'procgen') continue;
+    if (b.bulkWaterFraction == null) continue;
+    const S = b.kind === 'planet' ? insolationFor(b) : insolationFor(bodies[b.hostBodyIdx] ?? {});
+    if (S == null) continue;
+    const zone = S >= FROST_LINE_S ? 'inner' : 'outer';
+    byZone[zone].push(b.bulkWaterFraction);
+  }
+  for (const zone of ['inner', 'outer']) {
+    const arr = byZone[zone];
+    if (!arr.length) { console.log('  ' + pad(zone, 8) + ' |     0   (none)'); continue; }
+    // Geometric mean: exp(mean(log(x))). Floor x at 1e-9 to keep zeros usable.
+    const logs = arr.map(x => Math.log(Math.max(x, 1e-9)));
+    const geoMean = Math.exp(logs.reduce((a, b) => a + b, 0) / logs.length);
+    const min = Math.min(...arr);
+    const max = Math.max(...arr);
+    const p = BULK_WATER_FRACTION_BY_ZONE[zone];
+    console.log(
+      '  ' + pad(zone, 8) +
+      ' |' + pad(arr.length, 5, true) +
+      '   ' + pad(geoMean.toExponential(2), 11, true) +
+      '   ' + pad(p.mean.toExponential(2), 10, true) +
+      '   ' + pad(min.toExponential(2), 8, true) +
+      '   ' + pad(max.toExponential(2), 8, true),
+    );
   }
 }
 
-auditScalar('waterFraction',    WATER_FRACTION_BY_CLASS,    'waterFraction');
-auditIceFraction();
-auditScalar('surfaceAge',       SURFACE_AGE_BY_CLASS,       'surfaceAge (post-tidal-lift; expect bias above prior on giant-moon eccentric branches)');
-auditScalar('tectonicActivity', TECTONIC_ACTIVITY_BY_CLASS, 'tectonicActivity (post-mass-scale; expect bias on non-Earth-mass)');
-auditScalar('magneticFieldGauss', MAGNETIC_FIELD_GAUSS_BY_CLASS, 'magneticFieldGauss (post-tect/rot scaling for terrestrials)');
+auditSurfaceCover();
+auditCoverBugClosure();
+auditBulkWaterFraction();
+// Phase 4: surfaceAge / tectonicActivity / magneticFieldGauss are now
+// physics-derived (no per-class prior table); the class-keyed auditScalar
+// is incompatible. Drop these reports for now; replace with derivation-
+// distribution reports if needed.
+
+// Phase 4: derived worldClass distribution. After all physics settles,
+// worldClass is the label dispatched to designer content. Report counts
+// so it's easy to spot if a class is over- or under-represented.
+console.log('  --- worldClass distribution (procgen, derived) ---');
+const classCount = {};
+for (const b of bodies) {
+  if ((b.kind !== 'planet' && b.kind !== 'moon') || b.source !== 'procgen') continue;
+  if (!b.worldClass) continue;
+  classCount[b.worldClass] = (classCount[b.worldClass] ?? 0) + 1;
+}
+const totalDerived = Object.values(classCount).reduce((a, b) => a + b, 0);
+for (const cls of Object.keys(classCount).sort()) {
+  console.log('  ' + pad(cls, 11) + ' | ' + pad(classCount[cls], 6, true) + '  ' + pct(classCount[cls], totalDerived));
+}
 console.log();
 
 // --- 8. Atmosphere top-gas distribution -------------------------------------
@@ -514,10 +565,10 @@ for (const cls of Object.keys(atmByClass).sort()) {
 }
 console.log();
 
-// --- 9. Resource means by worldClass ---------------------------------------
+// --- 9. Resource means by worldClass (label-only — physics-derived) -------
 
 console.log('=== Resource means, by worldClass (procgen planets, 0-10 scale) ===');
-console.log('  class       |  n      met  sil  vol  rare radio exo    (priors in brackets)');
+console.log('  class       |  n      met  sil  vol  rare radio exo');
 const RES = ['resMetals','resSilicates','resVolatiles','resRareEarths','resRadioactives','resExotics'];
 const resByClass = {};
 for (const b of bodies) {
@@ -529,17 +580,14 @@ for (const b of bodies) {
   resByClass[b.worldClass].n += 1;
   for (const f of RES) if (b[f] != null) resByClass[b.worldClass].sums[f] += b[f];
 }
-for (const cls of Object.keys(PLANET_RESOURCE_PRIORS_BY_CLASS).sort()) {
+for (const cls of Object.keys(resByClass).sort()) {
   const r = resByClass[cls];
-  const p = PLANET_RESOURCE_PRIORS_BY_CLASS[cls];
   if (!r || !r.n) continue;
   const obs = RES.map(f => (r.sums[f] / r.n).toFixed(1).padStart(3));
-  const prior = RES.map(f => p[f].mean.toString().padStart(3));
   console.log(
     '  ' + pad(cls, 11) +
     ' | ' + pad(r.n, 4, true) +
-    '   ' + obs.join('  ') +
-    '   [' + prior.join(' ') + ']',
+    '   ' + obs.join('  '),
   );
 }
 console.log();
@@ -668,44 +716,49 @@ for (const a of BIOSPHERE_ARCHETYPES) {
 }
 console.log();
 
-console.log('=== Biosphere — observed vs predicted occurrence per (worldClass, archetype) ===');
-console.log('  class      | archetype           | gate       |  n      hits   obs%     prior%   z');
-console.log('  -----------+---------------------+------------+--------------------------------------');
-for (const cls of Object.keys(BIOSPHERE_BY_CLASS)) {
-  const archTable = BIOSPHERE_BY_CLASS[cls];
-  for (const [archetype, spec] of Object.entries(archTable)) {
-    // Count eligible bodies (in-gate, of this worldClass) and observed hits
-    // (where this archetype was the chosen one). Note observed hits are a
-    // LOWER bound on archetype rolls because the tier resolution prefers
-    // higher tiers across archetypes — a silicate hit can be overridden by
-    // a carbon_aqueous hit on the same body.
-    let eligible = 0, hits = 0;
-    for (const b of bodies) {
-      if (b.kind !== 'planet' || b.source !== 'procgen') continue;
-      if (b.worldClass !== cls) continue;
-      if (spec.gate != null) {
-        if (b.hostStarIdx == null || b.semiMajorAu == null) continue;
-        const star = stars[b.hostStarIdx];
-        if (!star || star.mass == null) continue;
-        const S = insolation(star.mass, b.semiMajorAu);
-        const r = BIOSPHERE_GATE_INSOLATION[spec.gate];
-        if (S == null || S < r.min || S >= r.max) continue;
-      }
-      eligible += 1;
-      if (b.biosphereArchetype === archetype) hits += 1;
-    }
-    if (!eligible) continue;
-    const obsRate = hits / eligible;
-    console.log(
-      '  ' + pad(cls, 10) +
-      ' | ' + pad(archetype, 19) +
-      ' | ' + pad(spec.gate ?? '—', 10) +
-      ' | ' + pad(eligible, 6, true) +
-      ' ' + pad(hits, 5, true) +
-      '   ' + pad((obsRate * 100).toFixed(2) + '%', 6, true) +
-      '   ' + pad((spec.occurrenceRate * 100).toFixed(2) + '%', 6, true) +
-      fmtZ(zBinom(hits, eligible, spec.occurrenceRate), Math.min(eligible * spec.occurrenceRate, eligible * (1 - spec.occurrenceRate))),
-    );
+console.log('=== Biosphere habitats — physics-keyed observed vs prior occurrence ===');
+console.log('  archetype           habitat            |  n      hits   obs%     prior%');
+console.log('  --------------------+------------------+--------------------------------');
+// Walks each habitat's physics gates against every procgen planet/moon
+// to count eligible bodies, then compares observed archetype hits vs
+// the habitat's prior occurrence rate. Note observed hits are a LOWER
+// bound on raw rolls because tier resolution prefers higher tiers
+// across archetypes — a silicate hit can be overridden by a
+// carbon_aqueous hit on the same body.
+function bodyMatchesGates(b, g) {
+  const T = b.avgSurfaceTempK, water = b.waterFraction ?? 0, ice = b.iceFraction ?? 0;
+  const bulkWater = b.bulkWaterFraction ?? 0, P = b.surfacePressureBar ?? 0;
+  const R = b.radiusEarth ?? 0, tect = b.tectonicActivity ?? 0;
+  if (g.tempMinK != null && (T == null || T < g.tempMinK)) return false;
+  if (g.tempMaxK != null && (T == null || T > g.tempMaxK)) return false;
+  if (g.waterMin != null && water < g.waterMin) return false;
+  if (g.waterMax != null && water > g.waterMax) return false;
+  if (g.iceMin != null && ice < g.iceMin) return false;
+  if (g.iceMax != null && ice > g.iceMax) return false;
+  if (g.bulkWaterMin != null && bulkWater < g.bulkWaterMin) return false;
+  if (g.pressureMin != null && P < g.pressureMin) return false;
+  if (g.radiusMin != null && R < g.radiusMin) return false;
+  if (g.radiusMax != null && R > g.radiusMax) return false;
+  if (g.tectonicMin != null && tect < g.tectonicMin) return false;
+  return true;
+}
+for (const habitat of BIOSPHERE_HABITATS) {
+  let eligible = 0, hits = 0;
+  for (const b of bodies) {
+    if ((b.kind !== 'planet' && b.kind !== 'moon') || b.source !== 'procgen') continue;
+    if (!bodyMatchesGates(b, habitat.gates)) continue;
+    eligible += 1;
+    if (b.biosphereArchetype === habitat.archetype) hits += 1;
   }
+  if (!eligible) continue;
+  const obsRate = hits / eligible;
+  console.log(
+    '  ' + pad(habitat.archetype, 19) +
+    '  ' + pad(habitat.name, 17) +
+    ' | ' + pad(eligible, 6, true) +
+    ' ' + pad(hits, 5, true) +
+    '   ' + pad((obsRate * 100).toFixed(2) + '%', 6, true) +
+    '   ' + pad((habitat.occurrenceRate * 100).toFixed(2) + '%', 6, true),
+  );
 }
 console.log();

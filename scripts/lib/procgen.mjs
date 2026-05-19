@@ -33,42 +33,48 @@
 // known, axis unknown) and transit-discovery rows (axis known, period
 // unknown) both fill out symmetrically.
 
-import { hash32, mulberry32, sampleTruncated, sampleMixture } from './prng.mjs';
+import { hash32, mulberry32, sampleTruncated, sampleLogTruncated, sampleMixture } from './prng.mjs';
 import {
   PROCGEN_VERSION,
   ECCENTRICITY,
   INCLINATION_DEG,
   AXIAL_TILT_DEG,
-  WATER_BUDGET_THRESHOLDS,
-  WATER_FRACTION_BY_CLASS,
-  ICE_FRACTION_BY_INSOLATION,
-  ICE_FRACTION_INSOLATION_BUCKETS,
-  ICE_FRACTION_CLASS_MUL,
-  ALBEDO_BY_CLASS,
-  SURFACE_AGE_BY_CLASS,
+  FROST_LINE_S,
+  BULK_WATER_FRACTION_BY_ZONE,
+  BULK_METAL_FRACTION_BY_ZONE,
+  ALBEDO_COMPONENTS,
+  CLOUD_BY_GAS,
+  GREENHOUSE,
+  GREENHOUSE_POTENCY_BY_GAS,
+  TECTONIC_BASE,
+  SURFACE_AGE_FROM_TECTONIC,
   SURFACE_AGE_TIDAL_LIFT,
-  TECTONIC_ACTIVITY_BY_CLASS,
-  ROTATION_PERIOD_HOURS_BY_CLASS,
+  ROTATION_INIT_HOURS,
   TIDAL_LOCK_RANGE,
-  TEMP_SWING_FRAC_BY_CLASS,
-  MAGNETIC_FIELD_GAUSS_BY_CLASS,
-  MAGNETIC_DYNAMO_MULTIPLIER_BY_CLASS,
-  GREENHOUSE_K_BY_CLASS,
-  ATMOSPHERE_GASES_BY_CLASS,
-  ATMOSPHERE_GASES_COLD_OVERLAY,
+  TEMP_SWING,
+  MAGNETIC_FIELD,
+  ATMOSPHERE_GASES_BY_REGIME,
+  ATMOSPHERE_REGIME_THRESHOLDS,
   ATMOSPHERE_O2_BIOTIC_LIFT,
   ATMOSPHERE_MIN_PRESSURE_BAR,
   INSOLATION_COLD_MAX,
-  ICE_THICK_ATM_PROBABILITY,
-  ICE_THICK_ATM_MIN_MASS_EARTH,
-  ICE_THICK_ATM_PRESSURE_BAR,
-  OCEAN_MIN_MASS_EARTH,
-  CHROMOPHORE_BY_CLASS,
-  PLANET_RESOURCE_PRIORS_BY_CLASS,
-  BIOSPHERE_BY_CLASS,
-  BIOSPHERE_GATE_INSOLATION,
+  ATMOSPHERIC_RETENTION,
+  OUTGASSING,
+  PRESSURE_HISTORY_MULTIPLIER,
+  TRIPLE_POINT_BAR,
+  BOILING_POINT_ANCHORS,
+  SURFACE_WATER_SAT,
+  SURFACE_ICE_SAT,
+  POLAR_CAP,
+  COLD_TRAP,
+  WATER_COVER_NOISE,
+  ICE_COVER_NOISE,
+  WORLD_CLASS_THRESHOLDS,
+  CHROMOPHORE_BY_REGIME,
+  CHROMOPHORE_REGIME_THRESHOLDS,
+  BIOSPHERE_HABITATS,
 } from './procgen-priors.mjs';
-import { insolation, tidalLockProxy } from './astrophysics.mjs';
+import { insolation, tidalLockProxy, meanMetallicityForClass, meanAgeForClass } from './astrophysics.mjs';
 
 function fieldPrng(body, field) {
   return mulberry32(hash32(`${body.id}:${field}:${PROCGEN_VERSION}`));
@@ -80,11 +86,41 @@ function fieldPrng(body, field) {
 
 const SIGMA_SB = 5.670374e-8;   // Stefan-Boltzmann constant (W/m²/K⁴)
 const SOLAR_CONSTANT = 1361;    // Solar irradiance at 1 AU (W/m²)
+const BOLTZMANN = 1.380649e-23; // Boltzmann constant (J/K)
+const ATOMIC_MASS_UNIT = 1.66053906660e-27;  // amu in kg
+const GRAV_CONSTANT = 6.6743e-11;            // m³/(kg·s²)
+const EARTH_MASS_KG = 5.9722e24;
+const EARTH_RADIUS_M = 6.371e6;
+
+// Mean molecular weight (amu) of the representative atmospheric
+// species used in the Jeans-escape ratio. N2 is the canonical anchor
+// — it dominates Earth, Titan, and Triton retained atmospheres. Lighter
+// species (H2, He) escape more easily; heavier (CO2) retain longer.
+// One-species model is the agreed-on simplification for Phase 2.
+const RETENTION_SPECIES_AMU = 28;
 
 // Earth masses per solar mass. Used to convert planet mass to solar
 // units for Kepler's third law applied to moons (whose "host" is their
 // parent planet, not a star).
 const EARTH_PER_SOLAR_MASS = 333000;
+
+function smoothstep(a, b, x) {
+  if (x <= a) return 0;
+  if (x >= b) return 1;
+  const t = (x - a) / (b - a);
+  return t * t * (3 - 2 * t);
+}
+
+// Bare equilibrium temperature (K) — Stefan-Boltzmann with a fixed
+// generic albedo. Used by atmosphericRetention to break the
+// chicken-and-egg with avgSurfaceTempFor (which depends on
+// surfacePressureBar via the greenhouse factor). The generic 0.3
+// albedo is close enough for retention purposes — the sigmoid is
+// gentle on a ±20 K input shift.
+function equilibriumTempK(S, bondAlbedo = 0.3) {
+  if (S == null) return null;
+  return Math.pow((S * SOLAR_CONSTANT * (1 - bondAlbedo)) / (4 * SIGMA_SB), 0.25);
+}
 
 // =============================================================================
 // Mass → Radius
@@ -130,79 +166,98 @@ function keplerSemiMajorAu(periodDays, hostMassSolar) {
 }
 
 // =============================================================================
-// World-class taxonomy
+// World-class derivation — pure label off settled physical state (Phase 4)
 // =============================================================================
 
-// world_class is many-to-one from PLANET_TYPES (mass/radius taxonomy) onto
-// the runtime surface-character enum. Mass/radius alone fixes the giant
-// branches; terrestrial branches need insolation + a seeded water-budget
-// proxy to choose rocky/ocean/desert/lava/ice.
+// `worldClass` is a label derived from settled physical state — radius,
+// temperature, surface cover, bulk composition, atmosphere. NOTHING in
+// the physics pipeline reads it as an input. It's consumed only by
+// renderer-side palettes and UI labels. A class change shifts which
+// label shows; never what the planet IS.
 //
-// Returns null when anchors are missing — the Filler leaves the field null
-// rather than guessing. Exported so the moon-backfill pass in
-// build-catalog.mjs can derive a class inline without writing it to the
-// body (the Filler does that authoritatively a step later).
+// The 14-label taxonomy carves the (mass × radius × T × P × water × ice
+// × bulkWater × bulkMetal × atm) hypercube into visually + gameplay
+// distinct cells. Each branch is a priority-ordered physical gate;
+// the first match wins.
+//
+// Returns null when inputs are missing; callers leave the field null.
 export function worldClassFor(body, S) {
   const r = body.radiusEarth;
   if (r == null) return null;
+  const T = body.avgSurfaceTempK;
+  const water = body.waterFraction ?? 0;
+  const ice = body.iceFraction ?? 0;
+  const bulkMetal = body.bulkMetalFraction ?? 0;
+  const bulkWater = body.bulkWaterFraction ?? 0;
+  const mass = body.massEarth ?? 0;
+  const tect = body.tectonicActivity ?? 0;
+  const W = WORLD_CLASS_THRESHOLDS;
 
-  // Giants — pure mass/radius
-  if (r >= 8) return 'gas_giant';
-  if (r >= 3.5) {
-    // Neptune-mass: warm version is gas_dwarf, cold is ice_giant.
-    return (S != null && S > 0.1) ? 'gas_dwarf' : 'ice_giant';
+  // ─── Gaseous bracket (radius ≥ gasDwarfRadius) ───
+  if (r >= W.gasDwarfRadius) {
+    // Hycean takes priority across the entire gaseous bracket: cold +
+    // water-rich + H2 atm. K2-18b-class. Above r=Neptune the bulk
+    // composition is enough to override the ice_giant label.
+    if (T != null && T < W.hyceanTempCeilingK &&
+        bulkWater >= W.hyceanBulkWaterMin &&
+        body.atm1 === 'H2') {
+      return 'hycean';
+    }
+    // Helium: He-dominant AND H2 absent from top-3 (post-H-stripping
+    // survivor — real helium planets need H2 fully gone, not just
+    // outweighed in the random draw).
+    if (body.atm1 === 'He' && body.atm2 !== 'H2' && body.atm3 !== 'H2') {
+      return 'helium';
+    }
+    // Default size-based gaseous taxonomy.
+    if (r >= W.jupiterRadius) return 'gas_giant';
+    if (r >= W.neptuneRadius) {
+      if (T != null && T <= W.iceGiantTempCeilingK) return 'ice_giant';
+      return 'gas_dwarf';
+    }
+    return 'gas_dwarf';
   }
-  if (r >= 2) return 'gas_dwarf';  // sub-Neptune
 
-  // Terrestrial — gated on insolation.
-  //
-  // Lava is reserved for extreme insolation (sub-orbital roasting that
-  // could plausibly liquefy the surface). Mercury (S≈6.7) and Venus
-  // (S≈1.9) are both solid rocky, not lava — Io is lava but from tidal
-  // heating, not stellar flux. v1 doesn't model tidal heating, so lava
-  // worlds are rare and limited to brutally-close-in orbits.
-  if (S == null) return null;
-  if (S > 200) return 'lava';        // S=200 ≈ 0.07 AU around Sun-like
-  if (S > 1.5) {
-    // Hot rocky — Venus/Mercury class. Dry by default; occasional
-    // water-bearing exceptions for hothouse worlds with retained volatiles.
-    const r_w = fieldPrng(body, 'water_budget')();
-    return r_w < WATER_BUDGET_THRESHOLDS.hot.desertMax ? 'desert' : 'rocky';
+  // ─── Terrestrial bracket (radius < gasDwarfRadius) ───
+  if (T == null) return null;
+  // Lava: sustained molten surface
+  if (T >= W.lavaTempFloorK) return 'lava';
+  // Chthonian: stripped giant core — checked BEFORE magma_ocean because
+  // chthonian IS a hot iron-rich body; the specific stripped-giant
+  // signature (close-in + massive + metal-dominant) wins over the
+  // generic "hot+active" magma_ocean label.
+  if (S != null && S >= W.chthonianInsolationMin &&
+      mass >= W.chthonianMassMin &&
+      bulkMetal >= W.chthonianMetalMin) {
+    return 'chthonian';
   }
-
-  // Cold and temperate bands both use the seeded water budget to split
-  // between rocky and ocean. Class is bulk composition (does this body
-  // have a water mantle / dominant volatile budget?) — the surface state
-  // (frozen vs liquid) emerges from insolation downstream via the
-  // iceFraction prior and the cold-zone atmosphere overlay. Outer-cold
-  // bodies still split between rocky (Callisto-like: silicate bulk) and
-  // ocean (Europa-like: water-ice mantle); the difference is that ALL
-  // cold worlds carry a high iceFraction regardless of which class they
-  // land in.
-  const r_w = fieldPrng(body, 'water_budget')();
-  if (r_w < WATER_BUDGET_THRESHOLDS.temperate.rockyMax) return 'rocky';
-  if (r_w < WATER_BUDGET_THRESHOLDS.temperate.oceanMax) {
-    // Ocean classification requires sufficient mass to sustain the
-    // atmospheric pressure needed to keep surface water liquid against
-    // evaporation. Sub-Mars-mass would-be-oceans can't hold thick atms,
-    // so their water exists as frozen surface ± subsurface ocean — bulk
-    // composition is still "watery" but they fall back to rocky here
-    // because the cold-zone iceFraction prior will dominate the surface
-    // read either way.
-    if ((body.massEarth ?? 0) < OCEAN_MIN_MASS_EARTH) return 'rocky';
-    return 'ocean';
-  }
-  return 'desert';
+  // Magma ocean: hot + active interior, not yet fully molten
+  if (T >= W.magmaOceanTempFloorK && tect >= W.magmaOceanTectMin) return 'magma_ocean';
+  // Iron: metal-dominant interior (Mercury-class super-iron)
+  if (bulkMetal >= W.ironMetalMin) return 'iron';
+  // Ice: surface ice dominant, no liquid (Callisto/Triton)
+  if (ice >= W.iceIceMin && water < W.iceWaterCeiling) return 'ice';
+  // Ocean: surface liquid water dominant (Europa/Ganymede/Earth)
+  if (water >= W.oceanWaterFloor) return 'ocean';
+  // Solid giant: large rocky terrestrial
+  if (mass >= W.solidGiantMassMin && r >= W.solidGiantRadiusMin) return 'solid_giant';
+  // Desert: both water + ice low
+  if (water < W.desertWaterCeiling && ice < W.desertIceCeiling) return 'desert';
+  // Default: ordinary rocky terrestrial
+  return 'rocky';
 }
 
-// World-class → Architect planet type, for moon-count lookup against
-// MOON_COUNT_BY_TYPE. Terrestrial worlds split by mass: super-earths
-// (>3 M⊕) retain more moons than Earth-class. Exported for the moon
-// backfill pass.
-export function planetTypeFor(worldClass, massEarth, S) {
-  if (worldClass === 'gas_giant') return 'jupiter';
-  if (worldClass === 'ice_giant') return 'neptune';
-  if (worldClass === 'gas_dwarf') return 'sub_neptune';
+// Architect planet type for moon/ring backfill. Dispatches on physical
+// inputs directly (mass, radius, S) — no longer goes through worldClass,
+// since worldClass is derived too late in the cascade for the backfill.
+// This is the dispatch handle for MOON_COUNT_BY_TYPE and
+// RING_OCCURRENCE_BY_TYPE.
+export function planetTypeFor(massEarth, radiusEarth, S) {
+  if (radiusEarth != null) {
+    if (radiusEarth >= WORLD_CLASS_THRESHOLDS.jupiterRadius) return 'jupiter';
+    if (radiusEarth >= WORLD_CLASS_THRESHOLDS.neptuneRadius) return 'neptune';
+    if (radiusEarth >= WORLD_CLASS_THRESHOLDS.gasDwarfRadius) return 'sub_neptune';
+  }
   // terrestrial bucket
   if (S != null && S > 100) return 'hot_rocky';
   if (massEarth != null && massEarth > 3) return 'super_earth';
@@ -213,163 +268,332 @@ export function planetTypeFor(worldClass, massEarth, S) {
 // Surface character (temperature, pressure)
 // =============================================================================
 
-// Greenhouse offset per worldClass lives in priors (GREENHOUSE_K_BY_CLASS)
-// so it can carry a realistic/tune split. The per-class value at 1 bar
-// gets multiplied here by pressureFactor = P_bar^0.3 so a Mars-thin desert
-// (P=0.003) gets ~0.15× its nominal offset (≈+0.8 K, correct), Earth gets
-// ×1.0 (+33 K, correct), and a Venus-class lava world at P=50 bar gets
-// ×3.2 (+256 K — under Venus's real +500 K but ×8 closer than the
-// constant-offset version). Exponent 0.3 sits between optically-thin
-// linear scaling and the slow log saturation of thick atmospheres.
-
-// Bond albedo input to the Stefan-Boltzmann temp pass. Sampled per-class
-// and lifted toward ~1 by iceFraction (Enceladus 0.99 is essentially
-// "max ice"). Local to its one consumer — the renderer derives body
-// brightness from primary attributes (resources + water + ice + biome +
-// haze), so the scalar never needs to leave this function.
-function effectiveBondAlbedo(body) {
-  const spec = ALBEDO_BY_CLASS[body.worldClass];
-  if (spec == null) return 0.3;
-  let a = sampleTruncated(fieldPrng(body, 'albedo'), spec);
-  if (body.iceFraction != null && body.iceFraction > 0) {
-    a = a * (1 - body.iceFraction) + 0.95 * body.iceFraction;
-  }
-  // Three-decimal quantize matches the precision that previously made it
-  // back into the temp pass via the stored body.albedo column. Without it,
-  // a few hundred bodies' avgSurfaceTempK round 1 K differently.
-  return Number(Math.max(0, Math.min(1, a)).toFixed(3));
+// Triangular-bell temperature gate around a condensation window — 1.0
+// inside [lo, hi], ramping smoothly to 0 outside via a 30K skirt.
+// Captures "this gas forms clouds in this T range".
+function tempCondenseFactor(T, lo, hi) {
+  if (T == null) return 0;
+  const upRamp   = smoothstep(lo - 30, lo, T);
+  const downRamp = 1 - smoothstep(hi, hi + 30, T);
+  return Math.max(0, Math.min(1, upRamp * downRamp));
 }
 
-// Stefan-Boltzmann equilibrium temperature plus a worldClass greenhouse
-// offset scaled by surface pressure. Gas giants return cloud-top
-// equilibrium temp (no surface).
-function avgSurfaceTempFor(body, S) {
-  if (S == null || body.worldClass == null) return null;
-  const A = effectiveBondAlbedo(body);
-  const tEq = Math.pow((S * SOLAR_CONSTANT * (1 - A)) / (4 * SIGMA_SB), 0.25);
-  const wc = body.worldClass;
-  if (wc === 'gas_giant' || wc === 'gas_dwarf' || wc === 'ice_giant') {
-    return Math.round(tEq);
-  }
-  const baseOffset = GREENHOUSE_K_BY_CLASS[wc] ?? 0;
-  const P = body.surfacePressureBar;
-  // Default pressure factor of 1.0 when no surfacePressureBar is set —
-  // matches the pre-v4 constant-offset behavior for any class missing
-  // from the pressure table (defensive fallback only; in practice every
-  // terrestrial class has a pressure value by this point in the cascade).
-  const pressureFactor = (P != null && P > 0) ? Math.pow(P, 0.3) : 1.0;
-  return Math.round(tEq + baseOffset * pressureFactor);
+// Pass A cloud bump — bulkWater proxy. Used as the initial estimate
+// before atm composition is computed. Captures Earth-class H2O clouds
+// in the temperate band; misses everything else (Titan tholin, Venus
+// H2SO4, Mars dust). Pass B refines via CLOUD_BY_GAS once atm settles.
+function cloudBumpFromBulkWater(body) {
+  const bulk = body.bulkWaterFraction ?? 0;
+  const T = body.avgSurfaceTempK;
+  if (bulk <= 0 || T == null) return 0;
+  const bulkFactor = Math.min(1, bulk / ALBEDO_COMPONENTS.cloudSatBulkWater);
+  const tempFactor = tempCondenseFactor(T, ALBEDO_COMPONENTS.cloudTempMin, ALBEDO_COMPONENTS.cloudTempMax);
+  return bulkFactor * tempFactor * ALBEDO_COMPONENTS.cloudBoost;
 }
 
-// Baseline atmospheric pressure (bar) per world_class. Scaled by sqrt(mass)
-// as a rough proxy for escape-velocity-driven retention (Earth=1, Mars
-// ≈ 0.003 because of low mass, super-Earth at 5 M⊕ ≈ 2.2 bar baseline).
-// Returns null for gaseous bodies — no defined surface. Cold-zone
-// terrestrials fall to the desert-baseline value (0.01) by default;
-// mass-eligible cold bodies get the Titan-class thick-atm retention
-// roll layered on top — see below.
-const PRESSURE_BAR_BY_CLASS = {
-  rocky:   1.0,    // Earth
-  ocean:   1.5,    // thicker on average — more volatiles, water vapor
-  desert:  0.01,   // Mars-class trace
-  lava:   50,      // Venus-class outgassed CO2 atmosphere
-};
-
-// Cold-zone (S < INSOLATION_COLD_MAX) override for the pressure baseline.
-// Cold terrestrials default to airless regardless of bulk class — volatile
-// outgassing is suppressed below the freezing point of water and most
-// other condensables, so a Callisto-class cold rocky and a Europa-class
-// cold ocean both read as ~0.001 bar before the Titan retention roll.
-const PRESSURE_BAR_COLD_BASELINE = 0.001;
-
-function surfacePressureFor(body, S) {
-  if (body.worldClass == null) return null;
-  const baseline = PRESSURE_BAR_BY_CLASS[body.worldClass];
-  if (baseline == null) return null;  // gas/ice giants land here — no surface
-  const m = body.massEarth ?? 1.0;
-  const cold = S != null && S < INSOLATION_COLD_MAX;
-
-  // Cold mass-eligible terrestrials get a Titan-class retention roll.
-  // The cold baseline (0.001 bar) puts every cold terrestrial in the
-  // airless category by default, but ~15% of Titan-mass-or-larger cold
-  // bodies retain a thick atmosphere (Titan = 1.45 bar). The roll uses
-  // an isolated 'thickAtm' seed so adding/removing it doesn't perturb
-  // other fields. When it fires, the actual pressure draws from a
-  // separate 'thickAtmPressure' seed.
-  if (
-    cold &&
-    m >= ICE_THICK_ATM_MIN_MASS_EARTH &&
-    fieldPrng(body, 'thickAtm')() < ICE_THICK_ATM_PROBABILITY
-  ) {
-    return Number(
-      sampleTruncated(fieldPrng(body, 'thickAtmPressure'), ICE_THICK_ATM_PRESSURE_BAR).toFixed(3)
-    );
-  }
-
-  const effective = cold ? PRESSURE_BAR_COLD_BASELINE : baseline;
-  return Number((effective * Math.sqrt(Math.max(m, 0.001))).toFixed(3));
-}
-
-// =============================================================================
-// Surface composition — water / ice fraction
-// =============================================================================
-
-// Per-class truncated-normal draws. Returns null for classes outside the
-// table (gas/ice giants and gas dwarfs have no surface). Water and ice
-// each draw independent PRNG streams so adding more generators later
-// doesn't shift earlier values.
-function waterFractionFor(body) {
-  const spec = WATER_FRACTION_BY_CLASS[body.worldClass];
-  if (spec == null) return null;
-  if (spec.max === 0) return 0;
-  return Number(sampleTruncated(fieldPrng(body, 'waterFraction'), spec).toFixed(3));
-}
-
-function iceFractionFor(body, S) {
-  if (body.worldClass == null) return null;
-  const mul = ICE_FRACTION_CLASS_MUL[body.worldClass];
-  if (mul == null) return null;       // giants — no surface, no ice
-  if (mul === 0) return 0;            // lava — always zero
-
-  // Insolation drives the geometry (bucket); class drives the amplitude
-  // (multiplier on the bucket's mean and max). A cold ocean and a cold
-  // rocky both land in the cold bucket; the ocean's mul=1.2 pushes its
-  // sample slightly higher to reflect more available water.
-  let bucketName = 'cold';
-  for (const [name, range] of Object.entries(ICE_FRACTION_INSOLATION_BUCKETS)) {
-    if (S != null && S >= range.min && S < range.max) {
-      bucketName = name;
-      break;
+// Pass B cloud bump — per-gas potency × partial pressure × T-window,
+// summed across atm1/2/3 + chromophore. Skips chromo if its gas is
+// already in atm1/2/3 (avoid double-counting; same posture as the
+// greenhouse refinement).
+function cloudBumpFromComposition(body) {
+  const P = body.surfacePressureBar ?? 0;
+  const T = body.avgSurfaceTempK;
+  if (P <= 0 || T == null) return 0;
+  const atmGases = new Set();
+  let bump = 0;
+  const addContribution = (gas, frac) => {
+    if (!gas || frac == null || frac <= 0) return;
+    const cloud = CLOUD_BY_GAS[gas];
+    if (!cloud) return;
+    const tFactor = tempCondenseFactor(T, cloud.condenseLow, cloud.condenseHigh);
+    if (tFactor <= 0) return;
+    const partial = P * frac;
+    const pFactor = Math.min(1, partial / cloud.pSat);
+    bump += cloud.maxBump * tFactor * pFactor;
+  };
+  for (const [gasField, fracField] of [
+    ['atm1', 'atm1Frac'],
+    ['atm2', 'atm2Frac'],
+    ['atm3', 'atm3Frac'],
+  ]) {
+    const gas = body[gasField];
+    if (gas) {
+      atmGases.add(gas);
+      addContribution(gas, body[fracField]);
     }
   }
-  const bucket = ICE_FRACTION_BY_INSOLATION[bucketName];
-  if (bucket == null) return null;
-  const spec = {
-    mean: Math.min(1, bucket.mean * mul),
-    sd:   bucket.sd,
-    min:  bucket.min,
-    max:  Math.min(1, bucket.max * mul),
+  if (body.chromophoreGas && !atmGases.has(body.chromophoreGas)) {
+    addContribution(body.chromophoreGas, body.chromophoreFrac);
+  }
+  // Cap total cloud bump — even a fully overcast Venus-class atm
+  // can't push surface-blend albedo past clean-snow territory.
+  return Math.min(bump, 0.6);
+}
+
+// Bond albedo — surface cover blend + cloud bump. Cover blend is always
+// composition-derived (waterFraction × ocean + iceFraction × ice + land
+// × rocky). The cloud bump dispatches on atm-presence: composition
+// path when atm1/2/3 are known (Pass B), bulkWater proxy otherwise
+// (Pass A initial estimate).
+//
+// Curated Sol bodies bypass this entirely (their albedo input to the
+// temp pass comes from CSV via their curated avgSurfaceTempK chain).
+// Procgen analogs land in the right zip code: Earth ~0.32, Mars ~0.22,
+// Venus-analog ~0.6-0.7. Titan-class is a known overshoot — clean-ice
+// albedo (0.85) doesn't represent the tholin-coated reality.
+function bondAlbedoFor(body) {
+  const water = body.waterFraction ?? 0;
+  const ice   = body.iceFraction ?? 0;
+  const land  = Math.max(0, 1 - water - ice);
+  const A_surface = water * ALBEDO_COMPONENTS.water +
+                    ice   * ALBEDO_COMPONENTS.ice +
+                    land  * ALBEDO_COMPONENTS.land;
+  const bump = body.atm1
+    ? cloudBumpFromComposition(body)
+    : cloudBumpFromBulkWater(body);
+  return Math.max(0, Math.min(1, A_surface + bump));
+}
+
+// Pass A greenhouse — pressure proxy. Composition-agnostic estimate
+// used before atm species are computed.
+function greenhouseKFromPressure(surfacePressureBar) {
+  const P = surfacePressureBar ?? 0;
+  if (P <= 0) return 0;
+  return GREENHOUSE.baseK * Math.pow(P, GREENHOUSE.exponent);
+}
+
+// Pass B greenhouse — partial-pressure × per-gas potency sum across the
+// body's atm1/2/3 + chromophore. Skips chromophore if its gas is
+// already represented in atm1/2/3 to avoid double-counting (Titan's
+// CH4 sits in both atm2 and chromophore; Earth's H2O is chromophore-
+// only, so it contributes).
+//
+// Transparent species (N2/O2/Ar/H2/He) have kMax=0 — they sum to zero
+// no matter the pressure. This is the load-bearing improvement over
+// the pressure proxy: Titan's 1.45 bar N2-dominant atm now produces
+// the ~12K it should, not the ~41K the proxy would assign.
+function greenhouseKFromComposition(body) {
+  const P = body.surfacePressureBar ?? 0;
+  if (P <= 0) return 0;
+  const atmGases = new Set();
+  let K = 0;
+  const addContribution = (gas, frac) => {
+    if (!gas || frac == null || frac <= 0) return;
+    const potency = GREENHOUSE_POTENCY_BY_GAS[gas];
+    if (!potency || potency.kMax === 0) return;
+    const partial = P * frac;
+    if (partial <= 0) return;
+    // Cap partial pressure at the saturation point — past pSat, the
+    // atmosphere is already optically thick in this gas's IR bands, so
+    // additional gas stops adding greenhouse.
+    const effPartial = Math.min(partial, potency.pSat);
+    K += potency.kMax * Math.pow(effPartial, potency.exp);
   };
-  return Number(sampleTruncated(fieldPrng(body, 'iceFraction'), spec).toFixed(3));
+  for (const [gasField, fracField] of [
+    ['atm1', 'atm1Frac'],
+    ['atm2', 'atm2Frac'],
+    ['atm3', 'atm3Frac'],
+  ]) {
+    const gas = body[gasField];
+    if (gas) {
+      atmGases.add(gas);
+      addContribution(gas, body[fracField]);
+    }
+  }
+  // Chromophore — only if distinct from the atm species, otherwise
+  // already counted above.
+  if (body.chromophoreGas && !atmGases.has(body.chromophoreGas)) {
+    addContribution(body.chromophoreGas, body.chromophoreFrac);
+  }
+  return K;
+}
+
+// Stefan-Boltzmann equilibrium temperature plus a pre-computed greenhouse
+// offset. Takes greenhouseK and Bond albedo as parameters so the outer
+// two-pass refinement (pressure-proxy → composition-aware) can swap one
+// for the other without recomputing T_eq. Gaseous bodies (radius >=
+// gasDwarfRadius) return bare T_eq — no surface, no greenhouse term.
+function avgSurfaceTempFromAlbedo(radiusEarth, S, bondAlbedo, greenhouseK) {
+  if (S == null) return null;
+  const tEq = Math.pow((S * SOLAR_CONSTANT * (1 - bondAlbedo)) / (4 * SIGMA_SB), 0.25);
+  if (radiusEarth != null && radiusEarth >= WORLD_CLASS_THRESHOLDS.gasDwarfRadius) {
+    return Math.round(tEq);  // gaseous body — cloud-top equilibrium
+  }
+  return Math.round(tEq + (greenhouseK ?? 0));
+}
+
+// Atmospheric retention scalar (0..1) — long-term fraction of an atm
+// the body holds against Jeans escape + stellar-wind stripping over
+// ~Gyr timescales. Two multiplicative gates:
+//
+//   1. Jeans escape: v_escape / v_thermal(N2 at equilibrium-T).
+//      Ratios < ~6 lose everything; > ~13 hold fully. Smoothstep
+//      between — the canonical "Jeans parameter" sigmoid.
+//   2. Magnetic shielding: bodies with no internal dynamo (Mars, Venus)
+//      bleed atm to stellar wind even when Jeans alone would hold.
+//      A residual `magneticFloor` keeps the multiplier non-zero so
+//      thick-atmosphere outliers like Venus stay possible.
+//
+// Tuning anchors live in ATMOSPHERIC_RETENTION (procgen-priors.mjs).
+function atmosphericRetention(massEarth, radiusEarth, magneticFieldGauss, equilibriumT) {
+  if (massEarth == null || radiusEarth == null || equilibriumT == null) return null;
+  const M = massEarth * EARTH_MASS_KG;
+  const R = radiusEarth * EARTH_RADIUS_M;
+  if (M <= 0 || R <= 0) return 0;
+  const vEsc = Math.sqrt(2 * GRAV_CONSTANT * M / R);
+  const vTh = Math.sqrt(3 * BOLTZMANN * equilibriumT / (RETENTION_SPECIES_AMU * ATOMIC_MASS_UNIT));
+  const ratio = vEsc / vTh;
+  const jeans = smoothstep(ATMOSPHERIC_RETENTION.jeansLow, ATMOSPHERIC_RETENTION.jeansHigh, ratio);
+  const B = magneticFieldGauss ?? 0;
+  const shield = ATMOSPHERIC_RETENTION.magneticFloor +
+    (1 - ATMOSPHERIC_RETENTION.magneticFloor) *
+    smoothstep(ATMOSPHERIC_RETENTION.magneticLow, ATMOSPHERIC_RETENTION.magneticHigh, B);
+  return jeans * shield;
+}
+
+// Volatile inventory available to outgas, in bar-equivalent. Linear in
+// body mass × effective-volatiles. bulkWaterFraction captures the H2O
+// content; volatileFloor backstops it with the universal CO2/N2/etc.
+// inventory every rocky body has from accretion (so Venus, bone-dry
+// by H2O, still has a thick volatile reservoir to outgas).
+function outgassingPotentialBar(massEarth, bulkWaterFraction) {
+  if (massEarth == null) return 0;
+  const eff = Math.max(bulkWaterFraction ?? 0, OUTGASSING.volatileFloor);
+  return OUTGASSING.outgassingScale * massEarth * eff;
+}
+
+// Final surface pressure = retention × outgassing-potential ×
+// history-multiplier. The history multiplier is a bistable mixture
+// (90% near 1.0, 10% in a heavy "runaway" tail to 5000×) that captures
+// the Earth-vs-Venus bifurcation: a small fraction of bodies preserve
+// a thick greenhouse atm (Venus, hot sub-Neptune secondaries) where
+// physics alone can't tell them apart from a moderate-pressure sibling.
+// See PRESSURE_HISTORY_MULTIPLIER in procgen-priors.mjs.
+function surfacePressureFor(body, S) {
+  if (body.massEarth == null || body.radiusEarth == null || S == null) return null;
+  // Gaseous bodies have no surface — radius gate replaces the old
+  // worldClass check, decoupling pressure derivation from class.
+  if (body.radiusEarth >= WORLD_CLASS_THRESHOLDS.gasDwarfRadius) return null;
+  const tEq = equilibriumTempK(S);
+  const retention = atmosphericRetention(body.massEarth, body.radiusEarth, body.magneticFieldGauss, tEq);
+  if (retention == null) return null;
+  const outgassing = outgassingPotentialBar(body.massEarth, body.bulkWaterFraction);
+  const mult = sampleMixture(fieldPrng(body, 'pressureHistory'), PRESSURE_HISTORY_MULTIPLIER);
+  const pressure = outgassing * retention * mult;
+  return Number(pressure.toFixed(4));
+}
+
+// =============================================================================
+// Surface composition — water / ice cover derivation (Phase 3)
+// =============================================================================
+
+// Boiling-point of water at pressure P (bar). Log-linear interpolation
+// between the three BOILING_POINT_ANCHORS — exact at the triple point,
+// STP, and the 100-bar deep-atmosphere anchor; ±5K accuracy in between
+// (well under the noise the cover formula introduces). Returns null
+// below the triple point — no liquid is thermodynamically possible.
+function boilingPointK(P_bar) {
+  if (P_bar == null || P_bar < TRIPLE_POINT_BAR) return null;
+  const a = BOILING_POINT_ANCHORS;
+  for (let i = 0; i < a.length - 1; i++) {
+    if (P_bar < a[i + 1].p) {
+      const t = (Math.log(P_bar) - Math.log(a[i].p)) /
+                (Math.log(a[i + 1].p) - Math.log(a[i].p));
+      return a[i].t + t * (a[i + 1].t - a[i].t);
+    }
+  }
+  return a[a.length - 1].t;
+}
+
+// Fill bulkWaterFraction from the formation-zone prior for catalog rows
+// that landed without an Architect-set value. Symmetric with the
+// Architect's sampleBulkWaterFraction. Returns null when insolation is
+// unknown.
+function bulkWaterFractionFor(body, S) {
+  const zone = (S != null && S >= FROST_LINE_S) ? 'inner' : 'outer';
+  return Number(sampleLogTruncated(fieldPrng(body, 'bulk_water'), BULK_WATER_FRACTION_BY_ZONE[zone]).toFixed(5));
+}
+
+// Architect's companion bulk-metal sampler for catalog rows. Same zone
+// gate as bulkWater — refractory metals condense first in the inner
+// zone, ices dominate outer.
+function bulkMetalFractionFor(body, S) {
+  const zone = (S != null && S >= FROST_LINE_S) ? 'inner' : 'outer';
+  return Number(sampleLogTruncated(fieldPrng(body, 'bulk_metal'), BULK_METAL_FRACTION_BY_ZONE[zone]).toFixed(5));
+}
+
+// Fraction of surface covered by liquid water. Three gates compose:
+//   1. bulkWater > 0           — must have water to cover anything
+//   2. P ≥ TRIPLE_POINT_BAR    — liquid impossible at sub-triple-point
+//   3. T ∈ [273, boilingPoint(P)]  — temperate enough to stay liquid
+// All gates pass → cover saturates at SURFACE_WATER_SAT bulkWater. Earth
+// (bulkWater 0.00023) reaches ~70% cover because the absolute water
+// inventory spreads thin; Hycean (bulkWater 0.1) saturates to 1.0.
+// `noiseMult` is a per-body multiplier drawn once and shared across both
+// passes of the two-pass T/ice iteration.
+function surfaceLiquidWaterCover(bulkWater, T_mean, surfacePressureBar, noiseMult) {
+  if (!bulkWater || bulkWater <= 0) return 0;
+  if (surfacePressureBar == null || surfacePressureBar < TRIPLE_POINT_BAR) return 0;
+  if (T_mean == null || T_mean < 273) return 0;
+  const tBoil = boilingPointK(surfacePressureBar);
+  if (tBoil != null && T_mean > tBoil) return 0;
+  const raw = Math.min(1, bulkWater / SURFACE_WATER_SAT);
+  return Number(Math.max(0, Math.min(1, raw * noiseMult)).toFixed(3));
+}
+
+// Fraction of surface covered by water ice. Two regimes:
+//   - cold-trap (T_mean < 273): global freezing, any pressure.
+//     coldFactor ramps from 0 at 273K to 1 at COLD_TRAP.freezeFullK.
+//     Cover scales with sqrt(bulkWater × scale) so a tiny bulkWater
+//     still produces visible ice (Mars's polar regions don't go to 0
+//     just because there's not much water).
+//   - polar cap (T_mean > 273, T_pole < 273, P ≥ triple point): small
+//     caps. capWeight ramps with (273 - T_pole).
+// Warm-and-airless bodies (Mercury, Luna) get 0 ice cover because both
+// regime gates fail — the bug Phase 3 is designed to close.
+function surfaceIceCover(bulkWater, T_mean, T_pole, surfacePressureBar, noiseMult) {
+  if (!bulkWater || bulkWater <= 0) return 0;
+  if (T_mean == null) return 0;
+
+  // Cold-trap: global freezing. coldFactor ramps 0→1 as T drops from
+  // freezeStartK (273) down to freezeFullK (173); below that everything
+  // that can freeze has frozen.
+  if (T_mean < 273) {
+    const coldFactor = 1 - smoothstep(COLD_TRAP.freezeFullK, COLD_TRAP.freezeStartK, T_mean);
+    const bulkAmp = Math.min(1, Math.sqrt(bulkWater / SURFACE_ICE_SAT));
+    return Number(Math.max(0, Math.min(1, bulkAmp * coldFactor * noiseMult)).toFixed(3));
+  }
+
+  // Polar cap: warm body, frozen poles, atm thick enough to keep cap stable.
+  if (T_pole == null || T_pole >= 273) return 0;
+  if (surfacePressureBar == null || surfacePressureBar < TRIPLE_POINT_BAR) return 0;
+  const capWeight = Math.min(1, (273 - T_pole) / POLAR_CAP.poleFullDeltaK);
+  const bulkBoost = Math.sqrt(Math.min(1, bulkWater / SURFACE_WATER_SAT));
+  const cover = POLAR_CAP.baseFraction * capWeight * bulkBoost * noiseMult;
+  return Number(Math.max(0, Math.min(POLAR_CAP.maxCoverFraction, cover)).toFixed(3));
 }
 
 // =============================================================================
 // Surface age
 // =============================================================================
 
-// 0..1 scalar — fraction of the surface that is geologically young. 1.0 is
-// perpetually refreshed (Io lava, Enceladus plumes, Earth plate tectonics);
-// 0.0 is ancient unmodified (Mercury, Luna, Callisto). Class prior leans
-// toward the "old" default; moons of giants with non-trivial eccentricity
-// get a tidal-heating lift toward 1.0. Returns null for classes without
-// a solid surface (gas/ice giants, gas dwarfs).
+// 0..1 scalar — fraction of the surface that is geologically young.
+// Derived from `tectonicActivity` (active body resurfaces, quiet body
+// accumulates old crust) with a tidal-heating lift for eccentric moons
+// of giants (Io, Enceladus). Returns null for bodies with no solid
+// surface (radius >= gasDwarfRadius).
 function surfaceAgeFor(body, hostBody) {
-  const spec = SURFACE_AGE_BY_CLASS[body.worldClass];
-  if (spec == null) return null;
-  let age = sampleTruncated(fieldPrng(body, 'surfaceAge'), spec);
-  const hostClass = hostBody?.worldClass;
-  const hostIsGiant = hostClass === 'gas_giant' || hostClass === 'ice_giant' || hostClass === 'gas_dwarf';
-  if (body.kind === 'moon' && hostIsGiant && body.eccentricity != null) {
+  if (body.radiusEarth == null) return null;
+  if (body.radiusEarth >= WORLD_CLASS_THRESHOLDS.gasDwarfRadius) return null;
+  if (body.tectonicActivity == null) return null;
+  const noise = sampleTruncated(fieldPrng(body, 'surfaceAge'), SURFACE_AGE_FROM_TECTONIC.noise);
+  let age = Math.pow(body.tectonicActivity, SURFACE_AGE_FROM_TECTONIC.exponent) * noise;
+  // Tidal-heating lift for eccentric moons of gaseous hosts. Host gate
+  // is now radius-based (was class-based) — same physical bodies, no
+  // worldClass dependency.
+  const hostIsGaseous = hostBody?.radiusEarth != null &&
+    hostBody.radiusEarth >= WORLD_CLASS_THRESHOLDS.gasDwarfRadius;
+  if (body.kind === 'moon' && hostIsGaseous && body.eccentricity != null) {
     const e = body.eccentricity;
     const { eThreshold, eMaxNormalize, liftAmount } = SURFACE_AGE_TIDAL_LIFT;
     if (e > eThreshold) {
@@ -381,32 +605,28 @@ function surfaceAgeFor(body, hostBody) {
 }
 
 // =============================================================================
-// Tectonic activity
+// Tectonic activity — mass-driven (Phase 4, class-free)
 // =============================================================================
 
-// Per-class draw multiplied by sqrt(mass / Earth) so a 5 M⊕ super-Earth at
-// worldClass='rocky' reads as significantly more active than a Mars-mass
-// world of the same class. Clamped to [0, 1].
+// tect = baseSample × sqrt(mass). Bigger bodies retain radiogenic heat
+// longer and sustain longer-lived dynamos / surface renewal. Mass is the
+// dominant physical input; no class lookup.
 function tectonicActivityFor(body) {
-  const spec = TECTONIC_ACTIVITY_BY_CLASS[body.worldClass];
-  if (spec == null) return null;
-  const base = sampleTruncated(fieldPrng(body, 'tectonicActivity'), spec);
-  const m = body.massEarth ?? 1.0;
-  const massScale = Math.sqrt(Math.max(m, 0.05));
+  if (body.massEarth == null) return null;
+  const base = sampleTruncated(fieldPrng(body, 'tectonicActivity'), TECTONIC_BASE);
+  const massScale = Math.sqrt(Math.max(body.massEarth, 0.05));
   return Number(Math.max(0, Math.min(1, base * massScale)).toFixed(3));
 }
 
 // =============================================================================
-// Rotation period — with probabilistic tidal locking
+// Rotation period — universal log-normal + tidal locking (Phase 4, class-free)
 // =============================================================================
 
-// Returns hours. Close-in bodies probabilistically lock (rotation =
-// orbital period); free rotators draw from the per-class log-ish normal.
-// Tidal-lock proxy uses the body's host star + semi-major axis from the
-// star, even for moons (whose stellar-flux context is inherited).
+// Free-rotation draw from a single log-normal-ish prior. Close-in bodies
+// probabilistically lock to their orbital period. No class lookup — all
+// bodies share the prior; tidal-lock proxy is the physics that distinguishes
+// short-period worlds from free-spinners.
 function rotationPeriodHoursFor(body, periodDays, lockProxy) {
-  const spec = ROTATION_PERIOD_HOURS_BY_CLASS[body.worldClass];
-  if (spec == null) return null;
   const prng = fieldPrng(body, 'rotationPeriodHours');
   // Probabilistic tidal lock: log-interpolate the lock probability
   // between PROXY_LOCKED (≈ always) and PROXY_FREE (≈ never).
@@ -424,55 +644,55 @@ function rotationPeriodHoursFor(body, periodDays, lockProxy) {
       return Number((periodDays * 24).toFixed(2));
     }
   }
-  return Number(sampleTruncated(prng, spec).toFixed(2));
+  return Number(sampleTruncated(prng, ROTATION_INIT_HOURS).toFixed(2));
 }
 
 // =============================================================================
-// Magnetic field
+// Magnetic field — mass-cap × dynamo × noise (Phase 4, class-free)
 // =============================================================================
 
-// Terrestrial fields scale with tectonicActivity (core convection) and
-// inversely with rotation period (faster dynamo = stronger field). Gas
-// giants ignore both — their fields come from metallic-hydrogen
-// convection deep in the mantle, not core dynamos.
+// field = cap × dynamo × noise, where:
+//   cap   = capBase × mass^capExponent      # bigger body → bigger cap
+//   dynamo = tect × sqrt(24/rot)            # active core, fast spin
+// Gaseous bodies (radius >= gasDwarfRadius) get a boost since their
+// fields are driven by deep metallic-hydrogen convection rather than
+// core dynamos.
 function magneticFieldGaussFor(body) {
-  const spec = MAGNETIC_FIELD_GAUSS_BY_CLASS[body.worldClass];
-  if (spec == null) return null;
-  if (spec.max === 0) return 0;
-  const base = sampleTruncated(fieldPrng(body, 'magneticFieldGauss'), spec);
-  const wc = body.worldClass;
-  if (wc === 'gas_giant' || wc === 'gas_dwarf' || wc === 'ice_giant') {
-    return Number(base.toFixed(3));
+  if (body.massEarth == null) return null;
+  const cap = MAGNETIC_FIELD.capBase * Math.pow(body.massEarth, MAGNETIC_FIELD.capExponent);
+  const noise = sampleTruncated(fieldPrng(body, 'magneticFieldGauss'), MAGNETIC_FIELD.noise);
+  // Gaseous body — deep convective dynamo, not core-driven
+  if (body.radiusEarth != null && body.radiusEarth >= WORLD_CLASS_THRESHOLDS.gasDwarfRadius) {
+    return Number((cap * MAGNETIC_FIELD.giantBoost * noise).toFixed(4));
   }
-  // Terrestrials: gate on core activity + rotation rate, with a per-class
-  // gameplay multiplier (realistic = 1.0; tune lifts rocky/ocean toward
-  // a habitability floor).
+  // Terrestrial — gate on tectonic + rotation
   const tect = body.tectonicActivity ?? 0.3;
   const rot = body.rotationPeriodHours ?? 24;
-  const gameplayMul = MAGNETIC_DYNAMO_MULTIPLIER_BY_CLASS[wc] ?? 1.0;
-  const dynamoScale = tect * Math.sqrt(24 / Math.max(rot, 4)) * gameplayMul;
-  return Number(Math.max(0, base * dynamoScale).toFixed(4));
+  const dynamo = tect * Math.sqrt(24 / Math.max(rot, 4));
+  return Number(Math.max(0, cap * dynamo * noise).toFixed(4));
 }
 
 // =============================================================================
-// Surface temperature extremes
+// Surface temperature swing — thermal-inertia derived (Phase 4, class-free)
 // =============================================================================
 
-// Per-class fractional swing widened by axial tilt and eccentricity. Tilt
-// drives seasonal variation; eccentricity drives orbital insolation
-// variation. Combined multiplicatively over the class base.
+// swing = SWING_BASE / inertia × tiltFactor × eccFactor × noise, where
+// inertia accumulates from atm pressure (log) and ocean cover (linear).
+// Thick atm + oceans → small swing (Earth ±50K seasonal); airless dry
+// body → wild swing (Mercury ±300K). Class isn't an input.
 function surfaceTempRangeFor(body) {
   if (body.avgSurfaceTempK == null) return { min: null, max: null };
-  const spec = TEMP_SWING_FRAC_BY_CLASS[body.worldClass];
-  if (spec == null) return { min: null, max: null };
-  const baseSwing = sampleTruncated(fieldPrng(body, 'tempSwing'), spec);
-  // Tilt 0 → ×1.0, tilt 90° → ×2.0; capped at 2.5 at extreme retrograde.
+  const P = body.surfacePressureBar ?? 0;
+  const water = body.waterFraction ?? 0;
+  const atmContrib = P > 0 ? Math.log10(P + 0.001) * TEMP_SWING.atmTerm : Math.log10(0.001) * TEMP_SWING.atmTerm;
+  const inertia = Math.max(TEMP_SWING.inertiaMin, 1 + atmContrib + water * TEMP_SWING.oceanTerm);
+  const noise = sampleTruncated(fieldPrng(body, 'tempSwing'), TEMP_SWING.noise);
+  const baseSwing = TEMP_SWING.swingBase / inertia;
   const tiltDeg = body.axialTiltDeg ?? 20;
   const tiltFactor = 1 + Math.min(Math.abs(tiltDeg), 90) / 90;
-  // Eccentricity 0 → ×1.0, e=0.3 → ×1.6.
   const ecc = body.eccentricity ?? 0.05;
   const eccFactor = 1 + ecc * 2;
-  const swing = Math.min(2.5, baseSwing * tiltFactor * eccFactor);
+  const swing = Math.min(2.5, baseSwing * tiltFactor * eccFactor * noise);
   const half = swing / 2;
   return {
     min: Math.round(body.avgSurfaceTempK * (1 - half)),
@@ -481,41 +701,95 @@ function surfaceTempRangeFor(body) {
 }
 
 // =============================================================================
-// Atmosphere composition
+// Atmosphere composition — physics-keyed regime dispatch (no class input)
 // =============================================================================
 
-// Pick the top 3 gases for the given world class by weighted-random draw
-// without replacement, then renormalize their fractions to sum to 1.0.
-// Returns null entries for classes with no atmosphere table or when the
-// surface pressure is below the trace floor.
-function atmosphereFor(body, S) {
+// Per-gas mean molecular weight in atomic-mass-units. Used by the Jeans
+// escape filter to zero out light-gas weights when the body's escape
+// velocity / thermal velocity ratio is too low to retain that gas.
+const GAS_MOLECULAR_WEIGHT_AMU = {
+  H2:  2,
+  He:  4,
+  CH4: 16,
+  NH3: 17,
+  H2O: 18,
+  CO:  28,
+  N2:  28,
+  O2:  32,
+  Ar:  40,
+  CO2: 44,
+  SO2: 64,
+};
+
+// Per-gas Jeans-retention check. Reuses the smoothstep gates from the
+// ATMOSPHERIC_RETENTION prior (calibrated against N2). Returns a 0..1
+// retention scalar for the gas — light gases on small bodies return ~0
+// and the dispatch zeros their weight.
+function gasRetentionFraction(massEarth, radiusEarth, equilibriumT, gas) {
+  const amu = GAS_MOLECULAR_WEIGHT_AMU[gas];
+  if (amu == null || amu <= 0) return 1;
+  if (massEarth == null || radiusEarth == null || equilibriumT == null) return 1;
+  const M = massEarth * EARTH_MASS_KG;
+  const R = radiusEarth * EARTH_RADIUS_M;
+  if (M <= 0 || R <= 0) return 0;
+  const vEsc = Math.sqrt(2 * GRAV_CONSTANT * M / R);
+  const vTh = Math.sqrt(3 * BOLTZMANN * equilibriumT / (amu * ATOMIC_MASS_UNIT));
+  const ratio = vEsc / vTh;
+  return smoothstep(ATMOSPHERIC_RETENTION.jeansLow, ATMOSPHERIC_RETENTION.jeansHigh, ratio);
+}
+
+// Atm regime dispatch — purely physics-keyed (no class input).
+//   primary         radius ≥ gasDwarfRadius (gaseous body retains H/He)
+//   cold_outgassed  T < coldTempMaxK (Titan/Triton class)
+//   thick_outgassed P ≥ thickPressureBar (Venus-class runaway)
+//   wet_outgassed   bulkWater ≥ wetBulkWaterMin (Earth-class)
+//   dry_outgassed   fallback (Mars-class)
+// Returns null for sub-trace pressure (airless).
+function atmosphereRegimeFor(body) {
   if (body.surfacePressureBar != null && body.surfacePressureBar < ATMOSPHERE_MIN_PRESSURE_BAR) {
-    return [null, null, null];
+    return null;
   }
-  // Cold terrestrials that passed the Titan-class thick-atm retention
-  // roll get the N2/CH4 outgassed mix rather than the warm-body
-  // CO2/H2O baseline (Titan's real chemistry). Gas/ice giants and
-  // gas dwarfs always use their own class entries since they don't
-  // have a cold-zone variant.
-  const cold = S != null && S < INSOLATION_COLD_MAX;
-  const wc = body.worldClass;
-  const isTerrestrial = wc === 'rocky' || wc === 'ocean' || wc === 'desert';
-  const table = (cold && isTerrestrial)
-    ? ATMOSPHERE_GASES_COLD_OVERLAY
-    : ATMOSPHERE_GASES_BY_CLASS[wc];
+  if (body.radiusEarth != null && body.radiusEarth >= WORLD_CLASS_THRESHOLDS.gasDwarfRadius) {
+    return 'primary';
+  }
+  if (body.avgSurfaceTempK != null && body.avgSurfaceTempK < ATMOSPHERE_REGIME_THRESHOLDS.coldTempMaxK) {
+    return 'cold_outgassed';
+  }
+  if (body.surfacePressureBar != null && body.surfacePressureBar >= ATMOSPHERE_REGIME_THRESHOLDS.thickPressureBar) {
+    return 'thick_outgassed';
+  }
+  if ((body.bulkWaterFraction ?? 0) >= ATMOSPHERE_REGIME_THRESHOLDS.wetBulkWaterMin) {
+    return 'wet_outgassed';
+  }
+  return 'dry_outgassed';
+}
+
+// Pick the top 3 gases for the body's atm regime, after per-gas Jeans
+// escape filtering and biotic O2 lift. Returns 3 entries (or null for
+// trailing slots when fewer gases qualify).
+function atmosphereFor(body, S) {
+  const regime = atmosphereRegimeFor(body);
+  if (regime == null) return [null, null, null];
+  const table = ATMOSPHERE_GASES_BY_REGIME[regime];
   if (!table) return [null, null, null];
   const prng = fieldPrng(body, 'atmosphere');
-  // Per-gas seeded weight perturbation (×0.5 to ×1.5) so two same-class
-  // worlds don't end up with identical mixes.
+  // Equilibrium-T used for Jeans escape filter (composition-agnostic
+  // bare T_eq, same as in surfacePressureFor).
+  const tEq = equilibriumTempK(S);
   const weights = {};
   for (const [gas, w] of Object.entries(table)) {
     if (w <= 0) continue;
-    weights[gas] = w * (0.5 + prng());
+    // Per-gas Jeans retention — light gases on small bodies effectively
+    // zero out. For terrestrials, H2/He won't survive over Gyr.
+    const retain = gasRetentionFraction(body.massEarth, body.radiusEarth, tEq, gas);
+    if (retain <= 0.01) continue;
+    // Per-gas seeded perturbation (×0.5 to ×1.5) so two same-regime
+    // worlds don't end up with identical mixes.
+    weights[gas] = w * retain * (0.5 + prng());
   }
-  // Biotic O2 lift: photosynthetic life makes free O2. Abiotic rocky/ocean
-  // worlds carry only photolysis-trace O2 (the small weight in the table);
-  // worlds with carbon_aqueous life at microbial+ tier get a multiplicative
-  // lift, so a Gaian Earth-analog ends up with Earth-class O2 fractions.
+  // Biotic O2 lift — only fires when the regime supports it (wet_outgassed
+  // is where Earth-class biotic O2 lives). Keyed on biosphere archetype
+  // (which is itself physics-derived in Phase 4.5).
   const lift = ATMOSPHERE_O2_BIOTIC_LIFT[body.biosphereArchetype]?.[body.biosphereTier];
   if (lift != null && weights.O2 != null) {
     weights.O2 *= lift;
@@ -551,40 +825,50 @@ function atmosphereFor(body, S) {
 // BIOSPHERE_TIERS order; used by chromophore gate matching.
 const BIOSPHERE_TIER_ORDER = ['none', 'prebiotic', 'microbial', 'complex', 'gaian'];
 
-// Returns true if the body matches the branch's gate. Null gate matches
-// everything (default branches). Multiple gate fields are AND-combined.
-function chromophoreGateMatches(body, S, gate) {
-  if (gate == null) return true;
-  if (gate.insolationAbove != null) {
-    if (S == null || S <= gate.insolationAbove) return false;
+// Chromophore regime dispatch — pure physics, no class input. Bucket
+// the body's physical state into one of nine regimes; each regime
+// resolves to a chromophore gas + fraction spec.
+function chromophoreRegimeFor(body, S) {
+  if (body.surfacePressureBar != null && body.surfacePressureBar < ATMOSPHERE_MIN_PRESSURE_BAR) {
+    return null;
   }
-  if (gate.insolationBelow != null) {
-    if (S == null || S >= gate.insolationBelow) return false;
+  const t = CHROMOPHORE_REGIME_THRESHOLDS;
+  const T = body.avgSurfaceTempK;
+  // Gaseous bracket (radius >= gasDwarfRadius)
+  if (body.radiusEarth != null && body.radiusEarth >= WORLD_CLASS_THRESHOLDS.gasDwarfRadius) {
+    if (T != null && T > t.hotGaseousTempK) return 'hot_gaseous';
+    if (S != null && S < t.hyceanInsolationMax &&
+        (body.bulkWaterFraction ?? 0) >= t.hyceanBulkWaterMin) return 'hycean';
+    if (T != null && T < t.coldGaseousTempK) return 'cold_gaseous';
+    return 'temperate_gaseous';
   }
-  if (gate.biosphereArchetype != null) {
-    if (body.biosphereArchetype !== gate.biosphereArchetype) return false;
+  // Terrestrial bracket
+  if (T != null && T < t.coldTerrestrialTempK) return 'cold_terrestrial';
+  if ((T != null && T > t.volcanicTempK) ||
+      (body.surfacePressureBar != null && body.surfacePressureBar > t.volcanicPressureBar)) {
+    return 'volcanic';
   }
-  if (gate.tierAtLeast != null) {
-    const idx = BIOSPHERE_TIER_ORDER.indexOf(body.biosphereTier ?? 'none');
-    const minIdx = BIOSPHERE_TIER_ORDER.indexOf(gate.tierAtLeast);
-    if (idx < 0 || minIdx < 0 || idx < minIdx) return false;
+  // Biotic and wet branches gate the H2O cloud chromophore — biotic
+  // bodies amplify the water cycle (atm is rich in transpiration H2O),
+  // wet bodies have surface oceans → cloud decks.
+  if (body.biosphereArchetype === 'carbon_aqueous') {
+    const tierIdx = BIOSPHERE_TIER_ORDER.indexOf(body.biosphereTier ?? 'none');
+    if (tierIdx >= BIOSPHERE_TIER_ORDER.indexOf('microbial')) return 'biotic_wet';
   }
-  return true;
+  if ((body.waterFraction ?? 0) >= t.wetWaterFractionMin) return 'wet_terrestrial';
+  return 'dust_terrestrial';
 }
 
-// Visually-dominant trace species. Walks CHROMOPHORE_BY_CLASS[worldClass]
-// in order and picks the first branch whose gate matches. Returns null
-// gas + null frac when no branch matches OR the body is airless (no
-// atmosphere can host an aerosol chromophore — chromophoreFrac of an
-// airless body would be meaningless).
+// Visually-dominant trace species. Picks the first branch from the
+// regime's branch list whose gate matches (most regimes have a single
+// default branch).
 function chromophoreFor(body, S) {
-  if (body.surfacePressureBar != null && body.surfacePressureBar < ATMOSPHERE_MIN_PRESSURE_BAR) {
-    return { gas: null, frac: null };
-  }
-  const branches = CHROMOPHORE_BY_CLASS[body.worldClass];
+  const regime = chromophoreRegimeFor(body, S);
+  if (regime == null) return { gas: null, frac: null };
+  const branches = CHROMOPHORE_BY_REGIME[regime];
   if (!branches || branches.length === 0) return { gas: null, frac: null };
   for (const branch of branches) {
-    if (!chromophoreGateMatches(body, S, branch.gate)) continue;
+    if (branch.gate != null) continue;  // future-proofing for nested gates
     const frac = sampleTruncated(fieldPrng(body, 'chromophore'), branch.frac);
     return { gas: branch.gas, frac: Number(frac.toFixed(5)) };
   }
@@ -592,65 +876,152 @@ function chromophoreFor(body, S) {
 }
 
 // =============================================================================
-// Resources
+// Resources — physics-derived (Phase 4.5)
 // =============================================================================
 
-// Six per-class truncated-normal draws. Returns null for unsupported
-// worldClass values (none currently — every defined class is in the
-// table).
-function resourcesFor(body) {
-  const spec = PLANET_RESOURCE_PRIORS_BY_CLASS[body.worldClass];
-  if (!spec) return null;
-  const draw = (field, fieldSpec) => {
-    if (fieldSpec.max === 0 || (fieldSpec.mean === 0 && fieldSpec.sd === 0)) return 0;
-    return Math.round(sampleTruncated(fieldPrng(body, field), fieldSpec));
-  };
+// Volatile gases for resVolatiles accounting. O2 is excluded (it's a
+// biotic biosignature, not a bulk-volatile resource).
+const VOLATILE_GASES_SET = new Set(['CO2', 'CH4', 'H2O', 'NH3', 'CO', 'SO2']);
+
+// Per-resource physics derivation. No class input — six scalars derived
+// from primary attributes (mass, bulk composition) + downstream physics
+// (atm composition, surface cover) + stellar context (metallicity, age).
+//
+// Calibration anchors (Sol curated values — Filler doesn't touch them,
+// these are for procgen consistency):
+//   Earth   M/S/V/R/Ra/E = 5/6/7/5/4/0   bulkMetal 0.32 / N2 atm
+//   Mars    5/5/3/5/4/0                  bulkMetal 0.24 / CO2 atm
+//   Mercury 8/4/1/5/3/0                  bulkMetal 0.70
+//   Europa  3/4/9/3/2/6                  bulkMetal 0.10 / iceFraction 0.85
+//   Jupiter 1/1/10/1/1/2                 bulkMetal 0.02 / gaseous
+//
+// Each scalar gets per-body seeded noise (truncated normal around 1.0).
+function resourcesFor(body, hostStar, hostBody) {
+  if (body.massEarth == null) return null;
+
+  const bulkMetal = body.bulkMetalFraction ?? 0.32;  // Earth-default if unset
+  const bulkWater = body.bulkWaterFraction ?? 0;
+  const silicateFraction = Math.max(0, 1 - bulkMetal - bulkWater);
+
+  // Stellar context — heavier metallicity → more rare-earths and U/Th;
+  // older star → more decay of radioactives.
+  const cls = hostStar?.cls;
+  const metallicity = cls ? meanMetallicityForClass(cls) : 0;
+  const stellarAge = cls ? meanAgeForClass(cls) : 5;
+  const metallicityFactor = Math.exp(metallicity * 2);  // 0 dex → 1.0, +0.3 → 1.82, -0.5 → 0.37
+  const ageDecayFactor = 1 / (1 + stellarAge / 4.5);    // U/Th half-decay anchor
+
+  const isGaseous = body.radiusEarth != null &&
+    body.radiusEarth >= WORLD_CLASS_THRESHOLDS.gasDwarfRadius;
+
+  // Surface + atm volatile accounting for terrestrial bodies.
+  let atmVolFrac = 0;
+  const atmGases = new Set();
+  for (const [g, f] of [[body.atm1, body.atm1Frac], [body.atm2, body.atm2Frac], [body.atm3, body.atm3Frac]]) {
+    if (g) {
+      atmGases.add(g);
+      if (VOLATILE_GASES_SET.has(g)) atmVolFrac += f ?? 0;
+    }
+  }
+  if (body.chromophoreGas && !atmGases.has(body.chromophoreGas) &&
+      VOLATILE_GASES_SET.has(body.chromophoreGas)) {
+    atmVolFrac += body.chromophoreFrac ?? 0;
+  }
+  const water = body.waterFraction ?? 0;
+  const ice = body.iceFraction ?? 0;
+  const surfaceVolFraction = Math.min(1, water + ice + atmVolFrac * 0.3);
+
+  // Tidal-heated moon of a giant — Io/Europa-class produce unusual
+  // chemistry → exotics lift. Mirrors the surface_age tidal-lift gate.
+  const hostIsGaseous = hostBody?.radiusEarth != null &&
+    hostBody.radiusEarth >= WORLD_CLASS_THRESHOLDS.gasDwarfRadius;
+  const tidalExotic = (body.kind === 'moon' && hostIsGaseous && (body.surfaceAge ?? 0) > 0.5) ? 3 : 0;
+
+  const noise = (field) => sampleTruncated(
+    fieldPrng(body, `res_${field}`),
+    { mean: 1, sd: 0.2, min: 0.5, max: 1.5 }
+  );
+
+  const clamp10 = (x) => Math.round(Math.max(0, Math.min(10, x)));
+
   return {
-    resMetals:       draw('resMetals',       spec.resMetals),
-    resSilicates:    draw('resSilicates',    spec.resSilicates),
-    resVolatiles:    draw('resVolatiles',    spec.resVolatiles),
-    resRareEarths:   draw('resRareEarths',   spec.resRareEarths),
-    resRadioactives: draw('resRadioactives', spec.resRadioactives),
-    resExotics:      draw('resExotics',      spec.resExotics),
+    // Metals scale with bulkMetalFraction. Mercury (0.70) → 11.2 → 10;
+    // Earth (0.32) → 5.1; Mars (0.24) → 3.8; Europa (0.10) → 1.6;
+    // Jupiter (0.02) → 0.32.
+    resMetals: clamp10(16 * bulkMetal * noise('metals')),
+    // Silicates from the leftover after metal + water. Earth (0.68) →
+    // 6.8; Mercury (0.30) → 3.0; Europa (0.40) → 4.0.
+    resSilicates: clamp10(10 * silicateFraction * noise('silicates')),
+    // Volatiles — gaseous bodies are made of volatiles by definition
+    // (H/He + CH4/NH3). Terrestrials get surface H2O + ice + atm
+    // volatile-gas content scaled.
+    resVolatiles: isGaseous
+      ? clamp10((8 + bulkWater * 20) * noise('volatiles'))
+      : clamp10(10 * surfaceVolFraction * noise('volatiles')),
+    // Rare earths track stellar metallicity. Solar metallicity → 6;
+    // metal-poor M-dwarf → ~2; metal-rich Pop I → ~10.
+    resRareEarths: clamp10(6 * metallicityFactor * noise('rare_earths')),
+    // Radioactives need metallicity (U/Th formed in supernovae of
+    // enriched ISM) + age-decay. Older stars have depleted U/Th.
+    resRadioactives: clamp10(8 * metallicityFactor * ageDecayFactor * noise('radioactives')),
+    // Exotics — gaseous bodies have He-3 + deuterium; tidal-heated
+    // moons have unusual chemistry; otherwise small base.
+    resExotics: clamp10((isGaseous ? 2 : 0) + tidalExotic + 1 * noise('exotics')),
   };
 }
 
 // =============================================================================
-// Biosphere — archetype × tier
+// Biosphere — physics-keyed habitat dispatch (no class input)
 // =============================================================================
 
-function insolationGateSatisfied(gate, S) {
-  if (gate == null) return true;
-  const range = BIOSPHERE_GATE_INSOLATION[gate];
-  if (!range || S == null) return false;
-  return S >= range.min && S < range.max;
+// Returns true if the body's physical state matches all the habitat's
+// gates. Each gate field is optional; only specified gates have to pass.
+// Atmosphere-gas gates check all of (atm1, atm2, atm3, chromophoreGas).
+function bodyMatchesHabitat(body, gates) {
+  const T = body.avgSurfaceTempK;
+  const water = body.waterFraction ?? 0;
+  const ice = body.iceFraction ?? 0;
+  const bulkWater = body.bulkWaterFraction ?? 0;
+  const P = body.surfacePressureBar ?? 0;
+  const R = body.radiusEarth ?? 0;
+  const tect = body.tectonicActivity ?? 0;
+
+  if (gates.tempMinK != null && (T == null || T < gates.tempMinK)) return false;
+  if (gates.tempMaxK != null && (T == null || T > gates.tempMaxK)) return false;
+  if (gates.waterMin != null && water < gates.waterMin) return false;
+  if (gates.waterMax != null && water > gates.waterMax) return false;
+  if (gates.iceMin != null && ice < gates.iceMin) return false;
+  if (gates.iceMax != null && ice > gates.iceMax) return false;
+  if (gates.bulkWaterMin != null && bulkWater < gates.bulkWaterMin) return false;
+  if (gates.pressureMin != null && P < gates.pressureMin) return false;
+  if (gates.radiusMin != null && R < gates.radiusMin) return false;
+  if (gates.radiusMax != null && R > gates.radiusMax) return false;
+  if (gates.tectonicMin != null && tect < gates.tectonicMin) return false;
+  return true;
 }
 
-// For each eligible archetype on this world class: check insolation gate,
-// roll occurrence, sample a tier. Among all hits, return the one with the
-// highest tier; ties broken by archetype order (rarer ones come first in
-// the prior table, so they win ties).
-function biosphereFor(body, S) {
-  const table = BIOSPHERE_BY_CLASS[body.worldClass];
-  if (!table) return { archetype: null, tier: 'none' };
+// Walk the habitat list; each habitat whose physical gates match the
+// body fires an independent occurrence roll. Among hits, the highest-
+// tier archetype wins (ties broken by habitat order — rarer/more-
+// evocative habitats listed earlier in BIOSPHERE_HABITATS win ties).
+function biosphereFor(body) {
   const TIER_ORDER = ['none', 'prebiotic', 'microbial', 'complex', 'gaian'];
   let best = { archetype: null, tier: 'none', tierIdx: 0 };
-  for (const [archetype, spec] of Object.entries(table)) {
-    if (!insolationGateSatisfied(spec.gate, S)) continue;
-    const prng = fieldPrng(body, `biosphere:${archetype}`);
-    if (prng() >= spec.occurrenceRate) continue;
-    // Sample tier from the conditional weights.
+  for (const habitat of BIOSPHERE_HABITATS) {
+    if (!bodyMatchesHabitat(body, habitat.gates)) continue;
+    const prng = fieldPrng(body, `biosphere:${habitat.archetype}:${habitat.name}`);
+    if (prng() >= habitat.occurrenceRate) continue;
     let total = 0;
-    for (const w of Object.values(spec.tierWeights)) total += w;
+    for (const w of Object.values(habitat.tierWeights)) total += w;
     let r = prng() * total;
     let chosenTier = 'microbial';
-    for (const [tier, w] of Object.entries(spec.tierWeights)) {
+    for (const [tier, w] of Object.entries(habitat.tierWeights)) {
       r -= w;
       if (r <= 0) { chosenTier = tier; break; }
     }
     const tierIdx = TIER_ORDER.indexOf(chosenTier);
     if (tierIdx > best.tierIdx) {
-      best = { archetype, tier: chosenTier, tierIdx };
+      best = { archetype: habitat.archetype, tier: chosenTier, tierIdx };
     }
   }
   return { archetype: best.archetype, tier: best.tier };
@@ -709,7 +1080,7 @@ function fillBody(b, allBodies, stars) {
   // previously-filled values; that's how downstream rules pick up upstream
   // results within the same pass.
   let {
-    radiusEarth, worldClass,
+    radiusEarth, worldClass, bulkWaterFraction, bulkMetalFraction,
     waterFraction, iceFraction, surfaceAge,
     avgSurfaceTempK, surfaceTempMinK, surfaceTempMaxK,
     tectonicActivity, rotationPeriodHours, magneticFieldGauss,
@@ -729,66 +1100,20 @@ function fillBody(b, allBodies, stars) {
 
   let working = { ...b, radiusEarth };
 
-  if (unknowns.has('worldClass')) {
-    const w = worldClassFor(working, S);
-    if (w != null) worldClass = w;
+  // bulkWaterFraction + bulkMetalFraction fill for catalog rows the
+  // Architect didn't touch. Symmetric with the Architect's per-body
+  // draws; both read insolation for the zone gate. Fall through to
+  // null when S is unknown.
+  if (unknowns.has('bulkWaterFraction')) {
+    if (S != null) bulkWaterFraction = bulkWaterFractionFor(working, S);
   }
-  working = { ...working, worldClass };
+  if (unknowns.has('bulkMetalFraction')) {
+    if (S != null) bulkMetalFraction = bulkMetalFractionFor(working, S);
+  }
+  working = { ...working, bulkWaterFraction, bulkMetalFraction };
 
-  // Surface composition — iceFraction also lifts the Bond albedo consumed
-  // by avgSurfaceTempFor downstream.
-  if (unknowns.has('waterFraction')) {
-    waterFraction = waterFractionFor(working);
-  }
-  working = { ...working, waterFraction };
-  if (unknowns.has('iceFraction')) {
-    iceFraction = iceFractionFor(working, S);
-  }
-  working = { ...working, iceFraction };
-
-  // Tectonics → Kepler → rotation → magnetic-field chain.
-  if (unknowns.has('tectonicActivity')) {
-    tectonicActivity = tectonicActivityFor(working);
-  }
-  working = { ...working, tectonicActivity };
-
-  // rotationPeriodHours needs periodDays for the lock branch; fill the
-  // Kepler relation here before consulting it.
-  if (unknowns.has('periodDays') && semiMajorAu != null) {
-    const p = keplerPeriodDays(semiMajorAu, hostMassSolar);
-    if (p != null) periodDays = p;
-  }
-  if (unknowns.has('semiMajorAu') && periodDays != null) {
-    const a = keplerSemiMajorAu(periodDays, hostMassSolar);
-    if (a != null) semiMajorAu = a;
-  }
-  working = { ...working, periodDays, semiMajorAu };
-
-  if (unknowns.has('rotationPeriodHours')) {
-    rotationPeriodHours = rotationPeriodHoursFor(working, periodDays, lockProxy);
-  }
-  working = { ...working, rotationPeriodHours };
-
-  if (unknowns.has('magneticFieldGauss')) {
-    magneticFieldGauss = magneticFieldGaussFor(working);
-  }
-  working = { ...working, magneticFieldGauss };
-
-  // Pressure must precede temperature: avgSurfaceTempFor reads pressure
-  // for the greenhouse-pressure scaling.
-  if (unknowns.has('surfacePressureBar')) {
-    const p = surfacePressureFor(working, S);
-    if (p != null) surfacePressureBar = p;
-  }
-  working = { ...working, surfacePressureBar };
-
-  if (unknowns.has('avgSurfaceTempK')) {
-    const t = avgSurfaceTempFor(working, S);
-    if (t != null) avgSurfaceTempK = t;
-  }
-  working = { ...working, avgSurfaceTempK };
-
-  // Orbital flavor before temperature range — range reads tilt/ecc.
+  // Orbital flavor early so tilt + eccentricity are available when temp
+  // range and surface age run later.
   if (unknowns.has('eccentricity')) {
     eccentricity = Number(sampleMixture(fieldPrng(b, 'eccentricity'), ECCENTRICITY).toFixed(4));
   }
@@ -801,57 +1126,174 @@ function fillBody(b, allBodies, stars) {
   if (unknowns.has('orbitalPhaseDeg')) {
     orbitalPhaseDeg = Number((fieldPrng(b, 'orbitalPhaseDeg')() * 360).toFixed(2));
   }
-  working = { ...working, eccentricity, axialTiltDeg };
+  working = { ...working, eccentricity, inclinationDeg, axialTiltDeg, orbitalPhaseDeg };
 
-  // Surface age reads eccentricity (for the moon-of-giant tidal lift) and
-  // the host body's worldClass (giant vs. non-giant decides whether the lift
-  // fires), so it has to run after the eccentricity draw.
+  // Kepler relation — periodDays ↔ semiMajorAu round-trip.
+  if (unknowns.has('periodDays') && semiMajorAu != null) {
+    const p = keplerPeriodDays(semiMajorAu, hostMassSolar);
+    if (p != null) periodDays = p;
+  }
+  if (unknowns.has('semiMajorAu') && periodDays != null) {
+    const a = keplerSemiMajorAu(periodDays, hostMassSolar);
+    if (a != null) semiMajorAu = a;
+  }
+  working = { ...working, periodDays, semiMajorAu };
+
+  // Class-free physical scalar chain: tectonics → rotation → magnetic.
+  // Each reads from physics (mass, period, lock proxy) not from class.
+  if (unknowns.has('tectonicActivity')) {
+    tectonicActivity = tectonicActivityFor(working);
+  }
+  working = { ...working, tectonicActivity };
+
+  if (unknowns.has('rotationPeriodHours')) {
+    rotationPeriodHours = rotationPeriodHoursFor(working, periodDays, lockProxy);
+  }
+  working = { ...working, rotationPeriodHours };
+
+  if (unknowns.has('magneticFieldGauss')) {
+    magneticFieldGauss = magneticFieldGaussFor(working);
+  }
+  working = { ...working, magneticFieldGauss };
+
+  // Pressure depends on retention (Jeans escape using bare T_eq) and
+  // outgassing potential — no class input.
+  if (unknowns.has('surfacePressureBar')) {
+    const p = surfacePressureFor(working, S);
+    if (p != null) surfacePressureBar = p;
+  }
+  working = { ...working, surfacePressureBar };
+
+  // Two-pass iteration on temperature ↔ albedo ↔ ice/water cover.
+  // Pass 1: no prior cover → albedo from land alone → high T_eq → coarse cover.
+  // Pass 2: pass-1 cover lifts albedo → refined T → final cover.
+  // Cover noise multipliers drawn once, shared across passes (only the
+  // deterministic gates refine, not the stochastic noise).
+  const iceNoise   = sampleTruncated(fieldPrng(b, 'iceCover'),   ICE_COVER_NOISE);
+  const waterNoise = sampleTruncated(fieldPrng(b, 'waterCover'), WATER_COVER_NOISE);
+
+  function runTempIcePass(waterPrev, icePrev, greenhouseK) {
+    const stateForAlbedo = {
+      ...working,
+      waterFraction: waterPrev,
+      iceFraction:   icePrev,
+      // T not yet known; bondAlbedoFor's cloud gate uses T — pass null
+      // first pass, refined T on second.
+      avgSurfaceTempK: null,
+    };
+    // First T-pass without cloud temperature gate
+    let A = bondAlbedoFor(stateForAlbedo);
+    let T = avgSurfaceTempFromAlbedo(working.radiusEarth, S, A, greenhouseK);
+    if (T == null) return { T: null, Tmin: null, Tmax: null, ice: null, water: null };
+    // Recompute albedo with T available so the cloud-temperate gate fires
+    A = bondAlbedoFor({ ...stateForAlbedo, avgSurfaceTempK: T });
+    T = avgSurfaceTempFromAlbedo(working.radiusEarth, S, A, greenhouseK);
+    if (T == null) return { T: null, Tmin: null, Tmax: null, ice: null, water: null };
+    const { min: Tmin, max: Tmax } = surfaceTempRangeFor({
+      ...working,
+      avgSurfaceTempK: T,
+      waterFraction: waterPrev,
+      surfacePressureBar,
+    });
+    const water = surfaceLiquidWaterCover(bulkWaterFraction, T, surfacePressureBar, waterNoise);
+    const ice   = surfaceIceCover(bulkWaterFraction, T, Tmin, surfacePressureBar, iceNoise);
+    return { T, Tmin, Tmax, ice, water };
+  }
+
+  // ─── Pass A: pressure-proxy greenhouse ───
+  // Initial estimate — atm composition isn't known yet, so we use the
+  // pressure proxy. This settles T/water/ice enough to derive class and
+  // dispatch atm species; Pass B will refine using the resulting
+  // composition.
+  const greenhouseA = greenhouseKFromPressure(surfacePressureBar);
+  const passA1 = runTempIcePass(0, 0, greenhouseA);
+  const passA2 = runTempIcePass(passA1.water ?? 0, passA1.ice ?? 0, greenhouseA);
+
+  if (unknowns.has('avgSurfaceTempK') && passA2.T != null) avgSurfaceTempK = passA2.T;
+  if (unknowns.has('surfaceTempMinK') && passA2.Tmin != null) surfaceTempMinK = passA2.Tmin;
+  if (unknowns.has('surfaceTempMaxK') && passA2.Tmax != null) surfaceTempMaxK = passA2.Tmax;
+  if (unknowns.has('iceFraction')   && passA2.ice   != null) iceFraction   = passA2.ice;
+  if (unknowns.has('waterFraction') && passA2.water != null) waterFraction = passA2.water;
+  working = {
+    ...working,
+    avgSurfaceTempK, surfaceTempMinK, surfaceTempMaxK,
+    iceFraction, waterFraction,
+  };
+
+  // Surface age — derived from tectonic activity + tidal lift for
+  // eccentric moons of gaseous hosts.
   if (unknowns.has('surfaceAge')) {
     surfaceAge = surfaceAgeFor(working, hostBody);
   }
   working = { ...working, surfaceAge };
 
-  if (unknowns.has('surfaceTempMinK') || unknowns.has('surfaceTempMaxK')) {
-    const { min, max } = surfaceTempRangeFor(working);
-    if (unknowns.has('surfaceTempMinK') && min != null) surfaceTempMinK = min;
-    if (unknowns.has('surfaceTempMaxK') && max != null) surfaceTempMaxK = max;
-  }
-
-  // Biosphere BEFORE atmosphere — atmosphereFor reads biosphereArchetype/
-  // biosphereTier to lift O2 for photosynthetic worlds.
+  // Biosphere — physics-gated habitats. Runs before atm so atm can read
+  // biosphere for O2 lift on biotic worlds.
   if (unknowns.has('biosphereArchetype') || unknowns.has('biosphereTier')) {
-    const { archetype, tier } = biosphereFor(working, S);
+    const { archetype, tier } = biosphereFor(working);
     if (unknowns.has('biosphereArchetype')) biosphereArchetype = archetype;
     if (unknowns.has('biosphereTier'))      biosphereTier = tier;
   }
   working = { ...working, biosphereArchetype, biosphereTier };
 
-  // Atmosphere — picks top 3 gases with renormalized fractions. Skips
-  // worlds with sub-trace surface pressure (ice / airless bodies).
+  // Atmosphere — regime-keyed top-3 gas dispatch with biosphere O2 lift.
   if (unknowns.has('atm1') || unknowns.has('atm2') || unknowns.has('atm3')) {
     const [a1, a2, a3] = atmosphereFor(working, S);
     if (unknowns.has('atm1')) { atm1 = a1?.gas ?? null; atm1Frac = a1?.frac ?? null; }
     if (unknowns.has('atm2')) { atm2 = a2?.gas ?? null; atm2Frac = a2?.frac ?? null; }
     if (unknowns.has('atm3')) { atm3 = a3?.gas ?? null; atm3Frac = a3?.frac ?? null; }
   }
+  working = { ...working, atm1, atm1Frac, atm2, atm2Frac, atm3, atm3Frac };
 
-  // Chromophore — visually-dominant trace species, independent of the
-  // by-mass top 3. Reads worldClass + surfacePressureBar so it has to
-  // run after both are settled. Gameplay treats this as a small
-  // additional resource at its real fraction; the renderer applies a
-  // visibility boost (see CHROMOPHORE_VISUAL_BOOST in stars.ts).
+  // Chromophore — regime-keyed visually-dominant trace species. Reads
+  // atm + biosphere for the wet/biotic/volcanic branches.
   if (unknowns.has('chromophoreGas') || unknowns.has('chromophoreFrac')) {
     const c = chromophoreFor(working, S);
     if (unknowns.has('chromophoreGas'))  chromophoreGas  = c.gas;
     if (unknowns.has('chromophoreFrac')) chromophoreFrac = c.frac;
   }
+  working = { ...working, chromophoreGas, chromophoreFrac };
+
+  // ─── Pass B: composition-aware greenhouse refinement ───
+  // Pass A used the pressure-proxy greenhouse to settle T/water/ice.
+  // Now that atm + chromophore are known, refine greenhouse from per-
+  // gas potencies and re-run the T↔ice loop. Skipped when the proxy
+  // is already within 1K of the composition value (most bodies).
+  if (working.surfacePressureBar != null && working.surfacePressureBar > 0) {
+    const greenhouseB = greenhouseKFromComposition(working);
+    const deltaK = Math.abs(greenhouseB - greenhouseA);
+    if (deltaK > 1) {
+      const passB1 = runTempIcePass(0, 0, greenhouseB);
+      const passB2 = runTempIcePass(passB1.water ?? 0, passB1.ice ?? 0, greenhouseB);
+      if (unknowns.has('avgSurfaceTempK') && passB2.T != null) avgSurfaceTempK = passB2.T;
+      if (unknowns.has('surfaceTempMinK') && passB2.Tmin != null) surfaceTempMinK = passB2.Tmin;
+      if (unknowns.has('surfaceTempMaxK') && passB2.Tmax != null) surfaceTempMaxK = passB2.Tmax;
+      if (unknowns.has('iceFraction')   && passB2.ice   != null) iceFraction   = passB2.ice;
+      if (unknowns.has('waterFraction') && passB2.water != null) waterFraction = passB2.water;
+      working = {
+        ...working,
+        avgSurfaceTempK, surfaceTempMinK, surfaceTempMaxK,
+        iceFraction, waterFraction,
+      };
+    }
+  }
+
+  // ─── DERIVE worldClass ─── pure label off settled physical state.
+  // Runs LAST so it reads the final refined T (post Pass B) plus the
+  // settled atm composition (hycean/helium branches inspect atm1).
+  // Nothing in the physics pipeline reads it — it's display-only.
+  if (unknowns.has('worldClass')) {
+    const w = worldClassFor(working, S);
+    if (w != null) worldClass = w;
+  }
+  working = { ...working, worldClass };
 
   // Resources — six 0..10 scalars.
   if (
     unknowns.has('resMetals') || unknowns.has('resSilicates') || unknowns.has('resVolatiles') ||
     unknowns.has('resRareEarths') || unknowns.has('resRadioactives') || unknowns.has('resExotics')
   ) {
-    const r = resourcesFor(working);
+    const r = resourcesFor(working, hostStar, hostBody);
     if (r) {
       if (unknowns.has('resMetals'))       resMetals = r.resMetals;
       if (unknowns.has('resSilicates'))    resSilicates = r.resSilicates;
@@ -866,7 +1308,7 @@ function fillBody(b, allBodies, stars) {
   const { _unknowns, ...rest } = b;
   return {
     ...rest,
-    radiusEarth, worldClass,
+    radiusEarth, worldClass, bulkWaterFraction, bulkMetalFraction,
     waterFraction, iceFraction, surfaceAge,
     avgSurfaceTempK, surfaceTempMinK, surfaceTempMaxK,
     tectonicActivity, rotationPeriodHours, magneticFieldGauss,

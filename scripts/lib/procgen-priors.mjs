@@ -414,41 +414,128 @@ export const MOON_MASS_LOG_EARTH = { mean: -3, sd: 1.5, min: -5, max: 0.3 };
 export const MOON_MAX_HOST_MASS_RATIO = 0.03;
 
 // ---------------------------------------------------------------------------
-// Surface character thresholds (read by the Filler, not the Architect)
+// Bulk composition (read by the Architect, persisted on the body)
 // ---------------------------------------------------------------------------
 
-// Each body draws a seeded `r_w ∈ [0, 1)` ("water budget") that partitions
-// the terrestrial space into rocky / ocean / desert by zone. Realistic
-// values follow the rough consensus that temperate-zone worlds are roughly
-// half rocky-like, with the remainder split between ocean-rich and desert.
-// Hot-zone retention is a single threshold — most baked worlds lose their
-// volatiles, but a small fraction (Venus-class hothouse) hangs onto enough
-// water to read as rocky rather than desert.
-const WATER_BUDGET_THRESHOLDS_REALISTIC = {
-  // Hot zone (S > 1.5): `r_w < desertMax` → desert, else rocky.
-  hot:       { desertMax: 0.7 },
-  // Temperate zone (0.1 < S < 1.5): split into three with two cuts.
-  //   r_w < rockyMax            → rocky (Earth-like)
-  //   rockyMax ≤ r_w < oceanMax → ocean (water-rich)
-  //   r_w ≥ oceanMax            → desert
-  // Realistic: 50% rocky / 30% ocean / 20% desert.
-  temperate: { rockyMax: 0.5, oceanMax: 0.8 },
+// Insolation threshold separating the inner (volatile-poor, formed inside
+// the protoplanetary frost line) and outer (volatile-rich) zones. Sol's
+// frost line sits ~2.7 AU around a G2V, giving S ≈ 1/2.7² ≈ 0.14. The
+// boundary isn't a hard step in real formation — but for a sampling prior
+// it gives a clean inside/outside cut. Mars (S=0.43) lands inner; Sol's
+// main belt (S≈0.13) and everything outward lands outer.
+export const FROST_LINE_S = 0.15;
+
+// Body-mass fraction that is H₂O / condensable volatiles. Architect
+// samples once per body from one of two zones, then persists on the body
+// — bulk composition is a formation-time property, not a re-rollable
+// surface scalar. Future phases derive surface waterFraction / iceFraction
+// /pressure-retention from this attribute + temperature + pressure.
+//
+// Anchors (Sol):
+//   inner zone — Mercury 0, Earth 0.00023, Mars 0.0001, Luna 1e-5
+//   outer zone — Europa/Titan/Callisto/Ganymede ≈ 0.5, Enceladus 0.6
+//
+// Specs are linear-space {mean, sd, min, max} consumed by
+// `sampleLogTruncated` — the helper log-transforms the mean and uses
+// `sd/mean` as the log-space sigma, so values spread by ~factor-e
+// around the mean and clamp to [min, max].
+export const BULK_WATER_FRACTION_BY_ZONE = {
+  // Inner: dry. Earth's 0.00023 is the upper tail — most inner-system
+  // bodies are drier (Mars, Mercury, Venus). Log-uniform-ish from sub-
+  // Mercury (1e-6) to a Venus-class hothouse cap (1e-3).
+  inner: { mean: 1e-4, sd: 1e-4, min: 1e-6, max: 1e-3 },
+  // Outer: wet. Galilean moons centered around 0.5 with a tail down to
+  // Io-class dry outliers (post-tidal water loss). 0.5 is the geometric
+  // cap — half the body's mass in water is the upper bound short of a
+  // pure ice ball.
+  outer: { mean: 0.2,  sd: 0.2,  min: 0.01, max: 0.5 },
 };
 
-// Gameplay tune: bring oceans up. They're visually striking and currently
-// only 2% of all procgen planets — squeezed twice (only 12% of terrestrials
-// reach the temperate zone, and only 30% of those become ocean). Shifting
-// to 40/30/30 rocky/ocean/desert ≈ doubles the ocean rate at the source.
-// Hot zone is left realistic — bumping hothouse-rocky too much would make
-// inner-system worlds feel uniform.
-const WATER_BUDGET_THRESHOLDS_TUNE = {
-  temperate: { rockyMax: 0.4, oceanMax: 0.7 },
+// Body-mass fraction that is iron / metallic content (vs. silicate +
+// volatile). Refractory metals (Fe, Ni, Al, Si) condense first in the
+// proto-planetary disk so inner-zone bodies form metal-rich; outer-zone
+// bodies form silicate+ice dominated with smaller metal cores.
+// Architect samples per body and persists.
+//
+// Anchors (Sol):
+//   Mercury 0.70  — extreme iron-world (giant impact stripped silicate)
+//   Earth   0.32  — canonical iron-core fraction
+//   Venus   0.31
+//   Mars    0.24  — proportionally smaller core
+//   Moon    0.03  — silicate-dominant, giant-impact-formed
+//   Io      0.20  — differentiated, iron-rich
+//   Europa  0.10  — silicate mantle under ice shell
+//   Ganymede 0.20 — differentiated
+//   Callisto 0.10 — poorly differentiated
+//   Titan   0.10
+//   Triton  0.15
+//   Jupiter 0.02  — mostly H/He envelope (minor metal core)
+//   Saturn  0.05
+//   Uranus  0.20  — heavy elements in ice mantle
+//   Neptune 0.20
+//
+// Log-truncated normal via sampleLogTruncated, same shape as bulkWater.
+export const BULK_METAL_FRACTION_BY_ZONE = {
+  // Inner: metal-rich. Mercury 0.70 is the upper tail (super-Mercury
+  // iron-world variant). Mean ~0.30 places Earth-class.
+  inner: { mean: 0.30, sd: 0.20, min: 0.02, max: 0.80 },
+  // Outer: silicate/ice dominant. Mean ~0.10 places Galilean-moon
+  // and ice-giant-mantle class. Low minimum for almost-pure-ice bodies.
+  outer: { mean: 0.10, sd: 0.10, min: 0.01, max: 0.30 },
 };
 
-export const WATER_BUDGET_THRESHOLDS = mergeTunes(
-  WATER_BUDGET_THRESHOLDS_REALISTIC,
-  WATER_BUDGET_THRESHOLDS_TUNE,
-);
+// ---------------------------------------------------------------------------
+// World class derivation thresholds (Phase 4)
+// ---------------------------------------------------------------------------
+//
+// `worldClass` is a pure label derived from settled physical state — it
+// flows downstream of mass, radius, temperature, water/ice cover, NOT
+// upstream of them. These thresholds bucket the (radius × temperature ×
+// cover) state space into seven labels (rocky, ocean, desert, lava,
+// gas_dwarf, ice_giant, gas_giant). Designer-dispatched tables
+// (atmosphere species, biosphere, chromophore, resources) consume the
+// label; no physical scalar does.
+export const WORLD_CLASS_THRESHOLDS = {
+  // ─── Radius gates (gaseous vs terrestrial) ───
+  jupiterRadius:        8,     // R⊕; gas giant lower bound
+  neptuneRadius:        3.5,   // Neptune-class lower bound
+  gasDwarfRadius:       2,     // rocky/sub-Neptune boundary
+  // Warm-vs-cold gate within the Neptune bracket. Cold → ice_giant.
+  iceGiantTempCeilingK: 200,
+
+  // ─── Sub-Neptune variant gates (hycean / helium) ───
+  // Hycean: cold sub-Neptune with H2 atm and high bulkWater (K2-18b-class).
+  hyceanTempCeilingK:   300,
+  hyceanBulkWaterMin:   0.05,
+  // Helium: gas dwarf with He-dominant atm (post-H-stripping survivor).
+  // Detected by atm1 === 'He'.
+
+  // ─── Terrestrial gates ───
+  // Lava: sustained molten surface.
+  lavaTempFloorK:       1000,
+  // Magma ocean: hot + active tectonics (early-Earth class, partial melt).
+  magmaOceanTempFloorK: 700,
+  magmaOceanTectMin:    0.5,
+  // Chthonian: stripped giant core — close-in + massive + metal-dominant.
+  chthonianMassMin:     2.0,
+  chthonianMetalMin:    0.4,
+  chthonianInsolationMin: 100,
+  // Iron: bulkMetal dominant (Mercury-class super-iron).
+  ironMetalMin:         0.5,
+  // Ice: surface ice without liquid (Callisto/Triton-class).
+  iceIceMin:            0.5,
+  iceWaterCeiling:      0.1,
+  // Ocean: surface liquid water dominant.
+  oceanWaterFloor:      0.5,
+  // Solid giant: large rocky terrestrial (analogous to gas_giant /
+  // ice_giant in the gaseous bracket — the biggest body in its
+  // compositional family).
+  solidGiantMassMin:    1.5,
+  solidGiantRadiusMin:  1.3,
+  // Desert: both water + ice low.
+  desertWaterCeiling:   0.05,
+  desertIceCeiling:     0.05,
+};
 
 // ---------------------------------------------------------------------------
 // Universal orbital flavor
@@ -854,295 +941,301 @@ export const RING_RESOURCE_PRIORS_BY_TYPE = {
 };
 
 // ---------------------------------------------------------------------------
-// Surface composition — water / ice fraction per world class
-// ---------------------------------------------------------------------------
-
-// Fraction of surface covered by liquid water. Distinct from iceFraction
-// (frozen surface water). Gas/ice giants and gas dwarfs are missing from
-// the table on purpose — they have no surface and the Filler leaves both
-// fields null for them.
-//
-// Anchored on Sol: Earth 0.71, Mars 0, Venus 0 (vaporized), Mercury 0.
-export const WATER_FRACTION_BY_CLASS = {
-  ocean:   { mean: 0.92, sd: 0.05, min: 0.6,  max: 0.99 },
-  rocky:   { mean: 0.55, sd: 0.20, min: 0.10, max: 0.85 },  // Earth = 0.71
-  desert:  { mean: 0.02, sd: 0.03, min: 0,    max: 0.10 },  // Mars-class
-  lava:    { mean: 0,    sd: 0,    min: 0,    max: 0    },  // vaporized
-};
-
-// Fraction of surface covered by water ice / frozen volatiles. Driven
-// primarily by insolation (a cold body is globally frozen regardless of
-// underlying class) with a per-class multiplier to account for available
-// water budget — ocean bodies have more water to freeze, desert bodies
-// less, lava bodies none. Anchors: Earth 0.10, Mars 0.02 (temperate
-// caps); Europa 0.85, Ganymede ~0.6, Callisto ~0.7 (cold global ice).
-//
-// Insolation rather than class drives the geometry because "where ice
-// sits" is a temperature question, not a bulk-composition one — a cold
-// rocky and a cold ocean both freeze globally; a warm body of either
-// class shows only polar caps.
-export const ICE_FRACTION_BY_INSOLATION = {
-  // Hot zone (S > 1.5): trace polar frost, mostly evaporated.
-  hot:       { mean: 0.02, sd: 0.02, min: 0,    max: 0.10 },
-  // Temperate (0.5 < S < 1.5): Earth-class polar caps.
-  temperate: { mean: 0.08, sd: 0.08, min: 0,    max: 0.30 },
-  // Cool (0.1 < S < 0.5): expanded caps, partial mid-latitude frost.
-  cool:      { mean: 0.30, sd: 0.20, min: 0.05, max: 0.80 },
-  // Cold (S < 0.1): globally frozen surface.
-  cold:      { mean: 0.80, sd: 0.15, min: 0.30, max: 1.00 },
-};
-
-// Insolation bucket boundaries for ICE_FRACTION_BY_INSOLATION. Same
-// thresholds the chromophore + biosphere cold gates use, so the
-// "this body is cold" signal stays consistent across the procgen
-// pipeline.
-export const ICE_FRACTION_INSOLATION_BUCKETS = {
-  hot:       { min: 1.5, max: Infinity },
-  temperate: { min: 0.5, max: 1.5 },
-  cool:      { min: 0.1, max: 0.5 },
-  cold:      { min: 0,   max: 0.1 },
-};
-
-// Per-class multiplier on the insolation-driven iceFraction. Applies to
-// both mean and max during sampling. Ocean bodies have more water
-// available to freeze (Europa would-be-ocean class); desert bodies have
-// less; lava bodies always read zero ice regardless of insolation.
-export const ICE_FRACTION_CLASS_MUL = {
-  rocky:     1.0,
-  ocean:     1.2,
-  desert:    0.5,
-  lava:      0,
-};
-
-// ---------------------------------------------------------------------------
-// Bond albedo — intermediate scalar for the Stefan-Boltzmann temp pass
-// ---------------------------------------------------------------------------
-
-// Bond albedo by world class. Anchors: Mercury 0.07 (dark basalt), Earth
-// 0.31 (mixed cloud + ocean + land), Mars 0.25 (red dust), Venus 0.77
-// (thick clouds — outlier we don't fit), Jupiter 0.34, Saturn 0.34,
-// Europa 0.67, Enceladus 0.99 (fresh ice).
-//
-// Consumed locally by effectiveBondAlbedo() inside avgSurfaceTempFor — not
-// stored on the body. Body brightness in the renderer is emergent from
-// primary attributes (resources + water + ice + biome + haze), so albedo
-// only ever existed as an input to the Stefan-Boltzmann derivation.
-export const ALBEDO_BY_CLASS = {
-  rocky:     { mean: 0.30, sd: 0.10, min: 0.10, max: 0.55 },
-  ocean:     { mean: 0.20, sd: 0.05, min: 0.10, max: 0.35 },
-  desert:    { mean: 0.30, sd: 0.10, min: 0.10, max: 0.50 },
-  lava:      { mean: 0.10, sd: 0.05, min: 0.05, max: 0.25 },
-  gas_dwarf: { mean: 0.30, sd: 0.10, min: 0.15, max: 0.55 },
-  ice_giant: { mean: 0.30, sd: 0.05, min: 0.20, max: 0.45 },
-  gas_giant: { mean: 0.35, sd: 0.10, min: 0.15, max: 0.60 },
-};
-
-// ---------------------------------------------------------------------------
-// Surface age — 0..1 fraction of the surface that is geologically young
+// Surface composition — water / ice cover derivation (Phase 3)
 // ---------------------------------------------------------------------------
 //
-// 1.0 = perpetually refreshed (Io's lava, Enceladus's plumes, Earth's
-// plate-tectonics-refreshed crust). 0.5 = mixed (Mars's young volcanic
-// plains over old highlands). 0.0 = ancient unmodified (lunar highlands,
-// Mercury, Callisto). Captures the "fresh young surface" signal that
-// distinguishes Ganymede from Enceladus — both iceFraction=1, both
-// render fully white from coverage alone.
+// Surface liquid water and surface ice are derived from `bulkWaterFraction`
+// + temperature + pressure, not sampled per class. The cover formulas live
+// in procgen.mjs; the tuning scalars live here.
 //
-// Gas/ice giants and gas dwarfs have no solid surface — null for them.
-// Class means lean toward "old surface is the default" because resurfacing
-// is the special case across the catalog; high-surface-age bodies emerge
-// from class (lava, ocean) or tidal lift (eccentric moons of giants).
-export const SURFACE_AGE_BY_CLASS = {
-  rocky:  { mean: 0.20, sd: 0.20, min: 0.00, max: 1.00 },  // Earth's plate tectonics lives in the upper tail
-  ocean:  { mean: 0.70, sd: 0.15, min: 0.30, max: 1.00 },  // active oceans + tectonics likely
-  desert: { mean: 0.15, sd: 0.10, min: 0.00, max: 0.50 },  // little resurfacing once dry
-  lava:   { mean: 0.90, sd: 0.08, min: 0.50, max: 1.00 },  // continuously molten by definition
+// Gates: liquid water requires P ≥ TRIPLE_POINT_BAR AND T ∈ [273, T_boil(P)].
+// Surface ice has two regimes:
+//   - cold-trap (T_mean < 273): global freezing, any pressure; scaled by
+//     bulkWaterFraction (a small bulkWater still produces visible ice).
+//   - polar cap (T_mean > 273 but T_pole < 273, P ≥ triple point): small
+//     caps proportional to (273 - T_pole).
+//
+// Liquid water coverage saturates: Earth's tiny absolute bulkWater
+// (0.00023) still covers 71% of the surface because the absolute
+// amount is enough to spread thin. SURFACE_WATER_SAT is the
+// bulkWaterFraction value at which surface coverage = 1.0.
+
+// Triple-point of water in bar. Below this, liquid is thermodynamically
+// impossible at any temperature — water either freezes or sublimes.
+export const TRIPLE_POINT_BAR = 0.006;
+
+// Boiling-point curve anchors (P_bar → T_boil_K). The cover formula
+// log-interpolates linearly between these three points; above 100 bar
+// the asymptote holds (supercritical territory above ~218 bar in
+// reality, but for gameplay the formula stops at 583 K).
+// Real anchors: triple point (0.006, 273), STP (1.0, 373), high-P (100, 583).
+export const BOILING_POINT_ANCHORS = [
+  { p: 0.006, t: 273 },
+  { p: 1.0,   t: 373 },
+  { p: 100,   t: 583 },
+];
+
+// bulkWaterFraction at which surface liquid water coverage saturates to
+// 1.0 (linear ramp from 0). Earth-anchor: bulkWater 0.00023 → cover
+// ~0.70, so threshold ≈ 3.3e-4. Bodies with bulkWater above this read
+// as fully covered when the temperature/pressure gates pass.
+export const SURFACE_WATER_SAT = 3.3e-4;
+
+// bulkWaterFraction at which ice cover saturates. Lower than the
+// liquid threshold because ice can pile up on any surface (no
+// gravitational-pooling constraint). Anchored so Europa/Callisto/
+// Titan-class moons (bulkWater ~0.5) saturate easily, and Mars-class
+// (bulkWater ~1e-4) produces visible polar caps.
+export const SURFACE_ICE_SAT = 1e-2;
+
+// Polar-cap regime parameters. base_cap is the maximum cap fraction
+// at T_pole = 273 - T_pole_full_K (e.g. 60K below freezing → max cap).
+// Earth-anchor: T_pole ~ T_min ~ 184K, capWeight = 89/60 → 1.0, cover
+// ≈ 0.10 with a noise multiplier ~ 0.67.
+export const POLAR_CAP = {
+  baseFraction:    0.15,  // max cap cover at full polar freeze
+  poleFullDeltaK:  60,    // (273 - T_pole) for capWeight = 1
+  maxCoverFraction: 0.40, // hard cap on polar-cap mode output
 };
+
+// Cold-trap regime parameters. T_full_freeze_K = T below which the
+// cold-factor saturates at 1.0 (everything that can freeze has frozen);
+// linear ramp from 273 down to here. Europa T=102K → factor=1, Mars
+// T=210K → factor=0.63.
+export const COLD_TRAP = {
+  freezeFullK:   173,  // smoothstep ceiling
+  freezeStartK:  273,  // smoothstep floor (water freezes)
+};
+
+// Per-body stochastic noise on the derived cover fractions. Captures
+// variance the physics formula can't explain: subsurface aquifers,
+// mineral-bound water, regolith covering ice (Callisto vs. Europa
+// despite similar T + bulkWater), Titan's hydrocarbon-lake surface
+// disrupting clean ice cover. Truncated normal, narrow spread.
+export const WATER_COVER_NOISE = { mean: 1.0, sd: 0.25, min: 0.5, max: 1.5 };
+export const ICE_COVER_NOISE   = { mean: 1.0, sd: 0.25, min: 0.5, max: 1.5 };
+
+// ---------------------------------------------------------------------------
+// Bond albedo — composition-derived (Phase 4)
+// ---------------------------------------------------------------------------
+//
+// Bond albedo is a linear blend of cover-component albedos. Water cover is
+// dark (~0.06), ice cover is bright (~0.85), bare land sits in between
+// (~0.20 rocky/desert). A cloud bump on top of that scales with
+// `bulkWaterFraction × temperate_factor` as a proxy for cloud cover —
+// without computing atmospheric H2O species explicitly. Curated Sol bodies
+// bypass this entirely.
+//
+// Earth check (water=0.71, ice=0.10, bulkWater=0.00023 → cloudFactor≈0.7):
+//   A = 0.71×0.06 + 0.10×0.85 + 0.19×0.20 + 0.7×0.15 = 0.27 vs real 0.31.
+// Europa (ice=0.85, cold → no cloud bump):
+//   A = 0×0.06 + 0.85×0.85 + 0.15×0.20 = 0.75 vs real 0.67.
+// Both within tolerance for procgen.
+export const ALBEDO_COMPONENTS = {
+  water:       0.06,  // open ocean
+  ice:         0.85,  // mixed ice (less than fresh snow's 0.95)
+  land:        0.20,  // rocky/desert average
+  // Pass A cloud bump — bulkWater proxy, used before atm composition is
+  // known. Pass B replaces this with per-gas cloud-table contributions
+  // from CLOUD_BY_GAS below.
+  cloudBoost:  0.15,
+  cloudSatBulkWater: 3.3e-4,
+  cloudTempMin: 240,
+  cloudTempMax: 320,
+};
+
+// ---------------------------------------------------------------------------
+// Per-gas cloud potency — Pass B composition-aware albedo
+// ---------------------------------------------------------------------------
+//
+// Each cloud-active gas contributes an additive bump to Bond albedo when:
+//   - the body's surface T is inside the gas's condensation window, AND
+//   - the gas's partial pressure × cloud potency reaches the saturation
+//     point pSat (above which the cloud deck is fully formed).
+//
+// The total cloud bump is summed across atm1/2/3 + chromophore (chromo
+// is skipped if its gas is already in atm1/2/3 to avoid double-counting,
+// same posture as the greenhouse table). The bump is added to the
+// cover-blend surface albedo and the whole thing is clamped to [0, 1].
+//
+// Aerosol-only species (DUST, SILICATE) saturate at tiny partial
+// pressures — trace concentrations are visually dominant for these
+// (CHROMOPHORE_VISUAL_BOOST applies a similar amplification on the
+// renderer side).
+//
+// Calibration anchors (curated Sol):
+//   Earth  H2O 0.004 partial @ 288K → boost ≈ 0.16 (real albedo 0.31)
+//   Venus  SO2 0.0138 partial @ 737K → boost ≈ 0.50 (real albedo 0.77)
+//   Mars   DUST 0.002×0.006 partial @ 210K → boost ≈ 0.01 (real albedo 0.25)
+//   Titan  CH4 0.041 partial @ 94K → boost ≈ 0.10 (real albedo 0.22 —
+//          ice-albedo overshoot is a separate known limitation)
+//
+// Sol bodies are curated; this table only affects procgen analogs.
+export const CLOUD_BY_GAS = {
+  H2O:      { maxBump: 0.20, condenseLow: 200, condenseHigh: 350,  pSat: 0.005 },
+  SO2:      { maxBump: 0.50, condenseLow: 200, condenseHigh: 800,  pSat: 0.010 },  // H2SO4 deck
+  CH4:      { maxBump: 0.10, condenseLow: 60,  condenseHigh: 130,  pSat: 0.005 },
+  NH3:      { maxBump: 0.15, condenseLow: 80,  condenseHigh: 200,  pSat: 0.002 },
+  CO2:      { maxBump: 0.10, condenseLow: 100, condenseHigh: 200,  pSat: 0.500 },  // dry-ice clouds (rare)
+  CO:       { maxBump: 0.05, condenseLow: 60,  condenseHigh: 100,  pSat: 0.010 },
+  // Aerosol species — trace partial pressure but visually dominant
+  DUST:     { maxBump: 0.10, condenseLow: 150, condenseHigh: 500,  pSat: 1e-4 },
+  SILICATE: { maxBump: 0.15, condenseLow: 800, condenseHigh: 3000, pSat: 1e-4 },
+};
+
+// ---------------------------------------------------------------------------
+// Greenhouse — Pass A pressure proxy + Pass B per-gas composition refinement
+// ---------------------------------------------------------------------------
+//
+// Pass A (initial cascade, before atm composition is known): pressure
+// proxy `K = baseK × P^exponent`. Used to settle T, water/ice, class so
+// the atm dispatch can run.
+//
+// Pass B (post-atm refinement): partial-pressure × per-gas potency
+// power law summed over atm1/2/3 + chromophore. Captures composition
+// effects the pressure proxy misses — Titan's N2-dominant atm produces
+// far less greenhouse than its 1.45 bar would suggest, and Mars's
+// CO2-rich thin atm produces more than its 0.006 bar would suggest.
+//
+// Pass A is kept as the initial estimate because Pass B requires class
+// (for atm dispatch); without Pass A the cascade has no entry point.
+export const GREENHOUSE = {
+  baseK:    33,   // Earth at P=1 bar (pressure proxy)
+  exponent: 0.6,  // saturating power law
+};
+
+// Per-gas greenhouse potency. Each contribution = `kMax × min(P_partial, pSat)^exp`
+// where P_partial = P_bar × gas_fraction. Sum across atm species gives
+// composition-aware greenhouse.
+//
+// Calibration anchors (curated Sol):
+//   Mars  CO2 0.0057 bar partial → real ~5K   → solves CO2 against Venus
+//   Venus CO2 88     bar partial → real ~500K → simultaneously
+//   Titan CH4 0.0406 bar partial → real ~12K  → solves CH4
+//   Earth H2O 0.004  bar partial → real ~20K  → solves H2O
+// CO2 spans the widest range (Mars→Venus is 100× greenhouse over
+// 15000× pressure), giving the cleanest power-law fit.
+//
+// `pSat` caps each gas's effective partial pressure at the saturation
+// point where additional gas stops adding meaningful greenhouse (optical
+// depth saturates → atmosphere is already opaque in that gas's IR bands).
+// Without this cap, Phase 2 runaway-tail bodies (P > 1000 bar) compound
+// the power law to physically implausible T > 3000K.
+//
+// Transparent gases (N2/O2/Ar/H2/He) get kMax=0 — pressure alone in
+// pure-N2 atms (Titan) doesn't produce greenhouse. CO is a weak
+// greenhouse gas; potency tuned by analogy with CH4.
+export const GREENHOUSE_POTENCY_BY_GAS = {
+  CO2: { kMax: 59,  exp: 0.477, pSat: 200 },  // CO2 supercritical above ~75 bar; cap higher to allow tail
+  H2O: { kMax: 100, exp: 0.30,  pSat: 30  },  // saturates as steam atm
+  CH4: { kMax: 38,  exp: 0.43,  pSat: 20  },
+  NH3: { kMax: 40,  exp: 0.45,  pSat: 20  },
+  SO2: { kMax: 40,  exp: 0.40,  pSat: 15  },  // Venus minor + Io — moderate IR
+  CO:  { kMax: 8,   exp: 0.40,  pSat: 30  },
+  N2:  { kMax: 0,   exp: 0,     pSat: 0   },
+  O2:  { kMax: 0,   exp: 0,     pSat: 0   },
+  Ar:  { kMax: 0,   exp: 0,     pSat: 0   },
+  H2:  { kMax: 0,   exp: 0,     pSat: 0   },
+  He:  { kMax: 0,   exp: 0,     pSat: 0   },
+};
+
+// ---------------------------------------------------------------------------
+// Tectonic activity — mass-driven (Phase 4)
+// ---------------------------------------------------------------------------
+//
+// tect = baseSample × sqrt(massEarth). Bigger bodies retain more
+// radiogenic heat over Gyr, sustain longer-lived dynamos and surface
+// renewal. Earth (M=1) lands at the prior mean; Mars (M=0.107) at ~30%
+// of that; a 5 M⊕ super-Earth at ~2.2×.
+export const TECTONIC_BASE = { mean: 0.4, sd: 0.25, min: 0, max: 1.0 };
 
 // Tidal-heating lift for moons of giants. Real tidal heating scales as
 // M_host² · e² / a⁵; for our catalog the host-mass term doesn't change
 // ordering (gas giants all dominate), so eccentricity-only is the simplest
-// defensible proxy. Above the threshold, eccentricity normalizes linearly
-// to the maxNormalize cap and pulls surfaceAge toward 1.0 by liftAmount ×
-// normalized fraction. Below the threshold, no lift fires (Ganymede e≈0.001
-// stays in the base prior's "old" tail).
+// defensible proxy. Pulls surfaceAge toward 1.0 by liftAmount × normalized
+// fraction. Below the threshold, no lift (Ganymede e≈0.001 stays old).
 export const SURFACE_AGE_TIDAL_LIFT = {
-  eThreshold:   0.005,
+  eThreshold:    0.005,
   eMaxNormalize: 0.05,
-  liftAmount:   0.70,
+  liftAmount:    0.70,
 };
 
 // ---------------------------------------------------------------------------
-// Tectonic activity — scalar 0..1 proxy for ongoing geology
+// Surface age — tectonic-driven (Phase 4)
 // ---------------------------------------------------------------------------
-
-// Sol convention (hand-curated): Earth 0.8, Venus 0.6, Mars 0.1, Moon 0,
-// Io 1.0 (tidally heated lava world). Driven by mass (bigger → warmer core,
-// longer-lived) modulated by surface character. Gas/ice giants and gas
-// dwarfs aren't in the table — null for them.
 //
-// Filler scales the per-class draw by sqrt(massEarth / Earth) so a 5 M⊕
-// super-Earth ranks higher than a Mars-mass rocky world at the same class.
-export const TECTONIC_ACTIVITY_BY_CLASS = {
-  rocky:   { mean: 0.45, sd: 0.30, min: 0,    max: 1.0 },
-  ocean:   { mean: 0.55, sd: 0.25, min: 0.05, max: 1.0 },  // plate tectonics ~ water present
-  desert:  { mean: 0.15, sd: 0.20, min: 0,    max: 0.8 },  // mostly dormant
-  lava:    { mean: 0.85, sd: 0.15, min: 0.4,  max: 1.0 },  // active by definition
+// age = tect^exponent × noise + tidal_lift. High-tect bodies renew their
+// surface frequently (young surface fraction high); low-tect bodies
+// accumulate impact gardening (old). The exponent < 1 pulls modest tect
+// values upward so Earth (tect ≈ 0.4) lands at age ≈ 0.6 rather than 0.4.
+export const SURFACE_AGE_FROM_TECTONIC = {
+  exponent: 0.7,
+  noise:    { mean: 1.2, sd: 0.3, min: 0.7, max: 1.5 },
 };
 
 // ---------------------------------------------------------------------------
-// Rotation period — hours, with probabilistic tidal locking
+// Rotation period — universal log-normal + tidal locking (Phase 4)
 // ---------------------------------------------------------------------------
-
-// Free-rotation per-class log-normal. Anchors: Earth 24, Mars 24.6,
-// Jupiter 9.9, Saturn 10.7, Uranus 17, Neptune 16. Venus's 5832 h
-// retrograde spin is the long-tail outlier — reachable through the sd
-// but not the mode.
-export const ROTATION_PERIOD_HOURS_BY_CLASS = {
-  rocky:     { mean: 26, sd: 30, min: 8,  max: 200 },
-  ocean:     { mean: 26, sd: 30, min: 8,  max: 200 },
-  desert:    { mean: 26, sd: 30, min: 8,  max: 200 },
-  lava:      { mean: 24, sd: 30, min: 8,  max: 200 },
-  gas_dwarf: { mean: 16, sd: 8,  min: 8,  max: 40  },
-  ice_giant: { mean: 16, sd: 4,  min: 10, max: 24  },
-  gas_giant: { mean: 11, sd: 3,  min: 8,  max: 20  },
-};
+//
+// Anchors: Earth 24h, Mars 24.6h, Jupiter 9.9h, Saturn 10.7h, Uranus 17h,
+// Neptune 16h. Venus's 5832h retrograde spin is the long-tail outlier —
+// reachable through the sd but not the mode. Architect's PlanetType could
+// later modulate this (gas giants spin faster from angular momentum
+// conservation during collapse), but a universal log-normal is the
+// minimal class-free shape.
+export const ROTATION_INIT_HOURS = { mean: 24, sd: 30, min: 8, max: 200 };
 
 // Tidal-locking probability ramps with `tidalLockProxy(M_star, a_AU)` from
 // astrophysics.mjs. proxy ≤ proxyLocked → locked with probability ~1;
 // proxy ≥ proxyFree → never locked. Log-interpolated between.
-//
-// proxyLocked 0.005 ≈ "locks within ~10 Myr around any host" (Mercury,
-// M-dwarf HZ planets); proxyFree 2 ≈ "longer than the universe's age"
-// (Earth = 1, Mars = 4.5 — already free-rotating in reality).
 const TIDAL_LOCK_RANGE_REALISTIC = { proxyLocked: 0.005, proxyFree: 2.0 };
 
-// Gameplay tune: tighten proxyLocked from 0.005 → 0.001. Astrophysically
-// the M-dwarf HZ catalog SHOULD be near-universally tide-locked — orbital
-// timescales there are short enough that synchronous rotation is the
-// inevitable outcome. But M-dwarfs are 61% of our catalog and tide-locked
-// terrestrials are colonization-hostile (eternal day/night, atmospheric
-// freeze-out on the dark hemisphere, no dynamo-protective rotation). The
-// tighter threshold means ~30% of M-dwarf HZ worlds break free into
-// Earth-like rotation periods, opening the bulk of the catalog to
-// playable colonization without invalidating Mercury or TRAPPIST-1b.
-const TIDAL_LOCK_RANGE_TUNE = {
-  proxyLocked: 0.001,
-};
+// Gameplay tune: tighten proxyLocked from 0.005 → 0.001. M-dwarf HZ worlds
+// SHOULD be near-universally tide-locked astronomically, but M-dwarfs are
+// 61% of our catalog and tide-locked terrestrials are colonization-hostile.
+// The tighter threshold means ~30% of M-dwarf HZ worlds break free.
+const TIDAL_LOCK_RANGE_TUNE = { proxyLocked: 0.001 };
 
 export const TIDAL_LOCK_RANGE = mergeTunes(TIDAL_LOCK_RANGE_REALISTIC, TIDAL_LOCK_RANGE_TUNE);
 
 // ---------------------------------------------------------------------------
-// Surface temperature extremes — min/max around avgSurfaceTempK
+// Surface temperature swing — thermal-inertia derived (Phase 4)
 // ---------------------------------------------------------------------------
-
-// Fractional swing around avgSurfaceTempK. Earth swing ~80 K on a mean of
-// 288 K → frac ~0.28; Mars swing ~150 K on 210 K → frac ~0.71; Mercury
-// swing ~600 K on 440 K → frac ~1.4; Venus swing ~5 K on 737 K → frac
-// ~0.007 (thick atmosphere homogenizes; we don't fit Venus). Worlds with
-// liquid water and thick atmospheres buffer hard; thin-atm worlds swing
-// wildly.
 //
-// Filler: tMin = avg × (1 - swing/2), tMax = avg × (1 + swing/2). Modulated
-// by axial tilt + eccentricity (more tilt → bigger swing — gives Uranus
-// analogs extreme seasonal variation).
-export const TEMP_SWING_FRAC_BY_CLASS = {
-  rocky:     { mean: 0.25, sd: 0.10, min: 0.05, max: 0.60 },  // Earth-ish
-  ocean:     { mean: 0.10, sd: 0.05, min: 0.05, max: 0.25 },  // ocean buffers
-  desert:    { mean: 0.50, sd: 0.20, min: 0.20, max: 1.20 },  // Mars-class thin atm
-  lava:      { mean: 0.10, sd: 0.05, min: 0.05, max: 0.25 },  // already saturated hot
-  gas_dwarf: { mean: 0.05, sd: 0.03, min: 0.02, max: 0.15 },  // cloud-top temps stable
-  ice_giant: { mean: 0.05, sd: 0.03, min: 0.02, max: 0.15 },
-  gas_giant: { mean: 0.05, sd: 0.03, min: 0.02, max: 0.15 },
-};
-
-// ---------------------------------------------------------------------------
-// Magnetic field — Gauss at surface
-// ---------------------------------------------------------------------------
-
-// Real anchors: Mercury 0.003, Mars 0.00006 (essentially dead), Earth 0.5,
-// Jupiter 4.3, Saturn 0.2, Uranus 0.23, Neptune 0.14, Ganymede 0.007.
-// Gas giants dwarf terrestrials because their fields are driven by deep
-// metallic-hydrogen convection, not core dynamos.
+// swing = SWING_BASE / inertia × tilt_factor × ecc_factor × noise
+// where inertia = max(inertiaMin, 1 + atmTerm×log10(P+0.001) + oceanTerm×waterFraction)
 //
-// Filler: per-class base draw, multiplied by `tectonicActivity` for
-// terrestrials (dead-core worlds → near-zero) and inversely scaled by
-// `sqrt(rotationPeriodHours / 24)` (faster spin → stronger dynamo). Gas
-// giants ignore both scalings — their field is convective, not core-driven.
-export const MAGNETIC_FIELD_GAUSS_BY_CLASS = {
-  rocky:     { mean: 0.4,  sd: 0.4,  min: 0,    max: 2.0 },
-  ocean:     { mean: 0.5,  sd: 0.5,  min: 0,    max: 2.0 },
-  desert:    { mean: 0.02, sd: 0.05, min: 0,    max: 0.5 },  // typically dead cores
-  lava:      { mean: 0.3,  sd: 0.3,  min: 0,    max: 1.5 },
-  gas_dwarf: { mean: 0.4,  sd: 0.3,  min: 0.05, max: 1.5 },
-  ice_giant: { mean: 0.2,  sd: 0.1,  min: 0.05, max: 0.5 },
-  gas_giant: { mean: 2.5,  sd: 1.5,  min: 0.5,  max: 6.0 },  // Jupiter 4.3, Saturn 0.2
+// Thick atmospheres and oceans buffer thermal variability; thin atms +
+// dry bodies (Mars, Mercury) swing wildly. Class isn't an input — the
+// physics-determined P and waterFraction are.
+export const TEMP_SWING = {
+  swingBase:   0.4,   // base fractional swing at unit inertia
+  inertiaMin:  0.3,   // floor on inertia for airless bodies
+  atmTerm:     0.5,   // log10(P) coefficient
+  oceanTerm:   1.5,   // waterFraction coefficient
+  noise:       { mean: 1.0, sd: 0.2, min: 0.5, max: 1.5 },
 };
-
-// Per-class multiplier on the dynamo scaling in magneticFieldGaussFor:
-//   field = base × tectonicActivity × √(24/rot) × multiplier
-// Realistic = 1.0 across the board — Mars (low tect, dead core) lands at
-// near-zero G, Earth (high tect, 24h rotation) lands near base. Gas giants
-// are unaffected by the tect/rot path so this multiplier doesn't apply
-// to them in code; listed here for completeness.
-const MAGNETIC_DYNAMO_MULTIPLIER_BY_CLASS_REALISTIC = {
-  rocky: 1.0, ocean: 1.0, desert: 1.0, lava: 1.0,
-  gas_dwarf: 1.0, ice_giant: 1.0, gas_giant: 1.0,
-};
-
-// Gameplay tune: habitability floor on water-bearing terrestrials. The
-// realistic dynamo chain correctly produces Mars-class weak fields on
-// most rocky worlds (tect ~0.5, rot ~26h → 0.48× multiplier on the base
-// 0.4 G prior → mean rocky field ~0.19 G). That's astronomically right
-// but means ~70% of rocky/ocean worlds have stripped atmospheres and
-// hostile colonization conditions — the 4X player is bouncing off worlds
-// they should be able to settle. Lifting rocky/ocean by 1.7× pulls the
-// rocky mean to ~0.32 G — Earth's 0.5 G is now within one sd, not a 2σ
-// outlier. Desert (Mars-class) stays untouched — dead cores should read
-// as dead. Lava worlds also untouched — their fields are tidal-heating-
-// driven, not relevant for colonization mechanics.
-const MAGNETIC_DYNAMO_MULTIPLIER_BY_CLASS_TUNE = {
-  rocky: 1.7,
-  ocean: 1.7,
-};
-
-export const MAGNETIC_DYNAMO_MULTIPLIER_BY_CLASS = mergeTunes(
-  MAGNETIC_DYNAMO_MULTIPLIER_BY_CLASS_REALISTIC,
-  MAGNETIC_DYNAMO_MULTIPLIER_BY_CLASS_TUNE,
-);
 
 // ---------------------------------------------------------------------------
-// Greenhouse offset (K above radiative equilibrium at 1 bar)
+// Magnetic field — mass-cap × dynamo × noise (Phase 4)
 // ---------------------------------------------------------------------------
-
-// Per-class greenhouse offset at 1 bar surface pressure. The Filler in
-// procgen.mjs (avgSurfaceTempFor) multiplies by P_bar^0.3 so thin
-// atmospheres get negligible boost and thick atmospheres approach
-// Venus-class. Earth at P=1 gets the canonical +33 K.
-const GREENHOUSE_K_BY_CLASS_REALISTIC = {
-  rocky:  33,    // Earth +33K at 1 bar
-  ocean:  50,    // water vapor adds to Earth-class
-  desert:  5,    // thin atmosphere baseline
-  lava:   80,    // outgassed CO2 / SO2; pressure scaling reaches Venus-class
+//
+// field = (capBase × mass^capExponent) × (tect × sqrt(24/rot)) × noise.
+// The mass-based cap replaces the per-class baseline — bigger bodies
+// sustain larger fields by virtue of larger conducting cores. Gas giants
+// land high because they're high-mass; rocky M-dwarf worlds with active
+// tectonics still get respectable fields.
+//
+// Earth (M=1, tect≈0.4, rot≈24): cap=0.5 × dynamo=0.4×1=0.4 → 0.20 G.
+// Real Earth 0.31. Within an sd.
+// Mars (M=0.107, tect≈0.07): cap=0.5×0.5=0.25 × dynamo=0.07×1=0.07 → 0.017 G.
+// Real Mars (relict) ~0.01-0.04. ✓
+export const MAGNETIC_FIELD = {
+  capBase:        0.5,   // gauss at M=1 (Earth-anchored cap)
+  capExponent:    0.3,   // mass scaling
+  giantBoost:     5.0,   // multiplier for radius >= 2 (deep convective dynamo)
+  noise:          { mean: 1.0, sd: 0.5, min: 0.1, max: 3.0 },
 };
-
-// Gameplay tune: nudge the rocky greenhouse from 33 → 40 K. A few
-// percent of procgen rocky worlds land in the 240–270 K avg-temp range —
-// astronomically "just past freezing" but unhabitable in 4X game terms.
-// Earth-fitted realism puts the offset at exactly 33 K; the +7 K tune
-// pulls those marginal rocky worlds across the 273 K threshold without
-// breaking Earth (its pressure×offset chain still lands at 288 K within
-// rounding once the pressure factor absorbs the bump). No tune on
-// ocean/desert/lava — none of those classes have the "just barely
-// frozen" gameplay edge case that rocky does.
-const GREENHOUSE_K_BY_CLASS_TUNE = {
-  rocky: 40,
-};
-
-export const GREENHOUSE_K_BY_CLASS = mergeTunes(
-  GREENHOUSE_K_BY_CLASS_REALISTIC,
-  GREENHOUSE_K_BY_CLASS_TUNE,
-);
 
 // ---------------------------------------------------------------------------
 // Atmosphere composition — top-3 gases per world class
@@ -1161,25 +1254,44 @@ export const GREENHOUSE_K_BY_CLASS = mergeTunes(
 // trace (sub-percent). See ATMOSPHERE_O2_BIOTIC_LIFT below for the
 // biosphere-conditional uplift.
 //
-// Atmospheres on bodies with sub-trace surface pressure are skipped
-// entirely (the Filler short-circuits before reaching this table —
-// see ATMOSPHERE_MIN_PRESSURE_BAR).
-export const ATMOSPHERE_GASES_BY_CLASS = {
-  rocky:     { N2: 5, CO2: 3, Ar: 1, H2O: 1, SO2: 0.5, O2: 0.05 },  // Mars/Venus-like absent life
-  ocean:     { N2: 5, H2O: 2, CO2: 1, Ar: 0.5, O2: 0.05 },
-  desert:    { CO2: 5, N2: 2, Ar: 1, SO2: 0.5, H2O: 0.3 },  // Mars-class
-  lava:      { SO2: 4, CO2: 3, H2O: 1, N2: 0.5 },  // Venus / Io-class outgassed
-  gas_dwarf: { H2: 6, He: 3, CH4: 0.5, NH3: 0.2 },
-  ice_giant: { H2: 6, He: 3, CH4: 0.5, NH3: 0.2 },  // CH4 colors Uranus/Neptune
-  gas_giant: { H2: 8, He: 2, CH4: 0.2, NH3: 0.1 },
+// Atmosphere composition is dispatched on physical regime (not class).
+// Five regimes based on (radius, T, P, bulkWater):
+//
+//   primary         — radius ≥ gasDwarfRadius. Captured H/He primordial
+//                     atm (gas giant / ice giant / sub-Neptune).
+//   cold_outgassed  — T < 200K (Titan/Triton-class). N2 dominant from
+//                     NH3 photolysis aging; CH4 stable at cold T.
+//   thick_outgassed — surfacePressureBar ≥ 30 (Venus-class runaway).
+//                     CO2 + SO2 from stagnant-lid outgassing.
+//   wet_outgassed   — bulkWaterFraction ≥ 1e-4 (Earth-class). N2
+//                     dominant (NH3 photolysis ages), trace CO2
+//                     (carbonate-cycle reservoir on biotic worlds).
+//                     Biotic O2 lift handles Earth's 21% via
+//                     ATMOSPHERE_O2_BIOTIC_LIFT.
+//   dry_outgassed   — Mars-class. CO2 dominant (volcanic outgassing,
+//                     no carbonate sink), thin pressure means most
+//                     species lost.
+//
+// Class is no longer involved. The Filler dispatches on regime, applies
+// per-gas Jeans escape filter (light gases zeroed when escape ratio
+// fails), and applies O2 biotic lift.
+export const ATMOSPHERE_GASES_BY_REGIME = {
+  primary:         { H2: 8,   He: 2,   CH4: 0.5, NH3: 0.2 },
+  cold_outgassed:  { N2: 5,   CH4: 2,  H2: 0.5,  CO: 0.3 },
+  thick_outgassed: { CO2: 5,  SO2: 3,  H2O: 1,   N2: 0.5 },
+  // wet_outgassed — N2 dominant (78% Earth), trace CO2/H2O (0.04% / ~1%
+  // Earth). O2 stays trace abiotically; biotic lift on top.
+  wet_outgassed:   { N2: 8,   Ar: 0.5, CO2: 0.05, H2O: 0.1, O2: 0.05 },
+  dry_outgassed:   { CO2: 5,  N2: 2,   Ar: 1,    SO2: 0.3, H2O: 0.3 },
 };
 
-// Cold-zone (S < INSOLATION_COLD_MAX) atmosphere overlay for terrestrial
-// classes. Used by atmosphereFor for cold rocky/ocean/desert bodies that
-// pass the Titan-class thick-atm retention roll. Replaces the warm-body
-// CO2/H2O baseline with the N2/CH4 outgassed mix typical of Titan and
-// Triton.
-export const ATMOSPHERE_GASES_COLD_OVERLAY = { N2: 4, CH4: 2, CO: 0.5, H2: 0.3 };
+// Atm regime thresholds. Kept here so they can be tuned without touching
+// the dispatch code in procgen.mjs.
+export const ATMOSPHERE_REGIME_THRESHOLDS = {
+  coldTempMaxK:      200,    // T below → cold_outgassed
+  thickPressureBar:  30,     // P above → thick_outgassed
+  wetBulkWaterMin:   1e-4,   // bulkWater above → wet_outgassed
+};
 
 // O2 weight multiplier applied to `rocky`/`ocean` worldClass atmospheres
 // when the host carries oxygenic-photosynthesis-grade biosphere. Without
@@ -1205,44 +1317,63 @@ export const ATMOSPHERE_MIN_PRESSURE_BAR = 0.01;
 // Europa well below at ~0.04.
 export const INSOLATION_COLD_MAX = 0.1;
 
-// Titan-class thick-atmosphere retention for cold terrestrial bodies.
-// Gates on (S < INSOLATION_COLD_MAX) + (rocky | ocean | desert) +
-// mass-eligibility. The default pressure baseline for cold terrestrials
-// puts most of them in the airless category, but a small fraction
-// retain thick atmospheres against thermal escape (Titan: 1.45 bar
-// N2+CH4). Without an explicit roll, procgen produces zero Titan-likes
-// because baseline×sqrt(mass) scaling can't reach a thick atm at those
-// temperatures.
+// Atmospheric retention shape — Jeans escape sigmoid + magnetic-shield
+// floor. The Filler computes v_escape/v_thermal(N2, T_eq) per body and
+// smoothsteps the ratio into a 0..1 "long-term retained fraction" over
+// ~Gyr timescales. Magnetic-field shielding multiplies on top: bodies
+// with no internal dynamo (Mars, Venus) lose atmosphere faster to
+// stellar-wind stripping, captured by the magneticFloor.
 //
-// Sol reality: 1 in ~5 mass-eligible cold terrestrials (Titan retains;
-// Triton/Europa/Ganymede/Callisto don't). 15% is a gameplay-tuned bump
-// above that.
-export const ICE_THICK_ATM_PROBABILITY = 0.15;
+// Calibration anchors (Sol v_esc/v_th(N2, T_eq) ratios):
+//   Earth ~22, Venus ~20  → above thresholdHigh, retention = 1.0
+//   Mars  ~12             → mid, retention ≈ 0.9
+//   Titan ~9              → near low, retention ≈ 0.4
+//   Mercury ~7, Europa ~7 → near low, retention ≈ 0.1
+//   Luna ~5               → below thresholdLow, retention = 0
+export const ATMOSPHERIC_RETENTION = {
+  // Jeans-escape sigmoid: v_esc/v_th below jeansLow → fully stripped;
+  // above jeansHigh → fully retained.
+  jeansLow:       6,
+  jeansHigh:      13,
+  // Magnetic-shielding sigmoid: B in gauss. magneticFloor is the
+  // residual retention for bodies with no internal field (Mars-class
+  // stellar-wind erosion is real but not total).
+  magneticFloor:  0.05,
+  magneticLow:    0.02,
+  magneticHigh:   0.20,
+};
 
-// Minimum body mass (M⊕) for the Titan-class retention roll. Below
-// this, escape velocity is too low to hold a meaningful atmosphere even
-// at cold-zone temperatures (Triton at 0.0036 M⊕ falls short; Titan at
-// 0.0225 M⊕ qualifies). Anchored on Titan/Triton.
-export const ICE_THICK_ATM_MIN_MASS_EARTH = 0.01;
+// Outgassing-potential scaling — total atm-bar a body would produce if
+// its full volatile inventory cycled to the surface. Linear in mass ×
+// effective-volatiles, where effective-volatiles = max(bulkWaterFraction,
+// volatileFloor). The floor represents the CO2/N2/other-volatile
+// inventory every rocky body has from accretion, independent of water
+// budget — bulkWaterFraction alone undercounts (e.g. Venus is bone-dry
+// by H2O but has a Venus-bar of CO2 from carbonate-equivalent
+// outgassing).
+//
+// Calibrated so Earth (M=1, eff-vol=0.005 from floor) × retention=1.0
+// × shield=1.0 × multiplier=1.0 ≈ 1.0 bar.
+export const OUTGASSING = {
+  outgassingScale: 200,
+  volatileFloor:   0.005,
+};
 
-// Pressure spec (bar) when the Titan-class roll fires. Titan = 1.45.
-// Range covers Titan through hypothetical extra-thick analogs without
-// crossing into Venus-class territory (10+ bar).
-export const ICE_THICK_ATM_PRESSURE_BAR = { mean: 1.5, sd: 0.8, min: 0.5, max: 3 };
-
-// Minimum mass (M⊕) for a body to be classified as `ocean`. Below this,
-// the body can't sustain enough atmospheric pressure to keep surface
-// water liquid — vapor pressure at temperate temps dominates the thin
-// atmosphere and water either escapes or precipitates as ice. The body
-// stays bulk-water (ocean class) but its surface fraction reads as
-// iceFraction-dominant via the cold-zone iceFraction prior. Sub-Mars
-// terrestrials (Europa/Enceladus analogs) keep their ocean class when
-// water-eligible because their water content is the defining
-// composition; if mass is below this threshold AND the water budget
-// roll didn't pick ocean, the body falls back to rocky.
-// Mars (0.107 M⊕) is roughly the floor; we sit slightly below to allow
-// Mars-class candidates.
-export const OCEAN_MIN_MASS_EARTH = 0.08;
+// History multiplier — bistable mixture capturing the "did this body
+// run away into a thick greenhouse / get its atm preferentially
+// stripped" dichotomy that simple physics can't model from
+// (mass, T, bulkWater) alone. Earth and Venus have ≈ identical
+// fundamentals; their divergence is an attractor-basin bifurcation
+// (carbonate-cycle vs. stagnant-lid runaway). 90% of bodies land in
+// the typical mode; 10% in the heavy-tail runaway mode.
+//
+// Same shape as ECCENTRICITY's near-circular/scattered mixture —
+// probabilistic spreads are the house pattern; deterministic physics
+// + stochastic history multiplier is more honest than either alone.
+export const PRESSURE_HISTORY_MULTIPLIER = {
+  primary:   { mean: 1.0, sd: 0.4, min: 0.3, max: 3,   weight: 0.90 },
+  secondary: { mean: 50,  sd: 50,  min: 5,   max: 500, weight: 0.10 },
+};
 
 // Per-class visually-dominant trace species. Each class maps to an
 // ordered list of branches; the Filler picks the first branch whose
@@ -1268,132 +1399,70 @@ export const OCEAN_MIN_MASS_EARTH = 0.08;
 // `frac` is a truncated-normal spec; the Filler draws once per body.
 // Values reflect real-system fractions where available (Jupiter NH3:
 // ~0.026% by mass, Earth H2O: ~0.4% by volume).
-export const CHROMOPHORE_BY_CLASS = {
-  rocky: [
-    // Cold rocky world with retained thick atmosphere (Titan-class)
-    // → CH4 tholin haze. Insolation gate plus the ATMOSPHERE_MIN_PRESSURE_BAR
-    // gate inside chromophoreFor catches Titan-class without firing on
-    // airless cold rockies like Callisto or Pluto.
-    { gate: { insolationBelow: 0.1 },
-      gas: 'CH4', frac: { mean: 0.02, sd: 0.01, min: 0.005, max: 0.05 } },
-    // Biotic temperate Earth-likes → H2O cloud decks. Gates on the
-    // biosphere chain so abiotic rockies don't suddenly all paint cloudy.
-    { gate: { biosphereArchetype: 'carbon_aqueous', tierAtLeast: 'microbial' },
-      gas: 'H2O', frac: { mean: 0.004, sd: 0.002, min: 0.001, max: 0.02 } },
-    // No default — abiotic warm rockies stay chromophore-null.
+// Chromophore branches dispatched on physical regime (no class input).
+// Regimes:
+//   hot_gaseous       gaseous + T > 1500K        → silicate haze
+//   hycean            gaseous + S < 0.3 + bulkWater > 0.05  → H2O clouds
+//   cold_gaseous      gaseous + T < 100K         → none (CH4 absorbs directly)
+//   temperate_gaseous gaseous default            → NH3 (Jupiter-class)
+//   cold_terrestrial  terrestrial + T < 200K     → CH4 tholin
+//   volcanic          terrestrial + (T > 600K or surfacePressure > 30) → SO2
+//   biotic_wet        terrestrial + carbon_aqueous biosphere ≥ microbial → H2O
+//   wet_terrestrial   terrestrial + waterFraction ≥ 0.3  → H2O
+//   dust_terrestrial  terrestrial default        → DUST (Mars-class)
+//
+// Each regime is a list of branches; the Filler picks the first whose
+// internal physical gate matches. Internal gates preserved from the old
+// class table (insolation/biosphere conditions are themselves physics).
+export const CHROMOPHORE_BY_REGIME = {
+  hot_gaseous: [
+    { gate: null, gas: 'SILICATE', frac: { mean: 0.001, sd: 0.0005, min: 0.0001, max: 0.005 } },
   ],
-  ocean: [
-    // Cold ocean world with retained thick atmosphere → CH4 tholin haze.
-    // Mirrors the rocky cold branch so a Titan-class body's chromophore
-    // is independent of whether its bulk is rocky or ocean.
-    { gate: { insolationBelow: 0.1 },
-      gas: 'CH4', frac: { mean: 0.02, sd: 0.01, min: 0.005, max: 0.05 } },
+  hycean: [
     { gate: null, gas: 'H2O', frac: { mean: 0.005, sd: 0.003, min: 0.001, max: 0.02 } },
   ],
-  desert: [
-    // Mars-class dust haze. Low frac so it reads as a tint rather than
-    // a dominant band on the disc.
-    { gate: null, gas: 'DUST', frac: { mean: 0.001, sd: 0.0005, min: 0.0001, max: 0.005 } },
+  cold_gaseous: [],  // CH4 in atm wins on potency directly
+  temperate_gaseous: [
+    { gate: null, gas: 'NH3', frac: { mean: 0.0003, sd: 0.0002, min: 0.0001, max: 0.001 } },
   ],
-  lava: [
-    // Io / Venus-class SO2 sulfuric aerosols.
+  cold_terrestrial: [
+    { gate: null, gas: 'CH4', frac: { mean: 0.02, sd: 0.01, min: 0.005, max: 0.05 } },
+  ],
+  volcanic: [
     { gate: null, gas: 'SO2', frac: { mean: 0.001, sd: 0.0005, min: 0.0001, max: 0.005 } },
   ],
-  gas_dwarf: [
-    // Hot sub-Neptune (S > 5 ≈ closer than Mercury for a Sun-class star):
-    // refractive silicate cloud particles dredged from hotter layers.
-    { gate: { insolationAbove: 5 },
-      gas: 'SILICATE', frac: { mean: 0.001, sd: 0.0005, min: 0.0001, max: 0.005 } },
-    // Cold Hycean (S < 0.3): H2 atmosphere with H2O clouds on a
-    // subsurface ocean — K2-18b candidates.
-    { gate: { insolationBelow: 0.3 },
-      gas: 'H2O', frac: { mean: 0.005, sd: 0.003, min: 0.001, max: 0.02 } },
-    // Default warm sub-Neptune → NH3 chromophore (Saturn-class).
-    { gate: null,
-      gas: 'NH3', frac: { mean: 0.0003, sd: 0.0002, min: 0.0001, max: 0.001 } },
+  biotic_wet: [
+    { gate: null, gas: 'H2O', frac: { mean: 0.004, sd: 0.002, min: 0.001, max: 0.02 } },
   ],
-  gas_giant: [
-    // Hot Jupiter — silicate cloud haze; reads grey-blue.
-    { gate: { insolationAbove: 5 },
-      gas: 'SILICATE', frac: { mean: 0.001, sd: 0.0005, min: 0.0001, max: 0.005 } },
-    // Cool / temperate Jupiter — NH3 cloud chromophore.
-    { gate: null,
-      gas: 'NH3', frac: { mean: 0.0003, sd: 0.0002, min: 0.0001, max: 0.001 } },
+  wet_terrestrial: [
+    { gate: null, gas: 'H2O', frac: { mean: 0.005, sd: 0.003, min: 0.001, max: 0.02 } },
   ],
-  // Ice giants paint via CH4 absorption directly (atm1 wins on potency);
-  // no additional chromophore needed.
-  ice_giant: [],
+  dust_terrestrial: [
+    { gate: null, gas: 'DUST', frac: { mean: 0.001, sd: 0.0005, min: 0.0001, max: 0.005 } },
+  ],
 };
 
-// ---------------------------------------------------------------------------
-// Resources — six 0..10 scalars per world class
-// ---------------------------------------------------------------------------
-
-// Same scale and shape as BELT_RESOURCE_PRIORS. Rocky/desert ranks high
-// on metals + silicates (Earth = 5/6/7/5/4/0 — though earth's volatiles
-// is anomalously high from oceans). Oceans tilt toward volatiles. Ice
-// worlds dominate volatiles. Lava worlds get metals + rare earths
-// (geological smelting concentrates them). Gas giants/ice giants carry
-// deep-atmosphere helium-3 and exotic isotopes — modeled as elevated
-// volatiles + exotics.
-export const PLANET_RESOURCE_PRIORS_BY_CLASS = {
-  rocky: {
-    resMetals:        { mean: 5, sd: 2, min: 0, max: 10 },
-    resSilicates:     { mean: 6, sd: 2, min: 0, max: 10 },
-    resVolatiles:     { mean: 4, sd: 2, min: 0, max: 10 },
-    resRareEarths:    { mean: 4, sd: 2, min: 0, max: 10 },
-    resRadioactives:  { mean: 3, sd: 2, min: 0, max: 10 },
-    resExotics:       { mean: 1, sd: 1, min: 0, max: 10 },
-  },
-  ocean: {
-    resMetals:        { mean: 3, sd: 2, min: 0, max: 10 },
-    resSilicates:     { mean: 3, sd: 2, min: 0, max: 10 },
-    resVolatiles:     { mean: 8, sd: 2, min: 0, max: 10 },
-    resRareEarths:    { mean: 2, sd: 2, min: 0, max: 10 },
-    resRadioactives:  { mean: 2, sd: 2, min: 0, max: 10 },
-    resExotics:       { mean: 2, sd: 2, min: 0, max: 10 },
-  },
-  desert: {
-    resMetals:        { mean: 5, sd: 2, min: 0, max: 10 },
-    resSilicates:     { mean: 7, sd: 2, min: 0, max: 10 },
-    resVolatiles:     { mean: 1, sd: 1, min: 0, max: 10 },
-    resRareEarths:    { mean: 4, sd: 2, min: 0, max: 10 },
-    resRadioactives:  { mean: 4, sd: 2, min: 0, max: 10 },
-    resExotics:       { mean: 1, sd: 1, min: 0, max: 10 },
-  },
-  lava: {
-    resMetals:        { mean: 7, sd: 2, min: 0, max: 10 },
-    resSilicates:     { mean: 5, sd: 2, min: 0, max: 10 },
-    resVolatiles:     { mean: 1, sd: 1, min: 0, max: 10 },
-    resRareEarths:    { mean: 6, sd: 2, min: 0, max: 10 },
-    resRadioactives:  { mean: 6, sd: 2, min: 0, max: 10 },
-    resExotics:       { mean: 3, sd: 2, min: 0, max: 10 },
-  },
-  gas_dwarf: {
-    resMetals:        { mean: 1, sd: 1, min: 0, max: 10 },
-    resSilicates:     { mean: 1, sd: 1, min: 0, max: 10 },
-    resVolatiles:     { mean: 8, sd: 2, min: 0, max: 10 },
-    resRareEarths:    { mean: 1, sd: 1, min: 0, max: 10 },
-    resRadioactives:  { mean: 1, sd: 1, min: 0, max: 10 },
-    resExotics:       { mean: 5, sd: 2, min: 0, max: 10 },
-  },
-  ice_giant: {
-    resMetals:        { mean: 1, sd: 1, min: 0, max: 10 },
-    resSilicates:     { mean: 1, sd: 1, min: 0, max: 10 },
-    resVolatiles:     { mean: 9, sd: 1, min: 0, max: 10 },
-    resRareEarths:    { mean: 1, sd: 1, min: 0, max: 10 },
-    resRadioactives:  { mean: 1, sd: 1, min: 0, max: 10 },
-    resExotics:       { mean: 6, sd: 2, min: 0, max: 10 },
-  },
-  gas_giant: {
-    resMetals:        { mean: 0, sd: 0, min: 0, max: 10 },
-    resSilicates:     { mean: 0, sd: 0, min: 0, max: 10 },
-    resVolatiles:     { mean: 9, sd: 1, min: 0, max: 10 },  // He-3 etc.
-    resRareEarths:    { mean: 0, sd: 0, min: 0, max: 10 },
-    resRadioactives:  { mean: 0, sd: 0, min: 0, max: 10 },
-    resExotics:       { mean: 7, sd: 2, min: 0, max: 10 },  // metallic-hydrogen layer
-  },
+// Chromophore regime thresholds.
+export const CHROMOPHORE_REGIME_THRESHOLDS = {
+  hotGaseousTempK:        1500,
+  hyceanInsolationMax:    0.3,
+  hyceanBulkWaterMin:     0.05,
+  coldGaseousTempK:       100,
+  coldTerrestrialTempK:   200,
+  volcanicTempK:          600,
+  volcanicPressureBar:    30,
+  wetWaterFractionMin:    0.3,
 };
+
+// Resources are now physics-derived in resourcesFor (procgen.mjs):
+//   metals       ∝ bulkMetalFraction
+//   silicates    ∝ (1 - bulkMetal - bulkWater)
+//   volatiles    ∝ surface water/ice cover + atm volatile fraction
+//                  (gaseous bodies: 8 + bulkWater × 20)
+//   rare earths  ∝ stellar metallicity
+//   radioactives ∝ stellar metallicity × age-decay
+//   exotics      ∝ gaseous bonus + tidal-heated moon bonus + noise
+// No class-keyed table.
 
 // ---------------------------------------------------------------------------
 // Biosphere — two orthogonal axes: archetype × tier
@@ -1406,7 +1475,7 @@ export const PLANET_RESOURCE_PRIORS_BY_CLASS = {
 export const BIOSPHERE_TIERS = ['none', 'prebiotic', 'microbial', 'complex', 'gaian'];
 
 // All recognized archetypes. Each describes a distinct biochemistry /
-// habitat combination — see BIOSPHERE_BY_CLASS for which can appear where.
+// habitat combination — see BIOSPHERE_HABITATS for physics-keyed gates.
 export const BIOSPHERE_ARCHETYPES = [
   'carbon_aqueous',      // Earth-standard, water + carbon
   'subsurface_aqueous',  // ice-shell ocean (Europa, Enceladus)
@@ -1439,110 +1508,135 @@ export const BIOSPHERE_ARCHETYPES = [
 //     consensus or examples. Realistic estimates are <0.1%. We keep them
 //     non-zero so the discovery moment exists at all, but they're
 //     deeply rare without the gameplay tune.
-const BIOSPHERE_BY_CLASS_REALISTIC = {
-  rocky: {
-    silicate:       { gate: 'hot',       occurrenceRate: 0.001, tierWeights: { prebiotic: 0.70, microbial: 0.25, complex: 0.05 } },
-    sulfur:         { gate: null,        occurrenceRate: 0.01,  tierWeights: { microbial: 1.00 } },
-    carbon_aqueous: { gate: 'temperate', occurrenceRate: 0.30,  tierWeights: { prebiotic: 0.55, microbial: 0.30, complex: 0.12, gaian: 0.03 } },
-    cryogenic:      { gate: 'cold',      occurrenceRate: 0.005, tierWeights: { prebiotic: 0.80, microbial: 0.20 } },
-  },
-  ocean: {
-    sulfur:         { gate: null,        occurrenceRate: 0.02,  tierWeights: { microbial: 1.00 } },
-    carbon_aqueous: { gate: 'temperate', occurrenceRate: 0.40,  tierWeights: { prebiotic: 0.45, microbial: 0.30, complex: 0.18, gaian: 0.07 } },
-    // Cold ocean bodies (Europa/Enceladus/Triton class) host subsurface
-    // ocean life under the ice shell. Gates on the cold zone since the
-    // ice shell is the load-bearing habitat condition.
-    subsurface_aqueous: { gate: 'cold',  occurrenceRate: 0.03,  tierWeights: { microbial: 0.85, complex: 0.15 } },
-  },
-  desert: {
-    silicate:       { gate: 'hot',       occurrenceRate: 0.001, tierWeights: { prebiotic: 0.70, microbial: 0.25, complex: 0.05 } },
-    carbon_aqueous: { gate: 'temperate', occurrenceRate: 0.05,  tierWeights: { prebiotic: 0.80, microbial: 0.20 } },
-  },
-  lava: {
-    silicate:       { gate: null,        occurrenceRate: 0.005, tierWeights: { prebiotic: 0.65, microbial: 0.30, complex: 0.05 } },
-    sulfur:         { gate: null,        occurrenceRate: 0.03,  tierWeights: { microbial: 1.00 } },
-  },
-  gas_dwarf: {
-    aerial:         { gate: null,        occurrenceRate: 0.001, tierWeights: { microbial: 0.85, complex: 0.15 } },
-  },
-  ice_giant: {
-    aerial:         { gate: null,        occurrenceRate: 0.0005, tierWeights: { microbial: 0.90, complex: 0.10 } },
-  },
-  gas_giant: {
-    aerial:         { gate: null,        occurrenceRate: 0.001, tierWeights: { microbial: 0.85, complex: 0.15 } },
-  },
-};
-
-// Gameplay tune: two layers of adjustment over realistic biosphere.
+// Biosphere habitats — physics-keyed (no class input). Each entry is a
+// {archetype, habitat-name, physical-gates, occurrenceRate, tierWeights}
+// tuple. The Filler walks the list, fires each habitat that matches the
+// body's physical state, and the highest-tier hit wins.
 //
-// (1) Exotic-archetype boost. Speculative archetypes (silicate, cryogenic,
-//     aerial) get bumped 5–50× so they actually appear in a playthrough.
-//     Carbon archetypes stay near their literature rates — they don't
-//     need an occurrence boost to be interesting; their interest comes
-//     from the tier-distribution shift below.
+// Tuning rationale (preserved from the prior class-keyed table):
 //
-// (2) Tier-distribution shift on carbon_aqueous (rocky + ocean). The
-//     realistic tail is prebiotic-heavy because Earth itself was prebiotic
-//     for ~1 Gyr — astronomically that's where most worlds sit at any
-//     snapshot. But from a 4X discovery lens, "organic chemistry without
-//     replicating life" is the LEAST interesting tier; the player wants
-//     complex+gaian finds as recurring rewards, not once-per-galaxy
-//     unicorns. Realistic rocky tier split (55/30/12/3) becomes
-//     35/30/25/10; ocean (45/30/18/7) becomes 25/30/30/15. Galaxy goes
-//     from ~25 complex + ~11 gaian to ~46 complex + ~21 gaian — about
-//     2× the mid-to-late game discovery surface area without inflating
-//     the "any life" rate. Desert untouched (a desert world that supports
-//     gaian biology would re-class to rocky/ocean by the time it
-//     mattered, so the tier cap holds).
+// (1) carbon_aqueous tier weights are tuned for 4X discovery — complex/
+//     gaian biased over the realistic prebiotic-heavy tail (Earth was
+//     prebiotic for ~1 Gyr, but "organic chemistry without replicating
+//     life" is the least interesting tier for the player).
 //
-// (3) Aerial gas-world bump. Gas-giant atmospheric biospheres are a
-//     visually-distinctive category (different from any rocky-world
-//     life — they show up in atmospheric readouts, not surface). Pushing
-//     gas_dwarf 5%→8% and gas_giant 5%→10% adds ~30 more aerial worlds
-//     across the galaxy, making them a recurring exploration beat rather
-//     than a rare curiosity. Ice_giant stays at the lower 2% (Uranus/
-//     Neptune-class atmospheres are colder and less hospitable than
-//     warmer gas dwarf / gas giant interiors).
-const BIOSPHERE_BY_CLASS_TUNE = {
-  rocky: {
-    silicate: { occurrenceRate: 0.005 },
-    sulfur:   { occurrenceRate: 0.02 },
-    carbon_aqueous: {
-      tierWeights: { prebiotic: 0.35, microbial: 0.30, complex: 0.25, gaian: 0.10 },
-    },
-    cryogenic: { occurrenceRate: 0.04 },
+// (2) Exotic archetypes (silicate, cryogenic, aerial) get boosted
+//     occurrence rates so they actually appear in a playthrough — real
+//     literature rates are <0.1% and would make them once-per-galaxy
+//     unicorns.
+//
+// (3) Aerial gas-world rates lifted (8-10%) for the visual-distinctness
+//     of atmospheric biospheres; ice_giant stays cooler at 2%.
+//
+// Habitats can overlap — a Europa-class body matches both
+// `icy_moon_subsurface` AND no other branch (its surface T excludes
+// all carbon/silicate paths). A super-Earth in the temperate zone
+// might match both ocean_temperate and rocky_temperate; the gates are
+// tight enough that overlap is rare. When it happens, multiple rolls
+// fire and the highest-tier wins.
+export const BIOSPHERE_HABITATS = [
+  // ─── carbon_aqueous — liquid water, atm, temperate ───
+  {
+    archetype: 'carbon_aqueous',
+    name: 'rocky_temperate',
+    gates: { tempMinK: 250, tempMaxK: 340, waterMin: 0.05, waterMax: 0.5, pressureMin: 0.006 },
+    occurrenceRate: 0.30,
+    tierWeights: { prebiotic: 0.35, microbial: 0.30, complex: 0.25, gaian: 0.10 },
   },
-  ocean: {
-    sulfur:   { occurrenceRate: 0.03 },
-    carbon_aqueous: {
-      tierWeights: { prebiotic: 0.25, microbial: 0.30, complex: 0.30, gaian: 0.15 },
-    },
-    subsurface_aqueous: { occurrenceRate: 0.08 },
+  {
+    archetype: 'carbon_aqueous',
+    name: 'ocean_temperate',
+    gates: { tempMinK: 250, tempMaxK: 340, waterMin: 0.5, pressureMin: 0.006 },
+    occurrenceRate: 0.40,
+    tierWeights: { prebiotic: 0.25, microbial: 0.30, complex: 0.30, gaian: 0.15 },
   },
-  desert: {
-    silicate: { occurrenceRate: 0.01 },
+  {
+    archetype: 'carbon_aqueous',
+    name: 'desert_temperate',
+    gates: { tempMinK: 250, tempMaxK: 340, waterMax: 0.05, iceMax: 0.05, pressureMin: 0.006 },
+    occurrenceRate: 0.05,
+    tierWeights: { prebiotic: 0.80, microbial: 0.20 },
   },
-  lava: {
-    silicate: { occurrenceRate: 0.03 },
-    sulfur:   { occurrenceRate: 0.05 },
-  },
-  gas_dwarf: { aerial: { occurrenceRate: 0.08 } },
-  ice_giant: { aerial: { occurrenceRate: 0.02 } },
-  gas_giant: { aerial: { occurrenceRate: 0.10 } },
-};
 
-export const BIOSPHERE_BY_CLASS = mergeTunes(
-  BIOSPHERE_BY_CLASS_REALISTIC,
-  BIOSPHERE_BY_CLASS_TUNE,
-);
+  // ─── subsurface_aqueous — cold + high bulkWater + ice shell ───
+  // Europa/Enceladus class. Doesn't require atm — ice shell IS the
+  // habitat barrier; subsurface ocean does the rest.
+  {
+    archetype: 'subsurface_aqueous',
+    name: 'icy_moon',
+    gates: { tempMaxK: 200, bulkWaterMin: 0.2, iceMin: 0.5, radiusMax: 2 },
+    occurrenceRate: 0.08,
+    tierWeights: { microbial: 0.85, complex: 0.15 },
+  },
 
-// Gate insolation ranges. `temperate` matches the Architect's "habitable
-// adjacent" band; `hot` matches inner-system rocky/desert worlds where
-// silicate biochemistry might find energy gradients; `cold` matches the
-// outer-system bodies whose surfaces are frozen but whose subsurface
-// oceans (Europa, Enceladus) or hydrocarbon cycles (Titan) host life.
-export const BIOSPHERE_GATE_INSOLATION = {
-  temperate: { min: 0.1, max: 1.5 },
-  hot:       { min: 1.5, max: 200 },
-  cold:      { min: 0,   max: 0.1 },
-};
+  // ─── aerial — gas/ice giant atmospheric biospheres ───
+  {
+    archetype: 'aerial',
+    name: 'gas_giant',
+    gates: { radiusMin: 8 },
+    occurrenceRate: 0.10,
+    tierWeights: { microbial: 0.85, complex: 0.15 },
+  },
+  {
+    archetype: 'aerial',
+    name: 'gas_dwarf_warm',
+    gates: { radiusMin: 2, radiusMax: 8, tempMinK: 200 },
+    occurrenceRate: 0.08,
+    tierWeights: { microbial: 0.85, complex: 0.15 },
+  },
+  {
+    archetype: 'aerial',
+    name: 'ice_giant_cold',
+    gates: { radiusMin: 3.5, tempMaxK: 200 },
+    occurrenceRate: 0.02,
+    tierWeights: { microbial: 0.90, complex: 0.10 },
+  },
+
+  // ─── cryogenic — cold terrestrial with hydrocarbon cycle ───
+  // Titan-class. Gates on cold + retained atm + volatile-rich bulk
+  // — these conditions imply CH4 in the atm via the cold_outgassed
+  // regime, no need to reference atm gases directly.
+  {
+    archetype: 'cryogenic',
+    name: 'titan_class',
+    gates: { tempMaxK: 200, radiusMax: 2, bulkWaterMin: 0.1, pressureMin: 0.5 },
+    occurrenceRate: 0.04,
+    tierWeights: { prebiotic: 0.80, microbial: 0.20 },
+  },
+
+  // ─── silicate — hot solid surfaces with mineral chemistry ───
+  {
+    archetype: 'silicate',
+    name: 'hot_rocky',
+    gates: { tempMinK: 400, tempMaxK: 900, radiusMax: 2, tectonicMin: 0.1 },
+    occurrenceRate: 0.005,
+    tierWeights: { prebiotic: 0.70, microbial: 0.25, complex: 0.05 },
+  },
+  {
+    archetype: 'silicate',
+    name: 'lava_silicate',
+    gates: { tempMinK: 900, radiusMax: 2 },
+    occurrenceRate: 0.03,
+    tierWeights: { prebiotic: 0.65, microbial: 0.30, complex: 0.05 },
+  },
+
+  // ─── sulfur — thermal vents + active outgassing ───
+  // Sulfur chemistry needs SO2 + sulfides which are produced by
+  // volcanic outgassing. Gate on (warm/hot + active tectonics + atm)
+  // rather than referencing SO2 directly — those conditions are what
+  // produce the SO2 in the first place.
+  {
+    archetype: 'sulfur',
+    name: 'thermal_vents',
+    gates: { tempMinK: 280, tempMaxK: 400, tectonicMin: 0.5, pressureMin: 0.1 },
+    occurrenceRate: 0.03,
+    tierWeights: { microbial: 1.0 },
+  },
+  {
+    archetype: 'sulfur',
+    name: 'volcanic',
+    gates: { tempMinK: 600, radiusMax: 2, tectonicMin: 0.7 },
+    occurrenceRate: 0.05,
+    tierWeights: { microbial: 1.0 },
+  },
+];

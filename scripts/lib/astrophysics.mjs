@@ -24,6 +24,62 @@ export function insolation(hostStarMass, aAu) {
   return L / (aAu * aAu);
 }
 
+// Stellar metallicity proxy from spectral class. Returns a coarse [Fe/H]
+// estimate (-0.5 to +0.3 dex) per spectral class typical-population
+// mapping. Higher metallicity → more refractory + radioactive material
+// available for planet building. Used by the Filler to scale
+// rare-earths / radioactives resource priors.
+//
+// Anchors:
+//   Sun (G2V): [Fe/H] = 0.0   (by definition Pop I solar reference)
+//   M dwarfs:  bimodal — Pop I (~0.0) and Pop II (~-0.5). Mean ≈ -0.2.
+//   K dwarfs:  Pop I bias, mean ≈ 0.0
+//   F/G:       Pop I, mean ≈ 0.0 with scatter
+//   A/B/O:     Pop I young, mean ≈ +0.1 (metal-enriched ISM)
+//   WD:        progenitor-dependent, mean ≈ 0.0 with wide scatter
+//   BD:        long-lived, mean ≈ -0.1 (older population skew)
+//
+// Returns the mean metallicity for the class as a deterministic scalar.
+// Per-star variation handled by callers via seeded draws around this mean.
+export function meanMetallicityForClass(cls) {
+  switch (cls) {
+    case 'O': return 0.10;
+    case 'B': return 0.10;
+    case 'A': return 0.05;
+    case 'F': return 0.00;
+    case 'G': return 0.00;
+    case 'K': return -0.05;
+    case 'M': return -0.20;
+    case 'WD': return 0.00;
+    case 'BD': return -0.10;
+    default:  return 0.00;
+  }
+}
+
+// Stellar age proxy from spectral class. Returns a representative age in
+// Gyr. Massive hot stars are necessarily young (short main-sequence
+// lifetimes); cool dwarfs span Gyr to hundreds of Gyr.
+//
+// Used by the Filler to compute radiogenic-resource decay (older bodies
+// have depleted U/Th) and to inform formation-time context.
+//
+// Returns the typical mean age. Callers can layer per-star seeded
+// scatter on top.
+export function meanAgeForClass(cls) {
+  switch (cls) {
+    case 'O': return 0.005;   // 5 Myr — short MS lifetime
+    case 'B': return 0.05;    // 50 Myr
+    case 'A': return 0.5;     // 500 Myr
+    case 'F': return 3;       // 3 Gyr
+    case 'G': return 5;       // 5 Gyr (Sun is 4.6)
+    case 'K': return 7;       // 7 Gyr
+    case 'M': return 8;       // 8 Gyr (long-lived but mix of young/old)
+    case 'WD': return 3;      // cooling age 3 Gyr typical
+    case 'BD': return 5;      // 5 Gyr
+    default:  return 5;
+  }
+}
+
 // Dimensionless proxy for tidal-locking timescale, normalized so Earth = 1.
 // The physical timescale is τ_lock ∝ a^6 / M_star^2 (the planet-side factors
 // are weaker and don't vary much across our taxonomy). Earth at 1 AU around

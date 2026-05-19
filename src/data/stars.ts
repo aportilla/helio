@@ -77,8 +77,11 @@ export interface Star {
 }
 
 export type WorldClass =
-  | 'rocky' | 'ocean' | 'desert' | 'lava'
-  | 'gas_dwarf' | 'gas_giant' | 'ice_giant';
+  // Terrestrial taxonomy
+  | 'rocky' | 'solid_giant' | 'desert' | 'ocean' | 'ice'
+  | 'iron' | 'lava' | 'magma_ocean' | 'chthonian'
+  // Gaseous taxonomy
+  | 'gas_dwarf' | 'hycean' | 'helium' | 'ice_giant' | 'gas_giant';
 // Biosphere is two orthogonal axes:
 //   - archetype: what kind of life (carbon/water, methane/cryogenic, etc.)
 //   - tier: how developed (prebiotic → microbial → complex → gaian)
@@ -152,6 +155,24 @@ export interface Body {
   // meaningful (total belt mass) for belts but null for rings.
   readonly massEarth: number | null;
   readonly radiusEarth: number | null;
+  // 0..1 mass fraction of body that is H₂O (and other condensable
+  // volatiles). Earth ≈ 0.00023 (ocean mass / Earth mass); Europa /
+  // Titan / Callisto ≈ 0.5 (water-ice mantle); Mercury ≈ 0; Hycean-
+  // world candidate ≈ 0.1. Sampled at Architect time from a formation-
+  // zone prior gated on insolation, then persists — used by the Filler
+  // to derive surface water/ice cover (Phase 3+). Null on belt/ring
+  // kinds (no body mass).
+  readonly bulkWaterFraction: number | null;
+  // 0..1 mass fraction of body that is iron / metallic. Mercury ≈ 0.70
+  // (huge iron core); Earth/Venus ≈ 0.32 (canonical 32% iron core);
+  // Mars ≈ 0.24; Moon ≈ 0.03 (silicate-dominant, tiny core); Europa
+  // ≈ 0.10 (silicate mantle); gas giants ≈ 0.02-0.05 (mostly H/He
+  // envelope). Sampled at Architect time from a zone-based prior
+  // (inner zone metal-rich, outer zone ice-dominant), then persists.
+  // Used by resource priors (metals, silicates) and downstream
+  // chromophore/atmosphere variety (iron-world, carbon-world). Null
+  // on belt/ring kinds.
+  readonly bulkMetalFraction: number | null;
   // Diameter of the largest body in the belt, in km. Shepherded
   // belts (anchored to a giant via the architect's BELT_GIANT_ADJACENCY)
   // sample from the parent-body range — Sol Main Belt's Ceres = 940 km,
@@ -274,13 +295,22 @@ export const CLASS_COLOR: Record<SpectralClass, Color> = {
 // render in WORLD_CLASS_UNKNOWN_COLOR so they read as "TBD" rather than
 // ambiguously slotting into one of the real classes.
 export const WORLD_CLASS_COLOR: Record<WorldClass, Color> = {
-  rocky:     new Color(0xc4956a),
-  ocean:     new Color(0x4a9fd9),
-  desert:    new Color(0xe4a854),
-  lava:      new Color(0xd64a3a),
-  gas_dwarf: new Color(0xa090c8),
-  gas_giant: new Color(0xc4a878),
-  ice_giant: new Color(0x5a9ad6),
+  // Terrestrial
+  rocky:       new Color(0xc4956a),  // brown-tan
+  solid_giant: new Color(0xb88560),  // large rocky terrestrial, slightly darker than rocky
+  desert:      new Color(0xe4a854),  // dust-tan (Mars-like)
+  ocean:       new Color(0x4a9fd9),  // blue (Earth/Europa)
+  ice:         new Color(0xb8d8e8),  // pale cyan-white (Callisto/Triton)
+  iron:        new Color(0x9a6660),  // dark grey-red (Mercury-like)
+  lava:        new Color(0xd64a3a),  // molten red-orange
+  magma_ocean: new Color(0xb04030),  // dark red, denser than lava
+  chthonian:   new Color(0x705048),  // dark stripped-core grey-red
+  // Gaseous
+  gas_dwarf:   new Color(0xa090c8),  // lavender
+  hycean:      new Color(0x3a8090),  // deep blue-green (water through H2)
+  helium:      new Color(0xd4c08c),  // pale yellow
+  ice_giant:   new Color(0x5a9ad6),  // CH4-blue (Uranus/Neptune)
+  gas_giant:   new Color(0xc4a878),  // Jovian cream
 };
 export const WORLD_CLASS_UNKNOWN_COLOR = new Color(0x808080);
 
@@ -635,7 +665,9 @@ const ATMOSPHERE_BANDED_PRESSURE_BAR = 10;
 //      surface is visible through its cloud decks.
 export function isBandedAtmosphere(body: Body): boolean {
   const wc = body.worldClass;
-  if (wc === 'gas_giant' || wc === 'gas_dwarf' || wc === 'ice_giant') return true;
+  // All gaseous-bracket labels render banded (no visible surface).
+  if (wc === 'gas_giant' || wc === 'gas_dwarf' || wc === 'ice_giant'
+      || wc === 'hycean' || wc === 'helium') return true;
   const pressure = body.surfacePressureBar ?? 0;
   if (pressure >= ATMOSPHERE_BANDED_PRESSURE_BAR) return true;
   if (
