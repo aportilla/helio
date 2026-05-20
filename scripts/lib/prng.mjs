@@ -49,14 +49,13 @@ export function sampleTruncated(prng, spec, round = false) {
 
 // Sample log-normal in natural log space, interpreting `spec.mean` as
 // the median (geometric mean) and `spec.sd / spec.mean` as the log-space
-// stdev — the convention called out in PHYSICAL_SPEC_BY_TYPE comments
-// ("the Architect should sample log(value) ~ N(log(mean), sd / mean)").
-// Clamps the linear-space result to [min, max]. Use for priors whose
-// realistic distribution is heavy-tailed in linear space (gas-giant mass
-// with sd ≈ mean is the canonical case — linear truncated normal
-// under-produces the super-Jupiter tail because the upper half of the
+// stdev. Clamps the linear-space result to [min, max]. Use for priors
+// whose realistic distribution is heavy-tailed in linear space (envelope
+// mass ratio is the canonical case — linear truncated normal under-
+// produces the super-Jupiter tail because the upper half of the
 // distribution gets compressed into [mean, max] in linear space rather
-// than spreading across [mean, max] in log space).
+// than spreading across [mean, max] in log space). Spec flag `log: true`
+// is the convention for marking a prior as log-distributed.
 export function sampleLogTruncated(prng, spec, round = false) {
   const logMean = Math.log(spec.mean);
   const logSd = spec.sd / spec.mean;
@@ -66,8 +65,8 @@ export function sampleLogTruncated(prng, spec, round = false) {
 }
 
 // Dispatch by `spec.log`: log-normal if truthy, otherwise linear
-// truncated normal. Lets PHYSICAL_SPEC_BY_TYPE flag the gas-giant mass
-// as log-distributed without forcing every caller to branch.
+// truncated normal. Lets a prior spec flag itself as log-distributed
+// without forcing every caller to branch.
 export function samplePhysical(prng, spec, round = false) {
   return spec.log
     ? sampleLogTruncated(prng, spec, round)

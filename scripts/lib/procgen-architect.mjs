@@ -12,19 +12,27 @@
 // character, atmosphere, resources, biosphere are left as `_unknowns`
 // for the Filler (procgen.mjs) to derive.
 
-import { hash32, mulberry32, sampleNormal, samplePhysical, sampleTruncated, sampleLogTruncated, sampleMixture, samplePoisson } from './prng.mjs';
-import { insolation } from './astrophysics.mjs';
-import { radiusFromMass } from './procgen.mjs';
+import { hash32, mulberry32, sampleNormal, sampleTruncated, sampleLogTruncated, samplePhysical, sampleMixture, samplePoisson } from './prng.mjs';
+import { insolation, frostLineAU, solidSurfaceDensity, isolationMass } from './astrophysics.mjs';
+import { radiusFromMass, planetTypeFor } from './procgen.mjs';
 import {
   PROCGEN_VERSION,
   PLANET_COUNT_BY_CLASS,
   COMPANION_PLANET_SUPPRESSION,
   ORBITAL_GEOMETRY_BY_CLASS,
-  TYPE_WEIGHTS_BY_INSOLATION,
-  TYPE_MULTIPLIER_BY_CLASS,
-  PHYSICAL_SPEC_BY_TYPE,
-  RADIUS_SCATTER_SIGMA_LOG,
-  RADIUS_CLAMP_BY_TYPE,
+  SNOW_LINE_TEMPERATURES,
+  SNOW_LINE_BOOSTS,
+  MMSN_NORMALIZATION,
+  DISK_GAS_LIFETIME_MYR,
+  ACCRETION_EFFICIENCY,
+  CRITICAL_CORE_MASS_EARTH,
+  ENVELOPE_FRACTION,
+  TIME_TO_RUNAWAY_MYR,
+  MIGRATION_RATE,
+  MIGRATION_FRACTION,
+  MIGRATION_MIN_MASS_EARTH,
+  MIN_HOT_JUPITER_AU,
+  RADIUS_SCATTER_LOG,
   MOON_COUNT_BY_TYPE,
   MOON_MASS_LOG_EARTH,
   MOON_MAX_HOST_MASS_RATIO,
@@ -49,21 +57,6 @@ import {
 // =============================================================================
 // Sampling helpers
 // =============================================================================
-
-// Weighted categorical sample. Weights can be unnormalized; zero/negative
-// entries are skipped. Falls back to last key on FP edge cases.
-function sampleWeighted(prng, weights) {
-  let total = 0;
-  for (const w of Object.values(weights)) if (w > 0) total += w;
-  if (total <= 0) return Object.keys(weights)[0];
-  let r = prng() * total;
-  for (const [k, w] of Object.entries(weights)) {
-    if (w <= 0) continue;
-    r -= w;
-    if (r <= 0) return k;
-  }
-  return Object.keys(weights).pop();
-}
 
 // Per-(star, slot, salt) PRNG. slot=-1 reserved for system-level draws
 // (planet count, etc.) that aren't tied to a specific orbital slot.
@@ -119,23 +112,29 @@ function ringPrng(planetId, salt) {
 // Per-slot sampling
 // =============================================================================
 
-// Largest-insolationMin-wins lookup. TYPE_WEIGHTS_BY_INSOLATION is ordered
-// hot→cold; the first matching entry is the right zone.
-function pickInsolationZone(S) {
-  for (const zone of TYPE_WEIGHTS_BY_INSOLATION) {
-    if (S >= zone.insolationMin) return zone;
-  }
-  return TYPE_WEIGHTS_BY_INSOLATION[TYPE_WEIGHTS_BY_INSOLATION.length - 1];
-}
-
-function planetTypeWeights(S, stellarClass) {
-  const zone = pickInsolationZone(S);
-  const multipliers = TYPE_MULTIPLIER_BY_CLASS[stellarClass] ?? TYPE_MULTIPLIER_BY_CLASS.G;
-  const weights = {};
-  for (const [type, w] of Object.entries(zone.weights)) {
-    weights[type] = w * (multipliers[type] ?? 1);
-  }
-  return weights;
+// Per-star disk context — frost-line trio in AU + sampled disk gas lifetime.
+// Computed once per call to generateSystem / generateOverlay and threaded
+// into buildPlanetAtOrbit so every slot reads the same disk state. The gas
+// lifetime is the single stochastic draw at this layer; frost-line positions
+// are deterministic functions of stellar luminosity.
+//
+// Returns null on missing inputs — callers fall back to legacy behavior
+// would-be, but every real catalog star has mass + class so this is
+// defensive against future stripped-down callers, not a hot path.
+function buildStarDiskContext(star) {
+  if (star == null || star.mass == null) return null;
+  const cls = star.cls;
+  const gasSpec = DISK_GAS_LIFETIME_MYR[cls] ?? DISK_GAS_LIFETIME_MYR.G;
+  const gasPrng = slotPrng(star.id, -1, 'disk_gas_lifetime');
+  const diskGasLifetimeMyr = sampleTruncated(gasPrng, gasSpec);
+  return {
+    frostLines: {
+      H2O: frostLineAU(star.mass, SNOW_LINE_TEMPERATURES.H2O),
+      NH3: frostLineAU(star.mass, SNOW_LINE_TEMPERATURES.NH3),
+      CH4: frostLineAU(star.mass, SNOW_LINE_TEMPERATURES.CH4),
+    },
+    diskGasLifetimeMyr,
+  };
 }
 
 // IAU planet designation: 0→'b', 1→'c', … 'a' is reserved for the star.
@@ -177,6 +176,7 @@ function makeBody(props) {
     hostBodyIdx: null,
     planetType: null,
     worldClass: null,
+    formationAu: null,
     bulkWaterFraction: null,
     bulkMetalFraction: null,
     largestBodyKm: null,
@@ -539,49 +539,91 @@ export function generateSystem(star, clusterRole = 'primary', clusterPlanetBudge
     orbits.push(a);
   }
 
-  const bodies = [];
+  const diskCtx = buildStarDiskContext(star);
+  // Build planets first, run migration before satellites — a migrated
+  // giant sweeps the inner system and we don't want to spend PRNG draws
+  // building moons for bodies that get removed.
+  const rawPlanets = [];
   for (let i = 0; i < orbits.length; i++) {
-    bodies.push(...buildPlanetAtOrbit(star, i, orbits[i], planetLetterAt(i)));
+    const p = buildPlanetCore(star, i, orbits[i], planetLetterAt(i), '', diskCtx);
+    if (p) rawPlanets.push(p);
+  }
+  const planets = migratePass(rawPlanets, star);
+  const bodies = [];
+  for (const p of planets) {
+    bodies.push(p);
+    bodies.push(...attachMoonsAndRing(p, star));
   }
   // Belts roll independently of the planet stream, but their placement
   // depends on it — asteroid/ice belts anchor against the system's
   // giants. Pass in the planets we just built so generateBelts can find
   // them. A zero-planet system still rolls belts (debris-disk-only
   // configurations are valid) — they just take the giantless path.
-  const planets = bodies.filter(b => b.kind === 'planet');
   bodies.push(...generateBelts(star, planets));
   return bodies;
 }
 
-// Per-orbit body construction: sample type → mass → radius → flavor for a
-// planet at `aAu` around `star`, generate its moons and (optional) ring,
-// and return them as a flat array. Shared by the architect's primary
-// planet stream and the partial-system overlay below; `saltPrefix` keeps
-// the two PRNG streams independent so the overlay's draws can't be
-// confused with what the architect would have produced.
-function buildPlanetAtOrbit(star, slotIdx, aAu, letter, saltPrefix = '') {
-  const cls = star.cls;
-  const S = insolation(star.mass, aAu);
-  const weights = planetTypeWeights(S, cls);
-  const typePrng = slotPrng(star.id, slotIdx, saltPrefix + 'planet_type');
-  const planetType = sampleWeighted(typePrng, weights);
-  const physSpec = PHYSICAL_SPEC_BY_TYPE[planetType];
-  if (!physSpec) return [];
+// Build one planet body at its formation orbit. Physics-driven mass
+// pipeline → radius → flavor. Returns the planet only (no moons / ring) —
+// the orchestrator runs the migration pass before attaching satellites,
+// since a migrated giant sweeps the inner system and we don't want to
+// build moons for planets that get removed.
+//
+// `formationAu` is where the body accreted. Initially it also serves as
+// semiMajorAu (in-situ formation); the migration pass may later move
+// semiMajorAu inward for hot Jupiters. Bulk water/metal sample on the
+// insolation at formationAu — a migrated giant keeps its outer-zone
+// composition.
+//
+// `diskCtx` is the per-star context from buildStarDiskContext(star) —
+// frost-line trio in AU + sampled disk gas lifetime. Both call sites
+// pass it; null fallback exists only for defensive coding.
+function buildPlanetCore(star, slotIdx, formationAu, letter, saltPrefix = '', diskCtx = null) {
+  if (diskCtx == null) return null;
+  const S = insolation(star.mass, formationAu);
 
-  const massPrng = slotPrng(star.id, slotIdx, saltPrefix + 'mass');
+  // Continuous mass pipeline:
+  //   isolation mass (zone physics) → core mass (× accretion efficiency)
+  //   → gas-envelope decision (mass + frost-line + disk-gas gates)
+  //   → total mass → radius
+  const Σ = solidSurfaceDensity(
+    star.mass, formationAu, diskCtx.frostLines, MMSN_NORMALIZATION, SNOW_LINE_BOOSTS,
+  );
+  const mIso = isolationMass(formationAu, star.mass, Σ);
+  if (mIso == null || mIso <= 0) return null;
+
+  const accPrng = slotPrng(star.id, slotIdx, saltPrefix + 'accretion');
+  const accZone = formationAu < diskCtx.frostLines.H2O ? 'inner' : 'outer';
+  const coreMass = mIso * samplePhysical(accPrng, ACCRETION_EFFICIENCY[accZone]);
+
+  // Gas envelope fires only when all three gates pass: the core can
+  // contract H2 fast enough (≥ critical mass), it sits past the water
+  // frost line so volatile ice feeds the envelope, and the disk still
+  // has gas left when runaway is reached.
+  let envelopeMass = 0;
+  const canRunaway =
+    coreMass >= CRITICAL_CORE_MASS_EARTH &&
+    formationAu > diskCtx.frostLines.H2O &&
+    diskCtx.diskGasLifetimeMyr > TIME_TO_RUNAWAY_MYR;
+  if (canRunaway) {
+    const envPrng = slotPrng(star.id, slotIdx, saltPrefix + 'envelope');
+    const envRatio = sampleLogTruncated(envPrng, ENVELOPE_FRACTION);
+    envelopeMass = coreMass * envRatio;
+  }
+  const massEarth = coreMass + envelopeMass;
+
+  // Radius from the Otegi mass-radius relation plus a single composition-
+  // agnostic log-scatter. The piecewise mean (rocky line below 2 M⊕, ice
+  // line below 130, gas plateau above) already encodes the bulk of
+  // density variety; remaining scatter is the per-body composition noise.
   const radiusPrng = slotPrng(star.id, slotIdx, saltPrefix + 'radius');
-  // Mass first — dispatched via samplePhysical so jupiter's log-normal
-  // spec sampling kicks in while terrestrial linear specs stay
-  // truncated-normal. Radius is then DERIVED from mass via the Otegi
-  // relation plus a per-type log-scatter, keeping density physically
-  // consistent (no more 1.6-R⊕ rocky worlds at 0.5 M⊕ from independent
-  // sampling). Final radius is clamped to per-type bounds.
-  const massEarth = samplePhysical(massPrng, physSpec.massEarth);
   const meanRadius = radiusFromMass(massEarth) ?? 1.0;
-  const sigma = RADIUS_SCATTER_SIGMA_LOG[planetType] ?? 0.1;
-  const clamp = RADIUS_CLAMP_BY_TYPE[planetType] ?? { min: 0.1, max: 30 };
-  const noisy = meanRadius * Math.exp(sampleNormal(radiusPrng, 0, sigma));
-  const radiusEarth = Math.max(clamp.min, Math.min(clamp.max, noisy));
+  const noisyRadius = meanRadius * Math.exp(sampleNormal(radiusPrng, 0, RADIUS_SCATTER_LOG));
+  const radiusEarth = Math.max(0.1, Math.min(30, noisyRadius));
+  // Legacy 6-bucket label, re-derived from the now-continuous mass +
+  // radius + insolation. Phase F deletes the field; for now moons +
+  // rings + audit still consume it.
+  const planetType = planetTypeFor(massEarth, radiusEarth, S);
 
   const eccPrng = slotPrng(star.id, slotIdx, saltPrefix + 'eccentricity');
   const incPrng = slotPrng(star.id, slotIdx, saltPrefix + 'inclination');
@@ -592,10 +634,12 @@ function buildPlanetAtOrbit(star, slotIdx, aAu, letter, saltPrefix = '') {
   const bulkMetalPrng = slotPrng(star.id, slotIdx, saltPrefix + 'bulk_metal');
   const bulkMetalFraction = sampleBulkMetalFraction(bulkMetalPrng, S);
 
-  // Kepler: P² = a³ / M_host_solar
-  const periodDays = 365.25 * Math.sqrt(Math.pow(aAu, 3) / Math.max(star.mass, 0.01));
+  // Kepler: P² = a³ / M_host_solar. Computed against semiMajorAu (which
+  // currently equals formationAu); the migration pass recomputes period
+  // for any body whose semiMajorAu moves.
+  const periodDays = 365.25 * Math.sqrt(Math.pow(formationAu, 3) / Math.max(star.mass, 0.01));
 
-  const planet = makeBody({
+  return makeBody({
     id: `${star.id}-${letter}`,
     hostId: star.id,
     kind: 'planet',
@@ -603,7 +647,8 @@ function buildPlanetAtOrbit(star, slotIdx, aAu, letter, saltPrefix = '') {
     name: `${star.name} ${letter}`,
     source: 'procgen',
     planetType,
-    semiMajorAu: Number(aAu.toFixed(4)),
+    semiMajorAu: Number(formationAu.toFixed(4)),
+    formationAu: Number(formationAu.toFixed(4)),
     eccentricity: Number(sampleMixture(eccPrng, ECCENTRICITY).toFixed(4)),
     inclinationDeg: Number(sampleTruncated(incPrng, INCLINATION_DEG).toFixed(2)),
     periodDays: Number(periodDays.toFixed(2)),
@@ -614,10 +659,58 @@ function buildPlanetAtOrbit(star, slotIdx, aAu, letter, saltPrefix = '') {
     bulkWaterFraction,
     bulkMetalFraction,
   });
-  const out = [planet, ...generateMoons(planet, planetType, S)];
-  const ring = generateRing(planet, planetType);
+}
+
+// Attach moons + (optional) ring to a planet that survived migration.
+// Moons inherit insolation from the planet's formation location — a
+// migrated hot Jupiter's moons still carry their outer-zone composition.
+function attachMoonsAndRing(planet, star) {
+  const Sform = insolation(star.mass, planet.formationAu ?? planet.semiMajorAu);
+  const out = [...generateMoons(planet, planet.planetType, Sform)];
+  const ring = generateRing(planet, planet.planetType);
   if (ring) out.push(ring);
   return out;
+}
+
+// Type II disk migration pass. Iterates the planet list, rolls each
+// qualifying gas giant (mass ≥ MIGRATION_MIN_MASS_EARTH, formed past
+// the H2O frost line) for inward migration. A migrating body's
+// semiMajorAu moves to formationAu × MIGRATION_FRACTION (floored at
+// MIN_HOT_JUPITER_AU); the body's formationAu stays put. Inner-zone
+// companions are swept (Type II migration drags the gas disk and
+// gravitationally clears the path).
+//
+// Mutates planets in place (semiMajorAu, periodDays) and returns the
+// surviving list (swept planets removed). Idempotent under stable PRNG
+// seeding — re-running with the same disk context produces the same
+// migration outcomes.
+function migratePass(planets, star, saltPrefix = '') {
+  if (planets.length === 0) return planets;
+  const migrators = [];
+  for (let i = 0; i < planets.length; i++) {
+    const p = planets[i];
+    if (p.massEarth < MIGRATION_MIN_MASS_EARTH) continue;
+    if (p.formationAu == null) continue;
+    const prng = slotPrng(star.id, i, saltPrefix + 'migration');
+    if (prng() >= MIGRATION_RATE) continue;
+    const newA = Math.max(
+      MIN_HOT_JUPITER_AU,
+      p.formationAu * sampleTruncated(prng, MIGRATION_FRACTION),
+    );
+    p.semiMajorAu = Number(newA.toFixed(4));
+    p.periodDays = Number(
+      (365.25 * Math.sqrt(Math.pow(newA, 3) / Math.max(star.mass, 0.01))).toFixed(2),
+    );
+    migrators.push(p);
+  }
+  if (migrators.length === 0) return planets;
+  // Sweep: any planet whose current orbit is inside ANY migrator's
+  // formation orbit gets cleared. Migrators themselves are kept (their
+  // semiMajorAu is now smaller than their formationAu, so the inequality
+  // wouldn't match them — but we guard explicitly to be safe).
+  const migratorSet = new Set(migrators);
+  const sweepFloor = Math.max(...migrators.map(m => m.formationAu));
+  return planets.filter(p => migratorSet.has(p) || p.semiMajorAu >= sweepFloor);
 }
 
 // Partial-system overlay. For stars that already host one or more catalog
@@ -659,6 +752,7 @@ export function generateOverlay(star, catalogPlanets, clusterRole = 'primary', c
   const existing = catalogPlanets.length;
   const toAdd = Math.max(0, N - existing);
 
+  const diskCtx = buildStarDiskContext(star);
   if (toAdd > 0) {
     let outermost = -Infinity;
     for (const p of catalogPlanets) {
@@ -695,7 +789,14 @@ export function generateOverlay(star, catalogPlanets, clusterRole = 'primary', c
         const periodRatio = Math.exp(sampleNormal(ratioPrng, Math.log(geom.spacingRatio.mean), geom.spacingRatio.sd));
         a *= Math.pow(periodRatio, 2 / 3);
         if (a > geom.outerEdgeAu) break;
-        out.push(...buildPlanetAtOrbit(star, slotIdx, a, allocLetter(), 'overlay_'));
+        // No migration on overlay path — catalog anchors fix observed
+        // positions, and overlay siblings are outer-only additions that
+        // wouldn't have time to migrate anyway.
+        const p = buildPlanetCore(star, slotIdx, a, allocLetter(), 'overlay_', diskCtx);
+        if (p) {
+          out.push(p);
+          out.push(...attachMoonsAndRing(p, star));
+        }
       }
     }
   }

@@ -138,6 +138,15 @@ export interface Body {
   // Orbit (around the host star for planets/belts; around the host
   // planet for moons/rings).
   readonly semiMajorAu: number | null;
+  // Orbital distance the planet formed at, before any Type II disk
+  // migration. Usually equals semiMajorAu (in-situ formation); a hot
+  // Jupiter has formationAu past the H2O frost line and semiMajorAu
+  // inside ~0.1 AU. Bulk composition (waterFraction / metalFraction)
+  // samples on formationAu insolation, not current — a migrated giant
+  // keeps its outer-zone water budget despite its hot current orbit.
+  // Set on planets only (architect samples + persists); null on moons,
+  // belts, and rings — they inherit formation context from their host.
+  readonly formationAu: number | null;
   readonly eccentricity: number | null;
   readonly inclinationDeg: number | null;
   readonly periodDays: number | null;

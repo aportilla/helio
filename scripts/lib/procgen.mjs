@@ -1070,6 +1070,17 @@ function fillBody(b, allBodies, stars) {
   }
 
   const S = hostStar ? insolation(hostStar.mass, aFromStar) : null;
+  // Composition (bulkWater / bulkMetal) reads insolation at the body's
+  // formation location, not its current orbit — a hot Jupiter that
+  // migrated from past the frost line keeps its outer-zone water budget.
+  // For in-situ formation (formationAu null or equal to semiMajorAu),
+  // Sform === S. Moons inherit formation context from their host planet.
+  const aFormation = b.kind === 'planet'
+    ? (b.formationAu ?? aFromStar)
+    : (b.kind === 'moon' && hostBody)
+      ? (hostBody.formationAu ?? aFromStar)
+      : aFromStar;
+  const Sform = hostStar ? insolation(hostStar.mass, aFormation) : null;
   const lockProxy = (b.kind === 'planet' && hostStar)
     ? tidalLockProxy(hostStar.mass, b.semiMajorAu)
     : (b.kind === 'moon' ? tidalLockProxy(hostMassSolar, b.semiMajorAu) : null);
@@ -1105,10 +1116,10 @@ function fillBody(b, allBodies, stars) {
   // draws; both read insolation for the zone gate. Fall through to
   // null when S is unknown.
   if (unknowns.has('bulkWaterFraction')) {
-    if (S != null) bulkWaterFraction = bulkWaterFractionFor(working, S);
+    if (Sform != null) bulkWaterFraction = bulkWaterFractionFor(working, Sform);
   }
   if (unknowns.has('bulkMetalFraction')) {
-    if (S != null) bulkMetalFraction = bulkMetalFractionFor(working, S);
+    if (Sform != null) bulkMetalFraction = bulkMetalFractionFor(working, Sform);
   }
   working = { ...working, bulkWaterFraction, bulkMetalFraction };
 

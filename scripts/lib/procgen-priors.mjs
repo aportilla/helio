@@ -218,135 +218,20 @@ export const HABITABLE_ZONE_AU = {
 // Per-planet sampling
 // ---------------------------------------------------------------------------
 
-// Planet "type" taxonomy used only inside the Architect to sample mass
-// and radius. The Filler later maps mass + radius + insolation onto the
-// runtime WorldClass enum (rocky / ocean / ice / desert / lava /
-// gas_dwarf / gas_giant / ice_giant). Types here are about mass/radius;
-// world classes are about surface character.
+// Legacy 6-bucket label set — emitted by planetTypeFor(mass, radius, S)
+// from the continuous mass pipeline. No longer a sampling axis; consumed
+// by audit-procgen for histogram grouping and by moon/ring backfill code
+// that hasn't yet been ported to physics-keyed dispatch (Phase E).
+// Phase F deletes this entirely.
 export const PLANET_TYPES = ['hot_rocky', 'rocky', 'super_earth', 'sub_neptune', 'neptune', 'jupiter'];
 
-// Type weights per insolation zone. Insolation = stellar_flux_at_planet
-// in Earth units (Earth at 1 AU around Sol = 1.0).
-//
-// Architect samples a planet's type at orbital distance a by:
-//   1. compute S = stellar_luminosity_LSun / a²
-//   2. find the largest insolationMin <= S
-//   3. multiply the zone's weights by the host's TYPE_MULTIPLIER_BY_CLASS
-//   4. renormalize and sample from the weighted distribution
-//
-// Bands chosen so Mercury (S≈7) lands in 'warm', Earth (S=1) in
-// 'temperate', Mars (S≈0.43) on the temperate/cool boundary, Jupiter
-// (S≈0.037) in 'cool', Neptune (S≈0.001) in 'deep_cold'.
-//
-// Authored as a named record so the tune block can override a single zone
-// without restating the others; exported as an array (hot→cold order) for
-// the architect's largest-insolationMin-wins lookup. Insertion order is
-// preserved by JS engines, so the export stays correctly ordered.
-const TYPE_WEIGHTS_BY_INSOLATION_REALISTIC = {
-  // Hot zone (S > 100): closer than Mercury. Hot rockies dominate;
-  // hot Jupiters are famously rare — Wright et al. 2012 / Cumming et al.
-  // 2008 / Mayor et al. 2011 converge on ~1% occurrence around Sun-likes,
-  // which sets `jupiter` here at 0.01 once normalized over the zone.
-  hot:       { insolationMin: 100,  weights: { hot_rocky: 0.45, rocky: 0.05, super_earth: 0.29, sub_neptune: 0.15, neptune: 0.05, jupiter: 0.01 } },
-  // Warm (10–100): inner-system, Kepler's "radius valley" sits here.
-  warm:      { insolationMin: 10,   weights: { hot_rocky: 0.05, rocky: 0.20, super_earth: 0.35, sub_neptune: 0.30, neptune: 0.07, jupiter: 0.03 } },
-  // Temperate (0.5–10): habitable-adjacent for most stellar classes.
-  temperate: { insolationMin: 0.5,  weights: { hot_rocky: 0,    rocky: 0.40, super_earth: 0.30, sub_neptune: 0.20, neptune: 0.07, jupiter: 0.03 } },
-  // Cool (0.05–0.5): outer ice line — gas/ice giant zone for Sun-likes.
-  cool:      { insolationMin: 0.05, weights: { hot_rocky: 0,    rocky: 0.20, super_earth: 0.15, sub_neptune: 0.20, neptune: 0.25, jupiter: 0.20 } },
-  // Deep cold (<0.05): outer system; giants dominate.
-  deep_cold: { insolationMin: 0,    weights: { hot_rocky: 0,    rocky: 0.10, super_earth: 0.05, sub_neptune: 0.15, neptune: 0.35, jupiter: 0.35 } },
-};
-
-// Gameplay tune: lift the temperate-zone rocky weight from 0.40 → 0.50.
-// Combined with the M-dwarf inner-edge push above (more terrestrials
-// reaching this zone in the first place), this is the main lever for
-// η_Earth. Weights don't need to sum to 1 — sampleWeighted normalizes
-// at draw time — so this just biases the categorical without renormalizing
-// the realistic block's siblings by hand.
-const TYPE_WEIGHTS_BY_INSOLATION_TUNE = {
-  temperate: { weights: { rocky: 0.50 } },
-};
-
-export const TYPE_WEIGHTS_BY_INSOLATION = Object.values(mergeTunes(
-  TYPE_WEIGHTS_BY_INSOLATION_REALISTIC,
-  TYPE_WEIGHTS_BY_INSOLATION_TUNE,
-));
-
-// Per-stellar-class multipliers on the insolation weights above.
-// M dwarfs are giant-poor (Dressing observed hot-Jupiter rate ~0.3%
-// vs 1% around G stars) and skewed toward small worlds. A/B/O stars
-// host more giants (disk masses scale with stellar mass). WD systems
-// are weird — surviving close-in planets are typically rocky remnants
-// of stripped giants.
-//
-// Applied as a per-type multiplier on the zone weights, then
-// renormalized before sampling.
-export const TYPE_MULTIPLIER_BY_CLASS = {
-  O:  { hot_rocky: 0.3, rocky: 0.3, super_earth: 0.6, sub_neptune: 0.8, neptune: 1.3, jupiter: 1.5 },
-  B:  { hot_rocky: 0.3, rocky: 0.3, super_earth: 0.6, sub_neptune: 0.8, neptune: 1.3, jupiter: 1.5 },
-  A:  { hot_rocky: 0.5, rocky: 0.5, super_earth: 0.7, sub_neptune: 0.9, neptune: 1.3, jupiter: 1.5 },
-  F:  { hot_rocky: 0.8, rocky: 0.8, super_earth: 0.9, sub_neptune: 1.0, neptune: 1.1, jupiter: 1.2 },
-  G:  { hot_rocky: 1.0, rocky: 1.0, super_earth: 1.0, sub_neptune: 1.0, neptune: 1.0, jupiter: 1.0 }, // baseline
-  K:  { hot_rocky: 1.0, rocky: 1.0, super_earth: 1.0, sub_neptune: 1.0, neptune: 0.8, jupiter: 0.7 },
-  M:  { hot_rocky: 1.2, rocky: 1.2, super_earth: 1.0, sub_neptune: 0.8, neptune: 0.5, jupiter: 0.3 },
-  WD: { hot_rocky: 0.3, rocky: 0.8, super_earth: 1.0, sub_neptune: 1.0, neptune: 0.8, jupiter: 0.5 },
-  BD: { hot_rocky: 1.5, rocky: 1.2, super_earth: 0.8, sub_neptune: 0.5, neptune: 0.2, jupiter: 0.1 },
-};
-
-// Mass sampling specs per planet type.
-//
-// Mass in M⊕. Real distributions are log-normal; specs flagged with
-// `log: true` get sampled via sampleLogTruncated (jupiter, where
-// sd≈mean makes linear sampling under-produce the super-Jupiter tail).
-// Terrestrial specs stay linear — sd/mean is small enough that linear
-// and log-normal produce nearly identical output.
-//
-// Radius is NOT sampled independently — see massToRadiusWithScatter
-// in procgen.mjs. The Architect derives radius from mass via the
-// Otegi mass-radius relation plus a per-type log-scatter, keeping
-// density physically consistent.
-export const PHYSICAL_SPEC_BY_TYPE = {
-  // Mercury, Venus close-in analogs. Small + dense.
-  hot_rocky:   { massEarth: { mean: 0.6, sd: 0.7, min: 0.05, max: 4    } },
-  // Earth, Mars, Venus. The "Earth-like" prior.
-  rocky:       { massEarth: { mean: 1.0, sd: 0.8, min: 0.1,  max: 4    } },
-  // Kepler-22b, GJ 1214b-class. Ambiguous composition.
-  super_earth: { massEarth: { mean: 5,   sd: 3,   min: 1.5,  max: 12   } },
-  // GJ 436b, K2-18b. The "mini-Neptune" plateau just above radius valley.
-  sub_neptune: { massEarth: { mean: 12,  sd: 8,   min: 5,    max: 30   } },
-  // Uranus/Neptune analogs.
-  neptune:     { massEarth: { mean: 25,  sd: 15,  min: 15,   max: 60   } },
-  // Jupiter through hot-Jupiter superjovians. sd ≈ mean is the
-  // canonical log-normal case — flag log so sampleLogTruncated kicks in.
-  jupiter:     { massEarth: { mean: 250, sd: 250, min: 60,   max: 3000, log: true } },
-};
-
-// Per-type log-scatter (multiplicative spread) around the Otegi mean
-// mass-radius relation. radius = radiusFromMass(mass) × exp(N(0, σ)),
-// then clamped to a sane bound. Real exoplanet scatter at fixed mass
-// runs ~0.1-0.2 dex (factor 1.25-1.6) from composition variation; we
-// pick per-type σ to match observed cloud width.
-export const RADIUS_SCATTER_SIGMA_LOG = {
-  hot_rocky:   0.08,  // tight — rocky composition is well-constrained
-  rocky:       0.10,
-  super_earth: 0.12,  // some volatile / silicate ambiguity
-  sub_neptune: 0.15,  // wide — H/He envelope mass varies
-  neptune:     0.12,
-  jupiter:     0.10,  // tight — degeneracy pressure pins R near 11 R⊕
-};
-
-// Clamp bounds (R⊕) for the post-scatter radius so a heavy-tail draw
-// can't produce 50-R⊕ giants. Per-type since the floor and ceiling
-// differ by class.
-export const RADIUS_CLAMP_BY_TYPE = {
-  hot_rocky:   { min: 0.3, max: 1.8 },
-  rocky:       { min: 0.4, max: 1.8 },
-  super_earth: { min: 1.2, max: 2.5 },
-  sub_neptune: { min: 2.0, max: 4.0 },
-  neptune:     { min: 3.5, max: 6.5 },
-  jupiter:     { min: 8.0, max: 20.0 },
-};
+// Log-scatter (multiplicative) on the Otegi mass-radius relation. A
+// single value because the continuous pipeline already produces mass
+// variety from accretion-efficiency + envelope-ratio rolls; the radius
+// scatter only needs to capture residual composition noise at fixed
+// mass (water-vs-iron-vs-silicate, envelope contraction state). Real
+// exoplanet scatter at fixed mass runs ~0.10–0.15 dex.
+export const RADIUS_SCATTER_LOG = 0.10;
 
 // Moon count per planet type. Sampled as Poisson(mean) and clamped to
 // [0, max]. Poisson rather than truncated-normal because moon counts are
@@ -518,6 +403,35 @@ export const ENVELOPE_FRACTION = { mean: 5, sd: 10, min: 0.3, max: 50, log: true
 // as a "failed giant" — massive bare core, no envelope (Uranus/Neptune-
 // like or chthonian-precursor).
 export const TIME_TO_RUNAWAY_MYR = 0.5;
+
+// Type II disk migration: a fraction of gas giants formed past the H2O
+// frost line spiral inward through the gas disk and end as hot Jupiters
+// at a tiny fraction of their formation distance. Migration sweeps the
+// inner system clean of original-zone planets (the architect's migration
+// pass removes any companions inside the migrator's formationAu).
+//
+// MIGRATION_RATE: probability a qualifying body migrates. Real Kepler
+//   hot-Jupiter occurrence around Sun-likes is ~1%; we calibrate higher
+//   because the architect's pool of eligible giants is structurally
+//   small (~5 per build). Overlay-path planets are excluded from
+//   migration — a star with observed catalog companions would already
+//   have had any hot Jupiter detected. The high per-roll rate produces
+//   ~2 visible hot Jupiters per build; lowering would erase them from
+//   sampling noise. Revisit when the gas-giant population grows (e.g.
+//   Phase D's multi-snow-line composition).
+// MIGRATION_FRACTION: how far inward, sampled as fraction of formation
+//   distance. Real hot Jupiters sit at 0.02–0.10 AU after forming at
+//   3–10 AU — fractions in the 0.005–0.05 band.
+// MIGRATION_MIN_MASS_EARTH: only bodies above this mass migrate. Type II
+//   migration is gas-disk-driven and needs a body massive enough to open
+//   a disk gap. Hot Neptune-mass migrators are real (GJ 436b at 22 M⊕,
+//   GJ 1214b at ~6 M⊕) so we sit the cutoff below Neptune-mass.
+// MIN_HOT_JUPITER_AU: hard floor — migrators can't end inside ~0.01 AU
+//   (Roche-limit destruction territory).
+export const MIGRATION_RATE = 0.60;
+export const MIGRATION_FRACTION = { mean: 0.02, sd: 0.015, min: 0.005, max: 0.08 };
+export const MIGRATION_MIN_MASS_EARTH = 15;
+export const MIN_HOT_JUPITER_AU = 0.01;
 
 // ---------------------------------------------------------------------------
 // Bulk composition (read by the Architect, persisted on the body)
@@ -700,7 +614,7 @@ export const ORBITAL_PHASE_DEG = { min: 0, max: 360 };
 // the version reseeds the whole galaxy without changing CSV ids. Per-
 // generator suffixes can be layered on top by individual generators that
 // want to be re-rollable independently.
-export const PROCGEN_VERSION = 'v10';
+export const PROCGEN_VERSION = 'v12';
 
 // ---------------------------------------------------------------------------
 // Belts — system-level structural bands

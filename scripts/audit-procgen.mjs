@@ -284,6 +284,64 @@ for (const t of PLANET_TYPES) {
 console.log('  ' + pad('total', 13) + pad(totalProcgen, 6, true));
 console.log();
 
+// --- 3b. Mass histogram + gas-giant gate (Phase B regression view) --------
+//
+// Continuous mass pipeline produces a smooth log distribution; this block
+// surfaces any bucketing artifacts (spikes at boundaries would indicate
+// the old type-keyed dispatch leaked back in). The S<0.1 gas-giant rate
+// is the doc's regression gate for the outer-orbit envelope mechanic.
+
+const MASS_BINS = [
+  [0,     0.01,  '< 0.01'],
+  [0.01,  0.1,   '0.01–0.1'],
+  [0.1,   0.5,   '0.1–0.5'],
+  [0.5,   2,     '0.5–2'],
+  [2,     10,    '2–10'],
+  [10,    50,    '10–50'],
+  [50,    300,   '50–300'],
+  [300,   Infinity, '300+'],
+];
+console.log('=== Mass histogram (procgen planets, log bins, M⊕) ===');
+for (const [lo, hi, label] of MASS_BINS) {
+  const n = procgenPlanets.filter(p => p.massEarth != null && p.massEarth >= lo && p.massEarth < hi).length;
+  const p = (n / totalProcgen * 100).toFixed(1);
+  const bar = '█'.repeat(Math.round(n / totalProcgen * 50));
+  console.log('  ' + pad(label, 10) + pad(n, 6, true) + '  ' + pad(p + '%', 6, true) + '  ' + bar);
+}
+console.log();
+
+console.log('=== Gas-giant rate by insolation band (procgen planets, m≥10 M⊕) ===');
+console.log('  band               |  planets   m≥10   pct-gaseous   median.mass');
+console.log('  -------------------+----------------------------------------------');
+const S_BANDS = [
+  [100, Infinity, 'hot (S > 100)'],
+  [10,  100,      'warm (10–100)'],
+  [0.5, 10,       'temperate (0.5–10)'],
+  [0.05, 0.5,     'cool (0.05–0.5)'],
+  [0,    0.05,    'deep_cold (<0.05)'],
+  [0,    0.1,     '— S < 0.1 (gate)'],
+];
+for (const [lo, hi, label] of S_BANDS) {
+  const planets = procgenPlanets.filter(p => {
+    const s = insolationFor(p); return s != null && s >= lo && s < hi;
+  });
+  if (planets.length === 0) {
+    console.log('  ' + pad(label, 18) + ' | ' + pad('—', 8, true));
+    continue;
+  }
+  const masses = planets.map(p => p.massEarth ?? 0).sort((a, b) => a - b);
+  const med = masses[masses.length >> 1];
+  const big = planets.filter(p => (p.massEarth ?? 0) >= 10).length;
+  console.log(
+    '  ' + pad(label, 18) +
+    ' | ' + pad(planets.length, 7, true) +
+    '   ' + pad(big, 5, true) +
+    '   ' + pad((big / planets.length * 100).toFixed(1) + '%', 8, true) +
+    '     ' + pad(med.toFixed(3), 8, true),
+  );
+}
+console.log();
+
 // --- 4. Ring occurrence by planet type --------------------------------------
 
 console.log('=== Rings, by host planet type ===');

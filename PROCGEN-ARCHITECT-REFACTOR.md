@@ -2,7 +2,51 @@
 
 Working plan for replacing the Architect's `PlanetType` taxonomy with continuous physics-driven generators. Builds on the worldClass refactor (`PROCGEN-FUNDAMENTALS-REFACTOR.md`) which decoupled `worldClass` from physics generation; this doc extends the same principle to the architect side.
 
-Status: design intent. No code changes yet; this doc is the spec the implementation will hit.
+Status: Phases A–C landed. Phase D scope under discussion (see "Progress" below). Phases E–F not started.
+
+---
+
+## Progress
+
+| Phase | Status | Notes |
+|---|---|---|
+| **A — Disk-physics foundations** | ✅ landed | Helpers + priors in place; anchor regression script at `scripts/check-disk-physics.mjs` (`npm run check:disk-physics`) |
+| **B — Continuous mass pipeline** | ✅ landed | `planetTypeFor` is now a pure derived label; mass histogram is continuous |
+| **C — Formation zone + migration** | ✅ landed | `formationAu` primary attribute; Type II migration with inner-sweep collision handling |
+| **D — Multi-snow-line composition** | ⏸ scope open | Two-bucket bulk water/metal needs to become 4-zone; question outstanding on whether `bulkVolatileFraction` is a new primary field or derived-only |
+| **E — Moons + rings physics-derived** | not started | |
+| **F — Delete PlanetType + cleanup** | not started | |
+
+### Calibration deviations from doc anchors (informational)
+
+The doc lists target anchor values for each phase. Landing-time tuning produced these deviations — each documented in code comments where the constant lives:
+
+- **Phase A — `MMSN_NORMALIZATION` and `SNOW_LINE_BOOSTS.H2O`** were tuned higher than the doc's classical-MMSN values to satisfy the load-bearing `isolationMass(5 AU, Sun)` anchor (gas-giant gating). Side effect: outer-disk `isolationMass(20 AU, Sun)` overshoots the doc anchor (graphed as informational in the anchor check, not a hard gate). Phase B+ will need a disk-extent cutoff or pebble-drift correction to bring outer M_iso down; see the `SNOW_LINE_BOOSTS` comment.
+- **Phase B — `ACCRETION_EFFICIENCY` zoned (inner/outer) with heavy-tailed log-normal**, departing from the doc's single distribution. Inner zone captures terrestrial mergers (Theia-class impacts → Earth-mass); outer zone keeps cores modest so the envelope multiplier delivers gas-giant variety. `ENVELOPE_FRACTION` median anchored on Saturn-Neptune-Uranus rather than Jupiter (doc had Jupiter as typical).
+- **Phase C — `MIGRATION_RATE` set to 0.6 vs the doc's ~10%**. The architect-eligible pool of gas giants is structurally small (~5 per build) because most procgen large bodies come via the overlay path, which is excluded from migration (catalog observations would have already detected any hot Jupiter around an observed system). High per-roll rate lifts hot-Jupiter visibility without distorting the underlying physics. Revisit once the eligible pool grows.
+
+### What Phase D needs to settle
+
+The doc's Phase D adds three things:
+1. Replace two-bucket `BULK_WATER_FRACTION_BY_ZONE` / `BULK_METAL_FRACTION_BY_ZONE` with four-zone (`inside_H2O` / `H2O_to_NH3` / `NH3_to_CH4` / `past_CH4`).
+2. Update samplers in architect + filler to dispatch on the per-star frost-line trio (already computed by `buildStarDiskContext` from Phase A).
+3. Add `BULK_VOLATILE_FRACTION_BY_ZONE` (new non-water-volatile prior) — and, if persisted as a primary field, propagate through `Body`, CSV, build-catalog, and Sol curation.
+
+Open question on (3): persist `bulkVolatileFraction` as a new primary attribute, or compute it transient-only / derive at consumption time from `formationAu` + zone-table lookup? No downstream consumer wired up yet — atmosphere regime / biosphere gates would have to update to read it before persistence carries weight.
+
+### Pickup notes for a fresh session
+
+Start by reading this section + the "Phasing" section below. Phase A/B/C deliverables are in:
+- `scripts/lib/astrophysics.mjs` — disk-physics helpers (`frostLineS`, `frostLineAU`, `solidSurfaceDensity`, `isolationMass`)
+- `scripts/lib/procgen-priors.mjs` — all priors (disk physics, accretion, envelope, migration); `PROCGEN_VERSION = 'v12'`
+- `scripts/lib/procgen-architect.mjs` — `buildStarDiskContext`, `buildPlanetCore`, `attachMoonsAndRing`, `migratePass`
+- `scripts/lib/procgen.mjs` — `bulkWaterFractionFor`, `bulkMetalFractionFor`, filler `Sform` (formation-au insolation)
+- `src/data/stars.ts` — `Body.formationAu`
+- `src/data/bodies.csv` — `formation_au` column (Sol curated, others empty)
+- `scripts/check-disk-physics.mjs` — Phase A anchor regression gate
+- `scripts/audit-procgen.mjs` — Mass histogram + gas-giant-by-S-band sections added in Phase B
+
+To resume Phase D: re-read this doc's Phase D section + the open question above, then ask which scope to land.
 
 ---
 

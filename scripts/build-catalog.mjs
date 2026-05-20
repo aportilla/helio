@@ -519,6 +519,7 @@ const CURATED_SYSTEM_HOSTS = new Set(['sol']);
 // cells stay as strings (or null). Both paths fold empty + 'n/a' to null.
 const BODY_NUMERIC_FIELDS = [
   ['semi_major_au',          'semiMajorAu'],
+  ['formation_au',           'formationAu'],
   ['eccentricity',           'eccentricity'],
   ['inclination_deg',        'inclinationDeg'],
   ['period_days',            'periodDays'],
