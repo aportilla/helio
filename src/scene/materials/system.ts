@@ -61,7 +61,6 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       // Per-body render metadata packed: x = size in px, y = hasSurface
       // (0/1 — gas giants skip the surface block), z = seed, w = tilt.
       attribute vec4  aRenderMeta;
-      attribute float aHovered;
       // Surface resource palette + weights.
       attribute vec3  aPalette0;
       attribute vec3  aPalette1;
@@ -83,10 +82,13 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       attribute vec4  aAtmoScalars;
       // Biome stipple: xyz = pigment color, w = coverage density [0..1].
       attribute vec4  aBiomeColor;
-      // Shared rim + haze-layer color. Picked CPU-side by the regime
-      // in disc-palette.ts so the inward fade, the outward halo, and
-      // the uniform haze layer all agree.
-      attribute vec3  aHazeColor;
+      // Shared rim + haze-layer color + per-vertex hover flag.
+      // Layout: xyz = haze RGB (rim + uniform haze tint, picked
+      // CPU-side by the regime in disc-palette.ts), w = hover flag
+      // (0/1, flipped by MoonsLayer.setHovered / PlanetsLayer.
+      // setHovered). Conflated to keep the attribute count under the
+      // GPU's gl_MaxVertexAttribs cap.
+      attribute vec4  aHazeColor;
 
       varying float vRadius;
       varying vec2  vCenter;
@@ -116,7 +118,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       uniform float uDiscScale;
       uniform vec2  uViewport;
       void main() {
-        vHovered  = aHovered;
+        vHovered  = aHazeColor.w;
         vPalette0 = aPalette0;
         vPalette1 = aPalette1;
         vPalette2 = aPalette2;
@@ -138,7 +140,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
         vRimWidthPx     = aAtmoScalars.w;
         vBiomeColor    = aBiomeColor.xyz;
         vBiomeCoverage = aBiomeColor.w;
-        vHazeColor   = aHazeColor;
+        vHazeColor   = aHazeColor.xyz;
 
         // Integer-pixel disc diameter. Floor + 0.5 → round-to-nearest.
         float sz = floor(aRenderMeta.x * uDiscScale + 0.5);

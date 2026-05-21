@@ -101,8 +101,8 @@ export class MoonsLayer {
       if (!pool) continue;
       const slotIdx = pool.slotByBodyIdx.get(pick.bodyIdx);
       if (slotIdx === undefined) continue;
-      const attr = pool.geometry.attributes.aHovered as BufferAttribute;
-      attr.setX(slotIdx, value);
+      const attr = pool.geometry.attributes.aHazeColor as BufferAttribute;
+      attr.setW(slotIdx, value);
       attr.needsUpdate = true;
       return;
     }
@@ -236,7 +236,6 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   // Packed render metadata: stride 4 = [size, hasSurface, seed, tilt].
   // See planets.ts for the rationale.
   const renderMeta = new Float32Array(N * 4);
-  const hoveredAttr = new Float32Array(N);
   // Procedural-texture inputs — same shape as PlanetsLayer. Every
   // palette entry is lifted toward white by MOON_BRIGHTEN so the moon's
   // rim doesn't merge into a same-class parent at the inner overlap.
@@ -251,7 +250,9 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   const surfaceScalars = new Float32Array(N * 4);
   const atmoScalars    = new Float32Array(N * 4);
   const biomeColors = new Float32Array(N * 4);
-  const hazeColors  = new Float32Array(N * 3);
+  // Rim/haze color + per-vertex hover packed as vec4 [r, g, b, hover].
+  // See PlanetsLayer for the rationale (attribute-count cap).
+  const hazeColors  = new Float32Array(N * 4);
   slots.forEach((slot, i) => {
     const b = BODIES[slot.bodyIdx];
     const disc = buildDiscPalette(b, slot.discPx, c => lerpTowardWhite(c, MOON_BRIGHTEN));
@@ -295,14 +296,14 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
     biomeColors[i * 4 + 1] = disc.biomeColor[1];
     biomeColors[i * 4 + 2] = disc.biomeColor[2];
     biomeColors[i * 4 + 3] = disc.biomeCoverage;
-    hazeColors[i * 3 + 0] = disc.hazeColor[0];
-    hazeColors[i * 3 + 1] = disc.hazeColor[1];
-    hazeColors[i * 3 + 2] = disc.hazeColor[2];
+    hazeColors[i * 4 + 0] = disc.hazeColor[0];
+    hazeColors[i * 4 + 1] = disc.hazeColor[1];
+    hazeColors[i * 4 + 2] = disc.hazeColor[2];
+    hazeColors[i * 4 + 3] = 0;
   });
   const geometry = new BufferGeometry();
   geometry.setAttribute('position',        new BufferAttribute(positions, 3));
   geometry.setAttribute('aRenderMeta',     new BufferAttribute(renderMeta, 4));
-  geometry.setAttribute('aHovered',        new BufferAttribute(hoveredAttr, 1));
   geometry.setAttribute('aPalette0',       new BufferAttribute(palette0, 3));
   geometry.setAttribute('aPalette1',       new BufferAttribute(palette1, 3));
   geometry.setAttribute('aPalette2',       new BufferAttribute(palette2, 3));
@@ -314,7 +315,7 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   geometry.setAttribute('aSurfaceScalars', new BufferAttribute(surfaceScalars, 4));
   geometry.setAttribute('aAtmoScalars',    new BufferAttribute(atmoScalars, 4));
   geometry.setAttribute('aBiomeColor',     new BufferAttribute(biomeColors, 4));
-  geometry.setAttribute('aHazeColor',      new BufferAttribute(hazeColors, 3));
+  geometry.setAttribute('aHazeColor',      new BufferAttribute(hazeColors, 4));
   const material = makePlanetMaterial(1.0);
   const points = new Points(geometry, material);
   points.renderOrder = renderOrder;

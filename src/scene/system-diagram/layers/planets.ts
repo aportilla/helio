@@ -46,7 +46,6 @@ export class PlanetsLayer {
     // hasSurface is 0/1 — the shader short-circuits the surface paint
     // block on gas/ice giants when this is 0.
     const renderMeta = new Float32Array(P * 4);
-    const hovered   = new Float32Array(P);
     // Surface resource palette + weights — three RGB entries the surface
     // block picks from per worley cell.
     const palette0  = new Float32Array(P * 3);
@@ -66,10 +65,10 @@ export class PlanetsLayer {
     const atmoScalars = new Float32Array(P * 4);
     // Biome color packed as vec4: xyz = pigment, w = coverage density.
     const biomeColors = new Float32Array(P * 4);
-    // Single rim/haze color — used by both the uniform haze tint and
-    // the disc rim halo. Picked by the regime in disc-palette.ts so
-    // both render paths agree.
-    const hazeColors = new Float32Array(P * 3);
+    // Rim/haze color + per-vertex hover. Packed as vec4 [r, g, b,
+    // hover] — conflated so the total attribute count fits under the
+    // driver's gl_MaxVertexAttribs cap. setHovered writes hazeColors[i*4+3].
+    const hazeColors = new Float32Array(P * 4);
     this.planetIndices.forEach((bIdx, i) => {
       const b = BODIES[bIdx];
       const discPx = this.planetDiscPx[i];
@@ -114,14 +113,14 @@ export class PlanetsLayer {
       biomeColors[i * 4 + 1] = disc.biomeColor[1];
       biomeColors[i * 4 + 2] = disc.biomeColor[2];
       biomeColors[i * 4 + 3] = disc.biomeCoverage;
-      hazeColors[i * 3 + 0] = disc.hazeColor[0];
-      hazeColors[i * 3 + 1] = disc.hazeColor[1];
-      hazeColors[i * 3 + 2] = disc.hazeColor[2];
+      hazeColors[i * 4 + 0] = disc.hazeColor[0];
+      hazeColors[i * 4 + 1] = disc.hazeColor[1];
+      hazeColors[i * 4 + 2] = disc.hazeColor[2];
+      hazeColors[i * 4 + 3] = 0;
     });
     this.geometry = new BufferGeometry();
     this.geometry.setAttribute('position',        new BufferAttribute(positions, 3));
     this.geometry.setAttribute('aRenderMeta',     new BufferAttribute(renderMeta, 4));
-    this.geometry.setAttribute('aHovered',        new BufferAttribute(hovered, 1));
     this.geometry.setAttribute('aPalette0',       new BufferAttribute(palette0, 3));
     this.geometry.setAttribute('aPalette1',       new BufferAttribute(palette1, 3));
     this.geometry.setAttribute('aPalette2',       new BufferAttribute(palette2, 3));
@@ -133,7 +132,7 @@ export class PlanetsLayer {
     this.geometry.setAttribute('aSurfaceScalars', new BufferAttribute(surfaceScalars, 4));
     this.geometry.setAttribute('aAtmoScalars',    new BufferAttribute(atmoScalars, 4));
     this.geometry.setAttribute('aBiomeColor',     new BufferAttribute(biomeColors, 4));
-    this.geometry.setAttribute('aHazeColor',      new BufferAttribute(hazeColors, 3));
+    this.geometry.setAttribute('aHazeColor',      new BufferAttribute(hazeColors, 4));
     this.material = makePlanetMaterial(1.0);
     this.points = new Points(this.geometry, this.material);
     this.points.renderOrder = RENDER_ORDER_PLANET;
@@ -192,8 +191,8 @@ export class PlanetsLayer {
     if (pick.kind !== 'planet' || !this.geometry) return;
     const slot = this.slotByBodyIdx.get(pick.bodyIdx);
     if (slot === undefined) return;
-    const attr = this.geometry.attributes.aHovered as BufferAttribute;
-    attr.setX(slot, value);
+    const attr = this.geometry.attributes.aHazeColor as BufferAttribute;
+    attr.setW(slot, value);
     attr.needsUpdate = true;
   }
 
