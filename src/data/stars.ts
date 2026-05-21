@@ -169,7 +169,7 @@ export interface Body {
   // on formationAu vs the host star's H2O/NH3/CH4 snow lines, then
   // persists. Inside_H2O is metal-rich; each successive zone dilutes
   // the metal fraction as more volatiles join the solid budget. Used
-  // by resource priors and downstream chromophore/atmosphere variety
+  // by resource priors and downstream cloud / haze / atmosphere variety
   // (iron-world, carbon-world). Null on belt/ring kinds.
   readonly bulkMetalFraction: number | null;
   // 0..1 mass fraction of body that is non-water condensable volatiles
@@ -233,12 +233,6 @@ export interface Body {
   readonly atm2Frac: number | null;
   readonly atm3: string | null;
   readonly atm3Frac: number | null;
-  // DEPRECATED — being replaced by the cloud + haze layer split below.
-  // Still populated by the Filler and consumed by the current renderer
-  // until the layered shader lands. Once disc-palette.ts reads cloudGas/
-  // hazeGas directly, these go.
-  readonly chromophoreGas: string | null;
-  readonly chromophoreFrac: number | null;
   // Cloud layer — condensed species that forms the body's visible cloud
   // deck. Independent of atm1/atm2/atm3 (which carry the gas-phase mix
   // for gameplay). cloudGas names the condensate (H2O ice/droplets, NH3
@@ -351,8 +345,8 @@ export const WORLD_CLASS_UNKNOWN_COLOR = new Color(0x808080);
 
 // Optional per-class warm/cool tint applied to every palette entry by
 // the planet/moon shader's palette derivation. Compensates for the
-// gas-mix model's inability to represent chromophores (NH3 ice clouds +
-// tholin chromophores on Jupiter, etc.) — gas giants tint warm so they
+// gas-mix model's inability to represent condensed-phase chemistry on
+// gas-giant cloud decks (NH4SH on Jupiter, etc.) — gas giants tint warm so they
 // read as ruddy Jovian rather than pale Saturnian-cream, even when H2
 // dominates the atm fractions and shares with Saturn. Bodies whose
 // class isn't in the table get no tint.
@@ -495,13 +489,13 @@ export function bodyIcyness(body: Body): number {
 // it from the palette.
 //
 // SILICATE and DUST are condensable aerosols rather than true gases —
-// they only ever appear via the chromophore path (CHROMOPHORE_BY_CLASS),
-// never in ATMOSPHERE_GASES_BY_CLASS. SILICATE represents refractive
-// silicate cloud particles in hot-Jupiter / hot-sub-Neptune atmospheres
-// (Mg-Si-O condensates dredged from deep layers). DUST represents
-// suspended ferric-oxide aerosols on Mars-class desert worlds. Both
-// remain in the AtmGas type so the chromophore field doesn't need a
-// separate type — the bounded vocabulary stays bounded.
+// they only ever appear via the cloud or haze layer paths, never in
+// ATMOSPHERE_GASES_BY_CLASS. SILICATE represents refractive silicate
+// cloud particles in hot-Jupiter / hot-sub-Neptune atmospheres (Mg-Si-O
+// condensates dredged from deep layers). DUST represents suspended
+// ferric-oxide aerosols on Mars-class desert worlds. Both remain in
+// the AtmGas type so the cloud / haze gas fields don't need a separate
+// type — the bounded vocabulary stays bounded.
 export type AtmGas =
   | 'N2' | 'O2' | 'CO2' | 'H2O' | 'CH4' | 'NH3'
   | 'SO2' | 'Ar' | 'CO'  | 'H2'  | 'He'
@@ -517,7 +511,7 @@ export const GAS_COLOR: Record<AtmGas, Color> = {
   CO2: new Color(0xd8a878),  // dusty ochre (Venus)
   H2O: new Color(0xe4ecf0),  // near-white cloud
   CH4: new Color(0x6890d8),  // blue-cyan (Uranus/Neptune)
-  NH3: new Color(0xc89860),  // warm amber — Jovian NH3 ice / chromophore
+  NH3: new Color(0xc89860),  // warm amber — Jovian NH3 ice cloud
   SO2: new Color(0xc8a448),  // sulfurous yellow
   Ar:  new Color(0xa8b0b8),  // grey neutral
   CO:  new Color(0x988478),  // smoky brown
@@ -526,9 +520,9 @@ export const GAS_COLOR: Record<AtmGas, Color> = {
   // Condensate-only — appears via cloudGas (Venus's sulfuric-acid deck)
   // rather than as a gas-phase atm species.
   H2SO4: new Color(0xd8c474),  // yellow-cream — Venus's sulfuric acid cloud
-  // Aerosol-only species — these never appear via atm priors, but the
-  // GAS_COLOR fallback exists in case CHROMOPHORE_COLOR drift leaves a
-  // null lookup.
+  // Aerosol-only species — these never appear via atm priors. Routed
+  // through hazeGas in disc-palette.ts; the GAS_COLOR fallback exists
+  // in case CONDENSATE_COLOR_OVERRIDE drift leaves a null lookup.
   SILICATE: new Color(0x788098),  // refractive silicate-cloud grey-blue
   DUST:     new Color(0xa86040),  // ferric oxide rust (Mars dust)
 };
@@ -544,66 +538,46 @@ export const GAS_COLOR: Record<AtmGas, Color> = {
 // topGases() multiplies each gas's fraction by its potency before
 // renormalizing, so the displayed weights reflect visual contribution
 // rather than abundance. Tunable.
-// Multiplier applied to a body's `chromophoreFrac` before folding it
-// into topGases. Reflects that condensed-phase species (NH3 ice clouds,
-// H2O cloud decks, tholin aerosols) punch above their gas-phase fraction
-// — the visible signal is the cloud or aerosol surface, not the bulk
-// gas. Separate from GAS_POTENCY (per-molecule absorption strength)
-// because the two are independent physics:
-//   - potency       = how much one molecule of this gas absorbs
-//   - visual boost  = how much this trace species condenses into a
-//                     visually-dominant phase
-// A gas can be high in one and low in the other (CH4 absorbs strongly
-// as gas; NH3 condenses strongly into clouds). Tunable; ~75 gets Jupiter
-// to ~37% NH3 weight (~2 of 6 bands rendering as belt-brown) while
-// leaving Saturn's lower NH3 fraction at ~18% (one subtle band).
-export const CHROMOPHORE_VISUAL_BOOST = 75;
 
-// Color override when a gas appears via the chromophore path rather
-// than via atm1/2/3. Distinct because the chromophore signal is the
-// *condensed-phase product*, not the pure gas: Jupiter's brown belts
-// are NH4SH + tholin chromophores on NH3 ice clouds, not transparent
-// NH3 gas. Gases without an entry fall back to GAS_COLOR (clouds are
-// white either way; SO2 aerosols read similar to SO2 gas).
+// Multiplier applied to a body's `cloudCoverage` before folding the
+// cloud species into topGases. Lets a full-coverage cloud deck show
+// up in the band palette alongside the bulk atm gases without
+// overwhelming them — the cloud is condensed-phase chemistry on top
+// of, not instead of, the gas column. Tunable; ~0.02 calibrated so
+// Jupiter's NH3 (coverage 1.0, potency 3) lands at ~37% of the
+// renormalized palette (~2 of 6 bands rendering as belt-brown).
+export const CLOUD_VISUAL_BOOST = 0.02;
+
+// Condensed-phase color override — used when a gas appears via the
+// cloud or haze layer instead of as gas-phase atm. The condensed
+// product reads differently from the bulk gas: Jupiter's brown belts
+// are NH4SH + tholin photochemistry on NH3 ice clouds, not transparent
+// NH3 gas. Gases without an entry fall back to GAS_COLOR.
 //
-// Bodies where the same gas appears in both atm and chromophore slots
-// resolve via topGases' dedupe: the higher-weight entry wins, and the
-// chromophore boost makes that nearly always the chromophore path —
-// so the condensed-product color is what renders.
+// Used by:
+//   - topGases() for the cloud entry (so banded gas-giant clouds pick
+//     up the brown belt tone alongside H2/He cream).
+//   - disc-palette.ts hazeChromophoreColor() for the haze layer +
+//     rim color (Titan tholin, etc.).
 export const CHROMOPHORE_COLOR: Partial<Record<AtmGas, Color>> = {
   NH3: new Color(0xa05028),  // NH4SH + tholin brown — Jovian belt color
   CH4: new Color(0xc88040),  // tholin orange — Titan haze (CH4 photolysis product)
-  // SILICATE + DUST are chromophore-only species; CHROMOPHORE_COLOR is
-  // their only render path so the value here is what actually paints.
+  // SILICATE + DUST only enter rendering via cloud / haze paths; the
+  // value here is what actually paints.
   SILICATE: new Color(0x788098),  // refractive silicate-cloud grey-blue — hot Jupiters / hot sub-Neptunes
   DUST:     new Color(0xa86040),  // ferric oxide rust — Mars-class dust haze
   // H2O defaults to GAS_COLOR (clouds are white)
   // SO2 defaults to GAS_COLOR (sulfuric aerosols read similar to SO2 gas)
 };
 
-// Chromophores whose condensed-phase product forms an opaque aerosol
-// haze that visually occludes the surface, even at modest pressures.
-// Titan's CH4 → tholin haze and Venus's SO2 → sulfuric aerosols are
-// the canonical cases. H2O is intentionally absent — water cloud decks
-// allow surface visibility (Earth from space shows continents); we want
-// "ocean-like rocky with surface texture" not "opaque banded disc."
-export const HAZE_FORMING_CHROMOPHORES: ReadonlySet<AtmGas> = new Set(['CH4', 'SO2']);
-
-// Pressure threshold (bar) above which a haze-forming chromophore flips
-// the body into banded mode. Titan sits at 1.45 bar; this needs to be
-// below that. Set conservatively at 0.5 so an outlier sub-1-bar Titan-
-// analog still gets the right treatment, while Mars-class thin atms
-// (0.006 bar) stay in surface mode regardless of chromophore.
-const HAZE_BANDED_PRESSURE_BAR = 0.5;
-
 // Per-class set of gases that are present in the atmosphere but not
 // visible from above — buried under a cloud deck at the photic depth
 // the disc renderer is modeling. Gas-giant CH4 is the canonical case:
 // real Jupiter and Saturn carry CH4 at 0.3-0.5% by mass, but it sits
 // below the NH3 ice cloud layer, so the disc's apparent color comes
-// from the cloud tops + chromophores, not from CH4 absorption. Ice
-// giants have thinner / higher cloud cover and CH4 IS the visible
-// signal, so they're intentionally absent from the filter.
+// from the cloud tops + condensed-phase chemistry, not from CH4
+// absorption. Ice giants have thinner / higher cloud cover and CH4 IS
+// the visible signal, so they're intentionally absent from the filter.
 //
 // topGases drops filtered gases from the candidate list before
 // scoring. The gas stays in atm1..3 for gameplay (CH4 really is in
@@ -615,13 +589,9 @@ export const GAS_VISIBILITY_FILTER: Partial<Record<WorldClass, ReadonlySet<AtmGa
   // ice_giant intentionally absent — CH4 is the Uranus/Neptune blue.
 };
 
-// Molecular weight per atmospheric gas (amu). Lighter gases concentrate
-// at high altitude in equilibrium atmospheres — useful for picking the
-// gas most visible at the LIMB of banded bodies whose chromophore is
-// deep cloud chemistry (NH3 on gas giants) rather than a high-altitude
-// haze. Aerosol species (SILICATE, DUST) get a "heavy particulate"
-// weight that keeps them out of the lightest-gas pick — they enter the
-// limb color via the chromophore path, not via this table.
+// Molecular weight per atmospheric gas (amu). Used historically for
+// altitude-stratification pickers; current renderer doesn't read it
+// but the table is kept for analytical scripts + future use.
 export const GAS_MOLECULAR_WEIGHT: Record<AtmGas, number> = {
   H2:   2,
   He:   4,
@@ -663,9 +633,9 @@ export const GAS_POTENCY: Record<AtmGas, number> = {
   // Potency matches H2O/NH3 cloud-former magnitude (Venus's H2SO4 deck
   // dominates its visual signal at a few percent fraction).
   H2SO4: 3.0,
-  // Aerosol-only — only meaningful via the chromophore path. Potency
-  // of 3 lets a 0.1% silicate/dust frac match a 3% H2O cloud-deck
-  // signal at the same boost level.
+  // Aerosol-only — only meaningful via the cloud or haze layer paths.
+  // Potency of 3 matches the cloud-former magnitude so the species
+  // contributes meaningfully when it appears.
   SILICATE: 3.0,
   DUST:     3.0,
 };
@@ -692,79 +662,51 @@ const RESOURCE_KEYS: readonly ResourceKey[] = [
   'resRareEarths', 'resRadioactives', 'resExotics',
 ];
 
-// Pressure (bar) above which a non-giant world's atmosphere visually
-// occludes its surface. Venus sits at ~90 bar so it clears easily;
-// Earth's 1 bar and Mars's 0.006 bar stay below. Tunable.
-const ATMOSPHERE_BANDED_PRESSURE_BAR = 10;
-
-// True when the body's atmosphere replaces its surface in the disc
-// render. Three triggers, in priority order:
-//   1. Gas/ice giants by class — no surface exists.
-//   2. Venus-class thick atmosphere (≥10 bar) — any composition.
-//   3. Titan-class haze-forming chromophore (CH4 → tholin, SO2 →
-//      sulfuric aerosol) at modest pressure (≥0.5 bar) — even though
-//      the bulk gas is transparent (Titan is mostly N2), the
-//      photochemistry product is opaque and obscures the surface.
-//      H2O is intentionally not in the haze-forming set; Earth's
-//      surface is visible through its cloud decks.
-export function isBandedAtmosphere(body: Body): boolean {
-  const wc = body.worldClass;
-  // All gaseous-bracket labels render banded (no visible surface).
-  if (wc === 'gas_giant' || wc === 'gas_dwarf' || wc === 'ice_giant'
-      || wc === 'hycean' || wc === 'helium') return true;
-  const pressure = body.surfacePressureBar ?? 0;
-  if (pressure >= ATMOSPHERE_BANDED_PRESSURE_BAR) return true;
-  if (
-    pressure >= HAZE_BANDED_PRESSURE_BAR &&
-    body.chromophoreGas !== null &&
-    HAZE_FORMING_CHROMOPHORES.has(body.chromophoreGas as AtmGas)
-  ) {
-    return true;
-  }
-  return false;
-}
-
 // Top 1-3 atmospheric gases for rendering, with each gas's contribution
-// computed as `fraction × potency`. The chromophore (if any) folds in
-// as an additional candidate with weight `chromophoreFrac × potency ×
-// CHROMOPHORE_VISUAL_BOOST` — see the const for why. The full candidate
-// list is then sorted by weight and trimmed to the top 3, so a body
-// whose chromophore outweighs its by-mass third gas (Jupiter: NH3
-// chromophore vs CH4 atm3) gets the chromophore in the palette.
+// computed as `fraction × potency`. The cloud condensate folds in as
+// an additional candidate so its condensed-phase color (Jupiter's NH3
+// brown, etc.) enters the palette alongside the bulk atm gases.
 //
-// The output may reorder vs the CSV's atm1/atm2/atm3 ordering when a
-// low-fraction high-potency gas (CH4 on ice giants) outweighs a high-
-// fraction transparent gas (H2). Unknown gas names (procgen vocabulary
-// drift) are silently skipped; an empty result means the caller should
-// fall back to a solid world-class color.
+// Used by the banded-cloud branch of `buildDiscPalette` for no-surface
+// bodies (gas / ice giants), where the atm above the cloud deck is
+// visible and contributes to the band palette. Surface bodies with
+// banded clouds (Venus) skip this and paint a single condensate color
+// because their cloud deck obscures the deeper atm.
+//
+// Unknown gas names (procgen vocabulary drift) are silently skipped;
+// an empty result means the caller should fall back to a solid
+// world-class color.
 export function topGases(body: Body): Array<{ color: Color; weight: number }> {
-  // Tuple: [gas, frac, boost, isChromophore]. The chromophore path uses
-  // CHROMOPHORE_COLOR (condensed-product hue) where defined; atm slots
-  // use GAS_COLOR (clear-gas hue).
+  // Tuple: [gas, weight, boost, isCondensate]. Atm species enter with
+  // their molar fraction; the cloud species enters with cloudCoverage
+  // and a small boost so the visible cloud chemistry shows up in the
+  // band palette without overwhelming the transparent bulk gases.
+  // CLOUD_VISUAL_BOOST tuned so Jupiter's NH3 contribution lands at
+  // ~37% of the palette (~2 of 6 bands rendering brown-belt).
   const candidates: Array<[string | null, number | null, number, boolean]> = [
     [body.atm1, body.atm1Frac, 1, false],
     [body.atm2, body.atm2Frac, 1, false],
     [body.atm3, body.atm3Frac, 1, false],
-    [body.chromophoreGas, body.chromophoreFrac, CHROMOPHORE_VISUAL_BOOST, true],
+    [body.cloudGas, body.cloudCoverage, CLOUD_VISUAL_BOOST, true],
   ];
   // Visibility filter — gases physically present but buried under a
-  // cloud deck at this world class don't contribute to the rendered
-  // color. See GAS_VISIBILITY_FILTER for the canonical case (gas-giant
-  // CH4 hidden beneath the NH3 ice layer).
+  // cloud deck at this world class don't contribute. See
+  // GAS_VISIBILITY_FILTER for the canonical case (gas-giant CH4 hidden
+  // beneath the NH3 ice layer).
   const filtered: ReadonlySet<AtmGas> | undefined =
     body.worldClass !== null ? GAS_VISIBILITY_FILTER[body.worldClass] : undefined;
 
-  // Dedupe by gas name so a body whose chromophore already appears in
-  // atm1..3 (e.g. an ice giant with CH4 as both top-by-mass and listed
-  // chromophore) doesn't get double-counted — keep the higher-weight
-  // entry, which will be the chromophore boost (and so will carry the
-  // condensed-product color, not the gas color).
+  // Dedupe by gas name so a body whose cloud species already appears
+  // in atm1..3 (e.g. an ice giant with CH4 as both top-by-mass atm
+  // and visible cloud) doesn't get double-counted — keep the higher-
+  // weight entry, which will be the cloud (and so will carry the
+  // condensed-phase color, not the gas color).
   const byGas = new Map<string, { color: Color; weight: number }>();
-  for (const [name, frac, boost, isChromophore] of candidates) {
+  for (const [name, frac, boost, isCondensate] of candidates) {
     if (name === null || frac === null) continue;
     const gas = name as AtmGas;
     if (filtered?.has(gas)) continue;
-    const col = (isChromophore ? CHROMOPHORE_COLOR[gas] : undefined) ?? GAS_COLOR[gas];
+    const col = (isCondensate ? CHROMOPHORE_COLOR[gas] : undefined) ?? GAS_COLOR[gas];
     if (!col) continue;
     const potency = GAS_POTENCY[gas] ?? 1;
     const visualWeight = frac * potency * boost;

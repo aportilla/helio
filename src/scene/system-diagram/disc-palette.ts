@@ -13,7 +13,7 @@
 //                    pattern (cloudStructure < 0.5, like Earth) or a
 //                    latitude-banded pattern (cloudStructure ≥ 0.5, like
 //                    Jupiter / Venus). Cloud palette is gas-mix derived
-//                    when banded (top-3 gases including the chromophore
+//                    when banded (top-3 gases including the condensate
 //                    tint) and a single condensate color when patchy.
 //   - **haze**     — uniform per-fragment lerp toward the haze color by
 //                    hazeOpacity. Aerosol species (CH4 tholin, SO2
@@ -31,7 +31,7 @@
 import { Color } from 'three';
 import {
   AtmGas, Body, CHROMOPHORE_COLOR, GAS_COLOR,
-  GAS_MOLECULAR_WEIGHT, WORLD_CLASS_COLOR, WORLD_CLASS_TINT,
+  WORLD_CLASS_COLOR, WORLD_CLASS_TINT,
   WORLD_CLASS_UNKNOWN_COLOR, biomePaintFor, dominantResources,
   topGases,
 } from '../../data/stars';
@@ -148,7 +148,7 @@ export interface DiscPalette {
   readonly weights: readonly [number, number, number];
   // 3 RGB entries × 3 floats — the CLOUD layer palette. For banded
   // clouds (cloudStructure ≥ 0.5), this is the gas-mix from topGases
-  // (so Jupiter's bands paint H2/He/NH3 chromophore tones). For patchy
+  // (so Jupiter's bands paint H2/He/NH3 condensate tones). For patchy
   // clouds (cloudStructure < 0.5), slot 0 carries the single condensate
   // color (H2O white, CH4 frost, etc.) and weights collapse to
   // [1, 0, 0]. Zeros throughout when the body has no cloud layer.
@@ -225,40 +225,16 @@ function cloudCondensateColor(gas: AtmGas): Color {
   return CLOUD_COLOR_FOR_GAS[gas] ?? GAS_COLOR[gas] ?? new Color(0xffffff);
 }
 
-// Pick the lightest atmospheric gas from atm1/2/3 by molecular weight.
-// Used to pick the rim color on no-surface bodies whose haze and cloud
-// aren't visible at the limb (gas giants — the rim shows the lightest
-// top-of-column gas, H2 for Jupiter/Saturn).
-function pickLightestAtmGas(body: Body): AtmGas | null {
-  let lightest: AtmGas | null = null;
-  let minW = Infinity;
-  for (const slot of [body.atm1, body.atm2, body.atm3]) {
-    if (slot === null) continue;
-    const gas = slot as AtmGas;
-    const w = GAS_MOLECULAR_WEIGHT[gas];
-    if (w !== undefined && w < minW) {
-      minW = w;
-      lightest = gas;
-    }
-  }
-  return lightest;
-}
-
-// Rim color for no-surface bodies (gas giants, ice giants). The limb
-// is dominated by the top of the atmospheric column:
-//   - Ice giant: dominant atm gas color (CH4 cyan for Uranus/Neptune)
-//   - Gas giant: lightest gas color (H2 cream for Jupiter/Saturn);
-//     chromophore lives deep, not at the limb.
+// Rim color for no-surface bodies (gas giants, ice giants, hycean,
+// helium). Returns the body's visually-dominant gas — same source
+// the cloud-band palette draws from — so the rim agrees with the
+// band color: H2 cream for Jupiter/Saturn (H2 wins by mass × low
+// potency), CH4 cyan-blue for Uranus/Neptune and Hycean (CH4 wins
+// by frac × potency 6), etc. The earlier lightest-gas heuristic
+// broke when a trace high-potency absorber (CH4 on a hydrogen-rich
+// world) dominated the visible signal but not the molecular-weight
+// stratification.
 function noSurfaceRimColor(body: Body): Color | null {
-  if (body.worldClass === 'ice_giant') {
-    const gases = topGases(body);
-    if (gases.length > 0) return gases[0].color;
-  }
-  const lightest = pickLightestAtmGas(body);
-  if (lightest !== null) {
-    const c = GAS_COLOR[lightest];
-    if (c) return c;
-  }
   const gases = topGases(body);
   return gases.length > 0 ? gases[0].color : null;
 }

@@ -551,7 +551,7 @@ export const BULK_METAL_FRACTION_BY_ZONE = {
 
 // Body-mass fraction that is non-water condensable volatiles — NH3, CH4,
 // CO, CO2, N2, organics. Captures the inventory that water doesn't, so
-// downstream atmosphere / chromophore / biosphere decisions can read a
+// downstream atmosphere / cloud / haze / biosphere decisions can read a
 // real "non-water volatile budget" rather than papering over with a
 // per-body floor (cf. OUTGASSING.volatileFloor — the proxy this replaces).
 //
@@ -587,7 +587,7 @@ export const BULK_VOLATILE_FRACTION_BY_ZONE = {
 // upstream of them. These thresholds bucket the (radius × temperature ×
 // cover) state space into seven labels (rocky, ocean, desert, lava,
 // gas_dwarf, ice_giant, gas_giant). Designer-dispatched tables
-// (atmosphere species, biosphere, chromophore, resources) consume the
+// (atmosphere species, biosphere, cloud / haze, resources) consume the
 // label; no physical scalar does.
 export const WORLD_CLASS_THRESHOLDS = {
   // ─── Radius gates (gaseous vs terrestrial) ───
@@ -1101,15 +1101,14 @@ export const ALBEDO_COMPONENTS = {
 //   - the gas's partial pressure × cloud potency reaches the saturation
 //     point pSat (above which the cloud deck is fully formed).
 //
-// The total cloud bump is summed across atm1/2/3 + chromophore (chromo
-// is skipped if its gas is already in atm1/2/3 to avoid double-counting,
-// same posture as the greenhouse table). The bump is added to the
-// cover-blend surface albedo and the whole thing is clamped to [0, 1].
+// The total cloud bump is summed across atm1/2/3. The bump is added
+// to the cover-blend surface albedo and the whole thing is clamped to
+// [0, 1].
 //
 // Aerosol-only species (DUST, SILICATE) saturate at tiny partial
 // pressures — trace concentrations are visually dominant for these
-// (CHROMOPHORE_VISUAL_BOOST applies a similar amplification on the
-// renderer side).
+// (CLOUD_VISUAL_BOOST applies a similar amplification on the renderer
+// side).
 //
 // Calibration anchors (curated Sol):
 //   Earth  H2O 0.004 partial @ 288K → boost ≈ 0.16 (real albedo 0.31)
@@ -1140,8 +1139,8 @@ export const CLOUD_BY_GAS = {
 // the atm dispatch can run.
 //
 // Pass B (post-atm refinement): partial-pressure × per-gas potency
-// power law summed over atm1/2/3 + chromophore. Captures composition
-// effects the pressure proxy misses — Titan's N2-dominant atm produces
+// power law summed over atm1/2/3. Captures composition effects the
+// pressure proxy misses — Titan's N2-dominant atm produces
 // far less greenhouse than its 1.45 bar would suggest, and Mars's
 // CO2-rich thin atm produces more than its 0.006 bar would suggest.
 //
@@ -1359,7 +1358,7 @@ export const ATMOSPHERE_O2_BIOTIC_LIFT = {
 export const ATMOSPHERE_MIN_PRESSURE_BAR = 0.01;
 
 // Insolation upper bound below which a body is treated as "cold" by the
-// chromophore / biosphere / iceFraction / thick-atm rules. Cold bodies
+// cloud / haze / biosphere / iceFraction / thick-atm rules. Cold bodies
 // have S < this threshold; warm/temperate/hot bodies sit above. Anchored
 // roughly at Sol's Jupiter orbit (S ≈ 0.04); Mars is just above at 0.43,
 // Europa well below at ~0.04.
@@ -1423,75 +1422,21 @@ export const PRESSURE_HISTORY_MULTIPLIER = {
   secondary: { mean: 50,  sd: 50,  min: 5,   max: 500, weight: 0.10 },
 };
 
-// Per-class visually-dominant trace species. Each class maps to an
-// ordered list of branches; the Filler picks the first branch whose
-// gate matches the body. A null gate matches anything (used as the
-// default at the end of a list). An empty list = no chromophore for
-// this class (ice_giant — the by-mass CH4 already paints).
+// Atmospheric regime thresholds — physical buckets the Filler uses
+// to dispatch CLOUD_BY_REGIME / HAZE_BY_REGIME (below). Pure physics
+// gates, no class input.
 //
-// Each branch names one species from the AtmGas vocabulary
-// (including the aerosol-only SILICATE / DUST) whose chromophore or
-// condensate signature paints the apparent color out of proportion to
-// its molar fraction. The Filler stamps `chromophoreGas` +
-// `chromophoreFrac` on bodies; the renderer folds them into topGases
-// with a visibility boost.
-//
-// Gate fields (any combination, all must match):
-//   insolationAbove / insolationBelow — bracket the body's S (W/m²/W·earth)
-//   biosphereArchetype — body's archetype must equal this
-//   tierAtLeast — body's tier must be ≥ this position in BIOSPHERE_TIERS
-//
-// Branches are walked in order — put the most-specific gates first
-// and a `gate: null` default at the end.
-//
-// `frac` is a truncated-normal spec; the Filler draws once per body.
-// Values reflect real-system fractions where available (Jupiter NH3:
-// ~0.026% by mass, Earth H2O: ~0.4% by volume).
-// Chromophore branches dispatched on physical regime (no class input).
 // Regimes:
-//   hot_gaseous       gaseous + T > 1500K        → silicate haze
+//   hot_gaseous       gaseous + T > 1500 K       → silicate clouds + haze
 //   hycean            gaseous + S < 0.3 + bulkWater > 0.05  → H2O clouds
-//   cold_gaseous      gaseous + T < 100K         → none (CH4 absorbs directly)
-//   temperate_gaseous gaseous default            → NH3 (Jupiter-class)
-//   cold_terrestrial  terrestrial + T < 200K     → CH4 tholin
-//   volcanic          terrestrial + (T > 600K or surfacePressure > 30) → SO2
-//   biotic_wet        terrestrial + carbon_aqueous biosphere ≥ microbial → H2O
-//   wet_terrestrial   terrestrial + waterFraction ≥ 0.3  → H2O
-//   dust_terrestrial  terrestrial default        → DUST (Mars-class)
-//
-// Each regime is a list of branches; the Filler picks the first whose
-// internal physical gate matches. Internal gates preserved from the old
-// class table (insolation/biosphere conditions are themselves physics).
-export const CHROMOPHORE_BY_REGIME = {
-  hot_gaseous: [
-    { gate: null, gas: 'SILICATE', frac: { mean: 0.001, sd: 0.0005, min: 0.0001, max: 0.005 } },
-  ],
-  hycean: [
-    { gate: null, gas: 'H2O', frac: { mean: 0.005, sd: 0.003, min: 0.001, max: 0.02 } },
-  ],
-  cold_gaseous: [],  // CH4 in atm wins on potency directly
-  temperate_gaseous: [
-    { gate: null, gas: 'NH3', frac: { mean: 0.0003, sd: 0.0002, min: 0.0001, max: 0.001 } },
-  ],
-  cold_terrestrial: [
-    { gate: null, gas: 'CH4', frac: { mean: 0.02, sd: 0.01, min: 0.005, max: 0.05 } },
-  ],
-  volcanic: [
-    { gate: null, gas: 'SO2', frac: { mean: 0.001, sd: 0.0005, min: 0.0001, max: 0.005 } },
-  ],
-  biotic_wet: [
-    { gate: null, gas: 'H2O', frac: { mean: 0.004, sd: 0.002, min: 0.001, max: 0.02 } },
-  ],
-  wet_terrestrial: [
-    { gate: null, gas: 'H2O', frac: { mean: 0.005, sd: 0.003, min: 0.001, max: 0.02 } },
-  ],
-  dust_terrestrial: [
-    { gate: null, gas: 'DUST', frac: { mean: 0.001, sd: 0.0005, min: 0.0001, max: 0.005 } },
-  ],
-};
-
-// Chromophore regime thresholds.
-export const CHROMOPHORE_REGIME_THRESHOLDS = {
+//   cold_gaseous      gaseous + T < 100 K        → CH4 clouds (no haze)
+//   temperate_gaseous gaseous default            → NH3 clouds (Jupiter-class)
+//   cold_terrestrial  terrestrial + T < 200 K    → sparse CH4 cloud + tholin haze
+//   volcanic          terrestrial + (T > 600 K or surfacePressure > 30 bar) → H2SO4 cloud + SO2 haze
+//   biotic_wet        terrestrial + carbon_aqueous biosphere ≥ microbial → H2O patchy cloud
+//   wet_terrestrial   terrestrial + waterFraction ≥ 0.3 → H2O patchy cloud
+//   dust_terrestrial  terrestrial default        → sparse H2O cirrus + DUST haze
+export const CLOUD_REGIME_THRESHOLDS = {
   hotGaseousTempK:        1500,
   hyceanInsolationMax:    0.3,
   hyceanBulkWaterMin:     0.05,

@@ -84,7 +84,7 @@ function dominantResourceLabels(b: Body, count = 3): string[] {
 // Round fraction (0..1) to a percent string at a precision that keeps
 // trace-level differences readable. ≥10% → integer (98%), 0.1–10% →
 // one decimal (3.3%, 0.5%), <0.1% → two decimals (0.03%) — so a
-// Jupiter NH3 chromophore at 0.026% renders distinctly from Saturn's
+// Jupiter NH3 cloud chemistry renders distinctly from Saturn's
 // 0.01% rather than both collapsing to "0%".
 function formatGasFrac(frac: number): string {
   const pct = frac * 100;

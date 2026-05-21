@@ -72,8 +72,7 @@ import {
   WATER_COVER_NOISE,
   ICE_COVER_NOISE,
   WORLD_CLASS_THRESHOLDS,
-  CHROMOPHORE_BY_REGIME,
-  CHROMOPHORE_REGIME_THRESHOLDS,
+  CLOUD_REGIME_THRESHOLDS,
   CLOUD_BY_REGIME,
   HAZE_BY_REGIME,
   BIOSPHERE_HABITATS,
@@ -279,9 +278,9 @@ function cloudBumpFromBulkWater(body) {
 }
 
 // Pass B cloud bump — per-gas potency × partial pressure × T-window,
-// summed across atm1/2/3 + chromophore. Skips chromo if its gas is
-// already in atm1/2/3 (avoid double-counting; same posture as the
-// greenhouse refinement).
+// summed across atm1/2/3. The cloud condensate species, when distinct
+// from atm species, has its visible cover counted via cloudCoverage
+// (not here).
 function cloudBumpFromComposition(body) {
   const P = body.surfacePressureBar ?? 0;
   const T = body.avgSurfaceTempK;
@@ -308,9 +307,6 @@ function cloudBumpFromComposition(body) {
       atmGases.add(gas);
       addContribution(gas, body[fracField]);
     }
-  }
-  if (body.chromophoreGas && !atmGases.has(body.chromophoreGas)) {
-    addContribution(body.chromophoreGas, body.chromophoreFrac);
   }
   // Cap total cloud bump — even a fully overcast Venus-class atm
   // can't push surface-blend albedo past clean-snow territory.
@@ -349,11 +345,8 @@ function greenhouseKFromPressure(surfacePressureBar) {
   return GREENHOUSE.baseK * Math.pow(P, GREENHOUSE.exponent);
 }
 
-// Pass B greenhouse — partial-pressure × per-gas potency sum across the
-// body's atm1/2/3 + chromophore. Skips chromophore if its gas is
-// already represented in atm1/2/3 to avoid double-counting (Titan's
-// CH4 sits in both atm2 and chromophore; Earth's H2O is chromophore-
-// only, so it contributes).
+// Pass B greenhouse — partial-pressure × per-gas potency sum across
+// the body's atm1/2/3.
 //
 // Transparent species (N2/O2/Ar/H2/He) have kMax=0 — they sum to zero
 // no matter the pressure. This is the load-bearing improvement over
@@ -386,11 +379,6 @@ function greenhouseKFromComposition(body) {
       atmGases.add(gas);
       addContribution(gas, body[fracField]);
     }
-  }
-  // Chromophore — only if distinct from the atm species, otherwise
-  // already counted above.
-  if (body.chromophoreGas && !atmGases.has(body.chromophoreGas)) {
-    addContribution(body.chromophoreGas, body.chromophoreFrac);
   }
   return K;
 }
@@ -818,17 +806,19 @@ function atmosphereFor(body, S) {
   return out;
 }
 
-// BIOSPHERE_TIERS order; used by chromophore gate matching.
+// BIOSPHERE_TIERS order; used in regime gate matching.
 const BIOSPHERE_TIER_ORDER = ['none', 'prebiotic', 'microbial', 'complex', 'gaian'];
 
-// Chromophore regime dispatch — pure physics, no class input. Bucket
+// Cloud + haze regime dispatch — pure physics, no class input. Bucket
 // the body's physical state into one of nine regimes; each regime
-// resolves to a chromophore gas + fraction spec.
-function chromophoreRegimeFor(body, S) {
+// resolves to a cloud + haze spec via CLOUD_BY_REGIME and HAZE_BY_REGIME.
+// Distinct from `atmosphereRegimeFor` (above), which buckets atm-species
+// dispatch via a different threshold set.
+function cloudHazeRegimeFor(body, S) {
   if (body.surfacePressureBar != null && body.surfacePressureBar < ATMOSPHERE_MIN_PRESSURE_BAR) {
     return null;
   }
-  const t = CHROMOPHORE_REGIME_THRESHOLDS;
+  const t = CLOUD_REGIME_THRESHOLDS;
   const T = body.avgSurfaceTempK;
   // Gaseous bracket (radius >= gasDwarfRadius)
   if (body.radiusEarth != null && body.radiusEarth >= WORLD_CLASS_THRESHOLDS.gasDwarfRadius) {
@@ -844,9 +834,9 @@ function chromophoreRegimeFor(body, S) {
       (body.surfacePressureBar != null && body.surfacePressureBar > t.volcanicPressureBar)) {
     return 'volcanic';
   }
-  // Biotic and wet branches gate the H2O cloud chromophore — biotic
-  // bodies amplify the water cycle (atm is rich in transpiration H2O),
-  // wet bodies have surface oceans → cloud decks.
+  // Biotic and wet branches gate the H2O cloud regime — biotic bodies
+  // amplify the water cycle (atm is rich in transpiration H2O), wet
+  // bodies have surface oceans → cloud decks.
   if (body.biosphereArchetype === 'carbon_aqueous') {
     const tierIdx = BIOSPHERE_TIER_ORDER.indexOf(body.biosphereTier ?? 'none');
     if (tierIdx >= BIOSPHERE_TIER_ORDER.indexOf('microbial')) return 'biotic_wet';
@@ -855,28 +845,12 @@ function chromophoreRegimeFor(body, S) {
   return 'dust_terrestrial';
 }
 
-// Visually-dominant trace species. Picks the first branch from the
-// regime's branch list whose gate matches (most regimes have a single
-// default branch).
-function chromophoreFor(body, S) {
-  const regime = chromophoreRegimeFor(body, S);
-  if (regime == null) return { gas: null, frac: null };
-  const branches = CHROMOPHORE_BY_REGIME[regime];
-  if (!branches || branches.length === 0) return { gas: null, frac: null };
-  for (const branch of branches) {
-    if (branch.gate != null) continue;  // future-proofing for nested gates
-    const frac = sampleTruncated(fieldPrng(body, 'chromophore'), branch.frac);
-    return { gas: branch.gas, frac: Number(frac.toFixed(5)) };
-  }
-  return { gas: null, frac: null };
-}
-
 // Cloud layer — condensed species + coverage + structure derived from
 // the body's regime. Returns nulls when the regime has no atmosphere
 // (null regime) or no cloud entry (defensive — every regime currently
 // defines a cloud).
 function cloudFor(body, S) {
-  const regime = chromophoreRegimeFor(body, S);
+  const regime = cloudHazeRegimeFor(body, S);
   if (regime == null) return { gas: null, coverage: null, structure: null };
   const spec = CLOUD_BY_REGIME[regime];
   if (!spec) return { gas: null, coverage: null, structure: null };
@@ -894,7 +868,7 @@ function cloudFor(body, S) {
 // haze (Earth-class, gas giants outside the hot bracket) and return
 // nulls.
 function hazeFor(body, S) {
-  const regime = chromophoreRegimeFor(body, S);
+  const regime = cloudHazeRegimeFor(body, S);
   if (regime == null) return { gas: null, opacity: null };
   const spec = HAZE_BY_REGIME[regime];
   if (!spec) return { gas: null, opacity: null };
@@ -953,10 +927,6 @@ function resourcesFor(body, hostStar, hostBody) {
       if (VOLATILE_GASES_SET.has(g)) atmVolFrac += f ?? 0;
     }
   }
-  if (body.chromophoreGas && !atmGases.has(body.chromophoreGas) &&
-      VOLATILE_GASES_SET.has(body.chromophoreGas)) {
-    atmVolFrac += body.chromophoreFrac ?? 0;
-  }
   const water = body.waterFraction ?? 0;
   const ice = body.iceFraction ?? 0;
   const surfaceVolFraction = Math.min(1, water + ice + atmVolFrac * 0.3);
@@ -1006,7 +976,7 @@ function resourcesFor(body, hostStar, hostBody) {
 
 // Returns true if the body's physical state matches all the habitat's
 // gates. Each gate field is optional; only specified gates have to pass.
-// Atmosphere-gas gates check all of (atm1, atm2, atm3, chromophoreGas).
+// Atmosphere-gas gates check all of (atm1, atm2, atm3).
 function bodyMatchesHabitat(body, gates) {
   const T = body.avgSurfaceTempK;
   const water = body.waterFraction ?? 0;
@@ -1136,7 +1106,6 @@ function fillBody(b, allBodies, stars) {
     tectonicActivity, rotationPeriodHours, magneticFieldGauss,
     surfacePressureBar,
     atm1, atm1Frac, atm2, atm2Frac, atm3, atm3Frac,
-    chromophoreGas, chromophoreFrac,
     cloudGas, cloudCoverage, cloudStructure,
     hazeGas, hazeOpacity,
     resMetals, resSilicates, resVolatiles, resRareEarths, resRadioactives, resExotics,
@@ -1306,18 +1275,9 @@ function fillBody(b, allBodies, stars) {
   }
   working = { ...working, atm1, atm1Frac, atm2, atm2Frac, atm3, atm3Frac };
 
-  // Chromophore — regime-keyed visually-dominant trace species. Reads
-  // atm + biosphere for the wet/biotic/volcanic branches.
-  if (unknowns.has('chromophoreGas') || unknowns.has('chromophoreFrac')) {
-    const c = chromophoreFor(working, S);
-    if (unknowns.has('chromophoreGas'))  chromophoreGas  = c.gas;
-    if (unknowns.has('chromophoreFrac')) chromophoreFrac = c.frac;
-  }
-  working = { ...working, chromophoreGas, chromophoreFrac };
-
-  // Cloud layer — condensed species + coverage + structure. Same regime
-  // dispatch as chromophore so a body's cloud chemistry agrees with its
-  // visual character.
+  // Cloud layer — condensed species + coverage + structure. Regime
+  // dispatch (cloudHazeRegimeFor) shares one set of physical thresholds
+  // with the haze layer below.
   if (unknowns.has('cloudGas') || unknowns.has('cloudCoverage') || unknowns.has('cloudStructure')) {
     const c = cloudFor(working, S);
     if (unknowns.has('cloudGas'))       cloudGas       = c.gas;
@@ -1337,7 +1297,7 @@ function fillBody(b, allBodies, stars) {
 
   // ─── Pass B: composition-aware greenhouse refinement ───
   // Pass A used the pressure-proxy greenhouse to settle T/water/ice.
-  // Now that atm + chromophore are known, refine greenhouse from per-
+  // Now that atm composition is known, refine greenhouse from per-
   // gas potencies and re-run the T↔ice loop. Skipped when the proxy
   // is already within 1K of the composition value (most bodies).
   if (working.surfacePressureBar != null && working.surfacePressureBar > 0) {
@@ -1395,7 +1355,6 @@ function fillBody(b, allBodies, stars) {
     tectonicActivity, rotationPeriodHours, magneticFieldGauss,
     surfacePressureBar,
     atm1, atm1Frac, atm2, atm2Frac, atm3, atm3Frac,
-    chromophoreGas, chromophoreFrac,
     cloudGas, cloudCoverage, cloudStructure,
     hazeGas, hazeOpacity,
     resMetals, resSilicates, resVolatiles, resRareEarths, resRadioactives, resExotics,

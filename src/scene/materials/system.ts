@@ -228,7 +228,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
 
       // Per-band ± additive lightness perturbation. Keeps bands
       // visually distinct when the palette entries collapse to nearly
-      // the same color — e.g. an H2/He gas giant with no chromophore,
+      // the same color — e.g. an H2/He gas giant with no cloud chemistry mix,
       // where the 3 palette slots all reduce to a single near-beige
       // and a per-band hue pick would otherwise paint every strip the
       // same RGB. 0.06 = ±6% value swing: invisible against a high-
