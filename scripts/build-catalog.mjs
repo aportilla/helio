@@ -544,6 +544,9 @@ const BODY_NUMERIC_FIELDS = [
   ['atm2_frac',              'atm2Frac'],
   ['atm3_frac',              'atm3Frac'],
   ['chromophore_frac',       'chromophoreFrac'],
+  ['cloud_coverage',         'cloudCoverage'],
+  ['cloud_structure',        'cloudStructure'],
+  ['haze_opacity',           'hazeOpacity'],
   ['res_metals',             'resMetals'],
   ['res_silicates',          'resSilicates'],
   ['res_volatiles',          'resVolatiles'],
@@ -561,6 +564,8 @@ const BODY_STRING_FIELDS = [
   ['atm2', 'atm2'],
   ['atm3', 'atm3'],
   ['chromophore_gas', 'chromophoreGas'],
+  ['cloud_gas',       'cloudGas'],
+  ['haze_gas',        'hazeGas'],
 ];
 
 function cellOrNull(raw) {

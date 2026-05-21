@@ -74,6 +74,8 @@ import {
   WORLD_CLASS_THRESHOLDS,
   CHROMOPHORE_BY_REGIME,
   CHROMOPHORE_REGIME_THRESHOLDS,
+  CLOUD_BY_REGIME,
+  HAZE_BY_REGIME,
   BIOSPHERE_HABITATS,
 } from './procgen-priors.mjs';
 import { insolation, tidalLockProxy, meanMetallicityForClass, meanAgeForClass, frostLineAU } from './astrophysics.mjs';
@@ -869,6 +871,40 @@ function chromophoreFor(body, S) {
   return { gas: null, frac: null };
 }
 
+// Cloud layer — condensed species + coverage + structure derived from
+// the body's regime. Returns nulls when the regime has no atmosphere
+// (null regime) or no cloud entry (defensive — every regime currently
+// defines a cloud).
+function cloudFor(body, S) {
+  const regime = chromophoreRegimeFor(body, S);
+  if (regime == null) return { gas: null, coverage: null, structure: null };
+  const spec = CLOUD_BY_REGIME[regime];
+  if (!spec) return { gas: null, coverage: null, structure: null };
+  const prng = fieldPrng(body, 'cloud');
+  const coverage  = sampleTruncated(prng, spec.coverage);
+  const structure = sampleTruncated(prng, spec.structure);
+  return {
+    gas: spec.gas,
+    coverage:  Number(coverage.toFixed(3)),
+    structure: Number(structure.toFixed(3)),
+  };
+}
+
+// Haze layer — uniform aerosol species + opacity. Many regimes have no
+// haze (Earth-class, gas giants outside the hot bracket) and return
+// nulls.
+function hazeFor(body, S) {
+  const regime = chromophoreRegimeFor(body, S);
+  if (regime == null) return { gas: null, opacity: null };
+  const spec = HAZE_BY_REGIME[regime];
+  if (!spec) return { gas: null, opacity: null };
+  const opacity = sampleTruncated(fieldPrng(body, 'haze'), spec.opacity);
+  return {
+    gas: spec.gas,
+    opacity: Number(opacity.toFixed(3)),
+  };
+}
+
 // =============================================================================
 // Resources — physics-derived (Phase 4.5)
 // =============================================================================
@@ -1101,6 +1137,8 @@ function fillBody(b, allBodies, stars) {
     surfacePressureBar,
     atm1, atm1Frac, atm2, atm2Frac, atm3, atm3Frac,
     chromophoreGas, chromophoreFrac,
+    cloudGas, cloudCoverage, cloudStructure,
+    hazeGas, hazeOpacity,
     resMetals, resSilicates, resVolatiles, resRareEarths, resRadioactives, resExotics,
     biosphereArchetype, biosphereTier,
     periodDays, semiMajorAu, eccentricity, inclinationDeg,
@@ -1277,6 +1315,26 @@ function fillBody(b, allBodies, stars) {
   }
   working = { ...working, chromophoreGas, chromophoreFrac };
 
+  // Cloud layer — condensed species + coverage + structure. Same regime
+  // dispatch as chromophore so a body's cloud chemistry agrees with its
+  // visual character.
+  if (unknowns.has('cloudGas') || unknowns.has('cloudCoverage') || unknowns.has('cloudStructure')) {
+    const c = cloudFor(working, S);
+    if (unknowns.has('cloudGas'))       cloudGas       = c.gas;
+    if (unknowns.has('cloudCoverage'))  cloudCoverage  = c.coverage;
+    if (unknowns.has('cloudStructure')) cloudStructure = c.structure;
+  }
+  working = { ...working, cloudGas, cloudCoverage, cloudStructure };
+
+  // Haze layer — uniform aerosol species + opacity. Many regimes have
+  // no haze (Earth-class, gas giants outside the hot bracket).
+  if (unknowns.has('hazeGas') || unknowns.has('hazeOpacity')) {
+    const h = hazeFor(working, S);
+    if (unknowns.has('hazeGas'))     hazeGas     = h.gas;
+    if (unknowns.has('hazeOpacity')) hazeOpacity = h.opacity;
+  }
+  working = { ...working, hazeGas, hazeOpacity };
+
   // ─── Pass B: composition-aware greenhouse refinement ───
   // Pass A used the pressure-proxy greenhouse to settle T/water/ice.
   // Now that atm + chromophore are known, refine greenhouse from per-
@@ -1338,6 +1396,8 @@ function fillBody(b, allBodies, stars) {
     surfacePressureBar,
     atm1, atm1Frac, atm2, atm2Frac, atm3, atm3Frac,
     chromophoreGas, chromophoreFrac,
+    cloudGas, cloudCoverage, cloudStructure,
+    hazeGas, hazeOpacity,
     resMetals, resSilicates, resVolatiles, resRareEarths, resRadioactives, resExotics,
     biosphereArchetype, biosphereTier,
     periodDays, semiMajorAu,

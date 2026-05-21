@@ -1502,6 +1502,133 @@ export const CHROMOPHORE_REGIME_THRESHOLDS = {
   wetWaterFractionMin:    0.3,
 };
 
+// Cloud layer per regime — what condenses into the body's visible cloud
+// deck, how much of the disc it covers, and whether it bands or stays
+// patchy. Independent of HAZE_BY_REGIME (a body can have both, neither,
+// or one).
+//
+// Coverage: 0..1 fraction of disc rendered as cloud. Gas giants and
+// Venus-class pin at 1.0 (full deck). Earth-class samples around 0.4
+// (broken trade-wind / mid-latitude cover). Mars-class samples around
+// 0.05 (high-altitude cirrus, sparse).
+//
+// Structure: 0..1 scalar. 0 = patchy cellular convection (Earth, Mars).
+// 1 = banded zonal circulation (Venus's superrotation, gas-giant zonal
+// jets). The renderer reads this to blend between a cellular hash and
+// latitude-strip pattern; intermediate values blend the two (or snap at
+// 0.5 in v1).
+//
+// Sampled once per body via fieldPrng(body, 'cloud').
+export const CLOUD_BY_REGIME = {
+  // Hot gas/sub-Neptune — refractive silicate clouds at full coverage,
+  // banded by the same zonal circulation as cooler giants.
+  hot_gaseous: {
+    gas: 'SILICATE',
+    coverage:  { mean: 1.00, sd: 0.0,  min: 1.0,  max: 1.0  },
+    structure: { mean: 1.00, sd: 0.0,  min: 1.0,  max: 1.0  },
+  },
+  // Hycean — water cloud deck over warm H2/He atmosphere.
+  hycean: {
+    gas: 'H2O',
+    coverage:  { mean: 1.00, sd: 0.0,  min: 1.0,  max: 1.0  },
+    structure: { mean: 1.00, sd: 0.0,  min: 1.0,  max: 1.0  },
+  },
+  // Cold gaseous (ice giants) — CH4 absorption is the visible signal;
+  // deeper NH3/H2O clouds are hidden. Banded.
+  cold_gaseous: {
+    gas: 'CH4',
+    coverage:  { mean: 1.00, sd: 0.0,  min: 1.0,  max: 1.0  },
+    structure: { mean: 1.00, sd: 0.0,  min: 1.0,  max: 1.0  },
+  },
+  // Temperate gaseous (Jupiter/Saturn-class) — NH3 ice clouds at full
+  // coverage, banded.
+  temperate_gaseous: {
+    gas: 'NH3',
+    coverage:  { mean: 1.00, sd: 0.0,  min: 1.0,  max: 1.0  },
+    structure: { mean: 1.00, sd: 0.0,  min: 1.0,  max: 1.0  },
+  },
+  // Cold terrestrial (Titan / Triton-class) — sparse methane / nitrogen
+  // ice clouds, patchy. Most of the visual signal is the haze above
+  // (see HAZE_BY_REGIME).
+  cold_terrestrial: {
+    gas: 'CH4',
+    coverage:  { mean: 0.15, sd: 0.10, min: 0.02, max: 0.40 },
+    structure: { mean: 0.00, sd: 0.0,  min: 0.0,  max: 0.0  },
+  },
+  // Volcanic / Venusian — sulfuric-acid droplet deck at full coverage,
+  // banded by superrotation. SO2 sulfate haze sits above (see haze).
+  volcanic: {
+    gas: 'H2SO4',
+    coverage:  { mean: 1.00, sd: 0.0,  min: 1.0,  max: 1.0  },
+    structure: { mean: 1.00, sd: 0.0,  min: 1.0,  max: 1.0  },
+  },
+  // Biotic wet (Earth-class with active biosphere) — patchy H2O clouds.
+  // Transpiration lifts the cycle slightly relative to the wet branch.
+  biotic_wet: {
+    gas: 'H2O',
+    coverage:  { mean: 0.45, sd: 0.10, min: 0.20, max: 0.65 },
+    structure: { mean: 0.00, sd: 0.0,  min: 0.0,  max: 0.0  },
+  },
+  // Wet terrestrial — patchy H2O clouds over ocean coverage.
+  wet_terrestrial: {
+    gas: 'H2O',
+    coverage:  { mean: 0.35, sd: 0.10, min: 0.10, max: 0.55 },
+    structure: { mean: 0.00, sd: 0.0,  min: 0.0,  max: 0.0  },
+  },
+  // Dust terrestrial (Mars-class) — sparse high cirrus. Most of the
+  // atmospheric visual signal is the dust haze (see haze regime).
+  dust_terrestrial: {
+    gas: 'H2O',
+    coverage:  { mean: 0.05, sd: 0.03, min: 0.01, max: 0.15 },
+    structure: { mean: 0.00, sd: 0.0,  min: 0.0,  max: 0.0  },
+  },
+};
+
+// Haze layer per regime — photochemical or lifted aerosol sitting above
+// the cloud deck (or surface). Always uniform at planetary scale because
+// haze has no condensation latent heat to drive structured circulation.
+//
+// `null` = no haze layer forms in this regime. A body can carry both a
+// cloud AND a haze (Titan = sparse cloud + thick tholin haze; Venus =
+// full sulfuric cloud deck + sulfate haze on top) or neither (Earth =
+// cloud only; Mercury = nothing).
+//
+// Opacity: 0..1 uniform alpha for the overlay. Titan ≈ 0.85, Venus ≈ 0.7,
+// Mars dust ≈ 0.15 (background, not storm-state).
+//
+// Sampled once per body via fieldPrng(body, 'haze').
+export const HAZE_BY_REGIME = {
+  // Hot gas — silicate fog above the silicate cloud deck. Subtle but
+  // present.
+  hot_gaseous: {
+    gas: 'SILICATE',
+    opacity: { mean: 0.30, sd: 0.10, min: 0.10, max: 0.50 },
+  },
+  hycean:            null,
+  cold_gaseous:      null,
+  temperate_gaseous: null,
+  // Cold terrestrial — Titan's tholin haze (CH4 photolysis product).
+  // Thick; this is what makes Titan's surface invisible from above.
+  cold_terrestrial: {
+    gas: 'CH4',
+    opacity: { mean: 0.85, sd: 0.10, min: 0.50, max: 0.95 },
+  },
+  // Volcanic — sulfate aerosols (SO2 photolysis) above the sulfuric
+  // cloud deck.
+  volcanic: {
+    gas: 'SO2',
+    opacity: { mean: 0.65, sd: 0.15, min: 0.30, max: 0.85 },
+  },
+  biotic_wet:        null,
+  wet_terrestrial:   null,
+  // Dust terrestrial — mineral aerosol haze from surface dust lifting.
+  // Background opacity (not storm-state, which would peak much higher).
+  dust_terrestrial: {
+    gas: 'DUST',
+    opacity: { mean: 0.20, sd: 0.10, min: 0.05, max: 0.40 },
+  },
+};
+
 // Resources are now physics-derived in resourcesFor (procgen.mjs):
 //   metals       ∝ bulkMetalFraction
 //   silicates    ∝ (1 - bulkMetal - bulkWater)

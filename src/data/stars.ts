@@ -233,17 +233,33 @@ export interface Body {
   readonly atm2Frac: number | null;
   readonly atm3: string | null;
   readonly atm3Frac: number | null;
-  // Visually-dominant trace species — a gas whose chromophore or
-  // condensate signature paints the body's apparent color out of
-  // proportion to its molar fraction (Jupiter's NH3 ice clouds at
-  // ~0.03%, Earth's H2O clouds at <1%). Independent of atm1/atm2/atm3
-  // which stay top-by-mass for gameplay (terraforming, breathability,
-  // mining yields). The renderer folds chromophoreGas into its palette
-  // selection with a visibility boost; gameplay should treat it as a
-  // small additional resource present at its real fraction, not as a
-  // top-3 species. Null when the body has no notable chromophore.
+  // DEPRECATED — being replaced by the cloud + haze layer split below.
+  // Still populated by the Filler and consumed by the current renderer
+  // until the layered shader lands. Once disc-palette.ts reads cloudGas/
+  // hazeGas directly, these go.
   readonly chromophoreGas: string | null;
   readonly chromophoreFrac: number | null;
+  // Cloud layer — condensed species that forms the body's visible cloud
+  // deck. Independent of atm1/atm2/atm3 (which carry the gas-phase mix
+  // for gameplay). cloudGas names the condensate (H2O ice/droplets, NH3
+  // ice, CH4 ice, H2SO4 droplets, SILICATE condensate, etc.).
+  // cloudCoverage is the rendered fraction of the disc covered by clouds
+  // (Earth ≈ 0.4 patchy, Jupiter = 1.0 full deck). cloudStructure is the
+  // pattern scalar: 0 = patchy cellular (Earth, Mars), 1 = banded zonal
+  // (Venus, gas giants). Null when the body has no visible cloud layer
+  // (Mercury, airless moons).
+  readonly cloudGas: string | null;
+  readonly cloudCoverage: number | null;
+  readonly cloudStructure: number | null;
+  // Haze layer — photochemical or lifted aerosol sitting above the cloud
+  // deck (or above the surface when no cloud deck exists). Always uniform
+  // at planetary scale (no condensation latent heat to drive structure).
+  // hazeGas names the aerosol species (CH4 → tholin, SO2 → sulfate,
+  // SILICATE, DUST). hazeOpacity is the uniform alpha [0..1] of the
+  // overlay — Titan ≈ 0.85, Venus ≈ 0.7, Mars dust ≈ 0.15. Null when
+  // no haze layer is present (Earth, gas giants, airless bodies).
+  readonly hazeGas: string | null;
+  readonly hazeOpacity: number | null;
   // Resources — 0..10 indices, calibrated against Earth (5/6/7/5/4/0).
   readonly resMetals: number | null;
   readonly resSilicates: number | null;
@@ -489,6 +505,7 @@ export function bodyIcyness(body: Body): number {
 export type AtmGas =
   | 'N2' | 'O2' | 'CO2' | 'H2O' | 'CH4' | 'NH3'
   | 'SO2' | 'Ar' | 'CO'  | 'H2'  | 'He'
+  | 'H2SO4'
   | 'SILICATE' | 'DUST';
 
 // Archetypal hue per atmospheric gas. Picked to read at small disc sizes
@@ -506,6 +523,9 @@ export const GAS_COLOR: Record<AtmGas, Color> = {
   CO:  new Color(0x988478),  // smoky brown
   H2:  new Color(0xf0e4c8),  // pale Jovian
   He:  new Color(0xf4e8d4),  // Jovian cream
+  // Condensate-only — appears via cloudGas (Venus's sulfuric-acid deck)
+  // rather than as a gas-phase atm species.
+  H2SO4: new Color(0xd8c474),  // yellow-cream — Venus's sulfuric acid cloud
   // Aerosol-only species — these never appear via atm priors, but the
   // GAS_COLOR fallback exists in case CHROMOPHORE_COLOR drift leaves a
   // null lookup.
@@ -614,6 +634,7 @@ export const GAS_MOLECULAR_WEIGHT: Record<AtmGas, number> = {
   Ar:  40,
   CO2: 44,
   SO2: 64,
+  H2SO4: 98,
   SILICATE: 100,
   DUST:     100,
 };
@@ -638,6 +659,10 @@ export const GAS_POTENCY: Record<AtmGas, number> = {
   // CH4 is the Uranus/Neptune blue; SO2 is the Venus sulfur haze.
   CH4: 6.0,
   SO2: 8.0,
+  // Condensate-only — only enters rendering via the cloud-layer path.
+  // Potency matches H2O/NH3 cloud-former magnitude (Venus's H2SO4 deck
+  // dominates its visual signal at a few percent fraction).
+  H2SO4: 3.0,
   // Aerosol-only — only meaningful via the chromophore path. Potency
   // of 3 lets a 0.1% silicate/dust frac match a 3% H2O cloud-deck
   // signal at the same boost level.
