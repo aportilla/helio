@@ -989,11 +989,21 @@ function hazeFor(body) {
   if (contributions.length === 0) return { gas: null, opacity: null };
   const totalStrength = contributions.reduce((s, c) => s + c.strength, 0);
   contributions.sort((a, b) => b.strength - a.strength);
+  // Cap below 1.0 even when chemistry gates saturate. Real-world
+  // aerosol haze is never truly opaque — Titan, the canonical case,
+  // is curated at 0.85. Leaving headroom keeps the underlying cloud
+  // and surface variation visible through the overlay rather than
+  // erasing it.
   return {
     gas: contributions[0].gas,
-    opacity: Number(Math.min(1, totalStrength).toFixed(3)),
+    opacity: Number(Math.min(HAZE_OPACITY_CAP, totalStrength).toFixed(3)),
   };
 }
+
+// Maximum opacity emitted by `hazeFor`. Real-world hazes saturate
+// below 1.0 (Titan ~0.85); a hard cap here keeps procgen output from
+// erasing the disc structure when chemistry gates fully fire.
+const HAZE_OPACITY_CAP = 0.92;
 
 // =============================================================================
 // Resources — physics-derived (Phase 4.5)

@@ -364,6 +364,16 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       // rim reads as organic haze rather than clean stripes.
       const float INWARD_BAND_DITHER = 4.0;
 
+      // Limb forward-scattering brightening. The outward halo and the
+      // inward fade both target this color instead of vHazeColor
+      // directly — models the longer scattering path at the glancing-
+      // angle limb that brightens the visible signal toward white. On
+      // surface bodies with heavy haze (Titan, Venus) this gives the
+      // disc a visible bright limb against the haze-flat interior; on
+      // no-surface bodies (Jupiter/Saturn) vHazeColor is already the
+      // pale atm column tint, so the additional brightening is subtle.
+      const float LIMB_BRIGHTEN = 0.3;
+
       // Phase 1.5b — per-region resource-subset selection. Aggregate
       // REGION_PATCH_FACTOR fine worley cells per axis into one
       // super-cell. The super-cell hash picks one of
@@ -495,6 +505,14 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
         vec2 d = gl_FragCoord.xy - vCenter;
         float r = length(d);
 
+        // Limb color — vHazeColor brightened toward white. Used by the
+        // outward halo and the inward limb fade to model forward
+        // scattering at the glancing-angle column. vHazeColor itself
+        // (the species/regime color) is still used un-brightened by
+        // the uniform haze overlay further down so the disc interior
+        // keeps the chromophore tone.
+        vec3 vLimbColor = mix(vHazeColor, vec3(1.0), LIMB_BRIGHTEN);
+
         // Outside the disc — paint the atmospheric halo (1.3a/b outward)
         // if any, else discard. Sprite is sized to give us vRimWidthPx
         // pixels of overdraw space in the outward direction. Stack count
@@ -510,7 +528,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
           float layer = floor(distOut);
           float stackCount = vRimWidthPx - layer;
           float rimA = 1.0 - pow(1.0 - OUTER_BASE_ALPHA, stackCount);
-          gl_FragColor = vec4(vHazeColor, rimA);
+          gl_FragColor = vec4(vLimbColor, rimA);
           return;
         }
 
@@ -1073,7 +1091,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
             float stackCount = numBands - bandIdx;
             if (stackCount > 0.0) {
               float fadeA = 1.0 - pow(1.0 - INNER_BASE_ALPHA, stackCount);
-              col = mix(col, vHazeColor, fadeA);
+              col = mix(col, vLimbColor, fadeA);
             }
           }
         }

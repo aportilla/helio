@@ -241,10 +241,14 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   const palette1  = new Float32Array(N * 3);
   const palette2  = new Float32Array(N * 3);
   const weights   = new Float32Array(N * 3);
-  const cloudPalette0 = new Float32Array(N * 3);
-  const cloudPalette1 = new Float32Array(N * 3);
-  const cloudPalette2 = new Float32Array(N * 3);
-  const cloudWeights  = new Float32Array(N * 3);
+  // Cloud-layer palette + weights — 4 slots (base blend + 3 accents).
+  // Packed into 3 vec4 attributes to stay under gl_MaxVertexAttribs:
+  // slot 3 RGB rides in the .w channels of slots 0/1/2 and gets
+  // reassembled in the vertex shader. See planets.ts.
+  const cloudPalette0 = new Float32Array(N * 4);
+  const cloudPalette1 = new Float32Array(N * 4);
+  const cloudPalette2 = new Float32Array(N * 4);
+  const cloudWeights  = new Float32Array(N * 4);
   const surfaceScalars = new Float32Array(N * 4);
   const atmoScalars    = new Float32Array(N * 4);
   const biomeColors = new Float32Array(N * 4);
@@ -266,18 +270,22 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
     weights[i * 3 + 0] = disc.weights[0];
     weights[i * 3 + 1] = disc.weights[1];
     weights[i * 3 + 2] = disc.weights[2];
-    cloudPalette0[i * 3 + 0] = disc.cloudPalette[0];
-    cloudPalette0[i * 3 + 1] = disc.cloudPalette[1];
-    cloudPalette0[i * 3 + 2] = disc.cloudPalette[2];
-    cloudPalette1[i * 3 + 0] = disc.cloudPalette[3];
-    cloudPalette1[i * 3 + 1] = disc.cloudPalette[4];
-    cloudPalette1[i * 3 + 2] = disc.cloudPalette[5];
-    cloudPalette2[i * 3 + 0] = disc.cloudPalette[6];
-    cloudPalette2[i * 3 + 1] = disc.cloudPalette[7];
-    cloudPalette2[i * 3 + 2] = disc.cloudPalette[8];
-    cloudWeights[i * 3 + 0] = disc.cloudWeights[0];
-    cloudWeights[i * 3 + 1] = disc.cloudWeights[1];
-    cloudWeights[i * 3 + 2] = disc.cloudWeights[2];
+    cloudPalette0[i * 4 + 0] = disc.cloudPalette[0];
+    cloudPalette0[i * 4 + 1] = disc.cloudPalette[1];
+    cloudPalette0[i * 4 + 2] = disc.cloudPalette[2];
+    cloudPalette0[i * 4 + 3] = disc.cloudPalette[9];   // slot3.r
+    cloudPalette1[i * 4 + 0] = disc.cloudPalette[3];
+    cloudPalette1[i * 4 + 1] = disc.cloudPalette[4];
+    cloudPalette1[i * 4 + 2] = disc.cloudPalette[5];
+    cloudPalette1[i * 4 + 3] = disc.cloudPalette[10];  // slot3.g
+    cloudPalette2[i * 4 + 0] = disc.cloudPalette[6];
+    cloudPalette2[i * 4 + 1] = disc.cloudPalette[7];
+    cloudPalette2[i * 4 + 2] = disc.cloudPalette[8];
+    cloudPalette2[i * 4 + 3] = disc.cloudPalette[11];  // slot3.b
+    cloudWeights[i * 4 + 0] = disc.cloudWeights[0];
+    cloudWeights[i * 4 + 1] = disc.cloudWeights[1];
+    cloudWeights[i * 4 + 2] = disc.cloudWeights[2];
+    cloudWeights[i * 4 + 3] = disc.cloudWeights[3];
     renderMeta[i * 4 + 0] = slot.discPx;
     renderMeta[i * 4 + 1] = disc.hasSurface ? 1 : 0;
     renderMeta[i * 4 + 2] = disc.seed;
@@ -306,10 +314,10 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   geometry.setAttribute('aPalette1',       new BufferAttribute(palette1, 3));
   geometry.setAttribute('aPalette2',       new BufferAttribute(palette2, 3));
   geometry.setAttribute('aWeights',        new BufferAttribute(weights, 3));
-  geometry.setAttribute('aCloudPalette0',  new BufferAttribute(cloudPalette0, 3));
-  geometry.setAttribute('aCloudPalette1',  new BufferAttribute(cloudPalette1, 3));
-  geometry.setAttribute('aCloudPalette2',  new BufferAttribute(cloudPalette2, 3));
-  geometry.setAttribute('aCloudWeights',   new BufferAttribute(cloudWeights, 3));
+  geometry.setAttribute('aCloudPalette0',  new BufferAttribute(cloudPalette0, 4));
+  geometry.setAttribute('aCloudPalette1',  new BufferAttribute(cloudPalette1, 4));
+  geometry.setAttribute('aCloudPalette2',  new BufferAttribute(cloudPalette2, 4));
+  geometry.setAttribute('aCloudWeights',   new BufferAttribute(cloudWeights, 4));
   geometry.setAttribute('aSurfaceScalars', new BufferAttribute(surfaceScalars, 4));
   geometry.setAttribute('aAtmoScalars',    new BufferAttribute(atmoScalars, 4));
   geometry.setAttribute('aBiomeColor',     new BufferAttribute(biomeColors, 4));
