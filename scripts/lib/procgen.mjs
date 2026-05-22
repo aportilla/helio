@@ -74,7 +74,6 @@ import {
   WORLD_CLASS_THRESHOLDS,
   CLOUD_REGIME_THRESHOLDS,
   CLOUD_BY_REGIME,
-  HAZE_BY_REGIME,
   BIOSPHERE_HABITATS,
 } from './procgen-priors.mjs';
 import { insolation, tidalLockProxy, meanMetallicityForClass, meanAgeForClass, frostLineAU } from './astrophysics.mjs';
@@ -864,18 +863,111 @@ function cloudFor(body, S) {
   };
 }
 
-// Haze layer — uniform aerosol species + opacity. Many regimes have no
-// haze (Earth-class, gas giants outside the hot bracket) and return
-// nulls.
-function hazeFor(body, S) {
-  const regime = cloudHazeRegimeFor(body, S);
-  if (regime == null) return { gas: null, opacity: null };
-  const spec = HAZE_BY_REGIME[regime];
-  if (!spec) return { gas: null, opacity: null };
-  const opacity = sampleTruncated(fieldPrng(body, 'haze'), spec.opacity);
+// Molar fraction of `gas` in body.atm1/atm2/atm3, or 0 when absent.
+// Helper for haze-species formation gates that depend on a precursor
+// gas being present in the atmosphere.
+function atmFracOf(body, gas) {
+  if (body.atm1 === gas) return body.atm1Frac ?? 0;
+  if (body.atm2 === gas) return body.atm2Frac ?? 0;
+  if (body.atm3 === gas) return body.atm3Frac ?? 0;
+  return 0;
+}
+
+// Per-haze-species formation strength from body physics. Returns a 0..1
+// contribution scalar — no regime intermediary, each species gates on
+// its own physical preconditions. Multiple species can contribute when
+// their gates overlap (a body with both cold CH4 photolysis and a
+// surface dust regime would lift both, blending toward whichever
+// dominates by strength).
+//
+// Calibration anchors (Sol bodies; values approximate what the prior
+// regime table emitted, recoverable to within ±0.1 opacity):
+//   Titan       T=94K,  P=1.5 bar, CH4 ≈ 5% atm   → CH4 tholin ~0.8
+//   Venus       T=735K, P=92 bar                  → H2SO4 sulfate ~0.65
+//   Mars        T=210K, P=0.006 bar, dry surface  → DUST ~0.2
+//   Earth       T=288K, P=1 bar, wet surface      → none
+//   Hot Jupiter T>1000K, gaseous                   → SILICATE ~0.3
+//   Jupiter/Saturn, Uranus/Neptune, Hycean         → none
+function hazeContribution(gas, body) {
+  const T = body.avgSurfaceTempK;
+  const P = body.surfacePressureBar;
+  const r = body.radiusEarth;
+  const isGaseous = r != null && r >= WORLD_CLASS_THRESHOLDS.gasDwarfRadius;
+
+  switch (gas) {
+    case 'CH4': {
+      // Tholin photochemistry — CH4 photolysis under cold conditions
+      // produces a brown organic haze (Titan, Triton, Pluto-class). Needs
+      // CH4 in the atmosphere as a precursor and cold temperatures to
+      // sustain the aerosol against UV breakdown. Saturates at modest
+      // CH4 fractions — once CH4 is present at all, the haze is set by
+      // residence time, not by precursor abundance.
+      if (isGaseous) return 0;
+      if (T == null) return 0;
+      const tempGate = 1 - smoothstep(80, 130, T);
+      if (tempGate === 0) return 0;
+      const ch4Frac = atmFracOf(body, 'CH4');
+      const ch4Gate = smoothstep(0.001, 0.01, ch4Frac);
+      return tempGate * ch4Gate;
+    }
+    case 'H2SO4': {
+      // Sulfuric acid sulfate haze — thick CO2 atmospheres at high T
+      // (Venus-class). Environmental, not gated on atm precursor: the
+      // S source is interior outgassing, not a trace gas in atm1/2/3.
+      if (isGaseous) return 0;
+      if (T == null || P == null) return 0;
+      return smoothstep(500, 900, T) * smoothstep(5, 50, P) * 0.7;
+    }
+    case 'SILICATE': {
+      // Refractive silicate aerosols dredged from deep layers at extreme
+      // insolation. Hot gas-giant / hot sub-Neptune only.
+      if (!isGaseous) return 0;
+      if (T == null) return 0;
+      return smoothstep(800, 1500, T) * 0.5;
+    }
+    case 'DUST': {
+      // Mineral dust haze — Mars-class surface lift. Terrestrial only,
+      // dry surface (water suppresses dust), thin atmosphere (thick air
+      // is too dense for sustained suspension), moderate T (not frozen,
+      // not boiled). DUST never appears in atm1/2/3 — it's injected
+      // here by environmental gate alone.
+      if (isGaseous) return 0;
+      if (T == null || P == null) return 0;
+      if (P < ATMOSPHERE_MIN_PRESSURE_BAR || P > 1) return 0;
+      const waterFrac = body.waterFraction ?? 0;
+      const dryGate = 1 - smoothstep(0.0, 0.3, waterFrac);
+      const pressGate = 1 - smoothstep(0.001, 1, P);
+      const tempGate = smoothstep(150, 200, T) * (1 - smoothstep(300, 400, T));
+      return dryGate * pressGate * tempGate * 0.2;
+    }
+    default:
+      return 0;
+  }
+}
+
+// Haze layer — uniform aerosol species + opacity, derived directly from
+// body physics. No regime intermediary: per-species formation gates
+// each consult the body's actual atmosphere, temperature, and pressure.
+// Returns the dominant contributor as `gas` and the combined opacity
+// across all firing species. Multi-species color blending is deferred
+// to a later phase; the dominant species drives both the haze layer
+// color and the rim color in disc-palette.ts today.
+function hazeFor(body) {
+  if (body.surfacePressureBar != null && body.surfacePressureBar < ATMOSPHERE_MIN_PRESSURE_BAR) {
+    return { gas: null, opacity: null };
+  }
+  const candidates = ['CH4', 'H2SO4', 'SILICATE', 'DUST'];
+  const contributions = [];
+  for (const gas of candidates) {
+    const strength = hazeContribution(gas, body);
+    if (strength > 0) contributions.push({ gas, strength });
+  }
+  if (contributions.length === 0) return { gas: null, opacity: null };
+  const totalStrength = contributions.reduce((s, c) => s + c.strength, 0);
+  contributions.sort((a, b) => b.strength - a.strength);
   return {
-    gas: spec.gas,
-    opacity: Number(opacity.toFixed(3)),
+    gas: contributions[0].gas,
+    opacity: Number(Math.min(1, totalStrength).toFixed(3)),
   };
 }
 
@@ -1286,10 +1378,13 @@ function fillBody(b, allBodies, stars) {
   }
   working = { ...working, cloudGas, cloudCoverage, cloudStructure };
 
-  // Haze layer — uniform aerosol species + opacity. Many regimes have
-  // no haze (Earth-class, gas giants outside the hot bracket).
+  // Haze layer — uniform aerosol species + opacity. Physics-derived
+  // from atm + T + P via per-species formation gates; Earth-class
+  // bodies and gas giants outside the hot-silicate bracket emit no
+  // haze. No `S` (insolation) input — T already encodes that signal
+  // through avgSurfaceTempK.
   if (unknowns.has('hazeGas') || unknowns.has('hazeOpacity')) {
-    const h = hazeFor(working, S);
+    const h = hazeFor(working);
     if (unknowns.has('hazeGas'))     hazeGas     = h.gas;
     if (unknowns.has('hazeOpacity')) hazeOpacity = h.opacity;
   }

@@ -1529,50 +1529,10 @@ export const CLOUD_BY_REGIME = {
   },
 };
 
-// Haze layer per regime — photochemical or lifted aerosol sitting above
-// the cloud deck (or surface). Always uniform at planetary scale because
-// haze has no condensation latent heat to drive structured circulation.
-//
-// `null` = no haze layer forms in this regime. A body can carry both a
-// cloud AND a haze (Titan = sparse cloud + thick tholin haze; Venus =
-// full sulfuric cloud deck + sulfate haze on top) or neither (Earth =
-// cloud only; Mercury = nothing).
-//
-// Opacity: 0..1 uniform alpha for the overlay. Titan ≈ 0.85, Venus ≈ 0.7,
-// Mars dust ≈ 0.15 (background, not storm-state).
-//
-// Sampled once per body via fieldPrng(body, 'haze').
-export const HAZE_BY_REGIME = {
-  // Hot gas — silicate fog above the silicate cloud deck. Subtle but
-  // present.
-  hot_gaseous: {
-    gas: 'SILICATE',
-    opacity: { mean: 0.30, sd: 0.10, min: 0.10, max: 0.50 },
-  },
-  hycean:            null,
-  cold_gaseous:      null,
-  temperate_gaseous: null,
-  // Cold terrestrial — Titan's tholin haze (CH4 photolysis product).
-  // Thick; this is what makes Titan's surface invisible from above.
-  cold_terrestrial: {
-    gas: 'CH4',
-    opacity: { mean: 0.85, sd: 0.10, min: 0.50, max: 0.95 },
-  },
-  // Volcanic — sulfate aerosols (SO2 photolysis) above the sulfuric
-  // cloud deck.
-  volcanic: {
-    gas: 'SO2',
-    opacity: { mean: 0.65, sd: 0.15, min: 0.30, max: 0.85 },
-  },
-  biotic_wet:        null,
-  wet_terrestrial:   null,
-  // Dust terrestrial — mineral aerosol haze from surface dust lifting.
-  // Background opacity (not storm-state, which would peak much higher).
-  dust_terrestrial: {
-    gas: 'DUST',
-    opacity: { mean: 0.20, sd: 0.10, min: 0.05, max: 0.40 },
-  },
-};
+// Haze layer is derived directly from body physics in procgen.mjs's
+// hazeFor — per-species formation gates consult atm + T + P rather than
+// looking up a regime-keyed spec. See hazeContribution for the
+// per-species gates and calibration anchors.
 
 // Resources are now physics-derived in resourcesFor (procgen.mjs):
 //   metals       ∝ bulkMetalFraction
