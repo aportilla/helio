@@ -81,13 +81,6 @@ export const MOON_DISC_BASE = 67;
 // pushes moons outward; negative pulls them inward.
 export const MOON_EDGE_BIAS = 0;
 
-// Per-channel lerp of moon color toward white. Same-world-class moon +
-// parent would otherwise share an exact color and the moon's inner half
-// would disappear into the parent at the rim overlap. Lerp toward white
-// (rather than additive bump) preserves hue and won't oversaturate
-// channels already near 1.
-export const MOON_BRIGHTEN = 0.15;
-
 // Disc-diameter floor (env-px) below which a body forces flat fill
 // rather than running the procedural surface/banded texture. At smaller
 // sizes the per-pixel palette pick reads as screen-door noise instead

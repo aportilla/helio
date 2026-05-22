@@ -8,9 +8,9 @@
 import { BufferAttribute, BufferGeometry, Points, Scene, ShaderMaterial } from 'three';
 import { BODIES } from '../../../data/stars';
 import { makePlanetMaterial } from '../../materials';
-import { buildDiscPalette, lerpTowardWhite } from '../disc-palette';
+import { buildDiscPalette } from '../disc-palette';
 import {
-  MOON_BRIGHTEN, MOON_DISC_BASE, MOON_DISC_MAX, MOON_DISC_MIN, MOON_EDGE_BIAS,
+  MOON_DISC_BASE, MOON_DISC_MAX, MOON_DISC_MIN, MOON_EDGE_BIAS,
   RENDER_ORDER_BACK_MOON, RENDER_ORDER_FRONT_MOON,
   Z_BACK_MOON, Z_FRONT_MOON, Z_STRIDE,
 } from '../layout/constants';
@@ -236,9 +236,7 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   // Packed render metadata: stride 4 = [size, hasSurface, seed, tilt].
   // See planets.ts for the rationale.
   const renderMeta = new Float32Array(N * 4);
-  // Procedural-texture inputs — same shape as PlanetsLayer. Every
-  // palette entry is lifted toward white by MOON_BRIGHTEN so the moon's
-  // rim doesn't merge into a same-class parent at the inner overlap.
+  // Procedural-texture inputs — same shape as PlanetsLayer.
   const palette0  = new Float32Array(N * 3);
   const palette1  = new Float32Array(N * 3);
   const palette2  = new Float32Array(N * 3);
@@ -255,7 +253,7 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   const hazeColors  = new Float32Array(N * 4);
   slots.forEach((slot, i) => {
     const b = BODIES[slot.bodyIdx];
-    const disc = buildDiscPalette(b, slot.discPx, c => lerpTowardWhite(c, MOON_BRIGHTEN));
+    const disc = buildDiscPalette(b, slot.discPx);
     palette0[i * 3 + 0] = disc.palette[0];
     palette0[i * 3 + 1] = disc.palette[1];
     palette0[i * 3 + 2] = disc.palette[2];

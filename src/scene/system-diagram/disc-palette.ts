@@ -357,16 +357,9 @@ function blendTowardMean(
 // final rendered diameter — sub-PROCEDURAL_TEXTURE_MIN_PX bodies force
 // flat fill (palette weights = [1, 0, 0]) so tiny moons don't render
 // as noise.
-//
-// transformColor lets the caller post-process every palette entry
-// before packing (moons brighten toward white so their rims don't merge
-// into a same-class parent — see MOON_BRIGHTEN). Applied to surface +
-// cloud palettes uniformly so a moon's clouds brighten the same
-// amount as its surface.
 export function buildDiscPalette(
   body: Body,
   discPx: number,
-  transformColor: (c: Color) => Color = c => c,
 ): DiscPalette {
   const seed = hash32(`disc:${body.id}`) / 0x100000000;
   const hasSurface = body.worldClass === null ||
@@ -443,10 +436,7 @@ export function buildDiscPalette(
   const surfaceAge = surfaceSuppressed ? 0.5 : (body.surfaceAge ?? 0.5);
   const globalness = surfaceSuppressed ? 0   : globalnessForTemp(body.avgSurfaceTempK);
 
-  // Biome stipple — same suppression as terrain scalars. transformColor
-  // intentionally not applied: moon-brighten on biome would wash an
-  // alien-purple gaian moon into pale lavender that no longer reads as
-  // "alive."
+  // Biome stipple — same suppression as terrain scalars.
   const biomePaint = surfaceSuppressed ? null : biomePaintFor(body);
   const biomeColor: readonly [number, number, number] = biomePaint
     ? [biomePaint.color.r, biomePaint.color.g, biomePaint.color.b]
@@ -512,12 +502,12 @@ export function buildDiscPalette(
   // palette comes from gas-mix (already physically derived) and skips
   // the tint to keep cloud colors aligned with their gas species.
   const tint = body.worldClass !== null ? WORLD_CLASS_TINT[body.worldClass] : undefined;
-  const t0 = transformColor(applyTint(sC0, tint));
-  const t1 = transformColor(applyTint(sC1, tint));
-  const t2 = transformColor(applyTint(sC2, tint));
-  const ct0 = transformColor(cC0);
-  const ct1 = transformColor(cC1);
-  const ct2 = transformColor(cC2);
+  const t0 = applyTint(sC0, tint);
+  const t1 = applyTint(sC1, tint);
+  const t2 = applyTint(sC2, tint);
+  const ct0 = cC0;
+  const ct1 = cC1;
+  const ct2 = cC2;
 
   // Pick the actual layer color — for the haze tint we want the haze
   // species color (set above); for the rim we want the regime color.
@@ -556,16 +546,4 @@ export function buildDiscPalette(
     surfaceAge,
     globalness,
   };
-}
-
-// Per-channel lerp toward white. Used by MoonsLayer with MOON_BRIGHTEN
-// so all palette entries lift uniformly, not just the world-class base
-// — keeping resource accents recognizable while preventing the moon's
-// rim from merging into a same-class parent.
-export function lerpTowardWhite(c: Color, amount: number): Color {
-  return new Color(
-    c.r + (1 - c.r) * amount,
-    c.g + (1 - c.g) * amount,
-    c.b + (1 - c.b) * amount,
-  );
 }
