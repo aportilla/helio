@@ -370,12 +370,12 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       // function. Inward fade is a per-fragment lerp on the surface
       // color — always opaque output.
       const float OUTER_BASE_ALPHA = 0.35;
-      const float INNER_BASE_ALPHA = 0.2;
+      const float INNER_BASE_ALPHA = 0.35;
       // Width of the inward fade as a fraction of disc radius. Bands
       // within this width grow as 1, 2, 3, ... px from the limb inward
       // following the sphere-projection foreshortening curve — see the
       // inward-fade block below.
-      const float INWARD_RIM_FRACTION = 0.3;
+      const float INWARD_RIM_FRACTION = 0.25;
 
       // Per-pixel dither amplitude (in pixels of distFromLimb) applied
       // to the inward-fade band boundaries. 1.5 → each pixel jitters by
@@ -385,15 +385,17 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       // rim reads as organic haze rather than clean stripes.
       const float INWARD_BAND_DITHER = 5.0;
 
-      // Limb forward-scattering brightening. The outward halo and the
-      // inward fade both target this color instead of vHazeColor
-      // directly — models the longer scattering path at the glancing-
-      // angle limb that brightens the visible signal toward white. On
-      // surface bodies with heavy haze (Titan, Venus) this gives the
-      // disc a visible bright limb against the haze-flat interior; on
-      // no-surface bodies (Jupiter/Saturn) vHazeColor is already the
-      // pale atm column tint, so the additional brightening is subtle.
-      const float LIMB_BRIGHTEN = 0.3;
+      // Limb forward-scattering brightening — disabled. Models the
+      // longer scattering path at the glancing-angle limb that
+      // brightens the visible signal toward white in real photos. Off
+      // because it was applied as a uniform 30% lerp across every body
+      // regardless of atmospheric column depth, washing species pigment
+      // (Titan tholin, Mars dust) toward a generic pale halo. The
+      // outward halo + inward fade now paint pure vRimColor (the
+      // data-merged blend across cloud + haze + scattering + dust).
+      // Raise above 0 — ideally as a per-body function of column
+      // depth — if dark hazes start vanishing against dark interiors.
+      const float LIMB_BRIGHTEN = 0.0;
 
       // Phase 1.5b — per-region resource-subset selection. Aggregate
       // REGION_PATCH_FACTOR fine worley cells per axis into one

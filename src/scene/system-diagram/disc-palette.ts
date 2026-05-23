@@ -80,10 +80,14 @@ const RIM_MAX_RADIUS_FRACTION = 0.15;
 const RIM_NO_SURFACE_FACTOR_THRESHOLDS = [1.0, 3.5] as const;
 const RIM_NO_SURFACE_BASE_PX = 1;
 
-// Fallback halo width for a surface body with haze but no measured
-// surfacePressureBar — keeps a hazy world's halo on the table when
-// data is partial. Clamped by disc radius like the proper buckets.
-const RIM_HAZE_FALLBACK_PX = 2;
+// Atmosphere-presence floor: any surface body whose color merger
+// produced a non-zero signal — pressure above RIM_MIN_PRESSURE_BAR,
+// cloud coverage, haze opacity, or lifted dust — gets at least this
+// many px of rim. Distinguishes "has air" (Mars: thin CO₂ + dust
+// storms + helicopters fly) from "airless" (Mercury, Luna). The
+// pressure-driven [2, 3] tiers above still mark significant
+// atmospheric depth.
+const RIM_PRESENCE_FLOOR_PX = 1;
 
 // Per-class molecular-weight ratio µ_air / µ_atm. H ∝ T/(µg), so a
 // lighter atmosphere produces a taller column. Used inside
@@ -584,10 +588,14 @@ export function buildDiscPalette(
       rimWidthPx = hasSurface
         ? rimWidthForSurfaceAtmosphere(body, discPx)
         : rimWidthForNoSurfaceAtmosphere(body, discPx);
-      // Surface-with-haze-but-no-pressure fallback (data-thin bodies).
-      if (hasSurface && rimWidthPx === 0 && hazeOpacity > 0) {
-        rimWidthPx = Math.min(RIM_HAZE_FALLBACK_PX,
-          Math.max(1, Math.floor((discPx / 2) * RIM_MAX_RADIUS_FRACTION)));
+      // Presence floor — any contributor that made it into the merger
+      // counts as "has atmosphere," so any surface body that fell
+      // through the pressure tiers still gets a visible rim. Catches
+      // Mars (P=0.006 bar too thin for the Rayleigh tier, but dust +
+      // thin cirrus dominate the visible signal from orbit) and data-
+      // thin bodies whose only signal is haze.
+      if (hasSurface && rimWidthPx === 0) {
+        rimWidthPx = RIM_PRESENCE_FLOOR_PX;
       }
     }
   }
