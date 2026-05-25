@@ -507,16 +507,20 @@ export function bodyIcyness(body: Body): number {
 // emitted by procgen when chemistry gates support them. They share the
 // AtmGas type so the cloud / haze gas fields don't need a separate
 // vocabulary.
-//   SILICATE — refractive Mg-Si-O cloud particles (hot Jupiters)
-//   DUST     — suspended ferric-oxide aerosols (Mars-class surface lift)
-//   THOLIN    — CnHmN photolysis polymers (Titan tholin, needs N2+CH4+UV+cold)
-//   NH4SH    — ammonium hydrosulfide condensate (Jovian belt brown)
+//   SILICATE    — refractive Mg-Si-O cloud particles (hot Jupiters)
+//   DUST        — suspended ferric-oxide aerosols (Mars-class surface lift)
+//   THOLIN      — CnHmN photolysis polymers (Titan tholin, needs N2+CH4+UV+cold)
+//   NH4SH       — ammonium hydrosulfide condensate (Jovian belt brown)
+//   CHROMOPHORE — PH3-photolysis red pigment (Jovian Great Red Spot)
+//   SALT        — KCl + ZnS condensate (warm sub-Neptune haze, GJ 1214 b class)
+//   SULFUR      — S8 elemental sulfur aerosol (Io-class volcanic terrestrial)
 export type AtmGas =
   | 'N2' | 'O2' | 'CO2' | 'H2O' | 'CH4' | 'NH3'
   | 'SO2' | 'Ar' | 'CO'  | 'H2'  | 'He'
   | 'H2SO4'
   | 'SILICATE' | 'DUST'
-  | 'THOLIN' | 'NH4SH';
+  | 'THOLIN' | 'NH4SH'
+  | 'CHROMOPHORE' | 'SALT' | 'SULFUR';
 
 // Archetypal hue per atmospheric gas. Picked to read at small disc sizes
 // as "what's in the air" rather than as photoreal sky color — the
@@ -538,11 +542,14 @@ export const GAS_COLOR: Record<AtmGas, Color> = {
   // condensate / aerosol actually looks like as a layer; procgen runs
   // the chemistry gates that decide whether the species forms (so the
   // renderer paints exactly what procgen says — no chemistry magic).
-  H2SO4:    new Color(0xd8c474),  // yellow-cream — Venus sulfuric acid deck
-  SILICATE: new Color(0x788098),  // refractive silicate-cloud grey-blue
-  DUST:     new Color(0xa86040),  // ferric oxide rust — Mars-class dust
-  THOLIN:    new Color(0xc88040),  // orange — Titan tholin (CH4+N2+UV photolysis)
-  NH4SH:    new Color(0xc88250),  // warm tan-orange — Jovian belt chromophore (NH4SH + photolysis products)
+  H2SO4:       new Color(0xd8c474),  // yellow-cream — Venus sulfuric acid deck
+  SILICATE:    new Color(0x788098),  // refractive silicate-cloud grey-blue
+  DUST:        new Color(0xa86040),  // ferric oxide rust — Mars-class dust
+  THOLIN:      new Color(0xc88040),  // orange — Titan tholin (CH4+N2+UV photolysis)
+  NH4SH:       new Color(0xc88250),  // warm tan-orange — Jovian belt brown (NH4SH condensate)
+  CHROMOPHORE: new Color(0xc04830),  // deep brick-red — Jovian Great Red Spot pigment (PH3 photolysis)
+  SALT:        new Color(0xc0d4d8),  // pale blue-white — KCl/ZnS sub-Neptune haze
+  SULFUR:      new Color(0xe8d048),  // bright yellow — S8 elemental sulfur (Io-class volcanic)
 };
 
 // Condensed-phase ice / frost colors — used when a gas is the body's
@@ -621,11 +628,14 @@ export const GAS_MOLECULAR_WEIGHT: Record<AtmGas, number> = {
   Ar:  40,
   CO2: 44,
   SO2: 64,
-  H2SO4: 98,
-  SILICATE: 100,
-  DUST:     100,
-  THOLIN:    100,  // CnHmN mixed polymer mass
-  NH4SH:     51,
+  H2SO4:        98,
+  SILICATE:    100,
+  DUST:        100,
+  THOLIN:      100,  // CnHmN mixed polymer mass
+  NH4SH:        51,
+  CHROMOPHORE: 100,  // PH3-derived phosphorus polymers, mass placeholder
+  SALT:         85,  // averaged across KCl (74) + ZnS (97)
+  SULFUR:      256,  // S8 elemental sulfur ring
 };
 
 // Per-gas clear-air scattering color — the visible tint of an
@@ -655,11 +665,14 @@ export const SCATTERING_COLOR: Record<AtmGas, Color> = {
   He:  new Color(0xece0c4),  // pale cream
   // Aerosol / product-only species don't enter the clear-air scattering
   // blend — they're handled exclusively by the haze layer.
-  H2SO4:    new Color(0xc0c0c0),
-  SILICATE: new Color(0xa0a0a0),
-  DUST:     new Color(0xa86040),
-  THOLIN:    new Color(0xc88040),
-  NH4SH:    new Color(0xc88250),
+  H2SO4:       new Color(0xc0c0c0),
+  SILICATE:    new Color(0xa0a0a0),
+  DUST:        new Color(0xa86040),
+  THOLIN:      new Color(0xc88040),
+  NH4SH:       new Color(0xc88250),
+  CHROMOPHORE: new Color(0xc04830),
+  SALT:        new Color(0xc0d4d8),
+  SULFUR:      new Color(0xe8d048),
 };
 
 // Per-gas weight in the clear-air scattering blend. Different from
@@ -683,11 +696,14 @@ export const SCATTERING_POTENCY: Record<AtmGas, number> = {
   CO:  0.5,
   H2:  0.3,  // nearly transparent
   He:  0.3,
-  H2SO4:    0,
-  SILICATE: 0,
-  DUST:     0,
-  THOLIN:    0,
-  NH4SH:    0,
+  H2SO4:       0,
+  SILICATE:    0,
+  DUST:        0,
+  THOLIN:      0,
+  NH4SH:       0,
+  CHROMOPHORE: 0,
+  SALT:        0,
+  SULFUR:      0,
 };
 
 export const GAS_POTENCY: Record<AtmGas, number> = {
@@ -713,11 +729,14 @@ export const GAS_POTENCY: Record<AtmGas, number> = {
   // Condensate / aerosol / product species — only enter rendering via
   // cloudGas or hazeGas paths. Potency 3 matches the cloud-former
   // magnitude so each species contributes meaningfully when emitted.
-  H2SO4:    3.0,
-  SILICATE: 3.0,
-  DUST:     3.0,
-  THOLIN:    3.0,
-  NH4SH:    3.0,
+  H2SO4:       3.0,
+  SILICATE:    3.0,
+  DUST:        3.0,
+  THOLIN:      3.0,
+  NH4SH:       3.0,
+  CHROMOPHORE: 3.0,
+  SALT:        3.0,
+  SULFUR:      3.0,
 };
 
 export type ResourceKey =

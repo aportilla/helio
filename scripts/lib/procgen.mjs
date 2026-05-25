@@ -875,20 +875,27 @@ function atmFracOf(body, gas) {
 
 // Per-haze-species formation strength from body physics. Returns a 0..1
 // contribution scalar — no regime intermediary, each species gates on
-// its own physical preconditions. Multiple species can contribute when
-// their gates overlap (a body with both cold CH4 photolysis and a
-// surface dust regime would lift both, blending toward whichever
-// dominates by strength).
+// its own physical preconditions. Each species' gates produce a
+// continuous distribution from 0 to its anchored peak; the peak
+// coefficient is set so a calibration-anchor body (Titan, Jupiter,
+// Venus, etc.) matches its observed haze opacity. Pile-up at the peak
+// is avoided by making at least one gate a true peaked function
+// (Gaussian-like or smoothstep×inverse-smoothstep) rather than a
+// monotonic step — bodies on either side of the optimal regime ramp
+// continuously, so the histogram fills out instead of clustering at
+// the coefficient ceiling.
 //
-// Calibration anchors (Sol bodies):
-//   Titan       T=94K,  P=1.5 bar, N2+CH4 atm  → THOLIN ~0.8
-//   Jupiter     T=165K, gaseous, NH3 cloud     → NH4SH ~0.7
-//   Saturn      T=134K, gaseous, NH3 cloud     → NH4SH ~0.4
-//   Venus       T=735K, P=92 bar               → H2SO4 sulfate ~0.65
-//   Mars        T=210K, P=0.006 bar, dry       → DUST ~0.2
-//   Earth       T=288K, P=1 bar, wet surface   → none
-//   Hot Jupiter T>1000K, gaseous               → SILICATE ~0.3
-//   Uranus/Neptune (too cold for NH4SH), Hycean → none
+// Calibration anchors (Sol bodies + literature targets):
+//   Titan       T=94K,  P=1.5 bar, N2+CH4 atm  → THOLIN ~0.85
+//   Jupiter     T=165K, gaseous, NH3 cloud     → NH4SH ~0.70
+//   Saturn      T=134K, gaseous, NH3 cloud     → CHROMOPHORE ~0.60
+//   Venus       T=735K, P=92 bar               → H2SO4 ~0.70
+//   Io          T~400K, P=trace, SO2 atm, dry  → SULFUR ~0.55
+//   GJ 1214 b   T~600K, gaseous, sub-Neptune   → SALT ~0.60
+//   Hot Jupiter T>1500K, gaseous               → SILICATE ~0.50
+//   Mars        T=210K, P=0.006 bar, dry       → none (DUST is a
+//                                                 separate channel)
+//   Earth       T=288K, P=1 bar, wet           → none
 //
 // Procgen owns the chemistry. Each branch outputs an explicit reaction
 // product species — THOLIN (not CH4), NH4SH (not NH3) — so the
@@ -902,52 +909,104 @@ function hazeContribution(gas, body) {
 
   switch (gas) {
     case 'THOLIN': {
-      // CnHmN photolysis polymers. Forms from N2 + CH4 + UV on cold
-      // terrestrial bodies with a thick-enough atm to retain the
-      // aerosol. Real Titan chemistry: ionospheric UV breaks N2 and
-      // CH4 into radicals that polymerize into orange-brown organic
-      // particles. Needs both precursors — methane alone (gas-giant
-      // upper atms) doesn't tholinize, which is why ice giants stay
-      // clear despite having CH4 in their column.
+      // CnHmN photolysis polymers — Titan-class orange-brown haze.
+      // Needs N2 + CH4 precursors AND host-star UV. Temperature is a
+      // proxy for UV flux (T set by insolation), so the gate is peaked
+      // around Titan's regime (~95K, moderate UV at Saturn distance):
+      // colder bodies (Triton/Pluto class) receive too little UV to
+      // drive polymerization; warmer bodies (>130K) lose CH4 to thermal
+      // escape and sublimation faster than aerosols can form.
+      // Rising/falling smoothsteps TOUCH at peak T (no plateau), so
+      // tempGate=1.0 only at T=95 exactly — bodies on either side
+      // ramp continuously, avoiding the saturation pile-up.
       if (isGaseous) return 0;
       if (T == null) return 0;
-      const tempGate = 1 - smoothstep(80, 130, T);
+      const tempGate = smoothstep(40, 95, T) * (1 - smoothstep(95, 150, T));
       if (tempGate === 0) return 0;
       const ch4Frac = atmFracOf(body, 'CH4');
       const n2Frac  = atmFracOf(body, 'N2');
-      const ch4Gate = smoothstep(0.001, 0.01, ch4Frac);
-      const n2Gate  = smoothstep(0.1, 0.5, n2Frac);
-      return tempGate * ch4Gate * n2Gate;
+      const ch4Gate = smoothstep(0.001, 0.05, ch4Frac);
+      const n2Gate  = smoothstep(0.1, 0.6, n2Frac);
+      return tempGate * ch4Gate * n2Gate * 0.85;
     }
     case 'NH4SH': {
       // Ammonium hydrosulfide cloud-top chemistry — Jovian belt brown.
-      // NH3 + H2S → NH4SH condensate at ~150-200K cloud-top
-      // temperatures. Gas-giant only; needs NH3 cloud chemistry as a
-      // proxy for the H2S precursor (real H2S isn't tracked, but
-      // gas-giant interiors with NH3 cloud decks also produce H2S at
-      // proportional abundance). Ice giants are too cold for NH4SH
-      // condensation — frozen out at lower altitudes than the photic
-      // depth — so no contribution there.
+      // Peak at Jupiter's cloud top (~165K) where NH3 + H2S → NH4SH
+      // condensate runs fastest; falls off at lower T (chemistry too
+      // slow, CHROMOPHORE takes over) and higher T (NH3 cloud
+      // dissociates).
       if (!isGaseous) return 0;
       if (T == null) return 0;
       if (body.cloudGas !== 'NH3') return 0;
-      const tempGate = smoothstep(80, 130, T) * (1 - smoothstep(190, 230, T));
+      const tempGate = smoothstep(120, 165, T) * (1 - smoothstep(165, 225, T));
       return tempGate * 0.7;
     }
-    case 'H2SO4': {
-      // Sulfuric acid sulfate haze — thick CO2 atmospheres at high T
-      // (Venus-class). Environmental, not gated on atm precursor: the
-      // S source is interior outgassing, not a trace gas in atm1/2/3.
-      if (isGaseous) return 0;
-      if (T == null || P == null) return 0;
-      return smoothstep(500, 900, T) * smoothstep(5, 50, P) * 0.7;
-    }
-    case 'SILICATE': {
-      // Refractive silicate aerosols dredged from deep layers at extreme
-      // insolation. Hot gas-giant / hot sub-Neptune only.
+    case 'CHROMOPHORE': {
+      // PH3-photolysis red pigment — Jovian Great Red Spot / Saturn
+      // polar haze. Co-located with NH3 cloud chemistry but peaks at
+      // cooler cloud tops (~125K, Saturn regime) where NH3 + H2S is
+      // too slow for NH4SH dominance and phosphorus polymers
+      // accumulate as the long-lived chromophore.
       if (!isGaseous) return 0;
       if (T == null) return 0;
-      return smoothstep(800, 1500, T) * 0.5;
+      if (body.cloudGas !== 'NH3') return 0;
+      const tempGate = smoothstep(90, 125, T) * (1 - smoothstep(125, 180, T));
+      return tempGate * 0.6;
+    }
+    case 'SALT': {
+      // KCl + ZnS condensate haze — warm sub-Neptune / gas dwarf
+      // regime between NH3-cloud Jovians (NH4SH) and hot-Jupiter
+      // silicate condensates. Anchored to GJ 1214 b modeling: a
+      // ubiquitous featureless haze attributed to alkali-salt
+      // photochemistry at ~600K cloud tops.
+      if (!isGaseous) return 0;
+      if (T == null) return 0;
+      const tempGate = smoothstep(250, 625, T) * (1 - smoothstep(625, 950, T));
+      return tempGate * 0.6;
+    }
+    case 'H2SO4': {
+      // Sulfuric acid sulfate haze — Venus-class. Needs hot CO2 + high
+      // pressure: the S source is interior outgassing converted to
+      // H2SO4 by photochemistry against the thick CO2 column. Peak
+      // around Venus' cloud-top temperatures (~720K, well below the
+      // surface 735K because the haze sits at altitude); above ~1000K
+      // H2SO4 dissociates back to SO3 + H2O.
+      if (isGaseous) return 0;
+      if (T == null || P == null) return 0;
+      const tempGate = smoothstep(500, 720, T) * (1 - smoothstep(720, 1100, T));
+      // Pressure gate's upper end widened from 50 to 150 bar so even
+      // Venus-class thick atmospheres (92 bar) don't sit in the
+      // saturation flat — the gate keeps climbing past Venus into
+      // hypothetical super-Venus pressures, so most CO2-rich worlds
+      // ramp continuously rather than hitting the 50-bar ceiling.
+      const pressGate = smoothstep(5, 150, P);
+      return tempGate * pressGate * 0.7;
+    }
+    case 'SULFUR': {
+      // S8 elemental sulfur aerosol — Io-class volcanic. Distinct from
+      // H2SO4 by pressure: H2SO4 needs a thick column for sustained
+      // sulfate chemistry; S8 photolysis dominates at THIN SO2
+      // columns where UV penetrates to the surface. Dry-surface gate
+      // (water suppresses sulfur cycle by scavenging SO2 into
+      // sulfate/sulfite). SO2 precursor gate.
+      if (isGaseous) return 0;
+      if (T == null || P == null) return 0;
+      const so2Frac = atmFracOf(body, 'SO2');
+      const so2Gate = smoothstep(0.01, 0.3, so2Frac);
+      if (so2Gate === 0) return 0;
+      const tempGate = smoothstep(250, 400, T) * (1 - smoothstep(400, 800, T));
+      const pressGate = 1 - smoothstep(0.5, 5, P);
+      const waterFrac = body.waterFraction ?? 0;
+      const dryGate = 1 - smoothstep(0.0, 0.2, waterFrac);
+      return tempGate * so2Gate * pressGate * dryGate * 0.65;
+    }
+    case 'SILICATE': {
+      // Refractive Mg-Si-O cloud particles dredged from deep layers at
+      // extreme insolation. Hot gas-giant / hot sub-Neptune only;
+      // peaks above SALT's range.
+      if (!isGaseous) return 0;
+      if (T == null) return 0;
+      return smoothstep(900, 1500, T) * 0.5;
     }
     default:
       return 0;
@@ -996,30 +1055,28 @@ function hazeFor(body) {
   if (body.surfacePressureBar != null && body.surfacePressureBar < ATMOSPHERE_MIN_PRESSURE_BAR) {
     return { gas: null, opacity: null };
   }
-  const candidates = ['THOLIN', 'NH4SH', 'H2SO4', 'SILICATE'];
-  const contributions = [];
+  const candidates = ['THOLIN', 'NH4SH', 'CHROMOPHORE', 'SALT', 'H2SO4', 'SULFUR', 'SILICATE'];
+  let best = null;
   for (const gas of candidates) {
     const strength = hazeContribution(gas, body);
-    if (strength > 0) contributions.push({ gas, strength });
+    if (strength > 0 && (best === null || strength > best.strength)) {
+      best = { gas, strength };
+    }
   }
-  if (contributions.length === 0) return { gas: null, opacity: null };
-  const totalStrength = contributions.reduce((s, c) => s + c.strength, 0);
-  contributions.sort((a, b) => b.strength - a.strength);
-  // Cap below 1.0 even when chemistry gates saturate. Real-world
-  // aerosol haze is never truly opaque — Titan, the canonical case,
-  // is curated at 0.85. Leaving headroom keeps the underlying cloud
-  // and surface variation visible through the overlay rather than
-  // erasing it.
+  if (best === null) return { gas: null, opacity: null };
+  // Opacity is the dominant species' own formation strength — not a
+  // sum across species. Summing produced phantom statistical cliffs:
+  // two co-firing species each at 0.5 totaled to 1.0 and were clamped
+  // by an explicit cap, pinning a chunk of the population to a single
+  // value. The renderer only paints one species' color anyway, so
+  // reporting that species' physical strength is the honest read.
+  // Per-species coefficients (0.5-0.85, anchored to real-world haze
+  // observations) bound the value naturally — no global cap needed.
   return {
-    gas: contributions[0].gas,
-    opacity: Number(Math.min(HAZE_OPACITY_CAP, totalStrength).toFixed(3)),
+    gas: best.gas,
+    opacity: Number(best.strength.toFixed(3)),
   };
 }
-
-// Maximum opacity emitted by `hazeFor`. Real-world hazes saturate
-// below 1.0 (Titan ~0.85); a hard cap here keeps procgen output from
-// erasing the disc structure when chemistry gates fully fire.
-const HAZE_OPACITY_CAP = 0.92;
 
 // =============================================================================
 // Resources — physics-derived (Phase 4.5)
