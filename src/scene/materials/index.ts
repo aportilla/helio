@@ -11,6 +11,7 @@ export {
   type SnappedLineOptions,
 } from './galaxy';
 export {
+  MAX_CLOUD_LAYERS,
   makeBlobMaterial,
   makePlanetMaterial,
   makeRingMaterial,

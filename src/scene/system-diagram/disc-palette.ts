@@ -30,9 +30,9 @@
 
 import { Color } from 'three';
 import {
-  AtmGas, Body, CONDENSATE_COLOR, GAS_COLOR, GAS_POTENCY,
+  AtmGas, Body, GAS_COLOR, GAS_POTENCY,
   GAS_VISIBILITY_FILTER, HAZE_AEROSOL_SCALE, HAZE_BULK_GAS_SCALE,
-  HAZE_DUST_SCALE, HAZE_RAYLEIGH_SCALE, NO_SURFACE_WORLD_CLASSES,
+  HAZE_DUST_SCALE, HAZE_RAYLEIGH_SCALE,
   SCATTERING_COLOR, SCATTERING_POTENCY,
   WORLD_CLASS_COLOR, WORLD_CLASS_TINT,
   WORLD_CLASS_UNKNOWN_COLOR, biomePaintFor, cloudBandPalette,
@@ -146,11 +146,13 @@ export interface DiscPalette {
                                    number, number, number,
                                    number, number, number];
   readonly cloudWeights: readonly [number, number, number, number];
-  // True when the body has a paintable surface (terrestrial bracket
-  // classes). False for gas/ice giants, gas dwarfs, hycean, helium —
-  // the shader short-circuits the surface block and the cloud layer
-  // is their canvas.
-  readonly hasSurface: boolean;
+  // Surface opacity [0..1]. 1 = paintable surface visible (terrestrials).
+  // 0 = surface contribution is suppressed in composition (gas/ice
+  // giants — visible only through cloud rents, where the surface
+  // palette has been substituted with atmColumnColor). The shader
+  // composites surface unconditionally; this scalar gates its
+  // contribution rather than branching the codepath.
+  readonly surfaceOpacity: number;
   readonly seed: number;  // [0..1)
   // Render tilt in radians — rotates the banded-mode strip axis so
   // bands run parallel to the planet's equator (and, for ringed giants,
@@ -173,15 +175,17 @@ export interface DiscPalette {
   // tiny discs, and bodies with no biosphere.
   readonly biomeColor: readonly [number, number, number];
   readonly biomeCoverage: number;
-  // Cloud layer coverage [0..1]. 0 = no clouds. Earth-class ≈ 0.4;
-  // gas giants and Venus = 1.0 (full deck). Patchy structure: per-cell
-  // hash < coverage paints cloud. Banded structure: full latitude
-  // strips at this alpha.
-  readonly cloudCoverage: number;
-  // Cloud structure scalar. 0 = patchy cellular (Earth, Mars). 1 =
-  // banded zonal (Venus, gas giants). The shader snaps at 0.5 in v1;
-  // intermediate values mostly come from procgen jitter.
-  readonly cloudStructure: number;
+  // Cloud layers — up to MAX_CLOUD_LAYERS stratified decks, sorted
+  // ascending by altitudeNorm. Each entry: coverage [0..1], bandness
+  // [0..1] (patchy ↔ banded), altitudeNorm [0..1] (deep → top). The
+  // shader composites all layers above the surface + haze, each
+  // pre-tinted by the haze opacity sitting above it. Unused slots
+  // have coverage = 0 and get a no-op composite.
+  readonly cloudLayers: ReadonlyArray<{
+    readonly coverage: number;
+    readonly bandness: number;
+    readonly altitudeNorm: number;
+  }>;
   // Haze layer uniform opacity [0..1]. The shader runs a per-fragment
   // mix(col, hazeColor, hazeOpacity) over EVERY paint underneath
   // (surface + cloud). Derived from the unified contributor blend
@@ -310,16 +314,6 @@ function hazeBlendFor(body: Body): { color: Color; opacity: number } {
   };
 }
 
-// Cloud condensate color — what cloud particles of the given species
-// look like. Most cloud species are condensable gases whose ice/frost
-// form differs visibly from their gas-phase color (CH4 ice frost vs
-// CH4 gas cyan); CONDENSATE_COLOR carries those. Species that ARE
-// already aerosols (H2SO4 droplets, SILICATE) fall back to GAS_COLOR
-// since their "gas" color is their visible appearance.
-function cloudCondensateColor(gas: AtmGas): Color {
-  return CONDENSATE_COLOR[gas] ?? GAS_COLOR[gas] ?? new Color(0xffffff);
-}
-
 // Atm-only column color — weighted blend across atm1/2/3 by
 // `frac × GAS_POTENCY`, with no contribution from cloud or haze
 // species.
@@ -428,70 +422,60 @@ export function buildDiscPalette(
   discPx: number,
 ): DiscPalette {
   const seed = hash32(`disc:${body.id}`) / 0x100000000;
-  const hasSurface = body.worldClass === null ||
-    !NO_SURFACE_WORLD_CLASSES.has(body.worldClass);
+  const surfaceOpacity = body.surfaceOpacity;
+  const hasSurface = surfaceOpacity > 0;
   const tinyDisc = discPx < PROCEDURAL_TEXTURE_MIN_PX;
 
-  // ── SURFACE PALETTE — resource-driven, always computed ──
-  // World-class color only re-enters as a flat-fill fallback when a
-  // body carries no resource signal at all (procgen edge).
-  const res = dominantResources(body, 3);
+  // ── SURFACE PALETTE — resource-driven for terrestrials, bulk-atm
+  // column tint for gas/ice giants (so a cloud rent reveals the
+  // physically-honest deep-column color). World-class color only
+  // re-enters as a flat-fill fallback when a body carries no resource
+  // signal at all (procgen edge).
   let sC0: Color, sC1: Color, sC2: Color;
   let sW0: number, sW1: number, sW2: number;
-  if (res.length === 0) {
-    const base = worldClassColor(body);
-    sC0 = base; sC1 = base; sC2 = base;
+  if (!hasSurface) {
+    const colColor = atmColumnColor(body) ?? worldClassColor(body);
+    sC0 = colColor; sC1 = colColor; sC2 = colColor;
     sW0 = 1; sW1 = 0; sW2 = 0;
   } else {
-    sC0 = res[0].color;
-    sC1 = res[1]?.color ?? res[0].color;
-    sC2 = res[2]?.color ?? res[0].color;
-    sW0 = res[0].weight;
-    sW1 = res[1]?.weight ?? 0;
-    sW2 = res[2]?.weight ?? 0;
-  }
-
-  // ── CLOUD PALETTE — base+accent for banded, single condensate for patchy ──
-  // For now (Phase B of the layered cloud rollout) the shader still
-  // takes a single deck. Pick the top layer (highest altitudeNorm —
-  // last in the procgen-sorted array) as the representative deck;
-  // Phase D will dispatch all layers to the shader through a per-body
-  // data texture.
-  const topLayer = body.cloudLayers.length > 0
-    ? body.cloudLayers[body.cloudLayers.length - 1]
-    : null;
-  const cloudGas = topLayer ? (topLayer.gas as AtmGas) : null;
-  const rawCloudCoverage  = topLayer?.coverage ?? 0;
-  const rawCloudStructure = topLayer?.bandness ?? 0;
-  let cC0 = new Color(0, 0, 0);
-  let cC1 = new Color(0, 0, 0);
-  let cC2 = new Color(0, 0, 0);
-  let cC3 = new Color(0, 0, 0);
-  let cW0 = 0, cW1 = 0, cW2 = 0, cW3 = 0;
-  if (cloudGas !== null && rawCloudCoverage > 0) {
-    if (rawCloudStructure >= 0.5) {
-      // Banded — 4-slot base+accent palette stochastically picked per
-      // cell. Slot 0 = perceptual blend across atm + cloud + haze at
-      // ~50% picker weight; slots 1-3 = accent species at their
-      // natural saturation sharing the remaining weight. See
-      // cloudBandPalette in stars.ts for the model.
-      const cbp = cloudBandPalette(body);
-      cC0 = cbp.palette[0];
-      cC1 = cbp.palette[1];
-      cC2 = cbp.palette[2];
-      cC3 = cbp.palette[3];
-      cW0 = cbp.weights[0];
-      cW1 = cbp.weights[1];
-      cW2 = cbp.weights[2];
-      cW3 = cbp.weights[3];
+    const res = dominantResources(body, 3);
+    if (res.length === 0) {
+      const base = worldClassColor(body);
+      sC0 = base; sC1 = base; sC2 = base;
+      sW0 = 1; sW1 = 0; sW2 = 0;
     } else {
-      // Patchy — single condensate color in slot 0. The shader paints
-      // pCloudPalette0 on cells where the per-cell hash < cloudCoverage.
-      const c = cloudCondensateColor(cloudGas);
-      cC0 = c; cC1 = c; cC2 = c; cC3 = c;
-      cW0 = 1; cW1 = 0; cW2 = 0; cW3 = 0;
+      sC0 = res[0].color;
+      sC1 = res[1]?.color ?? res[0].color;
+      sC2 = res[2]?.color ?? res[0].color;
+      sW0 = res[0].weight;
+      sW1 = res[1]?.weight ?? 0;
+      sW2 = res[2]?.weight ?? 0;
     }
   }
+
+  // ── CLOUD PALETTE — shared 4-slot palette across all decks.
+  // Per-layer character emerges from coverage / bandness / altitude
+  // variation rather than per-layer palette switching. The base-blend
+  // (slot 0) already folds in every cloud condensate the body carries
+  // via cloudBandPalette's iteration over body.cloudLayers, so a
+  // multi-deck Jupiter's slot 0 carries H2O + NH4SH + NH3 contributions
+  // jointly; the band picker resolves accent variation per worley cell.
+  const cbp = body.cloudLayers.length > 0 ? cloudBandPalette(body) : null;
+  const cC0 = cbp?.palette[0] ?? new Color(0, 0, 0);
+  const cC1 = cbp?.palette[1] ?? new Color(0, 0, 0);
+  const cC2 = cbp?.palette[2] ?? new Color(0, 0, 0);
+  const cC3 = cbp?.palette[3] ?? new Color(0, 0, 0);
+  const cW0 = cbp?.weights[0] ?? 0;
+  const cW1 = cbp?.weights[1] ?? 0;
+  const cW2 = cbp?.weights[2] ?? 0;
+  const cW3 = cbp?.weights[3] ?? 0;
+
+  // rawCloudCoverage is used elsewhere (rim merger, palette
+  // gating). Aggregate it across decks — the worst-case visible
+  // cloud signal at the rim is the max coverage across layers.
+  const rawCloudCoverage = body.cloudLayers.reduce(
+    (mx, l) => Math.max(mx, l.coverage), 0,
+  );
 
   // Force flat fill on very small discs — the per-pixel hash texture
   // and the band strips both degrade to noise below ~16 px.
@@ -514,16 +498,26 @@ export function buildDiscPalette(
     : [0, 0, 0];
   const biomeCoverage = biomePaint ? biomePaint.coverage : 0;
 
-  // Cloud + haze scalars — tinyDisc suppresses both since the shader's
-  // per-fragment work would resolve as noise.
-  const cloudCoverage  = tinyDisc ? 0 : rawCloudCoverage;
-  const cloudStructure = tinyDisc ? 0 : rawCloudStructure;
+  // Cloud layer scalars — pack each body.cloudLayer into the shape
+  // the shader's data-texture upload consumes, padded to
+  // MAX_CLOUD_LAYERS. tinyDisc suppresses all decks since the
+  // per-fragment work would resolve as noise on a small disc.
+  const cloudLayers = tinyDisc
+    ? []
+    : body.cloudLayers.map((l) => ({
+        coverage: l.coverage,
+        bandness: l.bandness,
+        altitudeNorm: l.altitudeNorm,
+      }));
 
   // Unified haze blend — one color + one opacity per body, derived
   // from the atmospheric contributor list (bulk gases × pressure ×
   // potency, Rayleigh scattering, formation-gated aerosol products,
-  // lifted dust). Surface bodies paint this as the interior overlay.
-  const hazeRaw = (tinyDisc || !hasSurface)
+  // lifted dust). Runs for every body now that the surface gate is
+  // gone; gas giants typically land at low hazeOpacity from bulk
+  // atm contributions alone (no surfacePressureBar → 0 for those
+  // contributors, only aerosol formation gates fire).
+  const hazeRaw = tinyDisc
     ? { color: new Color(0, 0, 0), opacity: 0 }
     : hazeBlendFor(body);
   const hazeOpacity = hazeRaw.opacity;
@@ -606,15 +600,14 @@ export function buildDiscPalette(
       ct3.r, ct3.g, ct3.b,
     ] as const,
     cloudWeights: [cW0, cW1, cW2, cW3] as const,
-    hasSurface,
+    surfaceOpacity,
     seed,
     tilt: bodyVisualTiltRad(body),
     waterFrac,
     iceFrac,
     biomeColor,
     biomeCoverage,
-    cloudCoverage,
-    cloudStructure,
+    cloudLayers,
     hazeOpacity,
     hazeColor: hazeColorRgb,
     rimColor: rimColorRgb,

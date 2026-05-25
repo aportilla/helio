@@ -5,9 +5,12 @@
 // per-planet seeded so the same parent always lays its moons out the
 // same way across reloads.
 
-import { BufferAttribute, BufferGeometry, Points, Scene, ShaderMaterial } from 'three';
+import {
+  BufferAttribute, BufferGeometry, DataTexture, FloatType, NearestFilter,
+  Points, RGBAFormat, Scene, ShaderMaterial,
+} from 'three';
 import { BODIES } from '../../../data/stars';
-import { makePlanetMaterial } from '../../materials';
+import { makePlanetMaterial, MAX_CLOUD_LAYERS } from '../../materials';
 import { buildDiscPalette } from '../disc-palette';
 import {
   MOON_DISC_BASE, MOON_DISC_MAX, MOON_DISC_MIN, MOON_EDGE_BIAS,
@@ -233,9 +236,11 @@ function distributeMoonAngles(
 function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   const N = slots.length;
   const positions = new Float32Array(N * 3);
-  // Packed render metadata: stride 4 = [size, hasSurface, seed, tilt].
-  // See planets.ts for the rationale.
+  // Packed render metadata: stride 4 = [size, surfaceOpacity, seed,
+  // tilt]. See planets.ts for the rationale.
   const renderMeta = new Float32Array(N * 4);
+  const bodyIndex = new Float32Array(N);
+  const cloudLayerData = new Float32Array(N * MAX_CLOUD_LAYERS * 4);
   // Procedural-texture inputs — same shape as PlanetsLayer.
   // Palette slots widened to vec4 to piggyback merged rim color in .w.
   // See PlanetsLayer.
@@ -295,17 +300,26 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
     cloudWeights[i * 4 + 2] = disc.cloudWeights[2];
     cloudWeights[i * 4 + 3] = disc.cloudWeights[3];
     renderMeta[i * 4 + 0] = slot.discPx;
-    renderMeta[i * 4 + 1] = disc.hasSurface ? 1 : 0;
+    renderMeta[i * 4 + 1] = disc.surfaceOpacity;
     renderMeta[i * 4 + 2] = disc.seed;
     renderMeta[i * 4 + 3] = disc.tilt;
+    bodyIndex[i] = i;
+    for (let li = 0; li < disc.cloudLayers.length && li < MAX_CLOUD_LAYERS; li++) {
+      const l = disc.cloudLayers[li];
+      const off = (i * MAX_CLOUD_LAYERS + li) * 4;
+      cloudLayerData[off + 0] = l.coverage;
+      cloudLayerData[off + 1] = l.bandness;
+      cloudLayerData[off + 2] = l.altitudeNorm;
+      cloudLayerData[off + 3] = li;
+    }
     surfaceScalars[i * 4 + 0] = disc.waterFrac;
     surfaceScalars[i * 4 + 1] = disc.iceFrac;
     surfaceScalars[i * 4 + 2] = disc.surfaceAge;
     surfaceScalars[i * 4 + 3] = disc.globalness;
-    atmoScalars[i * 4 + 0] = disc.cloudCoverage;
-    atmoScalars[i * 4 + 1] = disc.cloudStructure;
-    atmoScalars[i * 4 + 2] = disc.hazeOpacity;
-    atmoScalars[i * 4 + 3] = disc.rimWidthPx;
+    atmoScalars[i * 4 + 0] = disc.hazeOpacity;
+    atmoScalars[i * 4 + 1] = disc.rimWidthPx;
+    atmoScalars[i * 4 + 2] = 0;
+    atmoScalars[i * 4 + 3] = 0;
     biomeColors[i * 4 + 0] = disc.biomeColor[0];
     biomeColors[i * 4 + 1] = disc.biomeColor[1];
     biomeColors[i * 4 + 2] = disc.biomeColor[2];
@@ -330,7 +344,18 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   geometry.setAttribute('aAtmoScalars',    new BufferAttribute(atmoScalars, 4));
   geometry.setAttribute('aBiomeColor',     new BufferAttribute(biomeColors, 4));
   geometry.setAttribute('aHazeColor',      new BufferAttribute(hazeColors, 4));
+  geometry.setAttribute('aBodyIndex',      new BufferAttribute(bodyIndex, 1));
+  const cloudTex = N > 0 ? new DataTexture(
+    cloudLayerData, MAX_CLOUD_LAYERS, N, RGBAFormat, FloatType,
+  ) : null;
+  if (cloudTex !== null) {
+    cloudTex.minFilter = NearestFilter;
+    cloudTex.magFilter = NearestFilter;
+    cloudTex.needsUpdate = true;
+  }
   const material = makePlanetMaterial(1.0);
+  material.uniforms.uCloudLayerData.value = cloudTex;
+  material.uniforms.uCloudLayerRows.value = N;
   const points = new Points(geometry, material);
   points.renderOrder = renderOrder;
   // Stale-bounding-sphere workaround — same as planetPoints. Moon

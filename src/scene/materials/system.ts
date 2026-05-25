@@ -60,16 +60,29 @@ import { glsl, RASTER_PAD, snappedMaterials } from './shared';
 // positions are buffer-pixel coords). `aSize` is the per-body disc
 // diameter; `uDiscScale` is a global multiplier (planets + moons pass 1.0,
 // the diagram already bakes its own sizing).
+// Max cloud decks the shader iterates per body. Per-body deck data
+// lives in uCloudLayerData (DataTexture, RGBAFloat, width =
+// MAX_CLOUD_LAYERS, height = body count). Empty slots have coverage =
+// 0 and the shader's per-layer composite short-circuits to a no-op.
+export const MAX_CLOUD_LAYERS = 3;
+
 export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
   const m = new ShaderMaterial({
     uniforms: {
       uDiscScale: { value: initialDiscScale },
       uViewport:  { value: new Vector2(window.innerWidth, window.innerHeight) },
+      uCloudLayerData: { value: null },
+      uCloudLayerRows: { value: 1 },
     },
     vertexShader: `
-      // Per-body render metadata packed: x = size in px, y = hasSurface
-      // (0/1 — gas giants skip the surface block), z = seed, w = tilt.
+      // Per-body render metadata packed: x = size in px,
+      // y = surfaceOpacity (0..1 — 1 on terrestrials, 0 on gas/ice
+      // giants where the surface palette has been substituted with
+      // atmColumnColor for cloud-rent reveal), z = seed, w = tilt.
       attribute vec4  aRenderMeta;
+      // Body row index in uCloudLayerData (one float per vertex,
+      // matches the body's slot in the per-pool buffer).
+      attribute float aBodyIndex;
       // Surface resource palette + weights.
       // Surface palette resource slots (xyz) + merged rim color packed in
       // .w slots (palette0.w = rimColor.r, palette1.w = .g, palette2.w =
@@ -100,9 +113,10 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       // Surface scalars: x = waterFrac, y = iceFrac, z = surfaceAge,
       // w = globalness.
       attribute vec4  aSurfaceScalars;
-      // Atmosphere scalars: x = cloudCoverage [0..1], y = cloudStructure
-      // (snap-binary at 0.5 — patchy vs banded), z = hazeOpacity [0..1]
-      // uniform overlay alpha, w = rimWidthPx (integer 0..N halo width).
+      // Atmosphere scalars: x = hazeOpacity [0..1] uniform overlay
+      // alpha, y = rimWidthPx (integer 0..N halo width), zw unused.
+      // Per-layer cloud data (coverage / bandness / altitudeNorm) lives
+      // in uCloudLayerData sampled by aBodyIndex.
       attribute vec4  aAtmoScalars;
       // Biome stipple: xyz = pigment color, w = coverage density [0..1].
       attribute vec4  aBiomeColor;
@@ -125,7 +139,8 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       varying vec3  vCloudPalette2;
       varying vec3  vCloudPalette3;
       varying vec4  vCloudWeights;
-      varying float vHasSurface;
+      varying float vSurfaceOpacity;
+      varying float vBodyIndex;
       varying float vSeed;
       varying float vTilt;
       varying float vWaterFrac;
@@ -134,8 +149,6 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       varying float vGlobalness;
       varying vec3  vBiomeColor;
       varying float vBiomeCoverage;
-      varying float vCloudCoverage;
-      varying float vCloudStructure;
       varying float vHazeOpacity;
       varying float vRimWidthPx;
       varying vec3  vHazeColor;
@@ -154,17 +167,16 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
         vCloudPalette2 = aCloudPalette2.xyz;
         vCloudPalette3 = vec3(aCloudPalette0.w, aCloudPalette1.w, aCloudPalette2.w);
         vCloudWeights  = aCloudWeights;
-        vHasSurface = aRenderMeta.y;
+        vSurfaceOpacity = aRenderMeta.y;
+        vBodyIndex      = aBodyIndex;
         vSeed       = aRenderMeta.z;
         vTilt       = aRenderMeta.w;
         vWaterFrac  = aSurfaceScalars.x;
         vIceFrac    = aSurfaceScalars.y;
         vSurfaceAge = aSurfaceScalars.z;
         vGlobalness = aSurfaceScalars.w;
-        vCloudCoverage  = aAtmoScalars.x;
-        vCloudStructure = aAtmoScalars.y;
-        vHazeOpacity    = aAtmoScalars.z;
-        vRimWidthPx     = aAtmoScalars.w;
+        vHazeOpacity = aAtmoScalars.x;
+        vRimWidthPx  = aAtmoScalars.y;
         vBiomeColor    = aBiomeColor.xyz;
         vBiomeCoverage = aBiomeColor.w;
         vHazeColor   = aHazeColor.xyz;
@@ -177,7 +189,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
         // never be rasterized. RASTER_PAD adds the small fixed bounding-
         // box headroom; the rim term adds enough space for the per-
         // body halo width.
-        gl_PointSize = sz + ${glsl(RASTER_PAD)} + 2.0 * aAtmoScalars.w;
+        gl_PointSize = sz + ${glsl(RASTER_PAD)} + 2.0 * aAtmoScalars.y;
         vRadius = sz * 0.5;
 
         // Parity-aware snap of the projected center to the pixel grid:
@@ -207,7 +219,8 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       varying vec3  vCloudPalette2;
       varying vec3  vCloudPalette3;
       varying vec4  vCloudWeights;
-      varying float vHasSurface;
+      varying float vSurfaceOpacity;
+      varying float vBodyIndex;
       varying float vSeed;
       varying float vTilt;
       varying float vWaterFrac;
@@ -216,12 +229,12 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       varying float vGlobalness;
       varying vec3  vBiomeColor;
       varying float vBiomeCoverage;
-      varying float vCloudCoverage;
-      varying float vCloudStructure;
       varying float vHazeOpacity;
       varying float vRimWidthPx;
       varying vec3  vHazeColor;
       varying vec3  vRimColor;
+      uniform sampler2D uCloudLayerData;
+      uniform float     uCloudLayerRows;
 
       // Perspective foreshortening for banded mode — the disc is treated
       // as the projection of a sphere whose rotation axis is tipped
@@ -634,7 +647,7 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
         float lon     = atan(nxs, lonF);
 
         vec3 col;
-        if (vHasSurface > 0.5) {
+        if (vSurfaceOpacity > 0.5) {
           // Latitude for cap / biome tests uses the un-inset projection
           // so the visible disc rim covers the true sphere pole. The
           // worley pass above wants the inset to bound cell foreshortening
@@ -1066,165 +1079,113 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
           }
 
         } else {
-          // No surface — gas / ice giant. The cloud layer below will
-          // paint full-coverage bands over this fallback; the fallback
-          // shows through only if cloudCoverage somehow drops below 1.0.
+          // No surface — gas / ice giant. Surface palette has been
+          // substituted with atmColumnColor (bulk gas tint) in disc-
+          // palette so the worley above would have produced a uniform
+          // column color; the explicit fallback paints it directly to
+          // skip per-pixel work that resolves to a single value anyway.
           col = vCloudPalette0;
         }
 
-        // ── Cloud layer ──
-        // Two geometries, chosen per body by vCloudStructure:
-        //   < 0.5 (patchy): anisotropic worley cells in the sphere-
-        //     projected (lon, lat) frame. Per-cell hash < vCloudCoverage
-        //     paints the condensate color (vCloudPalette0). Earth's
-        //     trade-wind cumulus, Mars's sparse cirrus.
-        //   ≥ 0.5 (banded): two-layer worley stack in the same (lon,
-        //     lat) frame, cells stretched east-west so the natural
-        //     Voronoi tessellation forms strips along the rotation
-        //     axis. Per-cell color hashed off the cell's lat component
-        //     only → cells in one lat track share a color, so bands
-        //     read parallel to the equator. Painted at alpha =
-        //     vCloudCoverage. Jupiter / Saturn / Uranus / Neptune /
-        //     Venus.
-        if (vCloudCoverage > 0.0) {
-          vec3 cloudCol = vec3(0.0);
-          float cloudAlpha = 0.0;
-
-          if (vCloudStructure < 0.5) {
-            // Patchy clouds — sphere-projected anisotropic worley in the
-            // same (lon, lat) frame as the surface beneath, so cloud
-            // cells compress toward the limb together with continents
-            // rather than floating flat over a globe. Cell pitch scales
-            // by vRadius / CLOUD_LON_PX so disc-center cells stay at the
-            // equivalent pixel size across disc sizes. CLOUD_LON_PX >
-            // CLOUD_LAT_PX gives east-west stretch (zonal-flow direction).
-            // Salts (991/997 + 1013/1019 + 1031/1033) distinct from every
-            // other hash pass.
-            vec2 cloudPos = vec2(lon, lat) * vRadius / vec2(CLOUD_LON_PX, CLOUD_LAT_PX);
-            vec2 cloudCellId = floor(cloudPos);
-            vec2 cloudFrac   = cloudPos - cloudCellId;
-            float minCloudD2 = 1e9;
-            vec2  winnerCloudCell = cloudCellId;
-            for (int dx = -1; dx <= 1; dx++) {
-              for (int dy = -1; dy <= 1; dy++) {
-                vec2 off = vec2(float(dx), float(dy));
-                vec2 nCell = cloudCellId + off;
-                vec2 jitter = vec2(
-                  hash21(nCell + vec2(vSeed * 991.0,  vSeed * 997.0)),
-                  hash21(nCell + vec2(vSeed * 1013.0, vSeed * 1019.0))
-                );
-                vec2 nCenter = off + jitter;
-                vec2 diff = nCenter - cloudFrac;
-                float d2 = dot(diff, diff);
-                if (d2 < minCloudD2) {
-                  minCloudD2 = d2;
-                  winnerCloudCell = nCell;
-                }
-              }
-            }
-            float cH = hash21(winnerCloudCell + vec2(vSeed * 1031.0, vSeed * 1033.0));
-            if (cH < vCloudCoverage) {
-              cloudCol = vCloudPalette0;
-              cloudAlpha = 1.0;
-            }
-          } else {
-            // Banded clouds — two anisotropic worley layers in the
-            // same sphere-projected (lon, lat) frame the surface and
-            // patchy-cloud paths use. Cells are stretched east-west so
-            // the natural Voronoi tessellation forms strips along the
-            // rotation axis. Per-cell color is hashed off the cell's
-            // LAT component only, so cells in the same latitude track
-            // resolve to the same palette pick — the bands read as
-            // parallel to the equator. Worley's natural jitter wobbles
-            // the lon boundaries between adjacent bands, no separate
-            // warp pass needed.
-            //
-            // Two layers compose, the detail layer over-painting the
-            // primary on cells whose existence hash falls under
-            // DETAIL_COVERAGE — the rest pass the primary through.
-
-            // Primary band layer.
-            vec2 p1 = vec2(lon, lat) * vRadius / vec2(BAND1_LON_PX, BAND1_LAT_PX);
-            vec2 cellId1  = floor(p1);
-            vec2 cellFrac1 = p1 - cellId1;
-            vec2 winnerCell1 = cellId1;
-            float minD1 = 1e9;
-            for (int dx = -1; dx <= 1; dx++) {
-              for (int dy = -1; dy <= 1; dy++) {
-                vec2 off = vec2(float(dx), float(dy));
-                vec2 nCell = cellId1 + off;
-                vec2 jitter = vec2(
-                  hash21(nCell + vec2(vSeed * 1103.0, vSeed * 1117.0)),
-                  hash21(nCell + vec2(vSeed * 1129.0, vSeed * 1151.0))
-                );
-                vec2 nCenter = off + jitter;
-                vec2 diff = nCenter - cellFrac1;
-                float d2 = dot(diff, diff);
-                if (d2 < minD1) {
-                  minD1 = d2;
-                  winnerCell1 = nCell;
-                }
-              }
-            }
-            float h1 = hash11(winnerCell1.y + vSeed * 41.0);
-            vec3 col1 = pickFromCloudPalette(h1, vCloudPalette0, vCloudPalette1, vCloudPalette2, vCloudPalette3, vCloudWeights);
-            float lj1 = (hash11(winnerCell1.y + vSeed * 67.0) - 0.5) * 2.0 * BAND_LIGHTNESS_JITTER;
-            cloudCol = clamp(col1 + vec3(lj1), 0.0, 1.0);
-
-            // Detail layer — smaller pitch, partial coverage. Cells
-            // whose existence hash > DETAIL_COVERAGE pass the primary
-            // through; the rest paint their own lat-coherent pick over.
-            vec2 p2 = vec2(lon, lat) * vRadius / vec2(BAND2_LON_PX, BAND2_LAT_PX);
-            vec2 cellId2  = floor(p2);
-            vec2 cellFrac2 = p2 - cellId2;
-            vec2 winnerCell2 = cellId2;
-            float minD2 = 1e9;
-            for (int dx = -1; dx <= 1; dx++) {
-              for (int dy = -1; dy <= 1; dy++) {
-                vec2 off = vec2(float(dx), float(dy));
-                vec2 nCell = cellId2 + off;
-                vec2 jitter = vec2(
-                  hash21(nCell + vec2(vSeed * 1163.0, vSeed * 1171.0)),
-                  hash21(nCell + vec2(vSeed * 1181.0, vSeed * 1193.0))
-                );
-                vec2 nCenter = off + jitter;
-                vec2 diff = nCenter - cellFrac2;
-                float d2 = dot(diff, diff);
-                if (d2 < minD2) {
-                  minD2 = d2;
-                  winnerCell2 = nCell;
-                }
-              }
-            }
-            float existH = hash21(winnerCell2 + vec2(vSeed * 1201.0, vSeed * 1213.0));
-            if (existH < DETAIL_COVERAGE) {
-              float h2 = hash11(winnerCell2.y + vSeed * 79.0);
-              vec3 col2 = pickFromCloudPalette(h2, vCloudPalette0, vCloudPalette1, vCloudPalette2, vCloudPalette3, vCloudWeights);
-              float lj2 = (hash11(winnerCell2.y + vSeed * 83.0) - 0.5) * 2.0 * BAND_LIGHTNESS_JITTER;
-              cloudCol = clamp(col2 + vec3(lj2), 0.0, 1.0);
-            }
-
-            cloudAlpha = vCloudCoverage;
-          }
-
-          col = mix(col, cloudCol, cloudAlpha);
+        // ── Haze blanket ──
+        // Surface bodies: uniform per-fragment lerp toward the unified
+        // haze color (bulk atm gases + Rayleigh + aerosol products +
+        // dust, all weighted, soft-capped). Painted BETWEEN the surface
+        // and the cloud decks so each cloud deck's altitude-driven
+        // pre-tint composites coherently — clouds at higher altitudes
+        // sit above less of the column and tint less toward vHazeColor.
+        // Gas / ice giants skip the uniform overlay: their aerosols are
+        // band-localized chromophores feeding the cloud band palette;
+        // a uniform mix would crush the structure.
+        if (vHazeOpacity > 0.0 && vSurfaceOpacity > 0.5) {
+          col = mix(col, vHazeColor, vHazeOpacity);
         }
 
-        // ── Haze layer ──
-        // Surface bodies: uniform per-fragment lerp toward the aerosol
-        // color. Models a well-mixed aerosol blanket (Titan tholin
-        // ≈ 0.85, Venus sulfate ≈ 0.7, Mars dust ≈ 0.15, Earth = 0).
+        // ── Cloud layers ──
+        // Up to MAX_CLOUD_LAYERS stratified decks composite back-to-front
+        // by altitudeNorm. Per-body deck data lives in uCloudLayerData
+        // (DataTexture) sampled by vBodyIndex — kept off vertex attribs
+        // to stay under the gl_MaxVertexAttribs cap as layer count grows.
+        // Each deck pre-tints toward vHazeColor by the haze that would
+        // sit above it under a uniform-density column approximation:
+        //   hazeAbove = vHazeOpacity * (1 - altitudeNorm)
+        // Deeper decks get more haze tint (more atmosphere above them);
+        // top decks barely tint. The uniform haze pass below composites
+        // the full blanket once over the surface; deck pre-tinting is
+        // the cheap equivalent of interleaving haze sub-layers between
+        // every deck without sampling haze multiple times.
         //
-        // No-surface bodies (gas / ice giants) skip the uniform
-        // overlay. Their "haze" species — Jovian NH4SH, hot-Jupiter
-        // silicate — is actually banded chromophore chemistry with
-        // structure, not a uniform aerosol. It already feeds the
-        // cloud-band palette as an accent (so the species shows up in
-        // specific bands) and drives the rim color; running an
-        // additional uniform mix would crush every band toward the
-        // aerosol color and erase the structure.
-        if (vHazeOpacity > 0.0 && vHasSurface > 0.5) {
-          col = mix(col, vHazeColor, vHazeOpacity);
+        // Cloud rendering is a single unified worley sampler with two
+        // continuous bandness lerps:
+        //   - cell aspect: mix(patchy aspect, banded aspect, bandness)
+        //   - color hash key: mix(both-axes, lat-only, bandness)
+        // bandness = 0 produces Earth-style patchy cumulus; bandness = 1
+        // produces Jupiter-style zonal bands; intermediate values blend
+        // organically (elongated patches drifting east-west).
+        float vBodyV = (vBodyIndex + 0.5) / max(uCloudLayerRows, 1.0);
+        for (int li = 0; li < ${MAX_CLOUD_LAYERS}; li++) {
+          float layerU = (float(li) + 0.5) / float(${MAX_CLOUD_LAYERS});
+          vec4 layer = texture2D(uCloudLayerData, vec2(layerU, vBodyV));
+          float coverage = layer.x;
+          if (coverage <= 0.0) continue;
+          float bandness = layer.y;
+          float altitudeNorm = layer.z;
+          float layerSeed = layer.w;
+
+          vec2 cellAspect = mix(
+            vec2(CLOUD_LON_PX, CLOUD_LAT_PX),
+            vec2(BAND1_LON_PX, BAND1_LAT_PX),
+            bandness
+          );
+          vec2 p = vec2(lon, lat) * vRadius / cellAspect;
+          vec2 cellId = floor(p);
+          vec2 cellFrac = p - cellId;
+          float minD2 = 1e9;
+          vec2 winnerCell = cellId;
+          for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+              vec2 off = vec2(float(dx), float(dy));
+              vec2 nCell = cellId + off;
+              vec2 jitter = vec2(
+                hash21(nCell + vec2(vSeed * 991.0 + layerSeed * 13.0, vSeed * 997.0 + layerSeed * 17.0)),
+                hash21(nCell + vec2(vSeed * 1013.0 + layerSeed * 19.0, vSeed * 1019.0 + layerSeed * 23.0))
+              );
+              vec2 nCenter = off + jitter;
+              vec2 diff = nCenter - cellFrac;
+              float d2 = dot(diff, diff);
+              if (d2 < minD2) {
+                minD2 = d2;
+                winnerCell = nCell;
+              }
+            }
+          }
+
+          // Existence gate — cells whose per-cell hash exceeds coverage
+          // skip. At coverage = 1.0 every cell fires (banded path);
+          // at coverage = 0.4 ~40% of cells fire (patchy path).
+          float existH = hash21(winnerCell + vec2(vSeed * 1031.0 + layerSeed * 29.0, vSeed * 1033.0 + layerSeed * 31.0));
+          if (existH >= coverage) continue;
+
+          // Color hash key — at bandness=0 uses both axes, at bandness=1
+          // uses lat axis only so cells in the same latitude track
+          // resolve to the same palette pick (parallel bands).
+          vec2 hashKey = mix(winnerCell, vec2(0.0, winnerCell.y), bandness);
+          float colorH = hash21(hashKey + vec2(vSeed * 41.0 + layerSeed * 7.0, vSeed * 67.0 + layerSeed * 11.0));
+          vec3 cloudCol = pickFromCloudPalette(
+            colorH,
+            vCloudPalette0, vCloudPalette1, vCloudPalette2, vCloudPalette3,
+            vCloudWeights
+          );
+          float lj = (hash11(winnerCell.y + vSeed * 67.0 + layerSeed * 13.0) - 0.5) * 2.0 * BAND_LIGHTNESS_JITTER;
+          cloudCol = clamp(cloudCol + vec3(lj), 0.0, 1.0);
+
+          // Haze pre-tint by altitude — deep decks read as more
+          // haze-tinted; top decks barely tint. Approximates
+          // interleaved uniform-density haze without per-deck sampling.
+          float hazeAbove = vHazeOpacity * (1.0 - altitudeNorm);
+          vec3 tinted = mix(cloudCol, vHazeColor, hazeAbove);
+
+          col = tinted;
         }
 
         // 1-px hover rim — same as the previous flat-disc material. The

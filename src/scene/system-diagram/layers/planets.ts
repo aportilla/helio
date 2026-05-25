@@ -3,9 +3,12 @@
 // after layout, the layer publishes a PlanetCenterIndex that moons +
 // rings consume to anchor relative to their host.
 
-import { BufferAttribute, BufferGeometry, Points, Scene, ShaderMaterial } from 'three';
+import {
+  BufferAttribute, BufferGeometry, DataTexture, FloatType, NearestFilter,
+  Points, RGBAFormat, Scene, ShaderMaterial,
+} from 'three';
 import { BODIES } from '../../../data/stars';
-import { makePlanetMaterial } from '../../materials';
+import { makePlanetMaterial, MAX_CLOUD_LAYERS } from '../../materials';
 import { buildDiscPalette } from '../disc-palette';
 import { RENDER_ORDER_PLANET, Z_PLANET, Z_STRIDE } from '../layout/constants';
 import type { RowSlot } from '../layout/row';
@@ -42,10 +45,23 @@ export class PlanetsLayer {
 
     const P = this.planetIndices.length;
     const positions = new Float32Array(P * 3);
-    // Packed render metadata: stride 4 = [size, hasSurface, seed, tilt].
-    // hasSurface is 0/1 — the shader short-circuits the surface paint
-    // block on gas/ice giants when this is 0.
+    // Packed render metadata: stride 4 = [size, surfaceOpacity, seed,
+    // tilt]. surfaceOpacity is 1 on terrestrials (paint the surface
+    // worley) and 0 on gas/ice giants (surface palette has been
+    // substituted with atmColumnColor → flat-fill tint shows through
+    // cloud rents).
     const renderMeta = new Float32Array(P * 4);
+    // Per-body row index (one float, identifies the body's row in
+    // uCloudLayerData). Three.js Points geometry has one vertex per
+    // body so we can pass this as a plain attribute.
+    const bodyIndex = new Float32Array(P);
+    // Cloud-layer data — packed into a DataTexture of width
+    // MAX_CLOUD_LAYERS, height P. Each row carries one body's
+    // 3 layer slots; each texel is (coverage, bandness, altitudeNorm,
+    // layerSeed). Unused slots get coverage = 0 and the shader skips
+    // their composite. Kept off vertex attributes to stay under the
+    // gl_MaxVertexAttribs cap as the layer count grows.
+    const cloudLayerData = new Float32Array(P * MAX_CLOUD_LAYERS * 4);
     // Surface resource palette + weights — three RGB entries the surface
     // block picks from per worley cell.
     // Surface palette slots 0/1/2 (xyz) widened to vec4 to piggyback
@@ -76,8 +92,8 @@ export class PlanetsLayer {
     const cloudWeights  = new Float32Array(P * 4);
     // Surface scalars: [waterFrac, iceFrac, surfaceAge, globalness].
     const surfaceScalars = new Float32Array(P * 4);
-    // Atmospheric scalars: [cloudCoverage, cloudStructure, hazeOpacity,
-    // rimWidthPx]. Drives all three atmosphere layers (cloud, haze, rim).
+    // Atmospheric scalars: [hazeOpacity, rimWidthPx, _, _]. Cloud
+    // coverage / bandness / altitude live per-layer in uCloudLayerData.
     const atmoScalars = new Float32Array(P * 4);
     // Biome color packed as vec4: xyz = pigment, w = coverage density.
     const biomeColors = new Float32Array(P * 4);
@@ -122,17 +138,29 @@ export class PlanetsLayer {
       cloudWeights[i * 4 + 2] = disc.cloudWeights[2];
       cloudWeights[i * 4 + 3] = disc.cloudWeights[3];
       renderMeta[i * 4 + 0] = discPx;
-      renderMeta[i * 4 + 1] = disc.hasSurface ? 1 : 0;
+      renderMeta[i * 4 + 1] = disc.surfaceOpacity;
       renderMeta[i * 4 + 2] = disc.seed;
       renderMeta[i * 4 + 3] = disc.tilt;
+      bodyIndex[i] = i;
+      // Pack up to MAX_CLOUD_LAYERS decks. Empty slots stay zeroed.
+      for (let li = 0; li < disc.cloudLayers.length && li < MAX_CLOUD_LAYERS; li++) {
+        const l = disc.cloudLayers[li];
+        const off = (i * MAX_CLOUD_LAYERS + li) * 4;
+        cloudLayerData[off + 0] = l.coverage;
+        cloudLayerData[off + 1] = l.bandness;
+        cloudLayerData[off + 2] = l.altitudeNorm;
+        // Per-layer hash salt so each deck's worley cells fall on
+        // different positions. Layer index alone is enough.
+        cloudLayerData[off + 3] = li;
+      }
       surfaceScalars[i * 4 + 0] = disc.waterFrac;
       surfaceScalars[i * 4 + 1] = disc.iceFrac;
       surfaceScalars[i * 4 + 2] = disc.surfaceAge;
       surfaceScalars[i * 4 + 3] = disc.globalness;
-      atmoScalars[i * 4 + 0] = disc.cloudCoverage;
-      atmoScalars[i * 4 + 1] = disc.cloudStructure;
-      atmoScalars[i * 4 + 2] = disc.hazeOpacity;
-      atmoScalars[i * 4 + 3] = disc.rimWidthPx;
+      atmoScalars[i * 4 + 0] = disc.hazeOpacity;
+      atmoScalars[i * 4 + 1] = disc.rimWidthPx;
+      atmoScalars[i * 4 + 2] = 0;
+      atmoScalars[i * 4 + 3] = 0;
       biomeColors[i * 4 + 0] = disc.biomeColor[0];
       biomeColors[i * 4 + 1] = disc.biomeColor[1];
       biomeColors[i * 4 + 2] = disc.biomeColor[2];
@@ -157,7 +185,19 @@ export class PlanetsLayer {
     this.geometry.setAttribute('aAtmoScalars',    new BufferAttribute(atmoScalars, 4));
     this.geometry.setAttribute('aBiomeColor',     new BufferAttribute(biomeColors, 4));
     this.geometry.setAttribute('aHazeColor',      new BufferAttribute(hazeColors, 4));
+    this.geometry.setAttribute('aBodyIndex',      new BufferAttribute(bodyIndex, 1));
+    // DataTexture holding per-body cloud-layer metadata. NearestFilter
+    // because we sample at integer (col, row) coords; no interpolation
+    // wanted between neighboring bodies' rows.
+    const cloudTex = new DataTexture(
+      cloudLayerData, MAX_CLOUD_LAYERS, P, RGBAFormat, FloatType,
+    );
+    cloudTex.minFilter = NearestFilter;
+    cloudTex.magFilter = NearestFilter;
+    cloudTex.needsUpdate = true;
     this.material = makePlanetMaterial(1.0);
+    this.material.uniforms.uCloudLayerData.value = cloudTex;
+    this.material.uniforms.uCloudLayerRows.value = P;
     this.points = new Points(this.geometry, this.material);
     this.points.renderOrder = RENDER_ORDER_PLANET;
     // Three.js computes the bounding sphere from the initial all-zero
