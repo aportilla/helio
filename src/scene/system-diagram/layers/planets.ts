@@ -8,7 +8,7 @@ import {
   Points, RGBAFormat, Scene, ShaderMaterial,
 } from 'three';
 import { BODIES } from '../../../data/stars';
-import { makePlanetMaterial, MAX_CLOUD_LAYERS } from '../../materials';
+import { BODY_TEXTURE_WIDTH, makePlanetMaterial, MAX_CLOUD_LAYERS } from '../../materials';
 import { buildDiscPalette } from '../disc-palette';
 import { RENDER_ORDER_PLANET, Z_PLANET, Z_STRIDE } from '../layout/constants';
 import type { RowSlot } from '../layout/row';
@@ -55,13 +55,13 @@ export class PlanetsLayer {
     // uCloudLayerData). Three.js Points geometry has one vertex per
     // body so we can pass this as a plain attribute.
     const bodyIndex = new Float32Array(P);
-    // Cloud-layer data — packed into a DataTexture of width
-    // MAX_CLOUD_LAYERS, height P. Each row carries one body's
-    // 3 layer slots; each texel is (coverage, bandness, altitudeNorm,
-    // layerSeed). Unused slots get coverage = 0 and the shader skips
-    // their composite. Kept off vertex attributes to stay under the
-    // gl_MaxVertexAttribs cap as the layer count grows.
-    const cloudLayerData = new Float32Array(P * MAX_CLOUD_LAYERS * 4);
+    // Per-body data texture — packed Float32 RGBA, width
+    // BODY_TEXTURE_WIDTH, height P. Each row carries one body's
+    // MAX_CLOUD_LAYERS layer slots + 4 cloud-palette texels (palette
+    // slot 0/1/2 with slot 3's RGB packed into the .w lanes, plus a
+    // weights vec4). Kept off vertex attributes to stay under the
+    // gl_MaxVertexAttribs cap.
+    const cloudLayerData = new Float32Array(P * BODY_TEXTURE_WIDTH * 4);
     // Surface resource palette + weights — three RGB entries the surface
     // block picks from per worley cell.
     // Surface palette slots 0/1/2 (xyz) widened to vec4 to piggyback
@@ -76,20 +76,6 @@ export class PlanetsLayer {
     // Surface palette weights (xyz, sum-to-1). The .w slot is currently
     // unused and reserved for layer payload in PR 3.
     const weights   = new Float32Array(P * 4);
-    // Cloud-layer palette + weights. Banded clouds pick from 4 slots
-    // per worley cell: slot 0 = base blend (atm + cloud + haze) at
-    // ~50% picker weight, slots 1-3 = top accent species sharing the
-    // remaining weight. Patchy clouds use slot 0 as a single
-    // condensate color with weights [1,0,0,0].
-    //
-    // The 4 colors are packed into 3 vec4 attributes to stay under
-    // gl_MaxVertexAttribs on tighter GPUs: aCloudPalette0/1/2 carry
-    // (slot.r, slot.g, slot.b, slot3.{r,g,b}) — slot 3's RGB is stitched
-    // together from the .w components in the vertex shader.
-    const cloudPalette0 = new Float32Array(P * 4);
-    const cloudPalette1 = new Float32Array(P * 4);
-    const cloudPalette2 = new Float32Array(P * 4);
-    const cloudWeights  = new Float32Array(P * 4);
     // Surface scalars: [waterFrac, iceFrac, surfaceAge, globalness].
     const surfaceScalars = new Float32Array(P * 4);
     // Atmospheric scalars: [hazeOpacity, rimWidthPx, _, _]. Cloud
@@ -121,31 +107,16 @@ export class PlanetsLayer {
       weights[i * 4 + 1] = disc.weights[1];
       weights[i * 4 + 2] = disc.weights[2];
       weights[i * 4 + 3] = 0;
-      cloudPalette0[i * 4 + 0] = disc.cloudPalette[0];
-      cloudPalette0[i * 4 + 1] = disc.cloudPalette[1];
-      cloudPalette0[i * 4 + 2] = disc.cloudPalette[2];
-      cloudPalette0[i * 4 + 3] = disc.cloudPalette[9];   // slot3.r
-      cloudPalette1[i * 4 + 0] = disc.cloudPalette[3];
-      cloudPalette1[i * 4 + 1] = disc.cloudPalette[4];
-      cloudPalette1[i * 4 + 2] = disc.cloudPalette[5];
-      cloudPalette1[i * 4 + 3] = disc.cloudPalette[10];  // slot3.g
-      cloudPalette2[i * 4 + 0] = disc.cloudPalette[6];
-      cloudPalette2[i * 4 + 1] = disc.cloudPalette[7];
-      cloudPalette2[i * 4 + 2] = disc.cloudPalette[8];
-      cloudPalette2[i * 4 + 3] = disc.cloudPalette[11];  // slot3.b
-      cloudWeights[i * 4 + 0] = disc.cloudWeights[0];
-      cloudWeights[i * 4 + 1] = disc.cloudWeights[1];
-      cloudWeights[i * 4 + 2] = disc.cloudWeights[2];
-      cloudWeights[i * 4 + 3] = disc.cloudWeights[3];
       renderMeta[i * 4 + 0] = discPx;
       renderMeta[i * 4 + 1] = disc.surfaceOpacity;
       renderMeta[i * 4 + 2] = disc.seed;
       renderMeta[i * 4 + 3] = disc.tilt;
       bodyIndex[i] = i;
       // Pack up to MAX_CLOUD_LAYERS decks. Empty slots stay zeroed.
+      const rowBase = i * BODY_TEXTURE_WIDTH * 4;
       for (let li = 0; li < disc.cloudLayers.length && li < MAX_CLOUD_LAYERS; li++) {
         const l = disc.cloudLayers[li];
-        const off = (i * MAX_CLOUD_LAYERS + li) * 4;
+        const off = rowBase + li * 4;
         cloudLayerData[off + 0] = l.coverage;
         cloudLayerData[off + 1] = l.bandness;
         cloudLayerData[off + 2] = l.altitudeNorm;
@@ -153,6 +124,25 @@ export class PlanetsLayer {
         // different positions. Layer index alone is enough.
         cloudLayerData[off + 3] = li;
       }
+      // Cloud palette + weights packed into the next 4 texels per row.
+      // Slot 3's RGB rides in the .w lanes of palette texels 0/1/2.
+      const pBase = rowBase + MAX_CLOUD_LAYERS * 4;
+      cloudLayerData[pBase + 0] = disc.cloudPalette[0];
+      cloudLayerData[pBase + 1] = disc.cloudPalette[1];
+      cloudLayerData[pBase + 2] = disc.cloudPalette[2];
+      cloudLayerData[pBase + 3] = disc.cloudPalette[9];   // slot3.r
+      cloudLayerData[pBase + 4] = disc.cloudPalette[3];
+      cloudLayerData[pBase + 5] = disc.cloudPalette[4];
+      cloudLayerData[pBase + 6] = disc.cloudPalette[5];
+      cloudLayerData[pBase + 7] = disc.cloudPalette[10];  // slot3.g
+      cloudLayerData[pBase + 8] = disc.cloudPalette[6];
+      cloudLayerData[pBase + 9] = disc.cloudPalette[7];
+      cloudLayerData[pBase + 10] = disc.cloudPalette[8];
+      cloudLayerData[pBase + 11] = disc.cloudPalette[11]; // slot3.b
+      cloudLayerData[pBase + 12] = disc.cloudWeights[0];
+      cloudLayerData[pBase + 13] = disc.cloudWeights[1];
+      cloudLayerData[pBase + 14] = disc.cloudWeights[2];
+      cloudLayerData[pBase + 15] = disc.cloudWeights[3];
       surfaceScalars[i * 4 + 0] = disc.waterFrac;
       surfaceScalars[i * 4 + 1] = disc.iceFrac;
       surfaceScalars[i * 4 + 2] = disc.surfaceAge;
@@ -177,10 +167,6 @@ export class PlanetsLayer {
     this.geometry.setAttribute('aPalette1',       new BufferAttribute(palette1, 4));
     this.geometry.setAttribute('aPalette2',       new BufferAttribute(palette2, 4));
     this.geometry.setAttribute('aWeights',        new BufferAttribute(weights, 4));
-    this.geometry.setAttribute('aCloudPalette0',  new BufferAttribute(cloudPalette0, 4));
-    this.geometry.setAttribute('aCloudPalette1',  new BufferAttribute(cloudPalette1, 4));
-    this.geometry.setAttribute('aCloudPalette2',  new BufferAttribute(cloudPalette2, 4));
-    this.geometry.setAttribute('aCloudWeights',   new BufferAttribute(cloudWeights, 4));
     this.geometry.setAttribute('aSurfaceScalars', new BufferAttribute(surfaceScalars, 4));
     this.geometry.setAttribute('aAtmoScalars',    new BufferAttribute(atmoScalars, 4));
     this.geometry.setAttribute('aBiomeColor',     new BufferAttribute(biomeColors, 4));
@@ -190,7 +176,7 @@ export class PlanetsLayer {
     // because we sample at integer (col, row) coords; no interpolation
     // wanted between neighboring bodies' rows.
     const cloudTex = new DataTexture(
-      cloudLayerData, MAX_CLOUD_LAYERS, P, RGBAFormat, FloatType,
+      cloudLayerData, BODY_TEXTURE_WIDTH, P, RGBAFormat, FloatType,
     );
     cloudTex.minFilter = NearestFilter;
     cloudTex.magFilter = NearestFilter;

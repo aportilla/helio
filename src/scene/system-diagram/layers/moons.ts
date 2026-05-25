@@ -10,7 +10,7 @@ import {
   Points, RGBAFormat, Scene, ShaderMaterial,
 } from 'three';
 import { BODIES } from '../../../data/stars';
-import { makePlanetMaterial, MAX_CLOUD_LAYERS } from '../../materials';
+import { BODY_TEXTURE_WIDTH, makePlanetMaterial, MAX_CLOUD_LAYERS } from '../../materials';
 import { buildDiscPalette } from '../disc-palette';
 import {
   MOON_DISC_BASE, MOON_DISC_MAX, MOON_DISC_MIN, MOON_EDGE_BIAS,
@@ -240,7 +240,7 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   // tilt]. See planets.ts for the rationale.
   const renderMeta = new Float32Array(N * 4);
   const bodyIndex = new Float32Array(N);
-  const cloudLayerData = new Float32Array(N * MAX_CLOUD_LAYERS * 4);
+  const cloudLayerData = new Float32Array(N * BODY_TEXTURE_WIDTH * 4);
   // Procedural-texture inputs — same shape as PlanetsLayer.
   // Palette slots widened to vec4 to piggyback merged rim color in .w.
   // See PlanetsLayer.
@@ -250,14 +250,6 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   // Weights (xyz, sum-to-1). The .w slot is reserved for layer payload
   // in PR 3.
   const weights   = new Float32Array(N * 4);
-  // Cloud-layer palette + weights — 4 slots (base blend + 3 accents).
-  // Packed into 3 vec4 attributes to stay under gl_MaxVertexAttribs:
-  // slot 3 RGB rides in the .w channels of slots 0/1/2 and gets
-  // reassembled in the vertex shader. See planets.ts.
-  const cloudPalette0 = new Float32Array(N * 4);
-  const cloudPalette1 = new Float32Array(N * 4);
-  const cloudPalette2 = new Float32Array(N * 4);
-  const cloudWeights  = new Float32Array(N * 4);
   const surfaceScalars = new Float32Array(N * 4);
   const atmoScalars    = new Float32Array(N * 4);
   const biomeColors = new Float32Array(N * 4);
@@ -283,35 +275,37 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
     weights[i * 4 + 1] = disc.weights[1];
     weights[i * 4 + 2] = disc.weights[2];
     weights[i * 4 + 3] = 0;
-    cloudPalette0[i * 4 + 0] = disc.cloudPalette[0];
-    cloudPalette0[i * 4 + 1] = disc.cloudPalette[1];
-    cloudPalette0[i * 4 + 2] = disc.cloudPalette[2];
-    cloudPalette0[i * 4 + 3] = disc.cloudPalette[9];   // slot3.r
-    cloudPalette1[i * 4 + 0] = disc.cloudPalette[3];
-    cloudPalette1[i * 4 + 1] = disc.cloudPalette[4];
-    cloudPalette1[i * 4 + 2] = disc.cloudPalette[5];
-    cloudPalette1[i * 4 + 3] = disc.cloudPalette[10];  // slot3.g
-    cloudPalette2[i * 4 + 0] = disc.cloudPalette[6];
-    cloudPalette2[i * 4 + 1] = disc.cloudPalette[7];
-    cloudPalette2[i * 4 + 2] = disc.cloudPalette[8];
-    cloudPalette2[i * 4 + 3] = disc.cloudPalette[11];  // slot3.b
-    cloudWeights[i * 4 + 0] = disc.cloudWeights[0];
-    cloudWeights[i * 4 + 1] = disc.cloudWeights[1];
-    cloudWeights[i * 4 + 2] = disc.cloudWeights[2];
-    cloudWeights[i * 4 + 3] = disc.cloudWeights[3];
     renderMeta[i * 4 + 0] = slot.discPx;
     renderMeta[i * 4 + 1] = disc.surfaceOpacity;
     renderMeta[i * 4 + 2] = disc.seed;
     renderMeta[i * 4 + 3] = disc.tilt;
     bodyIndex[i] = i;
+    const rowBase = i * BODY_TEXTURE_WIDTH * 4;
     for (let li = 0; li < disc.cloudLayers.length && li < MAX_CLOUD_LAYERS; li++) {
       const l = disc.cloudLayers[li];
-      const off = (i * MAX_CLOUD_LAYERS + li) * 4;
+      const off = rowBase + li * 4;
       cloudLayerData[off + 0] = l.coverage;
       cloudLayerData[off + 1] = l.bandness;
       cloudLayerData[off + 2] = l.altitudeNorm;
       cloudLayerData[off + 3] = li;
     }
+    const pBase = rowBase + MAX_CLOUD_LAYERS * 4;
+    cloudLayerData[pBase + 0] = disc.cloudPalette[0];
+    cloudLayerData[pBase + 1] = disc.cloudPalette[1];
+    cloudLayerData[pBase + 2] = disc.cloudPalette[2];
+    cloudLayerData[pBase + 3] = disc.cloudPalette[9];
+    cloudLayerData[pBase + 4] = disc.cloudPalette[3];
+    cloudLayerData[pBase + 5] = disc.cloudPalette[4];
+    cloudLayerData[pBase + 6] = disc.cloudPalette[5];
+    cloudLayerData[pBase + 7] = disc.cloudPalette[10];
+    cloudLayerData[pBase + 8] = disc.cloudPalette[6];
+    cloudLayerData[pBase + 9] = disc.cloudPalette[7];
+    cloudLayerData[pBase + 10] = disc.cloudPalette[8];
+    cloudLayerData[pBase + 11] = disc.cloudPalette[11];
+    cloudLayerData[pBase + 12] = disc.cloudWeights[0];
+    cloudLayerData[pBase + 13] = disc.cloudWeights[1];
+    cloudLayerData[pBase + 14] = disc.cloudWeights[2];
+    cloudLayerData[pBase + 15] = disc.cloudWeights[3];
     surfaceScalars[i * 4 + 0] = disc.waterFrac;
     surfaceScalars[i * 4 + 1] = disc.iceFrac;
     surfaceScalars[i * 4 + 2] = disc.surfaceAge;
@@ -336,17 +330,13 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   geometry.setAttribute('aPalette1',       new BufferAttribute(palette1, 4));
   geometry.setAttribute('aPalette2',       new BufferAttribute(palette2, 4));
   geometry.setAttribute('aWeights',        new BufferAttribute(weights, 4));
-  geometry.setAttribute('aCloudPalette0',  new BufferAttribute(cloudPalette0, 4));
-  geometry.setAttribute('aCloudPalette1',  new BufferAttribute(cloudPalette1, 4));
-  geometry.setAttribute('aCloudPalette2',  new BufferAttribute(cloudPalette2, 4));
-  geometry.setAttribute('aCloudWeights',   new BufferAttribute(cloudWeights, 4));
   geometry.setAttribute('aSurfaceScalars', new BufferAttribute(surfaceScalars, 4));
   geometry.setAttribute('aAtmoScalars',    new BufferAttribute(atmoScalars, 4));
   geometry.setAttribute('aBiomeColor',     new BufferAttribute(biomeColors, 4));
   geometry.setAttribute('aHazeColor',      new BufferAttribute(hazeColors, 4));
   geometry.setAttribute('aBodyIndex',      new BufferAttribute(bodyIndex, 1));
   const cloudTex = N > 0 ? new DataTexture(
-    cloudLayerData, MAX_CLOUD_LAYERS, N, RGBAFormat, FloatType,
+    cloudLayerData, BODY_TEXTURE_WIDTH, N, RGBAFormat, FloatType,
   ) : null;
   if (cloudTex !== null) {
     cloudTex.minFilter = NearestFilter;

@@ -61,10 +61,20 @@ import { glsl, RASTER_PAD, snappedMaterials } from './shared';
 // diameter; `uDiscScale` is a global multiplier (planets + moons pass 1.0,
 // the diagram already bakes its own sizing).
 // Max cloud decks the shader iterates per body. Per-body deck data
-// lives in uCloudLayerData (DataTexture, RGBAFloat, width =
-// MAX_CLOUD_LAYERS, height = body count). Empty slots have coverage =
-// 0 and the shader's per-layer composite short-circuits to a no-op.
+// (coverage / bandness / altitudeNorm / layerSeed) and the shared
+// cloud palette (4 slots + weights) BOTH live in uCloudLayerData, a
+// DataTexture of width = BODY_TEXTURE_WIDTH and height = body count.
+// Texel layout per body row:
+//   [0..MAX_CLOUD_LAYERS)        — per-layer (coverage, bandness, alt, seed)
+//   [MAX_CLOUD_LAYERS .. .. +3)  — cloud palette slot 0 / 1 / 2 (.w packs slot 3)
+//   [MAX_CLOUD_LAYERS + 3]       — cloud palette weights vec4
+// Pulling palette + weights off vertex attributes brings the per-pool
+// attribute count back under the gl_MaxVertexAttribs cap (was hitting
+// 16 on tighter GPUs when the per-body index + cloud palette attrs
+// stacked).
 export const MAX_CLOUD_LAYERS = 3;
+const CLOUD_PALETTE_TEXELS = 4;
+export const BODY_TEXTURE_WIDTH = MAX_CLOUD_LAYERS + CLOUD_PALETTE_TEXELS;
 
 export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
   const m = new ShaderMaterial({
@@ -95,21 +105,6 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       // xyz = surface palette resource weights (sum-to-1 normalized);
       // w currently unused — reserved for layer payload in PR 3.
       attribute vec4  aWeights;
-      // Cloud-layer palette + weights. Banded clouds pick per worley
-      // cell from 4 slots: slot 0 = perceptual base blend (atm + cloud
-      // + haze) at ~50% picker weight, slots 1-3 = accent species
-      // sharing the remaining weight. Patchy clouds use slot 0 as a
-      // single condensate color (weights collapse to [1, 0, 0, 0]).
-      //
-      // The 4 colors are packed into 3 vec4 attributes to stay under
-      // gl_MaxVertexAttribs on tighter GPUs. Each slot 0/1/2 attribute
-      // carries (its.r, its.g, its.b, slot3.{r,g,b}) — slot 3 is
-      // reassembled in the vertex shader as
-      // vec3(aCloudPalette0.w, aCloudPalette1.w, aCloudPalette2.w).
-      attribute vec4  aCloudPalette0;
-      attribute vec4  aCloudPalette1;
-      attribute vec4  aCloudPalette2;
-      attribute vec4  aCloudWeights;
       // Surface scalars: x = waterFrac, y = iceFrac, z = surfaceAge,
       // w = globalness.
       attribute vec4  aSurfaceScalars;
@@ -134,11 +129,6 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       varying vec3  vPalette1;
       varying vec3  vPalette2;
       varying vec4  vWeights;
-      varying vec3  vCloudPalette0;
-      varying vec3  vCloudPalette1;
-      varying vec3  vCloudPalette2;
-      varying vec3  vCloudPalette3;
-      varying vec4  vCloudWeights;
       varying float vSurfaceOpacity;
       varying float vBodyIndex;
       varying float vSeed;
@@ -162,11 +152,6 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
         vPalette1 = aPalette1.xyz;
         vPalette2 = aPalette2.xyz;
         vWeights  = aWeights;
-        vCloudPalette0 = aCloudPalette0.xyz;
-        vCloudPalette1 = aCloudPalette1.xyz;
-        vCloudPalette2 = aCloudPalette2.xyz;
-        vCloudPalette3 = vec3(aCloudPalette0.w, aCloudPalette1.w, aCloudPalette2.w);
-        vCloudWeights  = aCloudWeights;
         vSurfaceOpacity = aRenderMeta.y;
         vBodyIndex      = aBodyIndex;
         vSeed       = aRenderMeta.z;
@@ -214,11 +199,6 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       varying vec3  vPalette1;
       varying vec3  vPalette2;
       varying vec4  vWeights;
-      varying vec3  vCloudPalette0;
-      varying vec3  vCloudPalette1;
-      varying vec3  vCloudPalette2;
-      varying vec3  vCloudPalette3;
-      varying vec4  vCloudWeights;
       varying float vSurfaceOpacity;
       varying float vBodyIndex;
       varying float vSeed;
@@ -645,6 +625,23 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
         float lat     = asin(latSinS);
         float lonF    = nzs * POLE_COS - nys * POLE_SIN;
         float lon     = atan(nxs, lonF);
+
+        // Per-body cloud palette sampled from the data texture once
+        // per fragment. Slot 3's RGB rides in the .w components of
+        // slots 0/1/2 to stay tight in the texture row.
+        float vBodyV = (vBodyIndex + 0.5) / max(uCloudLayerRows, 1.0);
+        float texPaletteU0 = (float(${MAX_CLOUD_LAYERS}    ) + 0.5) / float(${BODY_TEXTURE_WIDTH});
+        float texPaletteU1 = (float(${MAX_CLOUD_LAYERS + 1}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
+        float texPaletteU2 = (float(${MAX_CLOUD_LAYERS + 2}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
+        float texWeightsU  = (float(${MAX_CLOUD_LAYERS + 3}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
+        vec4 cp0Texel = texture2D(uCloudLayerData, vec2(texPaletteU0, vBodyV));
+        vec4 cp1Texel = texture2D(uCloudLayerData, vec2(texPaletteU1, vBodyV));
+        vec4 cp2Texel = texture2D(uCloudLayerData, vec2(texPaletteU2, vBodyV));
+        vec4 vCloudWeights = texture2D(uCloudLayerData, vec2(texWeightsU, vBodyV));
+        vec3 vCloudPalette0 = cp0Texel.xyz;
+        vec3 vCloudPalette1 = cp1Texel.xyz;
+        vec3 vCloudPalette2 = cp2Texel.xyz;
+        vec3 vCloudPalette3 = vec3(cp0Texel.w, cp1Texel.w, cp2Texel.w);
 
         vec3 col;
         if (vSurfaceOpacity > 0.5) {
@@ -1122,9 +1119,8 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
         // bandness = 0 produces Earth-style patchy cumulus; bandness = 1
         // produces Jupiter-style zonal bands; intermediate values blend
         // organically (elongated patches drifting east-west).
-        float vBodyV = (vBodyIndex + 0.5) / max(uCloudLayerRows, 1.0);
         for (int li = 0; li < ${MAX_CLOUD_LAYERS}; li++) {
-          float layerU = (float(li) + 0.5) / float(${MAX_CLOUD_LAYERS});
+          float layerU = (float(li) + 0.5) / float(${BODY_TEXTURE_WIDTH});
           vec4 layer = texture2D(uCloudLayerData, vec2(layerU, vBodyV));
           float coverage = layer.x;
           if (coverage <= 0.0) continue;
