@@ -1485,25 +1485,33 @@ export const CLOUD_REGIME_THRESHOLDS = {
 // Sampled once per body via fieldPrng(body, 'cloud').
 export const CLOUD_BY_REGIME = {
   // Hot gas/sub-Neptune — refractive silicate clouds, banded.
+  // Top deck has coverage variation so exotic giants can show rents.
   hot_gaseous: { layers: [
-    { gas: 'SILICATE', coverage: { mean: 1.00, sd: 0.00, min: 1.00, max: 1.00 }, bandness: 0.95, altitudeNorm: 0.85 },
+    { gas: 'SILICATE', coverage: { mean: 0.96, sd: 0.05, min: 0.80, max: 1.00 }, bandness: 0.95, altitudeNorm: 0.85 },
   ]},
-  // Hycean — water cloud deck over warm H2/He atmosphere.
+  // Hycean — water cloud deck over warm H2/He atmosphere. Variable
+  // top-deck coverage for exotic-giant variety.
   hycean: { layers: [
-    { gas: 'H2O', coverage: { mean: 1.00, sd: 0.00, min: 1.00, max: 1.00 }, bandness: 0.85, altitudeNorm: 0.80 },
+    { gas: 'H2O', coverage: { mean: 0.96, sd: 0.05, min: 0.80, max: 1.00 }, bandness: 0.85, altitudeNorm: 0.80 },
   ]},
-  // Cold gaseous (ice giants) — CH4 absorption is the visible signal;
-  // deeper decks are hidden under the CH4 absorption layer.
+  // Cold gaseous (ice giants) — CH4 absorption is the visible signal.
+  // Variable coverage produces occasional broken-cloud ice giants;
+  // when a cell skips, the deep atm column tint (atmColumnColor) shows
+  // through.
   cold_gaseous: { layers: [
-    { gas: 'CH4', coverage: { mean: 1.00, sd: 0.00, min: 1.00, max: 1.00 }, bandness: 0.85, altitudeNorm: 0.85 },
+    { gas: 'CH4', coverage: { mean: 0.96, sd: 0.05, min: 0.80, max: 1.00 }, bandness: 0.85, altitudeNorm: 0.85 },
   ]},
   // Temperate gaseous (Jupiter/Saturn-class) — three-deck stratified
   // model: deep H2O ice → mid NH4SH chromophore (the belt brown) →
-  // top NH3 ice (the bright zones).
+  // top NH3 ice (the bright zones). Top deck has sampled coverage so
+  // exotic procgen giants reveal NH4SH brown through NH3 rents (and
+  // very-low-coverage outliers reveal H2O ice through both upper
+  // layers' rents). Sol Jupiter / Saturn stay at 1.0 via the
+  // body_layers.csv override path.
   temperate_gaseous: { layers: [
     { gas: 'H2O',   coverage: { mean: 1.00, sd: 0.00, min: 1.00, max: 1.00 }, bandness: 0.85, altitudeNorm: 0.20 },
-    { gas: 'NH4SH', coverage: { mean: 1.00, sd: 0.00, min: 1.00, max: 1.00 }, bandness: 0.90, altitudeNorm: 0.50 },
-    { gas: 'NH3',   coverage: { mean: 1.00, sd: 0.00, min: 1.00, max: 1.00 }, bandness: 0.95, altitudeNorm: 0.85 },
+    { gas: 'NH4SH', coverage: { mean: 0.98, sd: 0.03, min: 0.85, max: 1.00 }, bandness: 0.90, altitudeNorm: 0.50 },
+    { gas: 'NH3',   coverage: { mean: 0.96, sd: 0.06, min: 0.70, max: 1.00 }, bandness: 0.95, altitudeNorm: 0.85 },
   ]},
   // Cold terrestrial (Titan / Triton-class) — sparse methane ice
   // clouds, patchy. Most of the visual signal is the haze.
