@@ -13,7 +13,7 @@ import {
   makePlanetMaterial, MAX_CLOUD_LAYERS,
 } from '../../materials';
 import { buildDiscPalette } from '../disc-palette';
-import { RENDER_ORDER_PLANET, Z_PLANET, Z_STRIDE } from '../layout/constants';
+import { RENDER_ORDER_PLANET, RENDER_ORDER_PLANET_HALO, Z_PLANET, Z_STRIDE } from '../layout/constants';
 import type { RowSlot } from '../layout/row';
 import type { DiagramPick, PlanetCenterIndex } from '../types';
 
@@ -26,8 +26,15 @@ export class PlanetsLayer {
   // per-vertex hover flag without scanning planetIndices on every change.
   private readonly slotByBodyIdx: ReadonlyMap<number, number>;
   private readonly geometry: BufferGeometry | null;
-  private readonly material: ShaderMaterial | null;
-  private readonly points: Points | null;
+  // Two materials + two Points sharing one geometry. Disc renders at
+  // RENDER_ORDER_PLANET (10) and discards halo fragments; halo renders
+  // at RENDER_ORDER_PLANET_HALO (20, after front-rings/moons) and
+  // discards disc fragments. See makePlanetMaterial's mode arg for the
+  // rationale.
+  private readonly discMaterial: ShaderMaterial | null;
+  private readonly haloMaterial: ShaderMaterial | null;
+  private readonly discPoints: Points | null;
+  private readonly haloPoints: Points | null;
 
   // Built fresh each layout pass. Stays empty when there are no
   // planets in the cluster.
@@ -41,8 +48,10 @@ export class PlanetsLayer {
 
     if (this.planetIndices.length === 0) {
       this.geometry = null;
-      this.material = null;
-      this.points   = null;
+      this.discMaterial = null;
+      this.haloMaterial = null;
+      this.discPoints   = null;
+      this.haloPoints   = null;
       return;
     }
 
@@ -177,18 +186,25 @@ export class PlanetsLayer {
     cloudTex.minFilter = NearestFilter;
     cloudTex.magFilter = NearestFilter;
     cloudTex.needsUpdate = true;
-    this.material = makePlanetMaterial(1.0);
-    this.material.uniforms.uCloudLayerData.value = cloudTex;
-    this.material.uniforms.uCloudLayerRows.value = P;
-    this.points = new Points(this.geometry, this.material);
-    this.points.renderOrder = RENDER_ORDER_PLANET;
+    this.discMaterial = makePlanetMaterial(1.0, 'disc');
+    this.haloMaterial = makePlanetMaterial(1.0, 'halo');
+    for (const m of [this.discMaterial, this.haloMaterial]) {
+      m.uniforms.uCloudLayerData.value = cloudTex;
+      m.uniforms.uCloudLayerRows.value = P;
+    }
+    this.discPoints = new Points(this.geometry, this.discMaterial);
+    this.discPoints.renderOrder = RENDER_ORDER_PLANET;
+    this.haloPoints = new Points(this.geometry, this.haloMaterial);
+    this.haloPoints.renderOrder = RENDER_ORDER_PLANET_HALO;
     // Three.js computes the bounding sphere from the initial all-zero
     // positions and never recomputes it when the position attribute
     // changes on resize. Disabling frustum culling sidesteps the stale
     // sphere; per-vertex GPU clipping still discards anything genuinely
     // off-screen.
-    this.points.frustumCulled = false;
-    scene.add(this.points);
+    this.discPoints.frustumCulled = false;
+    this.haloPoints.frustumCulled = false;
+    scene.add(this.discPoints);
+    scene.add(this.haloPoints);
   }
 
   // Write planet Points positions from the rowSlots' (already-laid-out)
@@ -197,7 +213,7 @@ export class PlanetsLayer {
   // for moons + rings to consume.
   layout(rowSlots: readonly RowSlot[]): void {
     this.centerIndex.clear();
-    if (!this.geometry || !this.points) return;
+    if (!this.geometry) return;
     const positions = this.geometry.attributes.position.array as Float32Array;
     let pi = 0;
     for (const item of rowSlots) {
@@ -244,6 +260,7 @@ export class PlanetsLayer {
 
   dispose(): void {
     this.geometry?.dispose();
-    this.material?.dispose();
+    this.discMaterial?.dispose();
+    this.haloMaterial?.dispose();
   }
 }

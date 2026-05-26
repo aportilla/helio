@@ -80,8 +80,19 @@ export const BODY_TEXTURE_WIDTH =
   MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS;
 export { ATM_COLUMN_TEXEL_OFFSET, DECK_COLOR_BASE_OFFSET };
 
-export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
+// mode='all' renders disc + halo (moons; keeps the original single-pass
+// behavior). mode='disc' or 'halo' splits the disc-interior and the
+// outward halo into two passes so the diagram can render all planet
+// halos AFTER front rings/moons — the halo otherwise blends against
+// background (and depth-rejects the front-ring) when a right neighbor's
+// halo extends over a left neighbor's front-ring/moon. See README's
+// "Per-row-item depth" section + RENDER_ORDER_PLANET_HALO.
+export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc' | 'halo' = 'all'): ShaderMaterial {
+  const defines: Record<string, string> = {};
+  if (mode === 'disc') defines.DISC_ONLY = '1';
+  if (mode === 'halo') defines.HALO_ONLY = '1';
   const m = new ShaderMaterial({
+    defines,
     uniforms: {
       uDiscScale: { value: initialDiscScale },
       uViewport:  { value: new Vector2(window.innerWidth, window.innerHeight) },
@@ -579,14 +590,21 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
         // average merger across cloud + species haze + scattering + dust
         // contributors (see disc-palette.ts).
         if (r > vRadius) {
-          if (r > vRadius + vRimWidthPx || vRimWidthPx < 1.0) discard;
-          float distOut = r - vRadius;
-          float layer = floor(distOut);
-          float stackCount = vRimWidthPx - layer;
-          float rimA = 1.0 - pow(1.0 - OUTER_BASE_ALPHA, stackCount);
-          gl_FragColor = vec4(vRimColor, rimA);
-          return;
+          #ifdef DISC_ONLY
+            discard;
+          #else
+            if (r > vRadius + vRimWidthPx || vRimWidthPx < 1.0) discard;
+            float distOut = r - vRadius;
+            float layer = floor(distOut);
+            float stackCount = vRimWidthPx - layer;
+            float rimA = 1.0 - pow(1.0 - OUTER_BASE_ALPHA, stackCount);
+            gl_FragColor = vec4(vRimColor, rimA);
+            return;
+          #endif
         }
+        #ifdef HALO_ONLY
+          discard;
+        #endif
 
         // Sphere projection — reconstruct the forward-hemisphere surface
         // normal at this fragment and dot it with the band-aligned pole
@@ -1427,14 +1445,13 @@ export function makeBlobMaterial(): ShaderMaterial {
 // `alpha` is similarly lerped — icy rings paint opaque (Saturn-class
 // bright band) while dusty rings paint translucent (Uranus/Neptune-
 // class faint dust). When alpha < 1 the material flips to transparent
-// + depthWrite=false so the stars and background show through.
+// so the alpha lane of the fragment actually blends.
 //
 // Per-mesh uHovered uniform (0 / 1) inverts the entire fill to white
 // on hover. No per-vertex outline math because the geometry is a
 // continuous arc rather than a sprite — a 1-px rim would need a
 // second pass.
 export function makeRingMaterial(color: Color, alpha: number): ShaderMaterial {
-  const transparent = alpha < 1;
   return new ShaderMaterial({
     uniforms: {
       uColor:   { value: new Color().copy(color) },
@@ -1456,14 +1473,14 @@ export function makeRingMaterial(color: Color, alpha: number): ShaderMaterial {
         gl_FragColor = vec4(col, a);
       }
     `,
-    transparent,
-    // See makePlanetMaterial — ring meshes ride the per-planet z
-    // stride too. The back / front mesh pair sits at z slightly
-    // bracketing the host planet's z so the planet disc paints over
-    // the back half and the front half overpaints the planet.
-    // depthWrite stays off for translucent rings so the background
-    // shows through their gaps rather than masking it.
-    depthWrite: !transparent,
+    transparent: alpha < 1,
+    // depthWrite stays on even when translucent. The diagram threads
+    // a per-row-item z so each planet's stack (back-ring / disc /
+    // front-ring / moons) reads as one occluding band against its
+    // neighbors; without depthWrite the back half wouldn't block a
+    // left-neighbor planet from painting over it at the planets pass
+    // (renderOrder primary, z secondary).
+    depthWrite: true,
   });
 }
 

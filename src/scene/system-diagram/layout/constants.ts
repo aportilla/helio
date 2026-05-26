@@ -183,7 +183,21 @@ export const Z_FRONT_MOON = +0.00040;
 // the right way — e.g. an equal-z moon next to a ring chunk.
 export const RENDER_ORDER_BACK_MOON  = 5;
 export const RENDER_ORDER_BELT       = 6;
-export const RENDER_ORDER_BACK_RING  = 7;
 export const RENDER_ORDER_PLANET     = 10;
+// Back rings run AFTER planet discs so a translucent back-half can
+// blend over a left-neighbor's disc (otherwise it would paint against
+// the cleared framebuffer and depth-reject the disc that's "behind"
+// it). Within R's own stack, the back ring is still hidden by R's
+// disc via depth test (back ring at z_R - 0.0003 fails LessEqual
+// against R's disc at z_R) — render-order doesn't need to enforce
+// it. Belts (opaque) don't have the same blend issue, so they stay
+// at renderOrder 6.
+export const RENDER_ORDER_BACK_RING  = 12;
 export const RENDER_ORDER_FRONT_RING = 13;
 export const RENDER_ORDER_FRONT_MOON = 15;
+// Planet atmospheric halo runs last so it blends over the left
+// neighbor's front-ring / front-moon (which the planet pass at
+// renderOrder 10 hasn't drawn yet). Within the pass, depth test
+// keeps R's halo from painting over R's own front ring/moon
+// (higher z) and lets it paint over L's full stack (lower z).
+export const RENDER_ORDER_PLANET_HALO = 20;
