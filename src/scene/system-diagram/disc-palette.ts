@@ -1,54 +1,54 @@
 // Per-body palette derivation for the planet + moon disc shader.
 // Both PlanetsLayer and MoonsLayer call buildDiscPalette(body, discPx) at
 // construction time and pack the result into the per-vertex attributes
-// consumed by makePlanetMaterial.
+// + per-body data-texture row consumed by makePlanetMaterial.
 //
 // The shader composes a layered stack per fragment, bottom to top:
 //   - **surface**  — worley/voronoi cell texture painted with the body's
 //                    top 3 resource colors. World-class color only
 //                    surfaces as a flat-fill fallback when a body has
-//                    no resource signal. Skipped entirely when the body
-//                    has no accessible surface (gas / ice giants).
-//   - **cloud**    — coverage + structure scalars drive a worley patchy
-//                    pattern (cloudStructure < 0.5, like Earth) or a
-//                    latitude-banded pattern (cloudStructure ≥ 0.5, like
-//                    Jupiter / Venus). Cloud palette is gas-mix derived
-//                    when banded (top-3 gases including the condensate
-//                    tint) and a single condensate color when patchy.
+//                    no resource signal. Substituted with `atmColumnColor`
+//                    when the body has no accessible surface (gas / ice
+//                    giants) — the void between cloud cells shows the
+//                    deep atm column tint there.
 //   - **haze**     — uniform per-fragment lerp toward the haze color by
-//                    hazeOpacity. Aerosol species (CH4 tholin, SO2
-//                    sulfate, DUST, SILICATE) live here.
-//   - **rim**      — concentric 1..N px halo OUTSIDE the disc + inward
-//                    fade INSIDE, driven by total atmospheric column.
+//                    hazeOpacity. Aerosol species not claimed by a
+//                    cloud deck (DUST, SILICATE, SALT, H2SO4, ...)
+//                    live here alongside bulk gas absorption and
+//                    Rayleigh scattering.
+//   - **cloud**    — up to MAX_CLOUD_LAYERS stratified decks composited
+//                    back-to-front by altitudeNorm. Each deck carries
+//                    its own 3-slot palette: condensate base + up to
+//                    two chromophore accents whose host gas matches
+//                    THIS deck (via AEROSOL_STAINS_GAS). Earth's H2O
+//                    deck is plain white; Jupiter's NH3 deck reads
+//                    white + brown + red because NH4SH and CHROMOPHORE
+//                    stain NH3 specifically.
+//   - **rim**      — outward halo into space, no inward fade. Width
+//                    bucketed off pressure (surface) or scale-height
+//                    proxy (no-surface). Color = same contributor blend
+//                    as haze, with each deck's base color folded in by
+//                    coverage.
 //
-// Each layer's alpha is data-driven; total opacity is a continuum
-// rather than a mode flip. A body with cloudCoverage = 0.4 and
-// hazeOpacity = 0 renders as patchy clouds over a visible surface
-// (Earth); cloudCoverage = 1.0 + hazeOpacity = 0.85 renders as full
-// banded cloud cover with a tholin tint over it (Titan, with visible
-// methane cloud structure beneath the haze).
+// Each layer's alpha is data-driven; total opacity emerges from
+// composition rather than a mode flip. Earth's H2O deck at coverage
+// 0.4 covers 40% of the disc in white worley cells; Venus's H2SO4
+// deck at 1.0 covers everything; Jupiter's three full-coverage decks
+// stack such that the upper NH3 hides everything below it.
 
 import { Color } from 'three';
 import {
   AtmGas, Body, GAS_COLOR, GAS_POTENCY,
-  GAS_VISIBILITY_FILTER, HAZE_AEROSOL_SCALE, HAZE_BULK_GAS_SCALE,
+  HAZE_AEROSOL_SCALE, HAZE_BULK_GAS_SCALE,
   HAZE_DUST_SCALE, HAZE_RAYLEIGH_SCALE,
   SCATTERING_COLOR, SCATTERING_POTENCY,
   WORLD_CLASS_COLOR, WORLD_CLASS_TINT,
-  WORLD_CLASS_UNKNOWN_COLOR, biomePaintFor, cloudBandPalette,
-  dominantResources,
+  WORLD_CLASS_UNKNOWN_COLOR, biomePaintFor, claimedAerosolsFor,
+  cloudDeckPalette, dominantResources, stratosphericHazeStrengthFor,
 } from '../../data/stars';
 import { hash32 } from './geom/prng';
 import { bodyVisualTiltRad } from './geom/ring';
 import { PROCEDURAL_TEXTURE_MIN_PX } from './layout/constants';
-
-
-// (Cloud condensate colors live in CONDENSATE_COLOR in stars.ts — a
-// shared table used by both cloudBandPalette and the patchy-cloud path here.)
-
-// (NO_SURFACE_WORLD_CLASSES lives in stars.ts — shared with
-// cloudBandPalette which needs it to apply the temperature-driven
-// base-blend weight on these classes.)
 
 // Outward rim width buckets for surface bodies — integer pixels of
 // atmospheric halo extending INTO SPACE beyond the disc edge. Driven
@@ -133,25 +133,16 @@ export interface DiscPalette {
                               number, number, number,
                               number, number, number];
   readonly weights: readonly [number, number, number];
-  // 4 RGB entries × 3 floats — the CLOUD layer palette. For banded
-  // clouds (cloudStructure ≥ 0.5), slot 0 carries the perceptual
-  // base blend (atm + cloud + haze) at fixed BASE_BLEND_WEIGHT and
-  // slots 1-3 carry the top accent species sharing the remaining
-  // weight (see cloudBandPalette in stars.ts). For patchy clouds
-  // (cloudStructure < 0.5), slot 0 carries the single condensate
-  // color and weights collapse to [1, 0, 0, 0]. Zeros throughout
-  // when the body has no cloud layer.
-  readonly cloudPalette: readonly [number, number, number,
-                                   number, number, number,
-                                   number, number, number,
-                                   number, number, number];
-  readonly cloudWeights: readonly [number, number, number, number];
+  // Atmospheric column color — weighted blend across the body's atm
+  // gases by `frac × GAS_POTENCY`. Painted as the disc base when
+  // `surfaceOpacity == 0` (gas / ice giants) so cloud rents reveal the
+  // physically-honest deep-column tint. Black when the body has no
+  // atmosphere data.
+  readonly atmColumnColor: readonly [number, number, number];
   // Surface opacity [0..1]. 1 = paintable surface visible (terrestrials).
-  // 0 = surface contribution is suppressed in composition (gas/ice
-  // giants — visible only through cloud rents, where the surface
-  // palette has been substituted with atmColumnColor). The shader
-  // composites surface unconditionally; this scalar gates its
-  // contribution rather than branching the codepath.
+  // 0 = surface contribution is suppressed; the shader paints
+  // atmColumnColor as base instead. Composition stays unconditional;
+  // this scalar gates contribution rather than branching the codepath.
   readonly surfaceOpacity: number;
   readonly seed: number;  // [0..1)
   // Render tilt in radians — rotates the banded-mode strip axis so
@@ -176,15 +167,25 @@ export interface DiscPalette {
   readonly biomeColor: readonly [number, number, number];
   readonly biomeCoverage: number;
   // Cloud layers — up to MAX_CLOUD_LAYERS stratified decks, sorted
-  // ascending by altitudeNorm. Each entry: coverage [0..1], bandness
-  // [0..1] (patchy ↔ banded), altitudeNorm [0..1] (deep → top). The
-  // shader composites all layers above the surface + haze, each
-  // pre-tinted by the haze opacity sitting above it. Unused slots
-  // have coverage = 0 and get a no-op composite.
+  // ascending by altitudeNorm. Each entry carries its own 3-slot
+  // palette (condensate base + up to two chromophore accents whose
+  // host gas matches this deck's gas via AEROSOL_STAINS_GAS). The
+  // shader composites layers above the surface + haze, each pre-tinted
+  // by the haze opacity sitting above it. Empty slots have coverage = 0
+  // and get a no-op composite.
   readonly cloudLayers: ReadonlyArray<{
     readonly coverage: number;
     readonly bandness: number;
     readonly altitudeNorm: number;
+    // 3 RGB triples (9 floats). Slot 0 = condensate base; slots 1-2 =
+    // top staining aerosols sorted by strength descending. Empty
+    // trailing slots are [0,0,0].
+    readonly palette: readonly [number, number, number,
+                                number, number, number,
+                                number, number, number];
+    // Weights sum to 1. Slot 0 = (1 - accentClaim); slots 1-2 share
+    // accentClaim by relative aerosol strength.
+    readonly weights: readonly [number, number, number];
   }>;
   // Haze layer uniform opacity [0..1]. The shader runs a per-fragment
   // mix(col, hazeColor, hazeOpacity) over EVERY paint underneath
@@ -247,12 +248,16 @@ function dustColorFor(body: Body): Color {
 
 // Unified haze contributor list — one entry per visible atmospheric
 // channel for a body. Reused by both `hazeBlendFor` (one tint + opacity
-// for the uniform haze pass) and the rim merger (which adds cloud slot 0
-// on top). Walks four contributor categories: bulk atm gases × pressure
-// (absorption tint), Rayleigh scattering on the same gases (scattering
-// tint), formation-gated aerosol products from procgen (`hazeAerosols`),
-// and lifted mineral dust colored by the body's resource mineralogy.
-// Empty on bodies with no atmosphere data.
+// for the uniform haze pass) and the rim merger (which adds per-deck
+// cloud bases on top). Walks four contributor categories: bulk atm
+// gases × pressure (absorption tint), Rayleigh scattering on the same
+// gases (scattering tint), formation-gated aerosol products from
+// procgen (`hazeAerosols`), and lifted mineral dust colored by the
+// body's resource mineralogy.
+//
+// Aerosols claimed by a cloud deck (via AEROSOL_STAINS_GAS) are
+// skipped — they're folded into that deck's per-cell palette and
+// shouldn't double-count in the uniform blanket.
 function surfaceHazeContributors(body: Body): Array<{ color: Color; weight: number }> {
   const out: Array<{ color: Color; weight: number }> = [];
   const P = body.surfacePressureBar;
@@ -278,9 +283,11 @@ function surfaceHazeContributors(body: Body): Array<{ color: Color; weight: numb
     }
   }
   if (body.hazeAerosols !== null) {
+    const claimed = claimedAerosolsFor(body);
     for (const [species, strength] of Object.entries(body.hazeAerosols)) {
       if (strength <= 0) continue;
       const gas = species as AtmGas;
+      if (claimed.has(gas)) continue;
       const col = GAS_COLOR[gas];
       const potency = GAS_POTENCY[gas] ?? 0;
       if (!col || potency <= 0) continue;
@@ -296,11 +303,32 @@ function surfaceHazeContributors(body: Body): Array<{ color: Color; weight: numb
   return out;
 }
 
+// Multiplier applied to stratosphericHazeStrengthFor when folding the
+// atm column into the no-surface haze contributor list. Tuned so the
+// exp soft-cap on opacity lands at:
+//   Jupiter (s ≈ 0.15) → opacity ≈ 0.20
+//   Saturn  (s ≈ 0.55) → opacity ≈ 0.55
+//   Uranus  (s ≈ 0.85) → opacity ≈ 0.71
+const NO_SURFACE_HAZE_GAIN = 1.5;
+
 // Unified haze color + opacity — weighted average across all
-// surfaceHazeContributors; opacity is the soft cap 1 - exp(-Σw) so
-// many thin contributions saturate smoothly rather than clipping.
+// surfaceHazeContributors plus (for no-surface bodies) the atm column
+// itself as a stratospheric-haze contributor. Opacity is the soft cap
+// 1 - exp(-Σw) so many thin contributions saturate smoothly.
 function hazeBlendFor(body: Body): { color: Color; opacity: number } {
   const contribs = surfaceHazeContributors(body);
+  // Stratospheric atm-column haze on gas / ice giants. Drives the
+  // per-deck haze pre-tint in the cloud loop (deeper decks get more
+  // cream tint on Saturn) and supplies vHazeColor for the same.
+  // Surface bodies stay on the contributor list alone — their column
+  // absorption + Rayleigh already feed it via bulk-gas terms.
+  if (body.surfaceOpacity < 1) {
+    const atmCol = atmColumnColor(body);
+    if (atmCol) {
+      const w = stratosphericHazeStrengthFor(body.avgSurfaceTempK) * NO_SURFACE_HAZE_GAIN;
+      if (w > 0) contribs.push({ color: atmCol, weight: w });
+    }
+  }
   let mr = 0, mg = 0, mb = 0, mw = 0;
   for (const { color, weight } of contribs) {
     if (weight <= 0) continue;
@@ -315,24 +343,16 @@ function hazeBlendFor(body: Body): { color: Color; opacity: number } {
 }
 
 // Atm-only column color — weighted blend across atm1/2/3 by
-// `frac × GAS_POTENCY`, with no contribution from cloud or haze
-// species.
-//
-// Models the limb's physical regime on no-surface bodies (gas/ice
-// giants, hycean, helium): at the limb the line of sight passes
-// through a long glancing-angle gas column where forward-scattering
-// accumulates. The visible color is the column tint of the gas
-// species (H2/He cream for Jupiter; CH4 cyan-leaning for Uranus) —
-// NOT the cloud-deck chemistry, which is altitude-localized and
-// doesn't appear at the limb.
+// `frac × GAS_POTENCY`. No worldClass filter, no cloud-deck
+// substitution: this is what the gas column looks like through any
+// cloud rents on a no-surface body. Jupiter is fully cloud-covered
+// at every altitude, so its atm column never renders in practice (no
+// rent for it to show through). Uranus / Neptune surface the visible
+// CH4 cyan through the same blend.
 //
 // GAS_COLOR entries are already chosen pale enough that the result
-// reads as a natural "lighter at the limb" effect without an extra
-// brighten-toward-white step. The visibility filter is honored so
-// gas-giant CH4 (buried under the NH3 deck) doesn't paint the rim.
+// reads as a natural "lighter at the limb" effect.
 function atmColumnColor(body: Body): Color | null {
-  const filtered: ReadonlySet<AtmGas> | undefined =
-    body.worldClass !== null ? GAS_VISIBILITY_FILTER[body.worldClass] : undefined;
   const candidates: Array<[AtmGas | null, number | null]> = [
     [body.atm1 as AtmGas | null, body.atm1Frac],
     [body.atm2 as AtmGas | null, body.atm2Frac],
@@ -341,7 +361,6 @@ function atmColumnColor(body: Body): Color | null {
   let r = 0, g = 0, b = 0, totalW = 0;
   for (const [gas, frac] of candidates) {
     if (gas === null || frac === null) continue;
-    if (filtered?.has(gas)) continue;
     const col = GAS_COLOR[gas];
     if (!col) continue;
     const w = frac * (GAS_POTENCY[gas] ?? 1);
@@ -453,29 +472,14 @@ export function buildDiscPalette(
     }
   }
 
-  // ── CLOUD PALETTE — shared 4-slot palette across all decks.
-  // Per-layer character emerges from coverage / bandness / altitude
-  // variation rather than per-layer palette switching. The base-blend
-  // (slot 0) already folds in every cloud condensate the body carries
-  // via cloudBandPalette's iteration over body.cloudLayers, so a
-  // multi-deck Jupiter's slot 0 carries H2O + NH4SH + NH3 contributions
-  // jointly; the band picker resolves accent variation per worley cell.
-  const cbp = body.cloudLayers.length > 0 ? cloudBandPalette(body) : null;
-  const cC0 = cbp?.palette[0] ?? new Color(0, 0, 0);
-  const cC1 = cbp?.palette[1] ?? new Color(0, 0, 0);
-  const cC2 = cbp?.palette[2] ?? new Color(0, 0, 0);
-  const cC3 = cbp?.palette[3] ?? new Color(0, 0, 0);
-  const cW0 = cbp?.weights[0] ?? 0;
-  const cW1 = cbp?.weights[1] ?? 0;
-  const cW2 = cbp?.weights[2] ?? 0;
-  const cW3 = cbp?.weights[3] ?? 0;
-
-  // rawCloudCoverage is used elsewhere (rim merger, palette
-  // gating). Aggregate it across decks — the worst-case visible
-  // cloud signal at the rim is the max coverage across layers.
-  const rawCloudCoverage = body.cloudLayers.reduce(
-    (mx, l) => Math.max(mx, l.coverage), 0,
-  );
+  // ── ATM COLUMN COLOR — what fills the void on a no-surface body.
+  // Pure atm blend; no cloud / haze contribution. Black on bodies
+  // with no atmosphere data (always overwritten by surface where
+  // surface paints).
+  const atmColC = atmColumnColor(body);
+  const atmColumnRgb: readonly [number, number, number] = atmColC
+    ? [atmColC.r, atmColC.g, atmColC.b]
+    : [0, 0, 0];
 
   // Force flat fill on very small discs — the per-pixel hash texture
   // and the band strips both degrade to noise below ~16 px.
@@ -498,17 +502,28 @@ export function buildDiscPalette(
     : [0, 0, 0];
   const biomeCoverage = biomePaint ? biomePaint.coverage : 0;
 
-  // Cloud layer scalars — pack each body.cloudLayer into the shape
-  // the shader's data-texture upload consumes, padded to
-  // MAX_CLOUD_LAYERS. tinyDisc suppresses all decks since the
-  // per-fragment work would resolve as noise on a small disc.
+  // Cloud layer scalars + per-deck palette. Each deck independently
+  // derives its 3-slot palette via cloudDeckPalette — condensate base
+  // + up to 2 chromophore accents whose host gas matches THIS deck's
+  // gas (NH4SH stains NH3, CHROMOPHORE stains NH3, THOLIN stains CH4,
+  // SULFUR stains SO2). tinyDisc suppresses all decks since per-fragment
+  // worley would resolve as noise on a small disc.
   const cloudLayers = tinyDisc
     ? []
-    : body.cloudLayers.map((l) => ({
-        coverage: l.coverage,
-        bandness: l.bandness,
-        altitudeNorm: l.altitudeNorm,
-      }));
+    : body.cloudLayers.map((l) => {
+        const dp = cloudDeckPalette(body, l.gas);
+        return {
+          coverage: l.coverage,
+          bandness: l.bandness,
+          altitudeNorm: l.altitudeNorm,
+          palette: [
+            dp.palette[0].r, dp.palette[0].g, dp.palette[0].b,
+            dp.palette[1].r, dp.palette[1].g, dp.palette[1].b,
+            dp.palette[2].r, dp.palette[2].g, dp.palette[2].b,
+          ] as const,
+          weights: [dp.weights[0], dp.weights[1], dp.weights[2]] as const,
+        };
+      });
 
   // Unified haze blend — one color + one opacity per body, derived
   // from the atmospheric contributor list (bulk gases × pressure ×
@@ -523,9 +538,11 @@ export function buildDiscPalette(
   const hazeOpacity = hazeRaw.opacity;
   const hazeColorRgb: readonly [number, number, number] = [hazeRaw.color.r, hazeRaw.color.g, hazeRaw.color.b];
 
-  // Rim color — cloud slot 0 + the same contributor list (surface
-  // bodies) or cloud + atm column tint (no-surface bodies). Every
-  // contributor with weight > 0 participates; result normalizes.
+  // Rim color — every visible channel folded into one weighted blend.
+  // Per-deck cloud bases enter weighted by their own coverage; haze
+  // contributors enter at their physics-derived weights. No-surface
+  // bodies add the atm column tint as the deep-column signal that
+  // dominates at the limb when clouds don't fully occlude.
   let rimColorRgb: readonly [number, number, number] = [0, 0, 0];
   let rimWidthPx = 0;
 
@@ -536,25 +553,19 @@ export function buildDiscPalette(
       mr += c.r * w; mg += c.g * w; mb += c.b * w; mw += w;
     };
 
-    // Cloud slot 0 — chromophore-muted base blend for banded clouds,
-    // single condensate for patchy. Safe on no-surface bodies too.
-    if (rawCloudCoverage > 0 && (cC0.r + cC0.g + cC0.b) > 0) {
-      add(cC0, rawCloudCoverage);
+    // Per-deck cloud bases (slot 0 of each deck's palette) weighted by
+    // that deck's coverage. Higher decks aren't preferred over lower
+    // decks at the limb — the rim sees the sum of cloud chemistry.
+    for (const dl of cloudLayers) {
+      const cr = dl.palette[0], cg = dl.palette[1], cb = dl.palette[2];
+      if ((cr + cg + cb) > 0) add({ r: cr, g: cg, b: cb }, dl.coverage);
     }
     if (hasSurface) {
-      // Same contributor list that feeds hazeColor — bulk gas
-      // absorption, Rayleigh, aerosol products, dust. Each at its
-      // physics-derived weight; no special-casing per channel.
       for (const { color, weight } of surfaceHazeContributors(body)) {
         add(color, weight);
       }
-    } else {
-      // Forward-scatter gas-column tint with chromophore filter
-      // (atmColumnColor strips cloud-deck species). Aerosols are
-      // altitude-localized chromophores on gas giants — they feed
-      // the cloud band palette, not the limb.
-      const c = atmColumnColor(body);
-      if (c !== null) add(c, 1);
+    } else if (atmColC !== null) {
+      add(atmColC, 1);
     }
 
     if (mw > 0) {
@@ -562,29 +573,22 @@ export function buildDiscPalette(
       rimWidthPx = hasSurface
         ? rimWidthForSurfaceAtmosphere(body)
         : rimWidthForNoSurfaceAtmosphere(body);
-      // Presence floor — any contributor that made it into the merger
-      // counts as "has atmosphere," so any surface body that fell
-      // through the pressure tiers still gets a visible rim. Catches
-      // Mars (P=0.006 bar too thin for the Rayleigh tier, but dust +
-      // thin cirrus dominate the visible signal from orbit) and data-
-      // thin bodies whose only signal is haze.
+      // Presence floor — Mars-class thin-air bodies that fall through
+      // the pressure tiers still get a visible rim if the merger
+      // produced any signal, distinguishing "has air" from "airless".
       if (hasSurface && rimWidthPx === 0) {
         rimWidthPx = RIM_PRESENCE_FLOOR_PX;
       }
     }
   }
 
-  // Per-class hue tint applies to surface palette entries; cloud
-  // palette comes from gas-mix (already physically derived) and skips
-  // the tint to keep cloud colors aligned with their gas species.
+  // Per-class hue tint applies to surface palette entries only. Cloud
+  // palettes already derive from physically-anchored gas species and
+  // skip the tint so cloud colors stay aligned with their condensates.
   const tint = body.worldClass !== null ? WORLD_CLASS_TINT[body.worldClass] : undefined;
   const t0 = applyTint(sC0, tint);
   const t1 = applyTint(sC1, tint);
   const t2 = applyTint(sC2, tint);
-  const ct0 = cC0;
-  const ct1 = cC1;
-  const ct2 = cC2;
-  const ct3 = cC3;
 
   return {
     palette: [
@@ -593,13 +597,7 @@ export function buildDiscPalette(
       t2.r, t2.g, t2.b,
     ] as const,
     weights: [sW0, sW1, sW2] as const,
-    cloudPalette: [
-      ct0.r, ct0.g, ct0.b,
-      ct1.r, ct1.g, ct1.b,
-      ct2.r, ct2.g, ct2.b,
-      ct3.r, ct3.g, ct3.b,
-    ] as const,
-    cloudWeights: [cW0, cW1, cW2, cW3] as const,
+    atmColumnColor: atmColumnRgb,
     surfaceOpacity,
     seed,
     tilt: bodyVisualTiltRad(body),

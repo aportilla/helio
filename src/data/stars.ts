@@ -582,25 +582,6 @@ export const CONDENSATE_COLOR: Partial<Record<AtmGas, Color>> = {
 // strong red-light absorber. Mass-fraction-weighted color would paint
 // them as cream-and-trace-blue (wrong); potency-weighted color paints
 // them as mostly CH4 with cream accents (right).
-//
-// cloudBandPalette() multiplies each gas's fraction by its potency before
-// renormalizing, so the displayed weights reflect visual contribution
-// rather than abundance. Tunable.
-
-// Multipliers applied to a body's `cloudCoverage` / aerosol strength
-// before folding the species into cloudBandPalette. Both kinds are
-// condensed-phase chemistry layered onto the gas column — neither
-// dominates the other structurally now that the chromophore is a band
-// accent (not a uniform overlay), so they share the same boost. The
-// remaining 1× / 1× distinction comes from the body's own `coverage`
-// and per-species aerosol strength scalars.
-//
-// Calibrated so on Jupiter the resulting weights land roughly at
-// parity with the dominant atm gas (H2 × potency 0.1 ≈ 0.09), so
-// each accent claims roughly a third of the (1 - BASE_BLEND_WEIGHT)
-// budget — comparable cell areas for the cream zones and tan belts.
-export const CLOUD_VISUAL_BOOST = 0.03;
-export const HAZE_VISUAL_BOOST  = 0.03;
 
 // Universal scales for the unified haze blend — Σ (per-species weight
 // × GAS_POTENCY) × scale, summed across the four contributor channels,
@@ -615,25 +596,6 @@ export const HAZE_BULK_GAS_SCALE = 0.2;
 export const HAZE_AEROSOL_SCALE  = 0.5;
 export const HAZE_DUST_SCALE     = 0.1;
 export const HAZE_RAYLEIGH_SCALE = 0.15;
-
-// Per-class set of gases that are present in the atmosphere but not
-// visible from above — buried under a cloud deck at the photic depth
-// the disc renderer is modeling. Gas-giant CH4 is the canonical case:
-// real Jupiter and Saturn carry CH4 at 0.3-0.5% by mass, but it sits
-// below the NH3 ice cloud layer, so the disc's apparent color comes
-// from the cloud tops + condensed-phase chemistry, not from CH4
-// absorption. Ice giants have thinner / higher cloud cover and CH4 IS
-// the visible signal, so they're intentionally absent from the filter.
-//
-// cloudBandPalette drops filtered gases from the candidate list before
-// scoring. The gas stays in atm1..3 for gameplay (CH4 really is in
-// Jupiter's atmosphere and can be mined as a deep-atmosphere resource)
-// — only the disc renderer ignores it.
-export const GAS_VISIBILITY_FILTER: Partial<Record<WorldClass, ReadonlySet<AtmGas>>> = {
-  gas_giant: new Set(['CH4']),
-  gas_dwarf: new Set(['CH4']),
-  // ice_giant intentionally absent — CH4 is the Uranus/Neptune blue.
-};
 
 // Molecular weight per atmospheric gas (amu). Used historically for
 // altitude-stratification pickers; current renderer doesn't read it
@@ -784,271 +746,190 @@ const RESOURCE_KEYS: readonly ResourceKey[] = [
   'resRareEarths', 'resRadioactives', 'resExotics',
 ];
 
-// Atmospheric contributions for the banded cloud palette. Four slots,
-// modeling two distinct physical mechanisms:
+// Per-deck cloud palette derivation. Each cloud deck is one condensate
+// species (NH3 ice, H2O ice, H2SO4 droplets, CH4 frost, ...) suspended
+// at one altitude. Its visible color is THAT condensate, plus whatever
+// chromophore aerosols physically associate with it — nothing else.
 //
-//   • **Atm gases — column absorption (uniform).** Every line of
-//     sight passes through the same gas column, so atm species tint
-//     the disc uniformly (CH4 pulls Uranus toward cyan; H2/He warm
-//     Jupiter toward cream). They feed the BASE BLEND only — never
-//     spatial accents — because column absorption doesn't paint
-//     patches.
+// No atm-gas folding here. Transparent atm species (N2, O2, H2, He)
+// don't form clouds and don't tint cloud cells. Atm-column absorption
+// is a separate concept that paints the void between cloud cells on
+// no-surface bodies (see `atmColumnColor` in disc-palette.ts), not the
+// cloud itself.
 //
-//   • **Cloud + haze species — photic-depth chemistry (spatial).**
-//     The visible cloud deck genuinely varies across latitudes: NH3
-//     zones with NH4SH brown belts on Jupiter; banded chromophore
-//     features on Saturn. These drive the ACCENT slots (and fold into
-//     the base blend too, at reduced weight via CLOUD_VISUAL_BOOST /
-//     HAZE_VISUAL_BOOST, so their species warms or cools the ground
-//     tone).
-//
-// **The four slots:**
-//
-//   • **Slot 0 — base blend.** Weighted average across atm + cloud +
-//     haze. Atm species dominate by weight (full potency, no visual
-//     boost) — the base reads as the column-tint with cloud chemistry
-//     warming or cooling it. Always assigned `BASE_BLEND_WEIGHT` in
-//     the picker so it dominates by frequency.
-//
-//   • **Slots 1-3 — accent species.** Top three cloud + haze entries
-//     by `frac × potency × boost`, sorted descending. Each paints at
-//     its natural pigment saturation — no mixing toward a common
-//     tone. Together they share the remaining `(1 - BASE_BLEND_WEIGHT)`
-//     of the picker weight, renormalized across however many were
-//     emitted.
-//
-// **Why this shape:** Earlier revisions blended the column tint into
-// each accent slot, which preserved physics but desaturated every band
-// — Jupiter went from belt-brown-on-cream to muted tan. The base+accent
-// shape solves the same "column character should dominate" problem by
-// frequency-weighting in the picker instead of mixing in the colors,
-// keeping each accent slot at full pigment saturation while the base
-// blend carries the holistic character on ~half the cells.
-//
-// Renderer rule: paint exactly what procgen emits. Jupiter shows NH4SH
-// brown bands because procgen emitted NH4SH in `hazeAerosols` — no
-// chromophore inference inside this function.
-//
-// Used by the banded-cloud branch of `buildDiscPalette` for no-surface
-// bodies (gas / ice giants). Surface bodies with banded clouds (Venus)
-// skip this and paint a single condensate color because their cloud
-// deck obscures the deeper atm.
+// Multi-deck bodies (Jupiter) get one palette per deck: NH3 deck reads
+// white + brown + red because procgen emits NH4SH + CHROMOPHORE that
+// stain NH3; the H2O deck below stays plain white because no chromophore
+// stains H2O. Renderer paints exactly what procgen + this mapping emit.
 
-// Default share of the cloud-band picker weight assigned to slot 0
-// (the perceptual base blend) for bodies without a stronger signal to
-// pick a per-body weight. Tunable: higher → smoother disc dominated
-// by the holistic blend with accents as occasional highlights; lower
-// → more visible band variety at the cost of perceived unity. 0.5
-// calibrated to land Jupiter at "cream-tan with belt-brown
-// highlights" rather than "alternating stripes" or "muddy single
-// tone."
-export const BASE_BLEND_WEIGHT = 0.5;
-
-// World classes whose body has no accessible surface — gas/ice giants,
-// gas dwarfs, hycean (deep ocean under thick H2/He), helium giants.
-// `cloudBandPalette` reads this to apply a temperature-driven base-
-// blend weight (colder no-surface bodies show more uniform discs);
-// `disc-palette.ts` reads it to short-circuit the surface paint pass.
-export const NO_SURFACE_WORLD_CLASSES: ReadonlySet<string> = new Set([
-  'gas_giant', 'gas_dwarf', 'ice_giant', 'hycean', 'helium',
-]);
-
-// Per-body slot-0 weight for no-surface bodies, derived from cloud-top
-// temperature. Colder gas/ice giants have thicker, more obscuring
-// cloud decks (more NH3 / CH4 condensed out of the gas phase) AND
-// more high-altitude photochemical haze sitting above the deck
-// (longer aerosol residence time under slower atmospheric dynamics).
-// Both effects mute the band chemistry that would otherwise show
-// through.
+// Each "staining" aerosol species → the cloud condensate gas it
+// physically descends into / forms WITHIN. Listed aerosols get folded
+// into that deck's palette as accents. Aerosols not listed here
+// (THOLIN, SULFUR, H2SO4 droplets, SILICATE particles, SALT, DUST)
+// are stratospheric or surface-derived hazes that sit ABOVE / SEPARATE
+// FROM any cloud deck — they stay in the unified haze blanket via
+// hazeBlendFor regardless of which decks the body carries, so they
+// blanket the whole disc rather than appearing only inside cloud cells.
 //
-// We don't yet emit per-altitude haze layers — only a uniform
-// `hazeAerosols` contributor list per body — so this heuristic uses
-// `avgSurfaceTempK` (cloud-top temperature on gas giants) as a proxy
-// that captures the trend cleanly across the four Sol gas giants:
+//  - NH4SH descends into NH3 ice deck → Jovian belt brown
+//  - CHROMOPHORE (PH3 photolysis red) embedded in NH3 deck → Saturn / GRS
 //
-//   • 800 K → 0.35  (hot Jupiter — bold contrast)
-//   • 165 K → 0.50  (Jupiter — strong zone/belt structure)
-//   • 134 K → 0.78  (Saturn — heavily muted bands)
-//   •  60 K → 0.85  (Uranus / Neptune — mostly uniform)
-//
-// The Jupiter→Saturn jump is deliberately steep (28 weight points
-// across 31 K) — it models the rapid transition out of the "warm
-// enough to keep chromophore chemistry visible" regime into the
-// "cold enough that the stratospheric haze + thicker NH3 deck obscure
-// it" regime. Without that steep step, Saturn looks like a slightly
-// paler Jupiter; with it, Saturn reads as visibly hazier with only
-// ghost traces of belt structure. The lower portion of the curve
-// (Uranus/Neptune) intentionally only moves a few more points
-// because the cloud chemistry differs there (CH4 frost, no haze) so
-// they read as cyan-uniform from their accent set alone.
-//
-// Piecewise linear between anchors, clamped at the extremes. Bodies
-// with null temperature fall back to `BASE_BLEND_WEIGHT`. Atm
-// composition is unchanged — only the cell-frequency split between
-// base and accents shifts with temperature.
-const NO_SURFACE_WEIGHT_ANCHORS: ReadonlyArray<readonly [number, number]> = [
-  [60, 0.85],
-  [134, 0.78],
-  [165, 0.50],
-  [800, 0.35],
-];
+// Titan's tholin is the canonical counter-example: it's a stratospheric
+// UV-photolysis haze, not a stain on Titan's thin CH4 cloud deck — so
+// THOLIN belongs in the haze blanket and routes there by omission here.
+export const AEROSOL_STAINS_GAS: Partial<Record<AtmGas, AtmGas>> = {
+  NH4SH:       'NH3',
+  CHROMOPHORE: 'NH3',
+};
 
-function baseBlendWeightForNoSurface(tCloudTopK: number | null): number {
-  if (tCloudTopK == null) return BASE_BLEND_WEIGHT;
-  const first = NO_SURFACE_WEIGHT_ANCHORS[0];
-  const last = NO_SURFACE_WEIGHT_ANCHORS[NO_SURFACE_WEIGHT_ANCHORS.length - 1];
-  if (tCloudTopK <= first[0]) return first[1];
-  if (tCloudTopK >= last[0]) return last[1];
-  for (let i = 0; i < NO_SURFACE_WEIGHT_ANCHORS.length - 1; i++) {
-    const [t0, w0] = NO_SURFACE_WEIGHT_ANCHORS[i];
-    const [t1, w1] = NO_SURFACE_WEIGHT_ANCHORS[i + 1];
-    if (tCloudTopK >= t0 && tCloudTopK <= t1) {
-      const a = (tCloudTopK - t0) / (t1 - t0);
-      return w0 + (w1 - w0) * a;
-    }
-  }
-  return BASE_BLEND_WEIGHT;
-}
-
-export interface CloudBandPalette {
-  // Four colors: slot 0 = base blend (atm + cloud + haze), slots 1-3 =
-  // top cloud + haze accent species sorted by weight descending. Empty
-  // trailing accent slots are ZERO_COLOR with weight 0 and the shader
-  // picker skips them.
-  readonly palette: readonly [Color, Color, Color, Color];
-  // Weights sum to 1. Slot 0's share is `BASE_BLEND_WEIGHT` on surface
-  // bodies, or a temperature-derived value on no-surface bodies (see
-  // `baseBlendWeightForNoSurface`) — colder gas/ice giants get a
-  // larger slot-0 share so the disc reads as more uniform. If every
-  // accent is empty, slot 0 absorbs the full 1.0.
-  readonly weights: readonly [number, number, number, number];
-}
+// How aggressively a deck's chromophore accents claim cell area away
+// from the condensate base. Soft-capped via
+//   accentClaim = 1 - exp(-Σ strength × potency × SCALE)
+// so even strong chromophore strengths leave the base visible.
+// Anchors: Jupiter NH3 deck (NH4SH + CHROMOPHORE, total weighted ~3-6)
+// → claim ≈ 0.85 (mostly stained, glimpses of cream). Earth H2O deck
+// (no chromophore at all) → claim = 0, all cells white.
+const ACCENT_CLAIM_SCALE = 0.2;
 
 const ZERO_COLOR = new Color(0, 0, 0);
+const EMPTY_GAS_SET: ReadonlySet<AtmGas> = new Set();
 
-export function cloudBandPalette(body: Body): CloudBandPalette {
-  type Contrib = { color: Color; weight: number };
-  // Two pools modeling two distinct physics:
-  //   • `atm` — gas-phase column absorption. Uniform across the disc,
-  //     so these species feed the BASE BLEND only. CH4 on Uranus
-  //     pulls the whole disc toward cyan; H2/He on Jupiter brighten
-  //     it toward cream. Never appears as a spatial accent because the
-  //     absorption acts on every line of sight equally.
-  //   • `cloudHaze` — condensed-phase chemistry at the photic depth.
-  //     Genuinely varies across the disc (NH3 ice deck punctuated by
-  //     NH4SH brown belts at specific latitudes), so these species
-  //     drive the ACCENT slots. The base blend folds them in too so
-  //     bodies with strong cloud chemistry shift their ground tone
-  //     accordingly (Jupiter's NH3 deck warming the H2/He cream).
-  const atm: Contrib[] = [];
-  const cloudHaze: Contrib[] = [];
-
-  const filtered: ReadonlySet<AtmGas> | undefined =
-    body.worldClass !== null ? GAS_VISIBILITY_FILTER[body.worldClass] : undefined;
-
-  const addAtm = (name: string | null, frac: number | null) => {
-    if (name === null || frac === null) return;
-    const gas = name as AtmGas;
-    if (filtered?.has(gas)) return;
-    const col = GAS_COLOR[gas];
-    if (!col) return;
-    atm.push({ color: col, weight: frac * (GAS_POTENCY[gas] ?? 1) });
-  };
-  addAtm(body.atm1, body.atm1Frac);
-  addAtm(body.atm2, body.atm2Frac);
-  addAtm(body.atm3, body.atm3Frac);
-
-  for (const layer of body.cloudLayers) {
-    const gas = layer.gas as AtmGas;
-    const col = CONDENSATE_COLOR[gas] ?? GAS_COLOR[gas];
-    if (!col || layer.coverage <= 0) continue;
-    cloudHaze.push({
-      color: col,
-      weight: layer.coverage * (GAS_POTENCY[gas] ?? 1) * CLOUD_VISUAL_BOOST,
-    });
+// Aerosol species that have been claimed by at least one cloud deck on
+// this body via AEROSOL_STAINS_GAS. Used by `surfaceHazeContributors`
+// to skip those species from the unified haze blanket so they're not
+// double-counted (deck palette + haze layer).
+export function claimedAerosolsFor(body: Body): ReadonlySet<AtmGas> {
+  if (body.cloudLayers.length === 0 || body.hazeAerosols === null) {
+    return EMPTY_GAS_SET;
   }
+  const cloudGases = new Set<AtmGas>(body.cloudLayers.map(l => l.gas as AtmGas));
+  let claimed: Set<AtmGas> | null = null;
+  for (const aerosol of Object.keys(body.hazeAerosols)) {
+    const host = AEROSOL_STAINS_GAS[aerosol as AtmGas];
+    if (host !== undefined && cloudGases.has(host)) {
+      (claimed ??= new Set()).add(aerosol as AtmGas);
+    }
+  }
+  return claimed ?? EMPTY_GAS_SET;
+}
+
+export interface CloudDeckPalette {
+  // Three colors: slot 0 = condensate base; slots 1-2 = top chromophore
+  // accents whose host gas matches this deck's gas (sorted descending by
+  // strength × potency). Empty trailing slots are ZERO_COLOR with weight 0.
+  readonly palette: readonly [Color, Color, Color];
+  // Weights sum to 1. Slot 0 = (1 - accentClaim); accent slots share
+  // accentClaim by relative weight.
+  readonly weights: readonly [number, number, number];
+}
+
+// Stratospheric haze strength for no-surface bodies (gas / ice giants
+// / hycean / helium). Photochemical haze accumulates above the cloud
+// decks; colder bodies hold thicker stratospheric haze under their
+// slower atmospheric dynamics, paling the chromophore visible below.
+//
+// One scalar drives two effects:
+//   • `hazeBlendFor` (disc-palette.ts) — adds atm column color as a
+//     haze contributor weighted by this strength, so the haze blanket
+//     pre-tint inside the per-deck loop has a non-zero signal on gas
+//     giants (cream H2/He tint bleeding into the deck cells).
+//   • `cloudDeckPalette` below — mutes per-deck chromophore accents
+//     toward the deck's condensate base by this strength, so Saturn's
+//     NH3 deck reads as mostly cream with traces of brown/red rather
+//     than at Jupiter's full chromophore saturation.
+//
+// Anchors land roughly:
+//   800K hot Jupiter → 0.10 (clear, full chromophore)
+//   165K Jupiter     → 0.15 (slight muting)
+//   134K Saturn      → 0.55 (strong cream muting)
+//   60K Uranus / Neptune → 0.85 (near-uniform CH4 frost)
+//
+// The steep 165→134K transition (0.15→0.55) models the rapid jump out
+// of "warm enough for chromophore" into "cold enough for the haze
+// blanket to dominate" — without it Saturn renders as a slightly paler
+// Jupiter rather than a visibly hazier disc. Piecewise linear,
+// clamped at extremes. Null temperature → 0.30 (mild default).
+const STRATOSPHERIC_HAZE_ANCHORS: ReadonlyArray<readonly [number, number]> = [
+  [60, 0.85],
+  [134, 0.55],
+  [165, 0.15],
+  [800, 0.10],
+];
+
+export function stratosphericHazeStrengthFor(tempK: number | null): number {
+  if (tempK == null) return 0.30;
+  const first = STRATOSPHERIC_HAZE_ANCHORS[0];
+  const last = STRATOSPHERIC_HAZE_ANCHORS[STRATOSPHERIC_HAZE_ANCHORS.length - 1];
+  if (tempK <= first[0]) return first[1];
+  if (tempK >= last[0]) return last[1];
+  for (let i = 0; i < STRATOSPHERIC_HAZE_ANCHORS.length - 1; i++) {
+    const [t0, s0] = STRATOSPHERIC_HAZE_ANCHORS[i];
+    const [t1, s1] = STRATOSPHERIC_HAZE_ANCHORS[i + 1];
+    if (tempK >= t0 && tempK <= t1) {
+      const a = (tempK - t0) / (t1 - t0);
+      return s0 + (s1 - s0) * a;
+    }
+  }
+  return 0.30;
+}
+
+// Per-deck palette. Independent of other decks on the same body: a
+// Jupiter H2O deck reads plain white even when NH4SH is present,
+// because NH4SH stains NH3 (not H2O). Jupiter's NH3 deck reads
+// white-cream + brown (NH4SH) + red (CHROMOPHORE) because the procgen
+// aerosol record routes those species here. On cold gas/ice giants the
+// chromophore accents are muted toward the condensate base by the
+// stratospheric haze strength (Saturn cream-muted vs Jupiter punchy).
+export function cloudDeckPalette(body: Body, layerGas: string): CloudDeckPalette {
+  const gas = layerGas as AtmGas;
+  const baseColor = CONDENSATE_COLOR[gas] ?? GAS_COLOR[gas] ?? ZERO_COLOR;
+
+  const accents: Array<{ color: Color; weight: number }> = [];
   if (body.hazeAerosols !== null) {
     for (const [species, strength] of Object.entries(body.hazeAerosols)) {
-      const gas = species as AtmGas;
-      const col = GAS_COLOR[gas];
-      if (!col || strength <= 0) continue;
-      cloudHaze.push({
-        color: col,
-        weight: strength * (GAS_POTENCY[gas] ?? 1) * HAZE_VISUAL_BOOST,
-      });
+      if (strength <= 0) continue;
+      const aerosol = species as AtmGas;
+      if (AEROSOL_STAINS_GAS[aerosol] !== gas) continue;
+      const col = GAS_COLOR[aerosol];
+      const potency = GAS_POTENCY[aerosol] ?? 1;
+      if (!col) continue;
+      accents.push({ color: col, weight: strength * potency });
     }
   }
+  accents.sort((a, b) => b.weight - a.weight);
+  const top = accents.slice(0, 2);
+  const accentTotal = top.reduce((s, a) => s + a.weight, 0);
 
-  // Base blend — weighted average across both pools. Atm species
-  // dominate by weight on most bodies (full potency, no visual-boost
-  // damping), so the base reads as the column tint with the cloud
-  // chemistry warming or cooling it.
-  const blendInputs: Contrib[] = [...atm, ...cloudHaze];
-  const blendTotal = blendInputs.reduce((s, e) => s + e.weight, 0);
-  let baseBlend: Color = ZERO_COLOR;
-  if (blendTotal > 0) {
-    let r = 0, g = 0, b = 0;
-    for (const { color, weight } of blendInputs) {
-      r += color.r * weight;
-      g += color.g * weight;
-      b += color.b * weight;
-    }
-    baseBlend = new Color(r / blendTotal, g / blendTotal, b / blendTotal);
-  }
+  const accentClaim = accentTotal > 0
+    ? 1 - Math.exp(-accentTotal * ACCENT_CLAIM_SCALE)
+    : 0;
+  const slot0Weight = 1 - accentClaim;
 
-  // Accent slots — top 3 cloud + haze species by visual weight. Atm
-  // gases are deliberately excluded here: column absorption is a
-  // uniform effect and doesn't produce spatial accents on real bodies.
-  cloudHaze.sort((a, b) => b.weight - a.weight);
-  const accents = cloudHaze.slice(0, 3);
-  const accentTotal = accents.reduce((s, e) => s + e.weight, 0);
-
-  // Per-body slot-0 share. Gas/ice giants pick a temperature-derived
-  // weight so colder bodies render more uniformly (Saturn mutes vs
-  // Jupiter; Uranus / Neptune nearly featureless). Surface bodies and
-  // bodies with no world class fall back to the default.
-  const isNoSurface = body.worldClass !== null
-    && NO_SURFACE_WORLD_CLASSES.has(body.worldClass);
-  const slot0Target = isNoSurface
-    ? baseBlendWeightForNoSurface(body.avgSurfaceTempK)
-    : BASE_BLEND_WEIGHT;
-
-  // Slot 0 reserves `slot0Target` when any accent is present;
-  // otherwise it absorbs the full 1.0 (a body with no cloud-haze
-  // chemistry still needs a visible color).
-  const accentBudget = accentTotal > 0 ? 1 - slot0Target : 0;
-  const slot0Weight = accentTotal > 0 ? slot0Target : (blendTotal > 0 ? 1 : 0);
-
-  // Accent desaturation — models stratospheric haze physically paling
-  // the cloud chemistry visible below it. Same temperature signal that
-  // drove the cell-frequency curve: as slot0Target climbs above the
-  // default, the body is "hazier" and the chromophore species reads
-  // softer when it does appear. Jupiter (slot0=0.50) → mute=0, full
-  // pigment punch. Saturn (slot0=0.78) → mute=0.56, accents drift
-  // strongly toward the base. Uranus / Neptune saturate at the upper
-  // clamp (only one accent — CH4 frost — which barely contrasts
-  // anyway, so the mute is mostly cosmetic there).
-  const accentMute = Math.max(0, Math.min(1, (slot0Target - BASE_BLEND_WEIGHT) * 2));
-  const muteAccent = (c: Color): Color => accentMute <= 0 || blendTotal <= 0 ? c : new Color(
-    c.r + (baseBlend.r - c.r) * accentMute,
-    c.g + (baseBlend.g - c.g) * accentMute,
-    c.b + (baseBlend.b - c.b) * accentMute,
+  // Stratospheric-haze accent mute — only meaningful on no-surface
+  // bodies (gas giants / ice giants). Surface bodies pass the chromo-
+  // phore through at full saturation; their stratospheric chemistry
+  // doesn't pale the visible signal at observed altitudes.
+  const accentMute = body.surfaceOpacity < 1
+    ? stratosphericHazeStrengthFor(body.avgSurfaceTempK)
+    : 0;
+  const muteAccent = (c: Color): Color => accentMute <= 0 ? c : new Color(
+    c.r + (baseColor.r - c.r) * accentMute,
+    c.g + (baseColor.g - c.g) * accentMute,
+    c.b + (baseColor.b - c.b) * accentMute,
   );
 
-  const palette: [Color, Color, Color, Color] = [
-    baseBlend,
-    muteAccent(accents[0]?.color ?? ZERO_COLOR),
-    muteAccent(accents[1]?.color ?? ZERO_COLOR),
-    muteAccent(accents[2]?.color ?? ZERO_COLOR),
-  ];
-  const weights: [number, number, number, number] = [
-    slot0Weight,
-    accentTotal > 0 ? ((accents[0]?.weight ?? 0) / accentTotal) * accentBudget : 0,
-    accentTotal > 0 ? ((accents[1]?.weight ?? 0) / accentTotal) * accentBudget : 0,
-    accentTotal > 0 ? ((accents[2]?.weight ?? 0) / accentTotal) * accentBudget : 0,
-  ];
-
-  return { palette, weights };
+  return {
+    palette: [
+      baseColor,
+      muteAccent(top[0]?.color ?? ZERO_COLOR),
+      muteAccent(top[1]?.color ?? ZERO_COLOR),
+    ],
+    weights: [
+      slot0Weight,
+      accentTotal > 0 ? ((top[0]?.weight ?? 0) / accentTotal) * accentClaim : 0,
+      accentTotal > 0 ? ((top[1]?.weight ?? 0) / accentTotal) * accentClaim : 0,
+    ],
+  };
 }
 
 // Top `count` resources (default 2) by value, with weights renormalized

@@ -8,7 +8,10 @@ import {
   Points, RGBAFormat, Scene, ShaderMaterial,
 } from 'three';
 import { BODIES } from '../../../data/stars';
-import { BODY_TEXTURE_WIDTH, makePlanetMaterial, MAX_CLOUD_LAYERS } from '../../materials';
+import {
+  ATM_COLUMN_TEXEL_OFFSET, BODY_TEXTURE_WIDTH, DECK_PALETTE_BASE_OFFSET,
+  makePlanetMaterial, MAX_CLOUD_LAYERS, PALETTE_TEXELS_PER_DECK,
+} from '../../materials';
 import { buildDiscPalette } from '../disc-palette';
 import { RENDER_ORDER_PLANET, Z_PLANET, Z_STRIDE } from '../layout/constants';
 import type { RowSlot } from '../layout/row';
@@ -112,37 +115,39 @@ export class PlanetsLayer {
       renderMeta[i * 4 + 2] = disc.seed;
       renderMeta[i * 4 + 3] = disc.tilt;
       bodyIndex[i] = i;
-      // Pack up to MAX_CLOUD_LAYERS decks. Empty slots stay zeroed.
+      // Pack up to MAX_CLOUD_LAYERS decks (scalars + per-deck palette).
+      // Empty slots stay zeroed (coverage = 0 → shader skips).
       const rowBase = i * BODY_TEXTURE_WIDTH * 4;
       for (let li = 0; li < disc.cloudLayers.length && li < MAX_CLOUD_LAYERS; li++) {
         const l = disc.cloudLayers[li];
-        const off = rowBase + li * 4;
-        cloudLayerData[off + 0] = l.coverage;
-        cloudLayerData[off + 1] = l.bandness;
-        cloudLayerData[off + 2] = l.altitudeNorm;
+        const scalarOff = rowBase + li * 4;
+        cloudLayerData[scalarOff + 0] = l.coverage;
+        cloudLayerData[scalarOff + 1] = l.bandness;
+        cloudLayerData[scalarOff + 2] = l.altitudeNorm;
         // Per-layer hash salt so each deck's worley cells fall on
         // different positions. Layer index alone is enough.
-        cloudLayerData[off + 3] = li;
+        cloudLayerData[scalarOff + 3] = li;
+        // Per-deck palette: 3 texels each = (color.rgb, weight).
+        const palBase = rowBase + (DECK_PALETTE_BASE_OFFSET + li * PALETTE_TEXELS_PER_DECK) * 4;
+        cloudLayerData[palBase +  0] = l.palette[0];
+        cloudLayerData[palBase +  1] = l.palette[1];
+        cloudLayerData[palBase +  2] = l.palette[2];
+        cloudLayerData[palBase +  3] = l.weights[0];
+        cloudLayerData[palBase +  4] = l.palette[3];
+        cloudLayerData[palBase +  5] = l.palette[4];
+        cloudLayerData[palBase +  6] = l.palette[5];
+        cloudLayerData[palBase +  7] = l.weights[1];
+        cloudLayerData[palBase +  8] = l.palette[6];
+        cloudLayerData[palBase +  9] = l.palette[7];
+        cloudLayerData[palBase + 10] = l.palette[8];
+        cloudLayerData[palBase + 11] = l.weights[2];
       }
-      // Cloud palette + weights packed into the next 4 texels per row.
-      // Slot 3's RGB rides in the .w lanes of palette texels 0/1/2.
-      const pBase = rowBase + MAX_CLOUD_LAYERS * 4;
-      cloudLayerData[pBase + 0] = disc.cloudPalette[0];
-      cloudLayerData[pBase + 1] = disc.cloudPalette[1];
-      cloudLayerData[pBase + 2] = disc.cloudPalette[2];
-      cloudLayerData[pBase + 3] = disc.cloudPalette[9];   // slot3.r
-      cloudLayerData[pBase + 4] = disc.cloudPalette[3];
-      cloudLayerData[pBase + 5] = disc.cloudPalette[4];
-      cloudLayerData[pBase + 6] = disc.cloudPalette[5];
-      cloudLayerData[pBase + 7] = disc.cloudPalette[10];  // slot3.g
-      cloudLayerData[pBase + 8] = disc.cloudPalette[6];
-      cloudLayerData[pBase + 9] = disc.cloudPalette[7];
-      cloudLayerData[pBase + 10] = disc.cloudPalette[8];
-      cloudLayerData[pBase + 11] = disc.cloudPalette[11]; // slot3.b
-      cloudLayerData[pBase + 12] = disc.cloudWeights[0];
-      cloudLayerData[pBase + 13] = disc.cloudWeights[1];
-      cloudLayerData[pBase + 14] = disc.cloudWeights[2];
-      cloudLayerData[pBase + 15] = disc.cloudWeights[3];
+      // Atm column color — painted as no-surface base + visible through
+      // cloud rents. One texel per body, RGB in xyz (alpha unused).
+      const atmOff = rowBase + ATM_COLUMN_TEXEL_OFFSET * 4;
+      cloudLayerData[atmOff + 0] = disc.atmColumnColor[0];
+      cloudLayerData[atmOff + 1] = disc.atmColumnColor[1];
+      cloudLayerData[atmOff + 2] = disc.atmColumnColor[2];
       surfaceScalars[i * 4 + 0] = disc.waterFrac;
       surfaceScalars[i * 4 + 1] = disc.iceFrac;
       surfaceScalars[i * 4 + 2] = disc.surfaceAge;

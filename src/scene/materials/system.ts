@@ -60,21 +60,27 @@ import { glsl, RASTER_PAD, snappedMaterials } from './shared';
 // positions are buffer-pixel coords). `aSize` is the per-body disc
 // diameter; `uDiscScale` is a global multiplier (planets + moons pass 1.0,
 // the diagram already bakes its own sizing).
-// Max cloud decks the shader iterates per body. Per-body deck data
-// (coverage / bandness / altitudeNorm / layerSeed) and the shared
-// cloud palette (4 slots + weights) BOTH live in uCloudLayerData, a
-// DataTexture of width = BODY_TEXTURE_WIDTH and height = body count.
-// Texel layout per body row:
-//   [0..MAX_CLOUD_LAYERS)        — per-layer (coverage, bandness, alt, seed)
-//   [MAX_CLOUD_LAYERS .. .. +3)  — cloud palette slot 0 / 1 / 2 (.w packs slot 3)
-//   [MAX_CLOUD_LAYERS + 3]       — cloud palette weights vec4
-// Pulling palette + weights off vertex attributes brings the per-pool
-// attribute count back under the gl_MaxVertexAttribs cap (was hitting
-// 16 on tighter GPUs when the per-body index + cloud palette attrs
-// stacked).
+// Max cloud decks the shader iterates per body. Per-body data lives in
+// uCloudLayerData, a DataTexture of width = BODY_TEXTURE_WIDTH and
+// height = body count. Texel layout per body row:
+//   [0..MAX_CLOUD_LAYERS)            — per-layer scalars (coverage, bandness, alt, seed)
+//   [MAX_CLOUD_LAYERS]               — atm column color (rgb, .a unused)
+//   [MAX_CLOUD_LAYERS+1 .. +1+N*3)   — per-deck palette texels, 3 per deck:
+//                                       texel = (color.rgb, weight). Slot 0 is
+//                                       the condensate base; slots 1-2 are the
+//                                       top staining aerosols (NH4SH/CHROMOPHORE
+//                                       on NH3, THOLIN on CH4, SULFUR on SO2;
+//                                       see AEROSOL_STAINS_GAS in stars.ts).
+// Pulling everything off vertex attributes brings the per-pool attribute
+// count back under the gl_MaxVertexAttribs cap (was hitting 16 on tighter
+// GPUs when per-body palette attributes stacked).
 export const MAX_CLOUD_LAYERS = 3;
-const CLOUD_PALETTE_TEXELS = 4;
-export const BODY_TEXTURE_WIDTH = MAX_CLOUD_LAYERS + CLOUD_PALETTE_TEXELS;
+const PALETTE_TEXELS_PER_DECK = 3;
+const ATM_COLUMN_TEXEL_OFFSET = MAX_CLOUD_LAYERS;
+const DECK_PALETTE_BASE_OFFSET = MAX_CLOUD_LAYERS + 1;
+export const BODY_TEXTURE_WIDTH =
+  MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS * PALETTE_TEXELS_PER_DECK;
+export { PALETTE_TEXELS_PER_DECK, ATM_COLUMN_TEXEL_OFFSET, DECK_PALETTE_BASE_OFFSET };
 
 export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
   const m = new ShaderMaterial({
@@ -531,9 +537,9 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
       // Defensive fallback: weights summing to zero → p0 (palette0 is
       // always plumbed with the dominant signal).
       //
-      // Used by the surface block (resource palette + region-masked
-      // weights). The cloud-banded path uses pickFromCloudPalette
-      // (4 slots) instead.
+      // Used by both the surface block (resource palette + region-masked
+      // weights) and each cloud deck's loop iteration (per-deck 3-slot
+      // palette: condensate base + up to two staining aerosols).
       vec3 pickFromPalette(float h, vec3 p0, vec3 p1, vec3 p2, vec3 weights) {
         float w = weights.x + weights.y + weights.z;
         if (w <= 0.0) return p0;
@@ -541,21 +547,6 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
         if (t < weights.x) return p0;
         if (t < weights.x + weights.y) return p1;
         return p2;
-      }
-
-      // 4-slot variant for the cloud-banded path: slot 0 carries the
-      // perceptual base blend (atm + cloud + haze) at fixed
-      // BASE_BLEND_WEIGHT, slots 1-3 carry top accent species sharing
-      // the remaining weight. Picker is otherwise identical to
-      // pickFromPalette — frequency-weighted, not blended.
-      vec3 pickFromCloudPalette(float h, vec3 p0, vec3 p1, vec3 p2, vec3 p3, vec4 weights) {
-        float w = weights.x + weights.y + weights.z + weights.w;
-        if (w <= 0.0) return p0;
-        float t = h * w;
-        if (t < weights.x) return p0;
-        if (t < weights.x + weights.y) return p1;
-        if (t < weights.x + weights.y + weights.z) return p2;
-        return p3;
       }
 
       void main() {
@@ -626,22 +617,14 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
         float lonF    = nzs * POLE_COS - nys * POLE_SIN;
         float lon     = atan(nxs, lonF);
 
-        // Per-body cloud palette sampled from the data texture once
-        // per fragment. Slot 3's RGB rides in the .w components of
-        // slots 0/1/2 to stay tight in the texture row.
+        // Atm column color sampled from the data texture once per
+        // fragment. Painted as the disc base on no-surface bodies
+        // (visible through cloud rents, dominating the limb where
+        // clouds don't fully occlude). On surface bodies the surface
+        // block paints over it and it never shows directly.
         float vBodyV = (vBodyIndex + 0.5) / max(uCloudLayerRows, 1.0);
-        float texPaletteU0 = (float(${MAX_CLOUD_LAYERS}    ) + 0.5) / float(${BODY_TEXTURE_WIDTH});
-        float texPaletteU1 = (float(${MAX_CLOUD_LAYERS + 1}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
-        float texPaletteU2 = (float(${MAX_CLOUD_LAYERS + 2}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
-        float texWeightsU  = (float(${MAX_CLOUD_LAYERS + 3}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
-        vec4 cp0Texel = texture2D(uCloudLayerData, vec2(texPaletteU0, vBodyV));
-        vec4 cp1Texel = texture2D(uCloudLayerData, vec2(texPaletteU1, vBodyV));
-        vec4 cp2Texel = texture2D(uCloudLayerData, vec2(texPaletteU2, vBodyV));
-        vec4 vCloudWeights = texture2D(uCloudLayerData, vec2(texWeightsU, vBodyV));
-        vec3 vCloudPalette0 = cp0Texel.xyz;
-        vec3 vCloudPalette1 = cp1Texel.xyz;
-        vec3 vCloudPalette2 = cp2Texel.xyz;
-        vec3 vCloudPalette3 = vec3(cp0Texel.w, cp1Texel.w, cp2Texel.w);
+        float atmColU = (float(${ATM_COLUMN_TEXEL_OFFSET}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
+        vec3 vAtmColumnColor = texture2D(uCloudLayerData, vec2(atmColU, vBodyV)).rgb;
 
         vec3 col;
         if (vSurfaceOpacity > 0.5) {
@@ -1076,12 +1059,10 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
           }
 
         } else {
-          // No surface — gas / ice giant. Surface palette has been
-          // substituted with atmColumnColor (bulk gas tint) in disc-
-          // palette so the worley above would have produced a uniform
-          // column color; the explicit fallback paints it directly to
-          // skip per-pixel work that resolves to a single value anyway.
-          col = vCloudPalette0;
+          // No surface — gas / ice giant. Paint the atm column tint
+          // directly (sampled from the per-body data texture); cloud
+          // decks below composite on top via the loop.
+          col = vAtmColumnColor;
         }
 
         // ── Haze blanket ──
@@ -1128,6 +1109,21 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
           float altitudeNorm = layer.z;
           float layerSeed = layer.w;
 
+          // Per-deck palette — 3 RGBA texels, each (color.rgb, weight).
+          // Slot 0 = condensate base (CONDENSATE_COLOR[gas]); slots 1-2 =
+          // staining aerosols routed by AEROSOL_STAINS_GAS. Earth's
+          // H2O deck is plain white (no chromophore stains H2O).
+          // Jupiter's NH3 deck reads white-cream + brown (NH4SH) + red
+          // (CHROMOPHORE).
+          float pBaseCol = float(${DECK_PALETTE_BASE_OFFSET}) + float(li) * float(${PALETTE_TEXELS_PER_DECK});
+          float pTex0U = (pBaseCol + 0.5) / float(${BODY_TEXTURE_WIDTH});
+          float pTex1U = (pBaseCol + 1.5) / float(${BODY_TEXTURE_WIDTH});
+          float pTex2U = (pBaseCol + 2.5) / float(${BODY_TEXTURE_WIDTH});
+          vec4 deckP0 = texture2D(uCloudLayerData, vec2(pTex0U, vBodyV));
+          vec4 deckP1 = texture2D(uCloudLayerData, vec2(pTex1U, vBodyV));
+          vec4 deckP2 = texture2D(uCloudLayerData, vec2(pTex2U, vBodyV));
+          vec3 deckWeights = vec3(deckP0.a, deckP1.a, deckP2.a);
+
           vec2 cellAspect = mix(
             vec2(CLOUD_LON_PX, CLOUD_LAT_PX),
             vec2(BAND1_LON_PX, BAND1_LAT_PX),
@@ -1167,10 +1163,10 @@ export function makePlanetMaterial(initialDiscScale: number): ShaderMaterial {
           // resolve to the same palette pick (parallel bands).
           vec2 hashKey = mix(winnerCell, vec2(0.0, winnerCell.y), bandness);
           float colorH = hash21(hashKey + vec2(vSeed * 41.0 + layerSeed * 7.0, vSeed * 67.0 + layerSeed * 11.0));
-          vec3 cloudCol = pickFromCloudPalette(
+          vec3 cloudCol = pickFromPalette(
             colorH,
-            vCloudPalette0, vCloudPalette1, vCloudPalette2, vCloudPalette3,
-            vCloudWeights
+            deckP0.rgb, deckP1.rgb, deckP2.rgb,
+            deckWeights
           );
           float lj = (hash11(winnerCell.y + vSeed * 67.0 + layerSeed * 13.0) - 0.5) * 2.0 * BAND_LIGHTNESS_JITTER;
           cloudCol = clamp(cloudCol + vec3(lj), 0.0, 1.0);

@@ -10,7 +10,10 @@ import {
   Points, RGBAFormat, Scene, ShaderMaterial,
 } from 'three';
 import { BODIES } from '../../../data/stars';
-import { BODY_TEXTURE_WIDTH, makePlanetMaterial, MAX_CLOUD_LAYERS } from '../../materials';
+import {
+  ATM_COLUMN_TEXEL_OFFSET, BODY_TEXTURE_WIDTH, DECK_PALETTE_BASE_OFFSET,
+  makePlanetMaterial, MAX_CLOUD_LAYERS, PALETTE_TEXELS_PER_DECK,
+} from '../../materials';
 import { buildDiscPalette } from '../disc-palette';
 import {
   MOON_DISC_BASE, MOON_DISC_MAX, MOON_DISC_MIN, MOON_EDGE_BIAS,
@@ -283,29 +286,29 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
     const rowBase = i * BODY_TEXTURE_WIDTH * 4;
     for (let li = 0; li < disc.cloudLayers.length && li < MAX_CLOUD_LAYERS; li++) {
       const l = disc.cloudLayers[li];
-      const off = rowBase + li * 4;
-      cloudLayerData[off + 0] = l.coverage;
-      cloudLayerData[off + 1] = l.bandness;
-      cloudLayerData[off + 2] = l.altitudeNorm;
-      cloudLayerData[off + 3] = li;
+      const scalarOff = rowBase + li * 4;
+      cloudLayerData[scalarOff + 0] = l.coverage;
+      cloudLayerData[scalarOff + 1] = l.bandness;
+      cloudLayerData[scalarOff + 2] = l.altitudeNorm;
+      cloudLayerData[scalarOff + 3] = li;
+      const palBase = rowBase + (DECK_PALETTE_BASE_OFFSET + li * PALETTE_TEXELS_PER_DECK) * 4;
+      cloudLayerData[palBase +  0] = l.palette[0];
+      cloudLayerData[palBase +  1] = l.palette[1];
+      cloudLayerData[palBase +  2] = l.palette[2];
+      cloudLayerData[palBase +  3] = l.weights[0];
+      cloudLayerData[palBase +  4] = l.palette[3];
+      cloudLayerData[palBase +  5] = l.palette[4];
+      cloudLayerData[palBase +  6] = l.palette[5];
+      cloudLayerData[palBase +  7] = l.weights[1];
+      cloudLayerData[palBase +  8] = l.palette[6];
+      cloudLayerData[palBase +  9] = l.palette[7];
+      cloudLayerData[palBase + 10] = l.palette[8];
+      cloudLayerData[palBase + 11] = l.weights[2];
     }
-    const pBase = rowBase + MAX_CLOUD_LAYERS * 4;
-    cloudLayerData[pBase + 0] = disc.cloudPalette[0];
-    cloudLayerData[pBase + 1] = disc.cloudPalette[1];
-    cloudLayerData[pBase + 2] = disc.cloudPalette[2];
-    cloudLayerData[pBase + 3] = disc.cloudPalette[9];
-    cloudLayerData[pBase + 4] = disc.cloudPalette[3];
-    cloudLayerData[pBase + 5] = disc.cloudPalette[4];
-    cloudLayerData[pBase + 6] = disc.cloudPalette[5];
-    cloudLayerData[pBase + 7] = disc.cloudPalette[10];
-    cloudLayerData[pBase + 8] = disc.cloudPalette[6];
-    cloudLayerData[pBase + 9] = disc.cloudPalette[7];
-    cloudLayerData[pBase + 10] = disc.cloudPalette[8];
-    cloudLayerData[pBase + 11] = disc.cloudPalette[11];
-    cloudLayerData[pBase + 12] = disc.cloudWeights[0];
-    cloudLayerData[pBase + 13] = disc.cloudWeights[1];
-    cloudLayerData[pBase + 14] = disc.cloudWeights[2];
-    cloudLayerData[pBase + 15] = disc.cloudWeights[3];
+    const atmOff = rowBase + ATM_COLUMN_TEXEL_OFFSET * 4;
+    cloudLayerData[atmOff + 0] = disc.atmColumnColor[0];
+    cloudLayerData[atmOff + 1] = disc.atmColumnColor[1];
+    cloudLayerData[atmOff + 2] = disc.atmColumnColor[2];
     surfaceScalars[i * 4 + 0] = disc.waterFrac;
     surfaceScalars[i * 4 + 1] = disc.iceFrac;
     surfaceScalars[i * 4 + 2] = disc.surfaceAge;

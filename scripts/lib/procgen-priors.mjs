@@ -1125,9 +1125,7 @@ export const ALBEDO_COMPONENTS = {
 // [0, 1].
 //
 // Aerosol-only species (DUST, SILICATE) saturate at tiny partial
-// pressures — trace concentrations are visually dominant for these
-// (CLOUD_VISUAL_BOOST applies a similar amplification on the renderer
-// side).
+// pressures — trace concentrations are visually dominant for these.
 //
 // Calibration anchors (curated Sol):
 //   Earth  H2O 0.004 partial @ 288K → boost ≈ 0.16 (real albedo 0.31)
