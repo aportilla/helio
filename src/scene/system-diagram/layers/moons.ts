@@ -12,7 +12,7 @@ import {
 import { BODIES } from '../../../data/stars';
 import {
   ATM_COLUMN_TEXEL_OFFSET, BODY_TEXTURE_WIDTH, DECK_COLOR_BASE_OFFSET,
-  makePlanetMaterial, MAX_CLOUD_LAYERS,
+  makePlanetMaterial, MAX_CLOUD_LAYERS, OCEAN_COLOR_TEXEL_OFFSET,
 } from '../../materials';
 import { buildDiscPalette } from '../disc-palette';
 import {
@@ -300,6 +300,10 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
     cloudLayerData[atmOff + 0] = disc.atmColumnColor[0];
     cloudLayerData[atmOff + 1] = disc.atmColumnColor[1];
     cloudLayerData[atmOff + 2] = disc.atmColumnColor[2];
+    const oceanOff = rowBase + OCEAN_COLOR_TEXEL_OFFSET * 4;
+    cloudLayerData[oceanOff + 0] = disc.oceanColor[0];
+    cloudLayerData[oceanOff + 1] = disc.oceanColor[1];
+    cloudLayerData[oceanOff + 2] = disc.oceanColor[2];
     surfaceScalars[i * 4 + 0] = disc.waterFrac;
     surfaceScalars[i * 4 + 1] = disc.iceFrac;
     surfaceScalars[i * 4 + 2] = disc.surfaceAge;

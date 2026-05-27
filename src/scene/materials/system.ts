@@ -71,14 +71,18 @@ import { glsl, RASTER_PAD, snappedMaterials } from './shared';
 //                                       banded bodies emerges from coverage
 //                                       rents revealing the deeper deck,
 //                                       not from in-deck mixing.
+//   [MAX_CLOUD_LAYERS+1+N]           — per-body ocean color (rgb, .a unused).
+//                                       Painted in surface-liquid cells (see
+//                                       `oceanColorFor` in disc-palette.ts).
 // Pulling everything off vertex attributes brings the per-pool attribute
 // count back under the gl_MaxVertexAttribs cap.
 export const MAX_CLOUD_LAYERS = 3;
 const ATM_COLUMN_TEXEL_OFFSET = MAX_CLOUD_LAYERS;
 const DECK_COLOR_BASE_OFFSET = MAX_CLOUD_LAYERS + 1;
+const OCEAN_COLOR_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS;
 export const BODY_TEXTURE_WIDTH =
-  MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS;
-export { ATM_COLUMN_TEXEL_OFFSET, DECK_COLOR_BASE_OFFSET };
+  MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1;
+export { ATM_COLUMN_TEXEL_OFFSET, DECK_COLOR_BASE_OFFSET, OCEAN_COLOR_TEXEL_OFFSET };
 
 // mode='all' renders disc + halo (moons; keeps the original single-pass
 // behavior). mode='disc' or 'halo' splits the disc-interior and the
@@ -305,11 +309,10 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // extra shader cost beyond one hash. 4 → ~16 px continents.
       const float CONTINENT_GROUP = 4.0;
 
-      // Ocean fill color for sub-sea-level continent cells. Deep navy
-      // — desaturated enough not to fight resource palette hues on
-      // adjacent land cells, dark enough to read as "below sealevel"
-      // against bright icy resource patches.
-      const vec3 OCEAN_COLOR = vec3(0.16, 0.34, 0.55);
+      // Ocean fill color is per-body and read from vOceanColor (sampled
+      // from uCloudLayerData), derived in disc-palette.ts so two
+      // close-analog bodies get distinguishable hues. See
+      // oceanColorFor.
 
       // Polar cap fill. Pale ice-white — not pure white so the cap
       // still reads as "frozen surface" rather than "missing pixels"
@@ -692,6 +695,13 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         float vBodyV = (vBodyIndex + 0.5) / max(uCloudLayerRows, 1.0);
         float atmColU = (float(${ATM_COLUMN_TEXEL_OFFSET}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
         vec3 vAtmColumnColor = texture2D(uCloudLayerData, vec2(atmColU, vBodyV)).rgb;
+        // Per-body ocean color — derived from solvent species, biotic
+        // pigment mix, suspended mineral sediment, CDOM yellow substance,
+        // host-star SED, and sky reflection (see oceanColorFor in
+        // disc-palette.ts). Replaces the old hard-coded OCEAN_COLOR
+        // constant so two close-analog bodies get distinguishable hues.
+        float oceanColU = (float(${OCEAN_COLOR_TEXEL_OFFSET}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
+        vec3 vOceanColor = texture2D(uCloudLayerData, vec2(oceanColU, vBodyV)).rgb;
 
         vec3 col;
         if (vSurfaceOpacity > 0.5) {
@@ -821,20 +831,78 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
 
           // CONTINENT_GROUP-sized blocks of worley cells share one
           // ocean/land coin flip. Salt offset from the resource-pick
-          // hash so the two scales decorrelate. The OCEAN_COLOR
-          // override only fires on bodies warm enough for liquid
-          // surface water — on a cold body (vGlobalness > 0.5, T <
-          // ~225 K), water exists but as ice, so "water cells" fall
-          // back to the resource palette (which on a volatile-rich
-          // body like Europa reads as pale-ice colored anyway). This
-          // keeps the dark-blue ocean from punching through the ice
-          // shell on cryogenic moons whose surface is globally
-          // frozen; the linea pass below carries the non-ice signal
-          // on those bodies.
+          // hash so the two scales decorrelate. The ocean override
+          // only fires on bodies warm enough for liquid surface
+          // liquid — on a cold body (vGlobalness > 0.5, T < ~225 K),
+          // water exists but as ice, so "water cells" fall back to
+          // the resource palette (which on a volatile-rich body like
+          // Europa reads as pale-ice colored anyway). This keeps the
+          // ocean tint from punching through the ice shell on
+          // cryogenic moons whose surface is globally frozen; the
+          // linea pass below carries the non-ice signal on those
+          // bodies.
           vec2 contCell = floor(winnerCell / CONTINENT_GROUP);
-          float contH = hash21(contCell + vec2(vSeed * 113.0, vSeed * 127.0));
+          vec2 contSalt = vec2(vSeed * 113.0, vSeed * 127.0);
+          float contH = hash21(contCell + contSalt);
           bool  waterHere = contH < vWaterFrac;
           bool  liquidOceanHere = waterHere && vGlobalness < 0.5;
+
+          // Coastal fringe. Only the worley cells AT THE EDGE of a
+          // water continent block (the row/column touching a land
+          // block) get a sparse highlight/lowlight dither within the
+          // body's own ocean hue — never bleeding toward land color.
+          // Keeps a large ocean area from reading as a flat fill while
+          // leaving the deep interior pure.
+          //
+          // Detection: step ONE worley cell in each axis and re-floor
+          // to a continent block. Interior worley cells stay in the
+          // same block (water → no flag). Only the 1-cell-wide ring
+          // along a block's boundary actually crosses into a neighbor
+          // block, which may evaluate to land.
+          //
+          // Coastal fringe — two graded rings.
+          //
+          // Ring 1 (one worley cell from a land continent block): solid
+          //   +COAST_LIGHT_DELTA highlight on every pixel — reads as a
+          //   continuous shoreline ringing each continent.
+          // Ring 2 (two worley cells out): sparse-dithered highlight
+          //   at COAST_R2_COVERAGE density — fades the band into the
+          //   deeper ocean rather than ending in a hard edge.
+          // Interior (no land within 2 worley cells in any axis):
+          //   plain vOceanColor.
+          //
+          // Both rings are detected by stepping winnerCell ±1 / ±2
+          // and re-flooring to a continent block; interior cells stay
+          // in this (water) block on every step so they don't flag.
+          // 8 hash21 evaluations per ocean fragment, cheap GPU-side.
+          vec3 oceanCol = vOceanColor;
+          if (liquidOceanHere) {
+            float n1E = hash21(floor((winnerCell + vec2( 1.0,  0.0)) / CONTINENT_GROUP) + contSalt);
+            float n1W = hash21(floor((winnerCell + vec2(-1.0,  0.0)) / CONTINENT_GROUP) + contSalt);
+            float n1N = hash21(floor((winnerCell + vec2( 0.0,  1.0)) / CONTINENT_GROUP) + contSalt);
+            float n1S = hash21(floor((winnerCell + vec2( 0.0, -1.0)) / CONTINENT_GROUP) + contSalt);
+            bool ring1 = (n1E >= vWaterFrac) || (n1W >= vWaterFrac)
+                      || (n1N >= vWaterFrac) || (n1S >= vWaterFrac);
+
+            const float COAST_LIGHT_DELTA = 0.14;
+            if (ring1) {
+              oceanCol = clamp(vOceanColor * (1.0 + COAST_LIGHT_DELTA), 0.0, 1.0);
+            } else {
+              float n2E = hash21(floor((winnerCell + vec2( 2.0,  0.0)) / CONTINENT_GROUP) + contSalt);
+              float n2W = hash21(floor((winnerCell + vec2(-2.0,  0.0)) / CONTINENT_GROUP) + contSalt);
+              float n2N = hash21(floor((winnerCell + vec2( 0.0,  2.0)) / CONTINENT_GROUP) + contSalt);
+              float n2S = hash21(floor((winnerCell + vec2( 0.0, -2.0)) / CONTINENT_GROUP) + contSalt);
+              bool ring2 = (n2E >= vWaterFrac) || (n2W >= vWaterFrac)
+                        || (n2N >= vWaterFrac) || (n2S >= vWaterFrac);
+              if (ring2) {
+                const float COAST_R2_COVERAGE = 0.35;
+                float dH = hash21(floor(d) + vec2(vSeed * 257.0, vSeed * 379.0));
+                if (dH < COAST_R2_COVERAGE) {
+                  oceanCol = clamp(vOceanColor * (1.0 + COAST_LIGHT_DELTA), 0.0, 1.0);
+                }
+              }
+            }
+          }
 
           // Per-region (primary, secondary, tertiary) palette election;
           // primary covers most cells, secondary fills sparse decoration,
@@ -865,7 +933,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
               if (bH < effective) landCol = vBiomeColor;
             }
           }
-          vec3 resourceSurface = liquidOceanHere ? OCEAN_COLOR : landCol;
+          vec3 resourceSurface = liquidOceanHere ? oceanCol : landCol;
 
           // Subsurface = the region's tertiary slot. Surface only ever
           // paints primary + secondary, so tertiary is the buried
