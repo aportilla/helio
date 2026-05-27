@@ -19,5 +19,6 @@ export {
   makeBlobMaterial,
   makePlanetMaterial,
   makeRingMaterial,
+  makeStarHaloMaterial,
   makeStarMeshMaterial,
 } from './system';

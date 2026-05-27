@@ -6,20 +6,48 @@
 // sprite whose vertex falls outside the clip volume, but the
 // triangle path rasterizes fine with vertices outside the viewport.
 
-import { Mesh, PlaneGeometry, Scene, ShaderMaterial, Vector2 } from 'three';
+import { Color, Mesh, PlaneGeometry, Scene, ShaderMaterial, Vector2 } from 'three';
 import { CLASS_COLOR, STARS, type StarCluster } from '../../../data/stars';
 import { sizes } from '../../../ui/theme';
-import { makeStarMeshMaterial } from '../../materials';
+import { makeStarHaloMaterial, makeStarMeshMaterial } from '../../materials';
 import {
-  DISC_SCALE, MIN_STAR_GAP, STAR_HORIZ_GAP_FACTOR, STAR_OFFSCREEN_FRAC,
+  DISC_SCALE, MIN_STAR_GAP, RENDER_ORDER_STAR_HALO,
+  STAR_HALO_RADIUS_FACTOR, STAR_HORIZ_GAP_FACTOR, STAR_OFFSCREEN_FRAC,
+  SYSTEM_VIEW_SATURATION_LIFT_MAX, SYSTEM_VIEW_SATURATION_LIFT_RATE,
 } from '../layout/constants';
 import { bigMiddleOrder, sumOf } from '../layout/row';
 import type { DiagramPick } from '../types';
+
+// Tune a galaxy-view class color for the system view. Lifts the minor
+// channels toward white by an amount proportional to color saturation
+// (max(R,G,B) − min(R,G,B)), capped at SYSTEM_VIEW_SATURATION_LIFT_MAX.
+// Both deep blue (O/B/A/WD) and deep red (M/BD) stars get softened so
+// the saturated dithered fringe + halo read naturally against the body
+// rather than as a "neon" ring. See SYSTEM_VIEW_SATURATION_LIFT_*
+// in layout/constants.ts for context.
+function tuneStarColorForSystemView(col: Color): Color {
+  const maxC = Math.max(col.r, col.g, col.b);
+  const minC = Math.min(col.r, col.g, col.b);
+  const saturation = maxC - minC;
+  const lift = Math.min(SYSTEM_VIEW_SATURATION_LIFT_MAX, saturation * SYSTEM_VIEW_SATURATION_LIFT_RATE);
+  return new Color(
+    col.r + (1 - col.r) * lift,
+    col.g + (1 - col.g) * lift,
+    col.b + (1 - col.b) * lift,
+  );
+}
 
 interface StarDisc {
   mesh: Mesh;
   geometry: PlaneGeometry;
   material: ShaderMaterial;
+  // Halo mesh paired with this disc: a larger plane behind the disc
+  // running makeStarHaloMaterial, dithered additive cloud around the
+  // disc edge. Same (cx, cy) as the disc; geometry sized to enclose
+  // the halo bbox (2·discRadius·STAR_HALO_RADIUS_FACTOR square).
+  halo: Mesh;
+  haloGeometry: PlaneGeometry;
+  haloMaterial: ShaderMaterial;
   // Cached current diameter in px — used to detect when layout()
   // needs to rebuild the geometry (size changed under width-fit scaling).
   currentDiam: number;
@@ -45,24 +73,45 @@ export class StarsRowLayer {
     this.starSlotDiscPx  = slotPerm.map(p => rawDiscPx[sortedIdx[p]]);
     this.slotByStarIdx   = new Map(this.starMembers.map((s, i) => [s, i]));
 
-    // Build one mesh per star. Geometry is sized to the star's natural
-    // diameter (before any width-fit scaling); layout() rebuilds it if
-    // a different size is needed. Initial position is (0, 0); resize
-    // fills it in.
+    // Build one disc + one halo mesh per star. Both geometries are
+    // sized to the star's natural diameter (before any width-fit
+    // scaling); layout() rebuilds them if a different size is needed.
+    // Initial position is (0, 0); resize fills it in.
     this.starMembers.forEach((starIdx, slot) => {
       const s = STARS[starIdx];
-      const col = CLASS_COLOR[s.cls] ?? CLASS_COLOR.M;
+      const classCol = CLASS_COLOR[s.cls] ?? CLASS_COLOR.M;
+      const col = tuneStarColorForSystemView(classCol);
       const d = this.starSlotDiscPx[slot];
+      const r = d / 2;
+
       const material = makeStarMeshMaterial();
       material.uniforms.uColor.value.setRGB(col.r, col.g, col.b);
-      material.uniforms.uRadius.value = d / 2;
+      material.uniforms.uRadius.value = r;
       const geometry = new PlaneGeometry(d, d);
       const mesh = new Mesh(geometry, material);
-      // Hidden until first layout() places it; avoids a one-frame
+
+      const haloMaterial = makeStarHaloMaterial();
+      haloMaterial.uniforms.uColor.value.setRGB(col.r, col.g, col.b);
+      haloMaterial.uniforms.uDiscRadius.value = r;
+      const haloR = r * STAR_HALO_RADIUS_FACTOR;
+      haloMaterial.uniforms.uHaloRadius.value = haloR;
+      const haloDiam = Math.ceil(haloR * 2);
+      const haloGeometry = new PlaneGeometry(haloDiam, haloDiam);
+      const halo = new Mesh(haloGeometry, haloMaterial);
+      halo.renderOrder = RENDER_ORDER_STAR_HALO;
+
+      // Hidden until first layout() places them; avoids a one-frame
       // flash at the origin.
       mesh.visible = false;
+      halo.visible = false;
+      scene.add(halo);
       scene.add(mesh);
-      this.starDiscs.push({ mesh, geometry, material, currentDiam: d });
+
+      this.starDiscs.push({
+        mesh, geometry, material,
+        halo, haloGeometry, haloMaterial,
+        currentDiam: d,
+      });
     });
   }
 
@@ -113,18 +162,30 @@ export class StarsRowLayer {
       const cy = Math.floor(cyTarget - oddOff + 0.5) + oddOff;
 
       const disc = this.starDiscs[slot];
-      // Rebuild the plane geometry only when diameter actually changed;
-      // a resize that doesn't change layout leaves all geometries intact.
+      // Rebuild the plane geometries only when diameter actually
+      // changed; a resize that doesn't change layout leaves them intact.
       if (disc.currentDiam !== d) {
         disc.geometry.dispose();
         disc.geometry = new PlaneGeometry(d, d);
         disc.mesh.geometry = disc.geometry;
         disc.material.uniforms.uRadius.value = r;
+
+        const haloR = r * STAR_HALO_RADIUS_FACTOR;
+        disc.haloMaterial.uniforms.uDiscRadius.value = r;
+        disc.haloMaterial.uniforms.uHaloRadius.value = haloR;
+        disc.haloGeometry.dispose();
+        const haloDiam = Math.ceil(haloR * 2);
+        disc.haloGeometry = new PlaneGeometry(haloDiam, haloDiam);
+        disc.halo.geometry = disc.haloGeometry;
+
         disc.currentDiam = d;
       }
       disc.mesh.position.set(cx, cy, 0);
       (disc.material.uniforms.uCenter.value as Vector2).set(cx, cy);
       disc.mesh.visible = true;
+      disc.halo.position.set(cx, cy, 0);
+      (disc.haloMaterial.uniforms.uCenter.value as Vector2).set(cx, cy);
+      disc.halo.visible = true;
 
       cursor += d + gap;
     }
@@ -156,6 +217,8 @@ export class StarsRowLayer {
     for (const disc of this.starDiscs) {
       disc.geometry.dispose();
       disc.material.dispose();
+      disc.haloGeometry.dispose();
+      disc.haloMaterial.dispose();
     }
   }
 }

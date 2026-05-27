@@ -28,6 +28,34 @@ export const STAR_HORIZ_GAP_FACTOR = 0.3;
 // we start scaling disc sizes down.
 export const MIN_STAR_GAP = 2;
 
+// Outer radius of the star halo as a multiple of the disc radius. The
+// halo is a dithered additive cloud that bleeds a saturation-stepped
+// gradient (hot/warm/ember/dark, all in the star's own hue) into the
+// surrounding scene (see makeStarHaloMaterial in materials/system.ts).
+// 3.0 pushes the dark fringe well into the dome area so the wash
+// bleeds past the planet row before fading to black, giving the
+// system a sense of being bathed in the star's light rather than
+// parked in front of it. Planets paint over the halo where they overlap.
+export const STAR_HALO_RADIUS_FACTOR = 3.0;
+
+// System-view-only base-color tuning. Lifts a star's minor channels
+// toward white by an amount proportional to how SATURATED the star's
+// class color is (max(R,G,B) − min(R,G,B)). Highly saturated catalog
+// colors — deep blue O/B/A or deep red M/BD — collide with the
+// saturated dithered inner-edge ring + halo to read as "neon" against
+// the body. Lifting the body softens it toward white in system view
+// only; the fringe stays a touch darker, restoring natural balance.
+// Galaxy view keeps the true class color (these constants only apply
+// to the system diagram). Two knobs:
+//   - SATURATION_LIFT_RATE: how strongly saturation drives lift.
+//     ~1.4 puts Vega around lift 0.30 (subtle whitening); higher
+//     values lift more.
+//   - SATURATION_LIFT_MAX: hard cap on the lift so very saturated
+//     stars (M, BD) don't fully wash out — without this, an M dwarf
+//     with sat ≈ 0.58 would lift past 0.8 and lose its warm character.
+export const SYSTEM_VIEW_SATURATION_LIFT_RATE = 1.4;
+export const SYSTEM_VIEW_SATURATION_LIFT_MAX  = 0.35;
+
 // --- Body dome ---
 
 // Distance from the TOP of the screen to the dome's PEAK (where the
@@ -181,6 +209,13 @@ export const Z_FRONT_MOON = +0.00040;
 // Render order is a secondary tiebreaker behind z (which the row-item
 // banding above handles). These values keep tied-z scenarios settling
 // the right way — e.g. an equal-z moon next to a ring chunk.
+
+// Star halos draw FIRST — additive blending into the cleared
+// framebuffer. Every later pass (belts, planets, rings, moons) paints
+// over them, so the warm wash ends up behind every body in the scene.
+// Star discs themselves keep the default renderOrder 0; the halo
+// discards inside the disc radius so the disc still renders on top.
+export const RENDER_ORDER_STAR_HALO  = -1;
 export const RENDER_ORDER_BACK_MOON  = 5;
 export const RENDER_ORDER_BELT       = 6;
 export const RENDER_ORDER_PLANET     = 10;

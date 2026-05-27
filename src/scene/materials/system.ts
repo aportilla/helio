@@ -1,10 +1,11 @@
-// System-view materials: flat 2D stars + chunk pool + ice ring +
-// per-mesh star disc. All four are designed to render under an
-// OrthographicCamera at 1 unit = 1 buffer pixel (see SystemDiagram in
-// scene/system-diagram/). No depth attenuation, no pivot dim — the
-// system view is a static screen layout, not a navigable 3D space.
+// System-view materials: planet/moon disc, chunk pool (belts + debris
+// rings), ice ring, per-mesh star disc, outer star halo. All five are
+// designed to render under an OrthographicCamera at 1 unit = 1 buffer
+// pixel (see SystemDiagram in scene/system-diagram/). No depth
+// attenuation, no pivot dim — the system view is a static screen
+// layout, not a navigable 3D space.
 
-import { Color, ShaderMaterial, Vector2 } from 'three';
+import { AdditiveBlending, Color, ShaderMaterial, Vector2 } from 'three';
 import { RING_MINOR_OVER_MAJOR } from '../system-diagram/layout/constants';
 import { glsl, RASTER_PAD, snappedMaterials } from './shared';
 
@@ -1508,6 +1509,13 @@ export function makeRingMaterial(color: Color, alpha: number): ShaderMaterial {
 // "star peeks down from above the screen" framing is only possible
 // with the mesh path.
 //
+// Interior is a solid uColor body with one Bayer-dithered ring of
+// hotter/darker pixels stippled just inside the outer edge. The ring
+// density falls off from the rim inward, so it reads as a noisy edge
+// fringe that tapers into the body rather than as a hard inner band.
+// No core brightening, no mid band — the body is the body, and the
+// dither ring is what differentiates "edge of star" from a flat puck.
+//
 // Per-star uniforms: uCenter (buffer-pixel coords, parity-snapped by
 // the caller), uRadius, uColor. Geometry should be a PlaneGeometry
 // sized to fully enclose the disc bounding box (typically d×d where
@@ -1533,15 +1541,239 @@ export function makeStarMeshMaterial(): ShaderMaterial {
       uniform float uRadius;
       uniform vec3 uColor;
       uniform float uHovered;
+
+      // 4x4 Bayer matrix lookup keyed on env-pixel coords. Same closed
+      // form as the planet shader's bayer4 (see this file's planet
+      // material) — values in {0/16..15/16}, no branches, no texture.
+      float bayer4(vec2 p) {
+        vec2 q = mod(floor(p), vec2(4.0));
+        vec2 outer = floor(q / 2.0);
+        vec2 inner = mod(q, vec2(2.0));
+        float bInner = inner.x * 2.0 + inner.y * 3.0 - inner.x * inner.y * 4.0;
+        float bOuter = outer.x * 2.0 + outer.y * 3.0 - outer.x * outer.y * 4.0;
+        return (4.0 * bInner + bOuter) / 16.0;
+      }
+
+      // Normalize a color to its "hue direction" — divide by the max
+      // channel so the dominant channel pins at 1.0 and the others
+      // express their ratio to it. Raising the result to a power then
+      // suppresses the minor channels (crushes them toward 0) while
+      // leaving the dominant one untouched — a saturation operator
+      // that works for ANY input hue. For a warm star the dominant
+      // channel is R so saturating shifts toward deep red; for a cool
+      // blue star the dominant channel is B so the same operation
+      // shifts toward deep blue. Hardcoded per-channel modulators
+      // only worked for one of those directions.
+      vec3 hueDir(vec3 c) {
+        float m = max(max(c.r, c.g), c.b);
+        return c / max(m, 1e-3);
+      }
+
+      // Width of the inner-edge dithered ring, in pixels. The ring
+      // hugs the outer edge of the disc; stipple density falls
+      // linearly from 1.0 at the edge to 0.0 at INNER_EDGE_DEPTH_PX
+      // into the body, so the fringe tapers into the solid fill
+      // rather than ending on a sharp inner border.
+      const float INNER_EDGE_DEPTH_PX = 8.0;
+
+      // Inner-edge fringe parameters:
+      //   - SAT_EXP saturates uColor's natural hue. Higher = the
+      //     minor channels get crushed harder (more saturated
+      //     fringe). 3.0 is subtle — enough to read as "richer
+      //     than the body" without going neon on stars whose
+      //     dominant channel is already pinned at 1.0 (cool stars
+      //     have R pegged low, so high exponents pop the B fringe
+      //     against the pale body).
+      //   - BRIGHTNESS is a scalar dim factor (< 1.0 darkens the
+      //     fringe relative to the body without touching hue).
+      //     Keeping the fringe dimmer than the body is what makes
+      //     it read as "shadow under the limb" rather than "hot
+      //     ring around it".
+      // Final fringe color = pow(hueDir(uColor), SAT_EXP) × uColor × BRIGHTNESS.
+      const float INNER_EDGE_SAT_EXP    = 3.0;
+      const float INNER_EDGE_BRIGHTNESS = 0.85;
+
       void main() {
         vec2 d = gl_FragCoord.xy - uCenter;
         float r = length(d);
         if (r > uRadius) discard;
-        vec3 col = (uHovered > 0.5 && r > uRadius - 1.0) ? vec3(1.0) : uColor;
+
+        // Hover wins — outer 1-px ring fills white regardless of
+        // body/edge shading below.
+        if (uHovered > 0.5 && r > uRadius - 1.0) {
+          gl_FragColor = vec4(1.0);
+          return;
+        }
+
+        vec3 col = uColor;
+
+        // Distance from the disc's outer edge, in pixels (0 at the
+        // outermost rasterized pixel, growing inward). Drives the
+        // density of the inner-edge stipple — pixels closer to the
+        // edge are more likely to flip to the hotter shade.
+        float distFromEdgePx = uRadius - r;
+        if (distFromEdgePx < INNER_EDGE_DEPTH_PX) {
+          float density = 1.0 - distFromEdgePx / INNER_EDGE_DEPTH_PX;
+          if (density > bayer4(gl_FragCoord.xy)) {
+            col = pow(hueDir(uColor), vec3(INNER_EDGE_SAT_EXP)) * uColor * INNER_EDGE_BRIGHTNESS;
+          }
+        }
+
         gl_FragColor = vec4(col, 1.0);
       }
     `,
     transparent: false,
     depthWrite: false,
+  });
+}
+
+// Outer halo for star discs — sized large around the disc and rendered
+// with additive blending so uColor bleeds into the dark background and
+// any planets/chrome below. The fragment shader runs an ordered Bayer
+// dither against a quadratic radial falloff, so pixels thin out with
+// distance — no smooth gradient, just a stippled cloud that hugs the
+// disc and fades. Each radial band paints uColor saturated by a
+// different exponent so the halo cools through the star's own hue
+// (orange-red for warm stars, deep blue for cool stars). Pixels
+// inside uDiscRadius are discarded; the disc material paints there.
+//
+// Per-star uniforms: uCenter (same as the disc's uCenter), uDiscRadius
+// (matches the disc's uRadius), uHaloRadius (outer extent of the halo
+// in env-px), uColor (same hue as the disc — typically the system-view
+// tuned class color from tuneStarColorForSystemView in stars-row.ts).
+// Geometry should be a PlaneGeometry sized to fully enclose the halo
+// bounding box (typically 2·uHaloRadius square). Caller positions the
+// mesh at uCenter and renders BEFORE planets/belts/etc so their
+// opaque/transparent passes can overpaint the halo where they overlap.
+export function makeStarHaloMaterial(): ShaderMaterial {
+  return new ShaderMaterial({
+    uniforms: {
+      uCenter:     { value: new Vector2() },
+      uDiscRadius: { value: 0 },
+      uHaloRadius: { value: 0 },
+      uColor:      { value: new Color() },
+    },
+    vertexShader: `
+      void main() {
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec2 uCenter;
+      uniform float uDiscRadius;
+      uniform float uHaloRadius;
+      uniform vec3 uColor;
+
+      float bayer4(vec2 p) {
+        vec2 q = mod(floor(p), vec2(4.0));
+        vec2 outer = floor(q / 2.0);
+        vec2 inner = mod(q, vec2(2.0));
+        float bInner = inner.x * 2.0 + inner.y * 3.0 - inner.x * inner.y * 4.0;
+        float bOuter = outer.x * 2.0 + outer.y * 3.0 - outer.x * outer.y * 4.0;
+        return (4.0 * bInner + bOuter) / 16.0;
+      }
+
+      // Normalize a color to its hue direction (max channel = 1.0).
+      // Raising the result to a power crushes the minor channels —
+      // a saturation operator that works for any uColor hue. See the
+      // matching helper in makeStarMeshMaterial for the longer
+      // rationale.
+      vec3 hueDir(vec3 c) {
+        float m = max(max(c.r, c.g), c.b);
+        return c / max(m, 1e-3);
+      }
+
+      // Falloff exponent — higher = density drops off faster (tighter
+      // halo). 2.5 keeps the hot ring tight against the disc while the
+      // ember + dark bands fan out into the broader fringe.
+      const float FALLOFF_EXP = 2.5;
+
+      // Intensity range — far pixels paint at INTENSITY_MIN, near pixels
+      // burn at INTENSITY_MAX. Both are well under 1.0 so the halo
+      // reads as a deep wash rather than a second bright disc — the
+      // disc itself is supposed to be the bright object.
+      const float INTENSITY_MIN = 0.10;
+      const float INTENSITY_MAX = 0.30;
+
+      // Heat-spectrum band thresholds in t (t = 0 at disc edge, t = 1 at
+      // halo edge). Each band paints uColor with a different saturation
+      // strength so the halo reads as a "cooling iron" gradient through
+      // the star's OWN hue — warm stars cool toward deep red, cool
+      // stars cool toward deep blue. Bayer dither on the boundary so
+      // the transitions stipple instead of ringing.
+      const float HOT_END   = 0.18;
+      const float WARM_END  = 0.40;
+      const float EMBER_END = 0.68;
+
+      // Per-band saturation exponents — higher = harder crush on the
+      // minor channels. Each successive band saturates more, so the
+      // halo's outer fringe shifts deeper into uColor's dominant hue
+      // (red for warm stars, blue for cool stars, etc) rather than
+      // toward a hardcoded direction. With color management OFF these
+      // values feed pow() directly on sRGB-coded channels (consistent
+      // with the rest of the project's shader math).
+      const float HOT_SAT_EXP   = 2.0;
+      const float WARM_SAT_EXP  = 5.0;
+      const float EMBER_SAT_EXP = 10.0;
+      const float DARK_SAT_EXP  = 18.0;
+
+      // Half-width of the band-boundary dither in t-space. Larger =
+      // noisier band transitions. ~0.07 lands a few pixels of fuzz on
+      // a typical halo width.
+      const float BAND_DITHER = 0.07;
+
+      void main() {
+        vec2 d = gl_FragCoord.xy - uCenter;
+        float r = length(d);
+
+        // Discard inside the disc (the disc material owns those pixels)
+        // and outside the halo extent (the bounding plane is square; we
+        // want a round halo).
+        if (r <= uDiscRadius) discard;
+        if (r >= uHaloRadius) discard;
+
+        // t ∈ [0, 1] across the halo annulus (0 = touching disc, 1 = far
+        // edge). Density-falloff gates pixel visibility; color-band
+        // bucketing gates pixel hue.
+        float t = (r - uDiscRadius) / max(uHaloRadius - uDiscRadius, 1.0);
+        float density = pow(1.0 - t, FALLOFF_EXP);
+
+        // Ordered-dither visibility gate — pixel only plots when density
+        // beats the Bayer threshold. No smooth alpha — falloff is purely
+        // a function of how many pixels survive the threshold.
+        float bVis = bayer4(gl_FragCoord.xy);
+        if (density < bVis) discard;
+
+        // Color-band lookup uses a separately-keyed dither (offset bayer
+        // sample) so band-edge stipple doesn't correlate with visibility
+        // stipple — keeps the band-color transition reading as a fuzzy
+        // boundary rather than ghosting onto the visibility pattern.
+        float bBand = bayer4(gl_FragCoord.xy + vec2(7.0, 13.0));
+        float td = t + (bBand - 0.5) * 2.0 * BAND_DITHER;
+
+        // Band color = pow(hueDir, SAT_EXP) × uColor. The pow term is
+        // pure hue saturation (always ≤ 1 in each channel); multiplying
+        // by uColor restores the original brightness scale and pulls
+        // each band back toward the star's actual color. Final pixel
+        // brightness comes from the intensity ramp below.
+        vec3 hue = hueDir(uColor);
+        vec3 hotCol   = pow(hue, vec3(HOT_SAT_EXP))   * uColor;
+        vec3 warmCol  = pow(hue, vec3(WARM_SAT_EXP))  * uColor;
+        vec3 emberCol = pow(hue, vec3(EMBER_SAT_EXP)) * uColor;
+        vec3 darkCol  = pow(hue, vec3(DARK_SAT_EXP))  * uColor;
+
+        vec3 col;
+        if (td < HOT_END)        col = hotCol;
+        else if (td < WARM_END)  col = warmCol;
+        else if (td < EMBER_END) col = emberCol;
+        else                     col = darkCol;
+
+        float intensity = mix(INTENSITY_MIN, INTENSITY_MAX, density);
+        gl_FragColor = vec4(col * intensity, 1.0);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    blending: AdditiveBlending,
   });
 }
