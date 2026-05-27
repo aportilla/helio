@@ -5,7 +5,7 @@
 //
 // The shader composes a layered stack per fragment, bottom to top:
 //   - **surface**  — worley/voronoi cell texture painted with the body's
-//                    top 3 resource colors. World-class color only
+//                    top 2 resource archetypes. World-class color only
 //                    surfaces as a flat-fill fallback when a body has
 //                    no resource signal. Substituted with `atmColumnColor`
 //                    when the body has no accessible surface (gas / ice
@@ -40,7 +40,7 @@
 
 import { Color } from 'three';
 import {
-  AtmGas, Body, GAS_COLOR, GAS_POTENCY,
+  AtmGas, BARREN_ROCK_COLOR, barrenTintFor, Body, GAS_COLOR, GAS_POTENCY,
   HAZE_AEROSOL_SCALE, HAZE_BULK_GAS_SCALE,
   HAZE_DUST_SCALE, HAZE_RAYLEIGH_SCALE,
   SCATTERING_COLOR, SCATTERING_POTENCY,
@@ -115,12 +115,12 @@ const ICE_TEMP_GLOBAL_K = 180;
 const ICE_TEMP_CAP_K    = 270;
 
 // Per-body brightness shift — deterministic ±RANGE in [0..1] applied
-// uniformly across all three archetype palette slots so the body's
-// internal contrast is preserved but two bodies sharing an archetype
-// stack (e.g. a system full of M+R rusty worlds) read as visibly
-// different shades. Positive seed → lerp toward white; negative → lerp
-// toward black. Magnitude tuned so adjacent bodies look like siblings
-// rather than the same body twice.
+// uniformly across both archetype palette slots so the body's internal
+// contrast is preserved but two bodies sharing an archetype stack
+// (e.g. a system full of M+R rusty worlds) read as visibly different
+// shades. Positive seed → lerp toward white; negative → lerp toward
+// black. Magnitude tuned so adjacent bodies look like siblings rather
+// than the same body twice.
 const PER_BODY_BRIGHTNESS_RANGE = 0.18;
 
 // Per-body temperature tint — hot bodies lerp toward a warm orange,
@@ -137,6 +137,18 @@ const TEMP_NEUTRAL_K = 280;
 const TEMP_COLD_K    = 100;
 const TEMP_HOT_K     = 700;
 
+// Two consumers share BARREN_ROCK_COLOR (imported from data/stars). The
+// archetype slots lerp toward it by (1 − abundance) so a trace-silicates
+// region collapses ~90% to neutral regolith. The third slot — the body-
+// tinted barren paint — uses it as the base for a (k0, k1)-flavored
+// mineralogy hint via `barrenTintFor`, so the disc's regolith varies
+// per body instead of every world wearing the same grey.
+// ABUNDANCE_VISUAL_FLOOR keeps any present-but-trace resource from
+// collapsing all the way to grey (~10% archetype always survives, so
+// the disc still hints at the underlying mineralogy rather than reading
+// as pure noise).
+const ABUNDANCE_VISUAL_FLOOR = 0.1;
+
 // Lerp `c` toward `target` by `t` ∈ [0, 1]. Mutates and returns a new
 // Color so callers can chain.
 function lerpColor(c: Color, target: Color, t: number): Color {
@@ -152,11 +164,11 @@ function lerpColor(c: Color, target: Color, t: number): Color {
 // warm/cool tint (from `avgSurfaceTempK`). Both are soft — they vary the
 // body within a recognizable archetype, not across archetypes.
 //
-// seed ∈ [0, 1) — same hash used elsewhere in disc-palette so all three
+// seed ∈ [0, 1) — same hash used elsewhere in disc-palette so both
 // palette slots on one body share the same brightness shift.
 function applyPerBodyTints(c: Color, body: Body, seed: number): Color {
   // Brightness — map seed [0, 1) to [-RANGE, +RANGE], lerp toward black
-  // or white. Uniform across the body's three slots so internal contrast
+  // or white. Uniform across the body's slots so internal contrast
   // is preserved.
   const brightDelta = (seed - 0.5) * 2 * PER_BODY_BRIGHTNESS_RANGE;
   let shifted = brightDelta > 0
@@ -290,7 +302,7 @@ export interface DiscPalette {
 // mineralogy: Mars's ferric-oxide rust is one possibility, but alien
 // Mars-class bodies with different resource mixes lift different-colored
 // dust (iron-grey on metal-dominant, tan on silicate-dominant, rose on
-// rare-earth-rich). Weighted blend across the body's top-3 resource
+// rare-earth-rich). Weighted blend across the body's top-2 resource
 // colors — same source the surface texturing uses, so dust matches the
 // body's apparent surface.
 //
@@ -300,13 +312,21 @@ export interface DiscPalette {
 const DUST_FALLBACK_COLOR = new Color(0xa86040);
 
 function dustColorFor(body: Body): Color {
-  const resources = dominantResources(body, 3);
+  const resources = dominantResources(body, 2);
   if (resources.length === 0) return DUST_FALLBACK_COLOR;
+  // Renormalize: dustColorFor is a hue blend across the body's
+  // mineralogy, so we want the relative ratio between the top resources,
+  // not their absolute abundance. A barren world still lifts dust that
+  // reflects its (sparse) surface composition; richness shows up in the
+  // surface palette grey-lerp, not here.
+  const total = resources.reduce((s, e) => s + e.abundance, 0);
+  if (total <= 0) return DUST_FALLBACK_COLOR;
   let r = 0, g = 0, b = 0;
-  for (const { color, weight } of resources) {
-    r += color.r * weight;
-    g += color.g * weight;
-    b += color.b * weight;
+  for (const { color, abundance } of resources) {
+    const w = abundance / total;
+    r += color.r * w;
+    g += color.g * w;
+    b += color.b * w;
   }
   return new Color(r, g, b);
 }
@@ -548,21 +568,32 @@ export function buildDiscPalette(
   const hasSurface = surfaceOpacity > 0;
   const tinyDisc = discPx < PROCEDURAL_TEXTURE_MIN_PX;
 
-  // ── SURFACE PALETTE — three rock-archetype slots derived from the
-  // body's top resources for terrestrials, bulk-atm column tint for
-  // gas/ice giants. World-class color re-enters as a flat-fill fallback
-  // when a body carries no resource signal at all.
+  // ── SURFACE PALETTE — three paint slots for terrestrials, bulk-atm
+  // column tint for gas/ice giants. World-class color re-enters as a
+  // flat-fill fallback when a body carries no resource signal at all.
   //
   // Slot mapping (terrestrials with N>=1 nonzero resources):
   //   slot 0 = top-1 single archetype           (Mercury → iron grey)
   //   slot 1 = (top-1 + top-2) pair archetype   (M+S    → basalt)
-  //   slot 2 = (top-2 + top-3) pair archetype   (S+R    → ferric ochre)
+  //   slot 2 = body-tinted barren regolith      (M+S    → rust-stained
+  //                                              iron-grey dust)
   //
-  // With N=1 → slot 1 = slot 2 = slot 0; with N=2 → slot 2 = slot 1.
-  // The shader's existing per-region subset hash then picks among these
-  // three archetype colors so a region paints "basalt" or "iron grey" or
-  // "iron oxide rust" as a coherent mineralogy rather than a blend of
-  // raw saturated resource colors.
+  // With N=1 → slot 1 = slot 0. The shader's per-region subset hash
+  // picks one of 7 non-empty subsets of {p0, p1, p2} so a region paints
+  // as pure-archetype-A, pure-archetype-B, body-tinted barren regolith,
+  // or any mix — coherent mineralogy rather than a blend of raw
+  // saturated resource colors.
+  //
+  // The two archetype slots are lerped toward BARREN_ROCK_COLOR by
+  // (1 − abundance) so resource-poor worlds fade toward neutral; the
+  // barren slot is independent of abundance — it's always the body's
+  // own tinted regolith and provides the visual variety that
+  // distinguishes a metal-rich world's barren patches from a volatile-
+  // rich one's. Net visual: a resource-poor moon and a resource-rich
+  // planet read visually distinct (the rich planet shows vibrant
+  // archetype regions next to body-tinted barren; the poor moon shows
+  // muted archetype regions next to body-tinted barren) instead of
+  // both saturating the same archetype palette.
   let sC0: Color, sC1: Color, sC2: Color;
   let sW0: number, sW1: number, sW2: number;
   if (!hasSurface) {
@@ -570,32 +601,44 @@ export function buildDiscPalette(
     sC0 = colColor; sC1 = colColor; sC2 = colColor;
     sW0 = 1; sW1 = 0; sW2 = 0;
   } else {
-    const res = dominantResources(body, 3);
+    const res = dominantResources(body, 2);
     if (res.length === 0) {
+      // No resource signal at all — fall back to the world-class color
+      // rather than barren grey so an "atm-only" classification still
+      // reads as something distinct. (Procgen virtually always populates
+      // at least one res scalar for terrestrials, so this branch is
+      // defensive against curated rows with the entire grid empty.)
       const base = worldClassColor(body);
       sC0 = base; sC1 = base; sC2 = base;
       sW0 = 1; sW1 = 0; sW2 = 0;
     } else {
       const k0 = res[0].key;
       const k1 = res[1]?.key ?? null;
-      const k2 = res[2]?.key ?? null;
-      const w0 = res[0].weight;
-      const w1 = res[1]?.weight ?? 0;
-      const w2 = res[2]?.weight ?? 0;
-      sC0 = applyPerBodyTints(rockArchetypeFor(k0, null, 1), body, seed);
-      sC1 = applyPerBodyTints(
-        k1 !== null ? rockArchetypeFor(k0, k1, w0 / (w0 + w1)) : sC0,
+      const a0 = res[0].abundance;
+      const a1 = res[1]?.abundance ?? 0;
+      const arch0 = applyPerBodyTints(rockArchetypeFor(k0, null, 1), body, seed);
+      const arch1 = applyPerBodyTints(
+        k1 !== null ? rockArchetypeFor(k0, k1, a0 / (a0 + a1)) : arch0,
         body, seed,
       );
-      sC2 = applyPerBodyTints(
-        k2 !== null && k1 !== null ? rockArchetypeFor(k1, k2, w1 / (w1 + w2)) : sC1,
-        body, seed,
-      );
-      // Equal weights across the three archetype slots so the region
-      // hash gets an even shot at each. Raw resource weights drove the
-      // legacy "slot probability ∝ resource amount" intent, but with
-      // archetypes the slots already encode the body's composition —
-      // even sampling produces the variegation we want.
+      // Per-slot grey lerp keyed off absolute abundance. Floor keeps a
+      // present-but-trace resource from collapsing fully to grey so the
+      // disc still hints at composition.
+      const t0 = Math.max(ABUNDANCE_VISUAL_FLOOR, a0);
+      const t1 = Math.max(ABUNDANCE_VISUAL_FLOOR, a1);
+      sC0 = lerpColor(BARREN_ROCK_COLOR, arch0, t0);
+      sC1 = lerpColor(BARREN_ROCK_COLOR, arch1, t1);
+      // Slot 2: body-tinted barren regolith. Ordered (k0, k1) so a
+      // metals-dominant world's barren differs from a silicates-
+      // dominant one's. Runs through applyPerBodyTints for the same
+      // sibling-distinguishing brightness/temp shifts the archetype
+      // slots use. NOT abundance-lerped — the barren patches are the
+      // body's actual regolith, present at full strength regardless of
+      // how rich the rest is.
+      sC2 = applyPerBodyTints(barrenTintFor(k0, k1), body, seed);
+      // Equal weights across all three slots so the region hash gets
+      // an even shot at each. Abundance shows through the per-slot
+      // color lerp above, not as area share.
       sW0 = 1; sW1 = 1; sW2 = 1;
     }
   }

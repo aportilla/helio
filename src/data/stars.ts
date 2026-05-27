@@ -74,6 +74,15 @@ export interface Star {
   // to `planets`; belts are kept on their own list so consumers can iterate
   // structural bands without inspecting every body's `kind`.
   readonly belts: readonly number[];
+  // Stellar age in gigayears (10⁹ yr). Drives biosphere productivity
+  // factors (life needs time to develop) and indirectly drives surface
+  // ages for the planets via system formation. Populated by the build
+  // step via priority chain: catalog age_gyr CSV cell → class-keyed
+  // Gaussian prior (AGE_BY_CLASS in build-catalog.mjs) with per-star
+  // hash jitter so siblings differ. Always non-null after build.
+  // Clamped to [0.001, min(13.8, 0.4 × MS_lifetime_max)] so an O-class
+  // star can't end up at 10 Gyr.
+  readonly ageGyr: number;
 }
 
 export type WorldClass =
@@ -284,9 +293,32 @@ export interface Body {
   readonly resRareEarths: number | null;
   readonly resRadioactives: number | null;
   readonly resExotics: number | null;
-  // Life — two-axis. archetype is null on sterile bodies (tier='none') and
-  // on bodies where the Filler skipped the roll (gas giants in curated
-  // systems, etc.). When tier ≠ 'none', archetype is guaranteed non-null.
+  // Biotic productivity — six continuous scalars in [0..1], one per
+  // archetype, derived from the body's underlying physics (temperature,
+  // water, atmosphere, age, stellar PAR, tectonic activity, …). A body
+  // can carry non-zero productivity across multiple archetypes
+  // simultaneously: Titan has both cryogenic surface chemistry AND a
+  // possible subsurface aqueous reservoir. The render path reads these
+  // scalars directly for biome coverage, atmospheric O2 lift, biotic
+  // chromophore enrichment, etc. — no discrete tier/archetype label
+  // gates anything in the renderer.
+  //
+  // Null on bodies where the archetype is physically impossible (gas
+  // giants get null for carbon_aqueous; airless rocky worlds get null
+  // for aerial). Curated bodies may pin specific values via CSV; the
+  // Filler computes from physics where the cell is empty.
+  readonly bioticCarbonAqueous: number | null;
+  readonly bioticSubsurfaceAqueous: number | null;
+  readonly bioticAerial: number | null;
+  readonly bioticCryogenic: number | null;
+  readonly bioticSilicate: number | null;
+  readonly bioticSulfur: number | null;
+  // Legacy biosphere labels — DERIVED from the productivity scalars
+  // above (argmax + bucket thresholds). Still populated for backwards
+  // compat with the existing render path (BIOME_COVERAGE_BY_TIER,
+  // ATMOSPHERE_O2_BIOTIC_LIFT) and the info card. Will be removed in
+  // a follow-up phase once those consumers read productivity directly.
+  // Don't add new dependencies on these labels — read the scalars instead.
   readonly biosphereArchetype: BiosphereArchetype | null;
   readonly biosphereTier: BiosphereTier | null;
   // Indices into BODIES of moons orbiting this body, sorted by semi-major
@@ -428,17 +460,17 @@ export const BIOME_STELLAR_SHIFT: Record<SpectralClass, { color: Color; amount: 
   BD: null,
 };
 
-// Coverage density of the biome stipple keyed to biosphere tier. The
-// shader treats this as the probability that any individual land-cell
-// pixel flips to biome color. microbial reads as sparse moss patches;
-// gaian reads as dense canopy. prebiotic/none don't paint at all.
-export const BIOME_COVERAGE_BY_TIER: Record<BiosphereTier, number> = {
-  none:      0,
-  prebiotic: 0,
-  microbial: 0.20,
-  complex:   0.50,
-  gaian:     0.80,
-};
+// Productivity threshold below which biome stipple doesn't render at
+// all — eliminates noise from worlds with trace biotic activity
+// (productivity ≈ 0.01) that would paint a few stray pixels and read
+// as a bug.
+const BIOME_RENDER_THRESHOLD = 0.05;
+
+// Coverage scale factor — multiplies the body's biotic productivity to
+// produce the stipple coverage fraction. Earth at carbon_aqueous=0.85
+// productivity × scale=0.94 lands at ~0.80 coverage (matches the prior
+// gaian-bucketed value, preserving Earth's visual identity).
+const BIOME_COVERAGE_SCALE = 0.94;
 
 // Channel-lerp helper local to the biome-paint pipeline. Mirrors the
 // `applyTint` pattern in disc-palette.ts but lives here so the helper
@@ -452,21 +484,49 @@ function lerpColor(base: Color, target: Color, amount: number): Color {
   );
 }
 
-// Resolve a body's biome stipple paint: pigment hue (archetype) shifted
-// by host star spectral class, paired with the coverage density driven
-// by biosphereTier. Returns null when no stipple should render — sterile
-// bodies, prebiotic-only worlds, archetypes with no visible surface
-// signal, or hosts whose stellar class can't support a biosphere.
+// Resolve a body's biome stipple paint by reading the productivity
+// scalars directly — no tier label lookup. Picks the dominant surface
+// archetype (carbon_aqueous, cryogenic, silicate, sulfur — the four
+// that paint a visible surface signal), uses its productivity as the
+// coverage scalar, and looks up its pigment hue × stellar shift for
+// the color. `subsurface_aqueous` and `aerial` don't paint a surface
+// stipple; subsurface gets a linea-tint pass and aerial amplifies
+// chromophore aerosols, both deferred.
+//
+// Returns null when no stipple should render — sterile bodies (all
+// productivity below threshold), bodies whose dominant archetype is
+// pigment-null (subsurface, aerial), or hosts whose stellar class
+// can't support a biosphere.
 //
 // Resolves through the host chain: planet → its host star; moon → its
 // host planet → that planet's host star. Hostless bodies (procgen edge)
 // return null rather than guessing.
+const SURFACE_BIOME_ARCHETYPES: readonly BiosphereArchetype[] = [
+  'carbon_aqueous', 'cryogenic', 'silicate', 'sulfur',
+];
+const BIOTIC_FIELD_BY_ARCHETYPE: Record<BiosphereArchetype, keyof Body> = {
+  carbon_aqueous:     'bioticCarbonAqueous',
+  subsurface_aqueous: 'bioticSubsurfaceAqueous',
+  aerial:             'bioticAerial',
+  cryogenic:          'bioticCryogenic',
+  silicate:           'bioticSilicate',
+  sulfur:             'bioticSulfur',
+};
+
 export function biomePaintFor(body: Body): { color: Color; coverage: number } | null {
-  if (body.biosphereArchetype === null) return null;
-  if (body.biosphereTier === null) return null;
-  const coverage = BIOME_COVERAGE_BY_TIER[body.biosphereTier];
-  if (coverage <= 0) return null;
-  const base = BIOME_TINT_COLOR[body.biosphereArchetype];
+  // Pick the dominant surface archetype by productivity.
+  let dominant: BiosphereArchetype | null = null;
+  let dominantProd = 0;
+  for (const arch of SURFACE_BIOME_ARCHETYPES) {
+    const prod = body[BIOTIC_FIELD_BY_ARCHETYPE[arch]] as number | null;
+    if (prod !== null && prod > dominantProd) {
+      dominantProd = prod;
+      dominant = arch;
+    }
+  }
+  if (dominant === null || dominantProd < BIOME_RENDER_THRESHOLD) return null;
+
+  const base = BIOME_TINT_COLOR[dominant];
   if (base === null) return null;
 
   let starIdx: number | null = null;
@@ -481,6 +541,7 @@ export function biomePaintFor(body: Body): { color: Color; coverage: number } | 
   if (shift === null) return null;
 
   const color = shift.amount > 0 ? lerpColor(base, shift.color, shift.amount) : base;
+  const coverage = Math.min(1, dominantProd * BIOME_COVERAGE_SCALE);
   return { color, coverage };
 }
 
@@ -819,6 +880,73 @@ const ROCK_ARCHETYPE_PAIR: Record<string, Color> = {
 // archetype's identity dominates the visual.
 const ROCK_ARCHETYPE_SHADE_AMOUNT = 0.3;
 
+// Neutral barren rock — the base regolith color before any per-body
+// resource tinting. Muted warm grey: readable as "weathered surface"
+// without leaning toward any of the six resource archetypes. Used by
+// the disc-palette grey-lerp on the archetype slots (low-abundance
+// resources fade toward this) AND by barrenTintFor below as the base
+// the body's mineralogy nudges away from. Exported so disc-palette.ts
+// can share one source of truth.
+export const BARREN_ROCK_COLOR = new Color(0x6c6864);
+
+// Body-tinted barren regolith — ordered (k0|k1) so a metals-dominant
+// world's barren patches differ from a silicates-dominant one's. Only
+// the named pairs below get hand-tuned colors; everything else falls
+// through to the formula-weighted mix in `barrenTintFor`. Each entry is
+// a muted regolith hue with a clear hint of the body's top-2 mineralogy.
+//
+// Convention: `${dominant}|${secondary}` — keyA is the higher-abundance
+// resource. Reversing the order picks a different LUT entry, which is
+// the whole point of having an ordered table: Mars-dust over a metals
+// crust reads different from iron-stained silicate plains.
+const ROCK_ARCHETYPE_BARREN: Record<string, Color> = {
+  'resMetals|resSilicates':     new Color(0x847468), // iron-dominant tan regolith (Mars dust on a metals crust)
+  'resSilicates|resMetals':     new Color(0x8e7c68), // silicate-dominant rust dust (Luna-Mars warm)
+  'resMetals|resVolatiles':     new Color(0x747880), // cold iron grey (asteroid surface)
+  'resVolatiles|resMetals':     new Color(0x8c9498), // dusty frozen grey (Callisto regolith)
+  'resSilicates|resVolatiles':  new Color(0x8c8478), // permafrost tan (Mars high lat.)
+  'resVolatiles|resSilicates':  new Color(0x94948c), // dirty ice grey (rocky inclusions in ice)
+};
+
+// Formula weights for the barren-tint fallback. `BARREN` carries the
+// neutral regolith base; `PRIMARY` and `SECONDARY` add the resource hue.
+// Order matters because PRIMARY > SECONDARY — a metals|silicates body
+// (metals primary) leans toward iron-grey; a silicates|metals body
+// (silicates primary) leans toward tan. Weights sum to 1 so the output
+// stays in the valid color range without further clamping.
+const BARREN_TINT_BASE_WEIGHT      = 0.55;
+const BARREN_TINT_PRIMARY_WEIGHT   = 0.30;
+const BARREN_TINT_SECONDARY_WEIGHT = 0.15;
+
+// Derive the body-tinted barren regolith color for a (k0, k1) pair. The
+// disc-palette renders this as the third paint slot alongside the two
+// archetype slots, so a Mars-class body's barren patches read as rust-
+// hinted regolith rather than a uniform neutral grey across every world.
+// Ordered: k0 is the higher-abundance resource. The LUT short-circuits
+// for curated pairs; the formula handles the rest.
+export function barrenTintFor(
+  k0: ResourceKey,
+  k1: ResourceKey | null,
+): Color {
+  if (k1 !== null && k0 !== k1) {
+    const lutHit = ROCK_ARCHETYPE_BARREN[`${k0}|${k1}`];
+    if (lutHit) return lutHit;
+  }
+  const c0 = RESOURCE_COLOR[k0];
+  const c1 = (k1 !== null && k0 !== k1) ? RESOURCE_COLOR[k1] : c0;
+  return new Color(
+    BARREN_ROCK_COLOR.r * BARREN_TINT_BASE_WEIGHT
+      + c0.r * BARREN_TINT_PRIMARY_WEIGHT
+      + c1.r * BARREN_TINT_SECONDARY_WEIGHT,
+    BARREN_ROCK_COLOR.g * BARREN_TINT_BASE_WEIGHT
+      + c0.g * BARREN_TINT_PRIMARY_WEIGHT
+      + c1.g * BARREN_TINT_SECONDARY_WEIGHT,
+    BARREN_ROCK_COLOR.b * BARREN_TINT_BASE_WEIGHT
+      + c0.b * BARREN_TINT_PRIMARY_WEIGHT
+      + c1.b * BARREN_TINT_SECONDARY_WEIGHT,
+  );
+}
+
 // Look up the rock archetype for one or two resources, applying shade-
 // by-balance for pair entries.
 //   - `keyA` alone (keyB = null) → the single-presence color.
@@ -943,28 +1071,30 @@ export function cloudDeckPalette(_body: Body, layerGas: string): CloudDeckPalett
   };
 }
 
-// Top `count` resources (default 2) by value, with weights renormalized
-// to sum to 1. Empty when every res scalar is null/zero — caller falls
-// back to a solid world-class color. `key` is exposed so callers can
-// look the resource up in any of the parallel tables (RESOURCE_COLOR for
-// the saturated gameplay signal, ROCK_ARCHETYPE_SINGLE / _PAIR for the
-// realistic surface mineralogy).
+// Top `count` resources (default 2) by value, with `abundance` = value/10
+// (absolute 0..1 scale, NOT renormalized across the picks). Two callers
+// rely on this: the disc-palette lerps each archetype slot toward a
+// neutral barren grey by (1 − abundance) so resource-poor worlds read
+// as muted regolith, and dustColorFor renormalizes internally to blend
+// dust mineralogy. Empty when every res scalar is null/zero — caller
+// falls back to a solid world-class color. `key` is exposed so callers
+// can look the resource up in any of the parallel tables (RESOURCE_COLOR
+// for the saturated gameplay signal, ROCK_ARCHETYPE_SINGLE / _PAIR for
+// the realistic surface mineralogy).
 export function dominantResources(
   body: Body,
   count = 2,
-): Array<{ key: ResourceKey; color: Color; weight: number }> {
-  const scored = RESOURCE_KEYS
+): Array<{ key: ResourceKey; color: Color; abundance: number }> {
+  return RESOURCE_KEYS
     .map(k => ({ key: k, value: body[k] ?? 0 }))
     .filter(e => e.value > 0)
     .sort((a, b) => b.value - a.value)
-    .slice(0, count);
-  const total = scored.reduce((s, e) => s + e.value, 0);
-  if (total <= 0) return [];
-  return scored.map(e => ({
-    key: e.key,
-    color: RESOURCE_COLOR[e.key],
-    weight: e.value / total,
-  }));
+    .slice(0, count)
+    .map(e => ({
+      key: e.key,
+      color: RESOURCE_COLOR[e.key],
+      abundance: Math.min(1, e.value / 10),
+    }));
 }
 
 // =============================================================================

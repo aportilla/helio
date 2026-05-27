@@ -51,10 +51,11 @@ const BIOSPHERE_TIER_LABEL: Record<Exclude<BiosphereTier, 'none'>, string> = {
   gaian:     'Gaian',
 };
 
-// Display label per resource. Used by dominantResourceLabels to render
-// the body's top-N resources as a single comma-separated value, so the
-// info card reads as "what's mineable here" instead of a flat six-row
-// numeric grid.
+// Display label per resource. Each surviving top-N resource becomes its
+// own row in the info card, keyed by the label and valued by the body's
+// abundance — so a player reads "metals 80% / silicates 40%" as "rich
+// in iron, modest in rock" rather than scanning a comma-joined name list
+// that hides whether the world is barren or saturated.
 const RESOURCE_LABEL: Record<ResourceKey, string> = {
   resMetals:       'metals',
   resSilicates:    'silicates',
@@ -68,17 +69,30 @@ const RESOURCE_FIELDS: readonly ResourceKey[] = [
   'resRareEarths', 'resRadioactives', 'resExotics',
 ];
 
-// Top `count` resource labels by raw value, descending. Empty array when
-// the body carries no resource signal at all. Mirrors the ordering used
-// by dominantResources() in data/stars.ts but skips the color step —
-// the panel only needs names.
-function dominantResourceLabels(b: Body, count = 3): string[] {
+// Top `count` resources by raw value, descending, each with the body's
+// absolute abundance ∈ [0..1] (value/10). Empty array when the body
+// carries no resource signal at all. Mirrors `dominantResources` in
+// data/stars.ts but uses display labels instead of Color objects since
+// the panel only needs names + numbers.
+function dominantResourceEntries(b: Body, count = 2): Array<{ label: string; abundance: number }> {
   return RESOURCE_FIELDS
     .map(f => ({ label: RESOURCE_LABEL[f], value: b[f] ?? 0 }))
     .filter(e => e.value > 0)
     .sort((a, c) => c.value - a.value)
     .slice(0, count)
-    .map(e => e.label);
+    .map(e => ({ label: e.label, abundance: Math.min(1, e.value / 10) }));
+}
+
+// Format an abundance ∈ (0..1] as 1-5 asterisks for the info card. Reads
+// as a quick rating rather than a hard percentage — "***" lands faster
+// than "60%" when the player is scanning multiple bodies for what's
+// worth mining. `ceil` so every nonzero abundance shows at least one
+// star (a present-but-trace resource still earns a tick), and the
+// quintile bucketing matches roughly how the surface renderer's grey
+// lerp reads: 1★ ≈ barren, 5★ ≈ fully saturated archetype.
+function formatAbundance(a: number): string {
+  const stars = Math.max(1, Math.min(5, Math.ceil(a * 5)));
+  return '*'.repeat(stars);
 }
 
 // Round fraction (0..1) to a percent string at a precision that keeps
@@ -158,8 +172,9 @@ function rowsForBody(bodyIdx: number): BodyRow[] {
   // keep player-relevant data forward. Moons of giants stay solid and
   // still surface their resources.
   if (!hasInaccessibleSurface(b)) {
-    const resources = dominantResourceLabels(b);
-    if (resources.length > 0) rows.push({ key: k('resources'), val: resources.join(', ') });
+    for (const e of dominantResourceEntries(b)) {
+      rows.push({ key: k(e.label), val: formatAbundance(e.abundance) });
+    }
   }
   return rows;
 }
@@ -172,9 +187,9 @@ function hasInaccessibleSurface(b: Body): boolean {
 }
 
 // Belt rows surface the band's extent, anchoring metadata, and the top
-// few mineable resources — collapsed from the full six-grid to the 2-3
-// dominant species so the panel reads as "what's worth scooping here"
-// rather than a numeric profile.
+// two mineable resources with their abundances — one row per resource
+// so a Kuiper-style "high volatiles, trace metals" reads as a pair of
+// percentages rather than a flat name list.
 function rowsForBelt(b: Body): BodyRow[] {
   const rows: BodyRow[] = [];
   if (b.innerAu !== null && b.outerAu !== null) {
@@ -190,22 +205,25 @@ function rowsForBelt(b: Body): BodyRow[] {
   if (b.shepherdBodyIdx !== null) {
     rows.push({ key: k('shepherd'), val: BODIES[b.shepherdBodyIdx].name });
   }
-  const resources = dominantResourceLabels(b);
-  if (resources.length > 0) rows.push({ key: k('resources'), val: resources.join(', ') });
+  for (const e of dominantResourceEntries(b)) {
+    rows.push({ key: k(e.label), val: formatAbundance(e.abundance) });
+  }
   return rows;
 }
 
 // Ring rows: extent in planetary radii (so "1.1–2.3 R_p" reads against
-// the host planet's size) plus the top few dominant resources. The
-// underlying six-resource grid still drives the renderer's icy/dusty
-// lerp — the panel just doesn't surface the long form.
+// the host planet's size) plus the top two dominant resources with
+// their abundances. The underlying six-resource grid still drives the
+// renderer's icy/dusty lerp — the panel just doesn't surface the long
+// form.
 function rowsForRing(b: Body): BodyRow[] {
   const rows: BodyRow[] = [];
   if (b.innerPlanetRadii !== null && b.outerPlanetRadii !== null) {
     rows.push({ key: k('extent'), val: `${b.innerPlanetRadii.toFixed(2)}–${b.outerPlanetRadii.toFixed(2)} R_p` });
   }
-  const resources = dominantResourceLabels(b);
-  if (resources.length > 0) rows.push({ key: k('resources'), val: resources.join(', ') });
+  for (const e of dominantResourceEntries(b)) {
+    rows.push({ key: k(e.label), val: formatAbundance(e.abundance) });
+  }
   return rows;
 }
 

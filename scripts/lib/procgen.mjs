@@ -57,7 +57,6 @@ import {
   MAGNETIC_FIELD,
   ATMOSPHERE_GASES_BY_REGIME,
   ATMOSPHERE_REGIME_THRESHOLDS,
-  ATMOSPHERE_O2_BIOTIC_LIFT,
   ATMOSPHERE_MIN_PRESSURE_BAR,
   INSOLATION_COLD_MAX,
   ATMOSPHERIC_RETENTION,
@@ -73,7 +72,6 @@ import {
   ICE_COVER_NOISE,
   WORLD_CLASS_THRESHOLDS,
   CONDENSABLES,
-  BIOSPHERE_HABITATS,
 } from './procgen-priors.mjs';
 import { insolation, tidalLockProxy, meanMetallicityForClass, meanAgeForClass, frostLineAU } from './astrophysics.mjs';
 
@@ -770,12 +768,16 @@ function atmosphereFor(body, S) {
     // worlds don't end up with identical mixes.
     weights[gas] = w * retain * (0.5 + prng());
   }
-  // Biotic O2 lift — only fires when the regime supports it (wet_outgassed
-  // is where Earth-class biotic O2 lives). Keyed on biosphere archetype
-  // (which is itself physics-derived in Phase 4.5).
-  const lift = ATMOSPHERE_O2_BIOTIC_LIFT[body.biosphereArchetype]?.[body.biosphereTier];
-  if (lift != null && weights.O2 != null) {
-    weights.O2 *= lift;
+  // Biotic O2 lift — continuous on productivity[carbon_aqueous]. Earth
+  // at productivity=0.85 gets weights.O2 ≈ 0.05 × (1 + 0.85 × 70) ≈ 3,
+  // which puts O2 at ~30% top-1 share against N2's 8 (close enough to
+  // Earth's 21% measured). A microbial-tier world at productivity=0.30
+  // gets a partial lift to weights.O2 ≈ 1.1 (the "Great Oxidation
+  // transition" regime where O2 is rising but not dominant). Sterile
+  // worlds (productivity ≈ 0) keep the trace photolysis O2 floor.
+  const carbProd = body.bioticCarbonAqueous ?? 0;
+  if (carbProd > 0 && weights.O2 != null) {
+    weights.O2 *= 1 + carbProd * BIOTIC_O2_LIFT_FACTOR;
   }
   // Pick top 3 (or however many are non-zero) by weight via repeated
   // weighted-random draw without replacement.
@@ -1223,57 +1225,290 @@ function resourcesFor(body, hostStar, hostBody) {
 // Biosphere — physics-keyed habitat dispatch (no class input)
 // =============================================================================
 
-// Returns true if the body's physical state matches all the habitat's
-// gates. Each gate field is optional; only specified gates have to pass.
-// Atmosphere-gas gates check all of (atm1, atm2, atm3).
-function bodyMatchesHabitat(body, gates) {
-  const T = body.avgSurfaceTempK;
-  const water = body.waterFraction ?? 0;
-  const ice = body.iceFraction ?? 0;
-  const bulkWater = body.bulkWaterFraction ?? 0;
-  const P = body.surfacePressureBar ?? 0;
-  const R = body.radiusEarth ?? 0;
-  const tect = body.tectonicActivity ?? 0;
 
-  if (gates.tempMinK != null && (T == null || T < gates.tempMinK)) return false;
-  if (gates.tempMaxK != null && (T == null || T > gates.tempMaxK)) return false;
-  if (gates.waterMin != null && water < gates.waterMin) return false;
-  if (gates.waterMax != null && water > gates.waterMax) return false;
-  if (gates.iceMin != null && ice < gates.iceMin) return false;
-  if (gates.iceMax != null && ice > gates.iceMax) return false;
-  if (gates.bulkWaterMin != null && bulkWater < gates.bulkWaterMin) return false;
-  if (gates.pressureMin != null && P < gates.pressureMin) return false;
-  if (gates.radiusMin != null && R < gates.radiusMin) return false;
-  if (gates.radiusMax != null && R > gates.radiusMax) return false;
-  if (gates.tectonicMin != null && tect < gates.tectonicMin) return false;
-  return true;
+// ── Biotic productivity ─────────────────────────────────────────────
+// Per-archetype continuous productivity scalars in [0..1], derived as
+// a product of soft-gated factors from the body's physical state. No
+// dice rolls — productivity emerges from physics. Each archetype's
+// formula combines: substrate availability, energy source, temperature
+// window, chemistry, stellar/age compatibility.
+//
+// Multiple archetypes can be non-zero simultaneously (Titan: surface
+// cryogenic AND a possible subsurface aqueous reservoir). Archetypes
+// physically impossible for the body (aerial on terrestrial,
+// carbon_aqueous on gas giant) return null instead of 0 so downstream
+// consumers can distinguish "this archetype can't exist here" from
+// "this archetype could but doesn't fire here."
+//
+// The legacy biosphereArchetype / biosphereTier labels are now derived
+// from these scalars via labelsFromProductivity (argmax + bucket), so
+// they're pure display classifications — nothing in the procgen
+// pipeline rolls a separate biosphere outcome.
+
+// PAR (Photosynthetically Active Radiation) availability by stellar
+// spectral class. G-class is the Sol baseline; cooler M-class stars
+// deliver fewer high-energy photons (calibrated against Kiang et al.
+// on alien photosynthesis — M-dwarf photosynthesis is more constrained
+// than Sol's, requires longer-wavelength chlorophyll analogs); A-class
+// drops because UV damages biomass faster than photosynthesis can fix
+// carbon. O/B too short-lived for biospheres to evolve; WD/BD lack
+// surface-luminance for photo-driven metabolism.
+const PAR_BY_CLASS = {
+  O: 0, B: 0, A: 0.6, F: 0.95, G: 1.0, K: 0.7, M: 0.3, WD: 0, BD: 0,
+};
+
+// Atmospheric O2 biotic-lift factor — applied to the O2 prior weight
+// as `1 + productivity × FACTOR`. Calibrated against Earth: at
+// carbon_aqueous productivity 0.85, this gives O2 weight ≈ 0.05 ×
+// (1 + 0.85 × 70) ≈ 3, which competes with N2's weight ~8 for ~21%
+// O2 fraction in the renormalized top-3 — matches Earth's measured
+// 21% O2. Linear in productivity so the Great Oxidation transition
+// reads as a smooth ramp rather than a discrete tier flip.
+const BIOTIC_O2_LIFT_FACTOR = 70;
+
+// Bell curve gate — peaks at `center`, falls to 0 at `center ± halfwidth`.
+// Quadratic falloff. Used by productivity factors that want a "best at
+// this value, falls off either direction" shape (T windows, ice-shell
+// thickness band) rather than a monotonic threshold.
+function bellGate(x, center, halfwidth) {
+  if (halfwidth <= 0) return x === center ? 1 : 0;
+  const t = (x - center) / halfwidth;
+  if (t <= -1 || t >= 1) return 0;
+  return 1 - t * t;
 }
 
-// Walk the habitat list; each habitat whose physical gates match the
-// body fires an independent occurrence roll. Among hits, the highest-
-// tier archetype wins (ties broken by habitat order — rarer/more-
-// evocative habitats listed earlier in BIOSPHERE_HABITATS win ties).
-function biosphereFor(body) {
-  const TIER_ORDER = ['none', 'prebiotic', 'microbial', 'complex', 'gaian'];
-  let best = { archetype: null, tier: 'none', tierIdx: 0 };
-  for (const habitat of BIOSPHERE_HABITATS) {
-    if (!bodyMatchesHabitat(body, habitat.gates)) continue;
-    const prng = fieldPrng(body, `biosphere:${habitat.archetype}:${habitat.name}`);
-    if (prng() >= habitat.occurrenceRate) continue;
-    let total = 0;
-    for (const w of Object.values(habitat.tierWeights)) total += w;
-    let r = prng() * total;
-    let chosenTier = 'microbial';
-    for (const [tier, w] of Object.entries(habitat.tierWeights)) {
-      r -= w;
-      if (r <= 0) { chosenTier = tier; break; }
-    }
-    const tierIdx = TIER_ORDER.indexOf(chosenTier);
-    if (tierIdx > best.tierIdx) {
-      best = { archetype: habitat.archetype, tier: chosenTier, tierIdx };
-    }
+// Body surface gravity in Earth-g. Used by the carbon_aqueous column-
+// mass-equivalent factor where the same P at lower g yields a thicker
+// effective column. Defensive null returns 1.0 (Earth-g proxy).
+function bodyGravityEarth(body) {
+  if (body.massEarth == null || body.radiusEarth == null) return 1;
+  if (body.radiusEarth === 0) return 1;
+  return body.massEarth / (body.radiusEarth * body.radiusEarth);
+}
+
+// Insolation in Earth units (S/S_earth). Approximates L ≈ M^4 for MS
+// stars per the same calibration as astrophysics.luminositySun.
+function insolationFor(body, hostStar) {
+  if (!hostStar || body.semiMajorAu == null || body.semiMajorAu <= 0) return 0;
+  const L = Math.pow(hostStar.mass, 4);
+  return L / (body.semiMajorAu * body.semiMajorAu);
+}
+
+const GASEOUS_CLASSES = new Set([
+  'gas_giant', 'ice_giant', 'gas_dwarf', 'hycean', 'helium',
+]);
+const TERRESTRIAL_SOLID_CLASSES = new Set([
+  'rocky', 'desert', 'ocean', 'ice', 'iron', 'lava',
+  'magma_ocean', 'chthonian', 'solid_giant',
+]);
+
+// Pre-atm productivity — carbon_aqueous + subsurface_aqueous. Neither
+// archetype depends on atmospheric composition, so both can fire
+// before the atmosphere is sampled. carbon_aqueous productivity then
+// drives biotic O2 atmospheric lift (clean acyclic dependency: bio
+// productivity → atm composition).
+function productivityPreAtm(body, hostStar, hostBody) {
+  const T = body.avgSurfaceTempK;
+  const Tmin = body.surfaceTempMinK;
+  const Tmax = body.surfaceTempMaxK;
+  const water = body.waterFraction ?? 0;
+  const ice = body.iceFraction ?? 0;
+  const bulkVol = body.bulkVolatileFraction ?? 0;
+  const P = body.surfacePressureBar ?? 0;
+  const g = bodyGravityEarth(body);
+  const colMass = P > 0 ? Math.log10(P / g + 1) : 0;
+  const B = body.magneticFieldGauss ?? 0;
+  const r = body.radiusEarth ?? 0;
+  const e = body.eccentricity ?? 0;
+  const age = hostStar?.ageGyr ?? 5.0;
+  const cls = hostStar?.cls ?? null;
+  const isGaseous = body.worldClass != null && GASEOUS_CLASSES.has(body.worldClass);
+
+  const ageWindowCarbon     = smoothstep(1.0, 3.5, age) * (1 - smoothstep(8.0, 12.0, age));
+  const ageWindowSubsurface = smoothstep(0.5, 2.0, age);
+
+  // ── carbon_aqueous (Earth-standard, water + carbon + photosynthesis) ──
+  // The N2_buffer factor was dropped: Earth's 78% N2 is BIOTIC-co-evolved,
+  // not a precondition — gating on it conflates cause and effect. The
+  // surviving factors capture the underlying physical preconditions:
+  // liquid water, temperate T, low variability, atmospheric column,
+  // magnetic shielding, stellar PAR, stellar age.
+  let bioticCarbonAqueous;
+  if (isGaseous) {
+    bioticCarbonAqueous = null;
+  } else if (T == null) {
+    bioticCarbonAqueous = 0;
+  } else {
+    const water_window = smoothstep(0.02, 0.30, water);
+    const T_temperate = T < 273 ? 0 : bellGate(T, 290, 60);
+    const T_variability = (Tmin != null && Tmax != null && T > 0)
+      ? 1 - smoothstep(0.5, 1.5, (Tmax - Tmin) / T)
+      : 1;
+    const atm_column = smoothstep(0.005, 0.10, colMass);
+    const shielding = smoothstep(0.005, 0.15, B * Math.log10(P + 1));
+    const stellar_PAR = cls ? (PAR_BY_CLASS[cls] ?? 0) : 0;
+    bioticCarbonAqueous = water_window * T_temperate * T_variability
+                          * atm_column * shielding
+                          * stellar_PAR * ageWindowCarbon;
   }
-  return { archetype: best.archetype, tier: best.tier };
+
+  // ── subsurface_aqueous (Europa/Enceladus, chemosynthesis at vents) ──
+  let bioticSubsurfaceAqueous;
+  if (isGaseous) {
+    bioticSubsurfaceAqueous = null;
+  } else if (T == null) {
+    bioticSubsurfaceAqueous = 0;
+  } else {
+    const bulk_water = smoothstep(0.05, 0.40, bulkVol);
+    const ice_shell = bellGate(ice, 0.85, 0.30);
+    const cold_surface = smoothstep(0, 60, 220 - T);
+    const size_floor = smoothstep(0.15, 0.35, r);
+    const hostMassEarth = hostBody?.massEarth ?? 0;
+    const a = body.semiMajorAu ?? 0;
+    const tidalProxy = (e > 0 && hostMassEarth > 0 && a > 0)
+      ? e * (hostMassEarth / 333000) / Math.pow(a, 3)
+      : 0;
+    const tidal_score = smoothstep(0, 0.1, tidalProxy);
+    const radio_score = smoothstep(2, 6, body.resRadioactives ?? 0);
+    const tidal_or_radiogenic = Math.max(tidal_score, radio_score);
+    bioticSubsurfaceAqueous = bulk_water * ice_shell * cold_surface
+                              * size_floor * tidal_or_radiogenic
+                              * ageWindowSubsurface;
+  }
+
+  return { bioticCarbonAqueous, bioticSubsurfaceAqueous };
+}
+
+// Post-atm productivity — aerial / cryogenic / silicate / sulfur all
+// read atmospheric composition (CH4, N2, NH3, SO2, H2S, H2SO4, …) and
+// in cryogenic's case the haze aerosol output (THOLIN). Runs after
+// haze in the Filler pipeline.
+function productivityPostAtm(body, hostStar) {
+  const T = body.avgSurfaceTempK;
+  const P = body.surfacePressureBar ?? 0;
+  const g = bodyGravityEarth(body);
+  const colMass = P > 0 ? Math.log10(P / g + 1) : 0;
+  const tect = body.tectonicActivity ?? 0;
+  const age = hostStar?.ageGyr ?? 5.0;
+  const insol = insolationFor(body, hostStar);
+  const isGaseous = body.worldClass != null && GASEOUS_CLASSES.has(body.worldClass);
+  const isTerrestrialSolid = body.worldClass != null && TERRESTRIAL_SOLID_CLASSES.has(body.worldClass);
+
+  const ageWindowAerial    = smoothstep(1.5, 4.0, age);
+  const ageWindowCryogenic = smoothstep(1.0, 4.0, age);
+  const ageWindowSilicate  = smoothstep(0.5, 3.0, age);
+  const ageWindowSulfur    = smoothstep(0.5, 3.0, age);
+
+  // ── aerial (Sagan-Salpeter floaters in gas-giant clouds) ──
+  let bioticAerial;
+  if (!isGaseous) {
+    bioticAerial = null;
+  } else if (T == null) {
+    bioticAerial = 0;
+  } else {
+    // Bulk T proxy for cloud-deck T — gas giants don't carry per-deck T
+    // explicitly, but the body's representative T sits in the visible
+    // cloud-deck region by construction (atm-column derivation).
+    const T_cloud = bellGate(T, 290, 80);
+    const ch4 = atmFracOf(body, 'CH4');
+    const nh3 = atmFracOf(body, 'NH3');
+    const h2o = atmFracOf(body, 'H2O');
+    const organic_precursors = smoothstep(0.001, 0.1, (ch4 + nh3 + h2o) * colMass);
+    const windMs = (body.cloudLayers ?? []).reduce(
+      (m, l) => Math.max(m, l.windSpeedMS ?? 0), 0
+    );
+    const circulation = 1 - smoothstep(200, 600, windMs);
+    const insol_window = smoothstep(0.1, 2.0, insol) * (1 - smoothstep(5, 20, insol));
+    bioticAerial = T_cloud * organic_precursors * circulation
+                   * insol_window * ageWindowAerial;
+  }
+
+  // ── cryogenic (Titan-class, hydrocarbon-cycle chemistry) ──
+  let bioticCryogenic;
+  if (isGaseous || !isTerrestrialSolid) {
+    bioticCryogenic = null;
+  } else if (T == null) {
+    bioticCryogenic = 0;
+  } else {
+    const cold_T = bellGate(T, 95, 50);
+    const ch4 = atmFracOf(body, 'CH4');
+    const hydrocarbon_atm = smoothstep(0.001, 0.1, ch4 * P);
+    const n2 = atmFracOf(body, 'N2');
+    const n2_solvent = smoothstep(0.1, 1.5, n2 * P);
+    const tholin = body.hazeAerosols?.THOLIN ?? 0;
+    const tholin_substrate = smoothstep(0.1, 0.7, tholin);
+    const uv_input = smoothstep(0.001, 0.05, insol);
+    bioticCryogenic = cold_T * hydrocarbon_atm * n2_solvent
+                      * tholin_substrate * uv_input * ageWindowCryogenic;
+  }
+
+  // ── silicate (high-T mineral cycling, Si-based hypothetical) ──
+  let bioticSilicate;
+  if (isGaseous) {
+    bioticSilicate = null;
+  } else if (T == null) {
+    bioticSilicate = 0;
+  } else {
+    const hot_T = bellGate(T, 600, 200);
+    const silicate_substrate = smoothstep(1, 6, body.resSilicates ?? 0);
+    const tectonic_activity = smoothstep(0.2, 0.8, tect);
+    const so2 = atmFracOf(body, 'SO2');
+    const h2so4 = atmFracOf(body, 'H2SO4');
+    const s2 = atmFracOf(body, 'S2');
+    const volatile_solvent = smoothstep(0.001, 0.05, (so2 + h2so4 + s2) * P);
+    const radioactives = body.resRadioactives ?? 0;
+    const energy = Math.max(smoothstep(0.2, 5, insol), smoothstep(2, 8, radioactives));
+    bioticSilicate = hot_T * silicate_substrate * tectonic_activity
+                     * volatile_solvent * energy * ageWindowSilicate;
+  }
+
+  // ── sulfur (Venus-cloud / Io-class sulfur-cycle) ──
+  let bioticSulfur;
+  if (isGaseous) {
+    bioticSulfur = null;
+  } else if (T == null) {
+    bioticSulfur = 0;
+  } else {
+    const warm_T = bellGate(T, 380, 100);
+    const so2 = atmFracOf(body, 'SO2');
+    const h2s = atmFracOf(body, 'H2S');
+    const h2so4 = atmFracOf(body, 'H2SO4');
+    const sulfur_atm = smoothstep(0.001, 0.05, (so2 + h2s + h2so4) * P);
+    const active_volcanism = smoothstep(0.3, 0.9, tect);
+    const sulfur_substrate = smoothstep(2, 8, (body.resRadioactives ?? 0) + (body.resSilicates ?? 0));
+    bioticSulfur = warm_T * sulfur_atm * active_volcanism
+                   * sulfur_substrate * ageWindowSulfur;
+  }
+
+  return { bioticAerial, bioticCryogenic, bioticSilicate, bioticSulfur };
+}
+
+// Argmax + bucket: collapse the per-archetype productivity scalars
+// into the legacy (archetype, tier) label pair. Used by the Filler
+// after `bioticProductivityFor` runs, so the legacy fields reflect
+// the productivity-driven physics rather than a separately-rolled
+// habitat outcome. The label is downstream of the scalars now.
+//
+// Thresholds match plans/BIOTIC-PRODUCTIVITY-REFACTOR.md.
+function labelsFromProductivity(productivity) {
+  let bestArch = null;
+  let bestProd = 0;
+  for (const [arch, prod] of Object.entries(productivity)) {
+    if (prod == null || prod <= bestProd) continue;
+    bestArch = arch;
+    bestProd = prod;
+  }
+  let tier;
+  if      (bestProd < 0.05) tier = 'none';
+  else if (bestProd < 0.20) tier = 'prebiotic';
+  else if (bestProd < 0.50) tier = 'microbial';
+  else if (bestProd < 0.75) tier = 'complex';
+  else                      tier = 'gaian';
+  // Below-threshold productivity → archetype null (matches the "sterile"
+  // semantics in the existing Body schema where tier='none' implies
+  // archetype=null).
+  if (tier === 'none') return { archetype: null, tier: 'none' };
+  return { archetype: bestArch, tier };
 }
 
 // =============================================================================
@@ -1329,6 +1564,8 @@ function fillBody(b, allBodies, stars) {
     cloudLayers, surfaceOpacity,
     hazeAerosols, dustStrength,
     resMetals, resSilicates, resVolatiles, resRareEarths, resRadioactives, resExotics,
+    bioticCarbonAqueous, bioticSubsurfaceAqueous, bioticAerial,
+    bioticCryogenic, bioticSilicate, bioticSulfur,
     biosphereArchetype, biosphereTier,
     periodDays, semiMajorAu, eccentricity, inclinationDeg,
     axialTiltDeg, orbitalPhaseDeg,
@@ -1510,14 +1747,16 @@ function fillBody(b, allBodies, stars) {
   }
   working = { ...working, surfaceAge };
 
-  // Biosphere — physics-gated habitats. Runs before atm so atm can read
-  // biosphere for O2 lift on biotic worlds.
-  if (unknowns.has('biosphereArchetype') || unknowns.has('biosphereTier')) {
-    const { archetype, tier } = biosphereFor(working);
-    if (unknowns.has('biosphereArchetype')) biosphereArchetype = archetype;
-    if (unknowns.has('biosphereTier'))      biosphereTier = tier;
+  // Pre-atm biotic productivity — carbon_aqueous + subsurface_aqueous.
+  // Neither depends on atmospheric composition. Runs before atm so the
+  // atm step can read productivity[carbon_aqueous] for biotic O2 lift
+  // (clean acyclic dependency: bio productivity → atm composition).
+  if (unknowns.has('bioticCarbonAqueous') || unknowns.has('bioticSubsurfaceAqueous')) {
+    const p = productivityPreAtm(working, hostStar, hostBody);
+    if (unknowns.has('bioticCarbonAqueous'))     bioticCarbonAqueous     = p.bioticCarbonAqueous;
+    if (unknowns.has('bioticSubsurfaceAqueous')) bioticSubsurfaceAqueous = p.bioticSubsurfaceAqueous;
   }
-  working = { ...working, biosphereArchetype, biosphereTier };
+  working = { ...working, bioticCarbonAqueous, bioticSubsurfaceAqueous };
 
   // Atmosphere — regime-keyed top-3 gas dispatch with biosphere O2 lift.
   if (unknowns.has('atm1') || unknowns.has('atm2') || unknowns.has('atm3')) {
@@ -1581,6 +1820,46 @@ function fillBody(b, allBodies, stars) {
   }
   working = { ...working, hazeAerosols, dustStrength };
 
+  // Post-atm biotic productivity — aerial / cryogenic / silicate /
+  // sulfur. All four read atm composition (CH4, N2, NH3, SO2, H2S,
+  // H2SO4); cryogenic additionally reads hazeAerosols.THOLIN, so this
+  // runs after haze. Carbon_aqueous + subsurface_aqueous already
+  // computed in the pre-atm pass.
+  if (
+    unknowns.has('bioticAerial')   || unknowns.has('bioticCryogenic') ||
+    unknowns.has('bioticSilicate') || unknowns.has('bioticSulfur')
+  ) {
+    const p = productivityPostAtm(working, hostStar);
+    if (unknowns.has('bioticAerial'))    bioticAerial    = p.bioticAerial;
+    if (unknowns.has('bioticCryogenic')) bioticCryogenic = p.bioticCryogenic;
+    if (unknowns.has('bioticSilicate'))  bioticSilicate  = p.bioticSilicate;
+    if (unknowns.has('bioticSulfur'))    bioticSulfur    = p.bioticSulfur;
+  }
+
+  // Derive the legacy biosphereArchetype / biosphereTier labels from
+  // the productivity scalars (argmax + bucket thresholds). The labels
+  // are pure downstream classifications — they exist only to feed the
+  // info card display.
+  //
+  // Tier buckets:
+  //   < 0.05 → none
+  //   0.05–0.20 → prebiotic
+  //   0.20–0.50 → microbial
+  //   0.50–0.75 → complex
+  //   > 0.75 → gaian
+  {
+    const labels = labelsFromProductivity({
+      carbon_aqueous:     bioticCarbonAqueous,
+      subsurface_aqueous: bioticSubsurfaceAqueous,
+      aerial:             bioticAerial,
+      cryogenic:          bioticCryogenic,
+      silicate:           bioticSilicate,
+      sulfur:             bioticSulfur,
+    });
+    biosphereArchetype = labels.archetype;
+    biosphereTier      = labels.tier;
+  }
+
   // ─── DERIVE worldClass ─── pure label off settled physical state.
   // Runs LAST so it reads the final refined T (post Pass B) plus the
   // settled atm composition (hycean/helium branches inspect atm1).
@@ -1620,6 +1899,8 @@ function fillBody(b, allBodies, stars) {
     cloudLayers, surfaceOpacity,
     hazeAerosols, dustStrength,
     resMetals, resSilicates, resVolatiles, resRareEarths, resRadioactives, resExotics,
+    bioticCarbonAqueous, bioticSubsurfaceAqueous, bioticAerial,
+    bioticCryogenic, bioticSilicate, bioticSulfur,
     biosphereArchetype, biosphereTier,
     periodDays, semiMajorAu,
     eccentricity, inclinationDeg, axialTiltDeg, orbitalPhaseDeg,

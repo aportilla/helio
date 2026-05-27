@@ -1222,7 +1222,20 @@ export const GREENHOUSE_POTENCY_BY_GAS = {
 // radiogenic heat over Gyr, sustain longer-lived dynamos and surface
 // renewal. Earth (M=1) lands at the prior mean; Mars (M=0.107) at ~30%
 // of that; a 5 M⊕ super-Earth at ~2.2×.
-export const TECTONIC_BASE = { mean: 0.4, sd: 0.25, min: 0, max: 1.0 };
+//
+// Realistic baseline: { mean: 0.4, sd: 0.25 } puts Earth at the mean and
+// gives Mars-mass bodies ~0.13 tect (matching reality).
+//
+// Tune: lift mean to 0.55 + widen sd to 0.35. The sqrt(mass) damping
+// pushes most procgen rocky bodies (sub-Earth mass) below tect=0.2,
+// which then dampens magnetic field dynamos below the threshold any
+// biotic productivity needs. Lifting mean compensates so the
+// population spans tect=0.2..0.9 instead of clustering 0.1..0.4 —
+// more diversity in the dynamo, surface-renewal, and outgassing
+// signals all of which downstream rules consume.
+const TECTONIC_BASE_REALISTIC = { mean: 0.4,  sd: 0.25, min: 0, max: 1.0 };
+const TECTONIC_BASE_TUNE      = { mean: 0.55, sd: 0.35 };
+export const TECTONIC_BASE = mergeTunes(TECTONIC_BASE_REALISTIC, TECTONIC_BASE_TUNE);
 
 // Tidal-heating lift for moons of giants. Real tidal heating scales as
 // M_host² · e² / a⁵; for our catalog the host-mass term doesn't change
@@ -1305,12 +1318,29 @@ export const TEMP_SWING = {
 // Real Earth 0.31. Within an sd.
 // Mars (M=0.107, tect≈0.07): cap=0.5×0.5=0.25 × dynamo=0.07×1=0.07 → 0.017 G.
 // Real Mars (relict) ~0.01-0.04. ✓
-export const MAGNETIC_FIELD = {
-  capBase:        0.5,   // gauss at M=1 (Earth-anchored cap)
-  capExponent:    0.3,   // mass scaling
-  giantBoost:     5.0,   // multiplier for radius >= 2 (deep convective dynamo)
+// Realistic baseline: { capBase: 0.5 } is Earth-anchored — at M=1, tect≈0.4,
+// rot≈24, noise=1 → B≈0.20 G, matching Earth's measured 0.31 G to
+// within one sd. giantBoost=5 anchors Jupiter at ~14 G (real 4-13 G).
+//
+// Tune: bump capBase to 0.75 and widen noise so the population is
+// more bimodal — some rocky worlds get strong dynamos (Earth-class),
+// others stay essentially field-free (Mars/Mercury-class), with fewer
+// in the muddy middle. Real exoplanet science suggests a bimodal
+// distribution: dynamo activity follows a step function in core
+// heat-flow + rotation, so populations cluster at "active" or "dead"
+// rather than uniform low values. Widening sd to 0.7 + max to 4.0
+// gives both more peaks AND more troughs.
+const MAGNETIC_FIELD_REALISTIC = {
+  capBase:        0.5,
+  capExponent:    0.3,
+  giantBoost:     5.0,
   noise:          { mean: 1.0, sd: 0.5, min: 0.1, max: 3.0 },
 };
+const MAGNETIC_FIELD_TUNE = {
+  capBase:        0.75,
+  noise:          { sd: 0.7, max: 4.0 },
+};
+export const MAGNETIC_FIELD = mergeTunes(MAGNETIC_FIELD_REALISTIC, MAGNETIC_FIELD_TUNE);
 
 // ---------------------------------------------------------------------------
 // Atmosphere composition — top-3 gases per world class
@@ -1326,8 +1356,9 @@ export const MAGNETIC_FIELD = {
 // 0.10 He / trace CH4. Earth's 0.78 N2 / 0.21 O2 is the OUTLIER, not the
 // rocky template — O2 at that concentration is a biosignature, produced
 // by photosynthesis. Abiotic rocky worlds carry O2 only as a photolysis
-// trace (sub-percent). See ATMOSPHERE_O2_BIOTIC_LIFT below for the
-// biosphere-conditional uplift.
+// trace (sub-percent). Biotic O2 lift is now a continuous function of
+// productivity[carbon_aqueous] applied at atm-sample time in procgen.mjs
+// (see BIOTIC_O2_LIFT_FACTOR there) — no table lookup.
 //
 // Atmosphere composition is dispatched on physical regime (not class).
 // Five regimes based on (radius, T, P, bulkWater):
@@ -1342,7 +1373,7 @@ export const MAGNETIC_FIELD = {
 //                     dominant (NH3 photolysis ages), trace CO2
 //                     (carbonate-cycle reservoir on biotic worlds).
 //                     Biotic O2 lift handles Earth's 21% via
-//                     ATMOSPHERE_O2_BIOTIC_LIFT.
+//                     productivity-driven biotic O2 lift in procgen.mjs.
 //   dry_outgassed   — Mars-class. CO2 dominant (volcanic outgassing,
 //                     no carbonate sink), thin pressure means most
 //                     species lost.
@@ -1360,24 +1391,31 @@ export const ATMOSPHERE_GASES_BY_REGIME = {
   dry_outgassed:   { CO2: 5,  N2: 2,   Ar: 1,    SO2: 0.3, H2O: 0.3 },
 };
 
-// Atm regime thresholds. Kept here so they can be tuned without touching
-// the dispatch code in procgen.mjs.
-export const ATMOSPHERE_REGIME_THRESHOLDS = {
-  coldTempMaxK:      200,    // T below → cold_outgassed
-  thickPressureBar:  30,     // P above → thick_outgassed
-  wetBulkWaterMin:   1e-4,   // bulkWater above → wet_outgassed
+// Realistic baseline: wetBulkWaterMin=1e-4 was calibrated against
+// Earth's bulk-water fraction (~2.3e-4) — bodies with at least that
+// much water reservoir entered the N2-dominant regime.
+//
+// Tune: loosen wetBulkWaterMin to 1e-5. The procgen distribution of
+// bulkWaterFraction puts most rocky bodies below the realistic
+// threshold, even when they're in the habitable zone — they fall to
+// dry_outgassed (CO2-dominant Mars-class atmospheres) by default. The
+// looser threshold catches more habitable-zone bodies and gives them
+// Earth-class N2 atmospheres, which is the precondition for biotic
+// carbon_aqueous productivity to fire. Hot Venus-class bodies still
+// hit the thick_outgassed gate first, so this only affects temperate
+// thin-atm bodies.
+const ATMOSPHERE_REGIME_THRESHOLDS_REALISTIC = {
+  coldTempMaxK:      200,
+  thickPressureBar:  30,
+  wetBulkWaterMin:   1e-4,
 };
-
-// O2 weight multiplier applied to `rocky`/`ocean` worldClass atmospheres
-// when the host carries oxygenic-photosynthesis-grade biosphere. Without
-// life, O2 stays at its trace photolysis weight (~0.05); with `complex`
-// or `gaian` carbon_aqueous life, weight × 60 ≈ 3, restoring Earth-class
-// O2 fractions on planets that should actually have them. Microbial
-// carbon_aqueous gets a partial lift (×15 ≈ 0.75) to model early-Earth
-// "Great Oxidation transition" worlds where O2 is rising but not dominant.
-export const ATMOSPHERE_O2_BIOTIC_LIFT = {
-  carbon_aqueous: { microbial: 15, complex: 60, gaian: 60 },
+const ATMOSPHERE_REGIME_THRESHOLDS_TUNE = {
+  wetBulkWaterMin:   1e-5,
 };
+export const ATMOSPHERE_REGIME_THRESHOLDS = mergeTunes(
+  ATMOSPHERE_REGIME_THRESHOLDS_REALISTIC,
+  ATMOSPHERE_REGIME_THRESHOLDS_TUNE,
+);
 
 // Sub-trace surface pressure is treated as airless — the Filler skips
 // atm fill when surfacePressureBar is below this floor (covers airless
@@ -1637,15 +1675,23 @@ export const CONDENSABLES = [
 // ---------------------------------------------------------------------------
 // Biosphere — two orthogonal axes: archetype × tier
 // ---------------------------------------------------------------------------
+//
+// Both axes are now DERIVED from per-archetype productivity scalars
+// computed in the Filler (productivityPreAtm + productivityPostAtm in
+// procgen.mjs). The legacy `biosphereFor` habitat-walk has been
+// removed — labels are pure downstream classifications of physics.
+// These exports remain as enum-iteration helpers (audit reports,
+// info-card display) but don't drive any procgen rolls.
 
-// Tiers form an ordered ladder (none < prebiotic < microbial < complex <
-// gaian); the runtime can answer "is there any life here?" with a tier
-// check and "what kind?" with the archetype check. Sterile worlds carry
-// tier=`none` and archetype=null.
+// Tiers form an ordered ladder (none < prebiotic < microbial < complex
+// < gaian). Bucket thresholds for productivity → tier live in
+// `labelsFromProductivity` in procgen.mjs.
 export const BIOSPHERE_TIERS = ['none', 'prebiotic', 'microbial', 'complex', 'gaian'];
 
-// All recognized archetypes. Each describes a distinct biochemistry /
-// habitat combination — see BIOSPHERE_HABITATS for physics-keyed gates.
+// All recognized archetypes — each describes a distinct biochemistry /
+// habitat combination. Productivity formulas in procgen.mjs derive a
+// continuous [0..1] scalar per archetype from the body's physics; the
+// argmax assigns the body's archetype label.
 export const BIOSPHERE_ARCHETYPES = [
   'carbon_aqueous',      // Earth-standard, water + carbon
   'subsurface_aqueous',  // ice-shell ocean (Europa, Enceladus)
@@ -1656,157 +1702,3 @@ export const BIOSPHERE_ARCHETYPES = [
 ];
 
 // Per-(worldClass, archetype) rolls. `gate` constrains which insolation
-// zone the host body must sit in for this archetype to even consider
-// appearing; `occurrenceRate` is P(this archetype takes hold | gate
-// satisfied); `tierWeights` is the conditional distribution over non-`none`
-// tiers when it does. Each eligible archetype rolls independently per
-// body; multiple hits get resolved by highest tier (ties → archetype
-// listed earlier wins, so put rarer/more-evocative archetypes first).
-//
-// Realistic block uses literature-derived rates where possible:
-//   - carbon_aqueous: 30-40% of temperate rocky/ocean worlds carry life of
-//     SOME tier. Within published f_life envelopes (Lineweaver 2007,
-//     Schulze-Makuch & Irwin 2008, Catling & Kasting 2017 — pessimistic
-//     ~1%, optimistic ~50%; we sit on the optimistic-but-defensible side).
-//   - subsurface_aqueous: Europa/Enceladus/Ganymede make this the most
-//     defensible "exotic habitat." Hand & Carlson 2017 estimate "a few
-//     percent" of icy moons may host subsurface oceans with chemistry.
-//     3% is conservative-optimistic.
-//   - sulfur: extension of Earth's chemoautotrophic thermal-vent biology.
-//     Real-but-rare; 1-3% is a reasonable extrapolation.
-//   - silicate, cryogenic, aerial: speculative SF tropes, no astrobiology
-//     consensus or examples. Realistic estimates are <0.1%. We keep them
-//     non-zero so the discovery moment exists at all, but they're
-//     deeply rare without the gameplay tune.
-// Biosphere habitats — physics-keyed (no class input). Each entry is a
-// {archetype, habitat-name, physical-gates, occurrenceRate, tierWeights}
-// tuple. The Filler walks the list, fires each habitat that matches the
-// body's physical state, and the highest-tier hit wins.
-//
-// Tuning rationale (preserved from the prior class-keyed table):
-//
-// (1) carbon_aqueous tier weights are tuned for 4X discovery — complex/
-//     gaian biased over the realistic prebiotic-heavy tail (Earth was
-//     prebiotic for ~1 Gyr, but "organic chemistry without replicating
-//     life" is the least interesting tier for the player).
-//
-// (2) Exotic archetypes (silicate, cryogenic, aerial) get boosted
-//     occurrence rates so they actually appear in a playthrough — real
-//     literature rates are <0.1% and would make them once-per-galaxy
-//     unicorns.
-//
-// (3) Aerial gas-world rates lifted (8-10%) for the visual-distinctness
-//     of atmospheric biospheres; ice_giant stays cooler at 2%.
-//
-// Habitats can overlap — a Europa-class body matches both
-// `icy_moon_subsurface` AND no other branch (its surface T excludes
-// all carbon/silicate paths). A super-Earth in the temperate zone
-// might match both ocean_temperate and rocky_temperate; the gates are
-// tight enough that overlap is rare. When it happens, multiple rolls
-// fire and the highest-tier wins.
-export const BIOSPHERE_HABITATS = [
-  // ─── carbon_aqueous — liquid water, atm, temperate ───
-  {
-    archetype: 'carbon_aqueous',
-    name: 'rocky_temperate',
-    gates: { tempMinK: 250, tempMaxK: 340, waterMin: 0.05, waterMax: 0.5, pressureMin: 0.006 },
-    occurrenceRate: 0.30,
-    tierWeights: { prebiotic: 0.35, microbial: 0.30, complex: 0.25, gaian: 0.10 },
-  },
-  {
-    archetype: 'carbon_aqueous',
-    name: 'ocean_temperate',
-    gates: { tempMinK: 250, tempMaxK: 340, waterMin: 0.5, pressureMin: 0.006 },
-    occurrenceRate: 0.40,
-    tierWeights: { prebiotic: 0.25, microbial: 0.30, complex: 0.30, gaian: 0.15 },
-  },
-  {
-    archetype: 'carbon_aqueous',
-    name: 'desert_temperate',
-    gates: { tempMinK: 250, tempMaxK: 340, waterMax: 0.05, iceMax: 0.05, pressureMin: 0.006 },
-    occurrenceRate: 0.05,
-    tierWeights: { prebiotic: 0.80, microbial: 0.20 },
-  },
-
-  // ─── subsurface_aqueous — cold + high bulkWater + ice shell ───
-  // Europa/Enceladus class. Doesn't require atm — ice shell IS the
-  // habitat barrier; subsurface ocean does the rest.
-  {
-    archetype: 'subsurface_aqueous',
-    name: 'icy_moon',
-    gates: { tempMaxK: 200, bulkWaterMin: 0.2, iceMin: 0.5, radiusMax: 2 },
-    occurrenceRate: 0.08,
-    tierWeights: { microbial: 0.85, complex: 0.15 },
-  },
-
-  // ─── aerial — gas/ice giant atmospheric biospheres ───
-  {
-    archetype: 'aerial',
-    name: 'gas_giant',
-    gates: { radiusMin: 8 },
-    occurrenceRate: 0.10,
-    tierWeights: { microbial: 0.85, complex: 0.15 },
-  },
-  {
-    archetype: 'aerial',
-    name: 'gas_dwarf_warm',
-    gates: { radiusMin: 2, radiusMax: 8, tempMinK: 200 },
-    occurrenceRate: 0.08,
-    tierWeights: { microbial: 0.85, complex: 0.15 },
-  },
-  {
-    archetype: 'aerial',
-    name: 'ice_giant_cold',
-    gates: { radiusMin: 3.5, tempMaxK: 200 },
-    occurrenceRate: 0.02,
-    tierWeights: { microbial: 0.90, complex: 0.10 },
-  },
-
-  // ─── cryogenic — cold terrestrial with hydrocarbon cycle ───
-  // Titan-class. Gates on cold + retained atm + volatile-rich bulk
-  // — these conditions imply CH4 in the atm via the cold_outgassed
-  // regime, no need to reference atm gases directly.
-  {
-    archetype: 'cryogenic',
-    name: 'titan_class',
-    gates: { tempMaxK: 200, radiusMax: 2, bulkWaterMin: 0.1, pressureMin: 0.5 },
-    occurrenceRate: 0.04,
-    tierWeights: { prebiotic: 0.80, microbial: 0.20 },
-  },
-
-  // ─── silicate — hot solid surfaces with mineral chemistry ───
-  {
-    archetype: 'silicate',
-    name: 'hot_rocky',
-    gates: { tempMinK: 400, tempMaxK: 900, radiusMax: 2, tectonicMin: 0.1 },
-    occurrenceRate: 0.005,
-    tierWeights: { prebiotic: 0.70, microbial: 0.25, complex: 0.05 },
-  },
-  {
-    archetype: 'silicate',
-    name: 'lava_silicate',
-    gates: { tempMinK: 900, radiusMax: 2 },
-    occurrenceRate: 0.03,
-    tierWeights: { prebiotic: 0.65, microbial: 0.30, complex: 0.05 },
-  },
-
-  // ─── sulfur — thermal vents + active outgassing ───
-  // Sulfur chemistry needs SO2 + sulfides which are produced by
-  // volcanic outgassing. Gate on (warm/hot + active tectonics + atm)
-  // rather than referencing SO2 directly — those conditions are what
-  // produce the SO2 in the first place.
-  {
-    archetype: 'sulfur',
-    name: 'thermal_vents',
-    gates: { tempMinK: 280, tempMaxK: 400, tectonicMin: 0.5, pressureMin: 0.1 },
-    occurrenceRate: 0.03,
-    tierWeights: { microbial: 1.0 },
-  },
-  {
-    archetype: 'sulfur',
-    name: 'volcanic',
-    gates: { tempMinK: 600, radiusMax: 2, tectonicMin: 0.7 },
-    occurrenceRate: 0.05,
-    tierWeights: { microbial: 1.0 },
-  },
-];

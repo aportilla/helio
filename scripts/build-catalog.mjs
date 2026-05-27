@@ -97,6 +97,55 @@ function radiusFromClassMass(cls, mass) {
   return Math.pow(mass, 0.8);
 }
 
+// Stellar age priors keyed on spectral class. Mean / SD in gigayears,
+// plus a hard cap roughly equal to 40% of the class's main-sequence
+// lifetime so an O-class star can't end up at 10 Gyr (it would have
+// exploded long ago). The thin galactic disc is ~10 Gyr old so any age
+// also clamps to 13.8 (universe age). Calibrated against published
+// age-class distributions: Sol's 4.6 Gyr lands solidly in the G-class
+// mode, M-dwarfs skew old (long-lived population), O/B young.
+//
+// MS lifetime cap source: t_MS ≈ 10 Gyr × (M/M☉)^(-2.5). For O-class
+// mean mass ~30 M☉ → ~2 Myr; for B ~9 M☉ → ~40 Myr; for A ~2 M☉ →
+// ~1.8 Gyr; G ~1 M☉ → 10 Gyr; M ~0.3 M☉ → ~200 Gyr (capped at universe).
+const AGE_BY_CLASS = {
+  O:  { mean: 0.02,  sd: 0.015, maxMS: 0.005 },
+  B:  { mean: 0.15,  sd: 0.10,  maxMS: 0.06  },
+  A:  { mean: 0.8,   sd: 0.5,   maxMS: 2.0   },
+  F:  { mean: 3.0,   sd: 1.5,   maxMS: 5.0   },
+  G:  { mean: 5.0,   sd: 2.0,   maxMS: 10.0  },
+  K:  { mean: 6.0,   sd: 2.5,   maxMS: 13.8  },
+  M:  { mean: 7.0,   sd: 3.0,   maxMS: 13.8  },
+  WD: { mean: 4.0,   sd: 2.0,   maxMS: 13.8  },
+  BD: { mean: 6.0,   sd: 3.0,   maxMS: 13.8  },
+};
+const AGE_FLOOR_GYR = 0.001;
+
+// Box-Muller transform — sample from a standard Normal using two
+// uniforms. Used by ageFromClass and any other field that wants
+// Gaussian noise rather than uniform.
+function gaussianSample(rng) {
+  let u1 = 0, u2 = 0;
+  while (u1 === 0) u1 = rng();   // avoid log(0)
+  u2 = rng();
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+
+// Derive a stellar age from class + an id-seeded PRNG. Truncated Gaussian
+// clamped to [AGE_FLOOR_GYR, min(13.8, maxMS)]. Catalog age (when set on
+// the CSV row) takes priority and skips this function entirely.
+function ageFromClass(cls, id) {
+  const prior = AGE_BY_CLASS[cls];
+  if (!prior) return 5.0; // defensive — shouldn't fire (every class in table)
+  const rng = mulberry32(hash32(`age:${id}`));
+  // Two-sample average dampens long tails — a Gaussian sample × sd plus
+  // mean would land outside the cap too often for short-lived classes.
+  const z = (gaussianSample(rng) + gaussianSample(rng)) / 2;
+  const ageRaw = prior.mean + z * prior.sd;
+  const cap = Math.min(13.8, prior.maxMS);
+  return Math.max(AGE_FLOOR_GYR, Math.min(cap, ageRaw));
+}
+
 const BC_BY_CLASS = { O: -4.0, B: -1.5, A: -0.3, F: -0.1, G: -0.1, K: -0.8, M: -2.5 };
 const ML_ALPHA   = { O:  3.5, B:  3.8, A:  4.0, F:  4.0, G:  4.0, K:  3.0, M: 2.3 };
 const PARSEC_PER_LY = 1 / 3.2615637;
@@ -219,9 +268,11 @@ function parseCsvCatalog(text, label) {
     const radiusSolar = radiusFromClassMass(cls, mass);
     const id = (row[ID] ?? '').trim();
     const iauName = IAU_NAME >= 0 ? (row[IAU_NAME] ?? '').trim() : '';
+    const ageGyr = ageFromClass(cls, id);
     out.push({
       id, name, iauName, ...pos, cls, rawClass, distLy, mass, radiusSolar,
       pxSize: radiusToPxSize(radiusSolar),
+      ageGyr,
     });
   }
   return out;
@@ -239,6 +290,7 @@ function loadCatalog(sources) {
     mass: 1.0,
     radiusSolar: 1.0,
     pxSize: radiusToPxSize(1.0),
+    ageGyr: 4.6,   // Sol is the calibration anchor; not derived from the prior.
   }];
   const seen = new Set(['sol']);
   for (const { text, label } of sources) {
@@ -493,14 +545,6 @@ const WORLD_CLASSES = new Set([
   // Gaseous
   'gas_dwarf', 'hycean', 'helium', 'ice_giant', 'gas_giant',
 ]);
-// Biosphere is two orthogonal axes — archetype (what kind of life) and
-// tier (how developed). Sterile bodies carry tier='none' and archetype is
-// 'n/a' (curated) or null (procgen-skipped). 'none' is the only tier where
-// archetype-null is meaningful.
-const BIOSPHERE_TIERS_SET = new Set(['none', 'prebiotic', 'microbial', 'complex', 'gaian']);
-const BIOSPHERE_ARCHETYPES_SET = new Set([
-  'carbon_aqueous', 'subsurface_aqueous', 'aerial', 'cryogenic', 'silicate', 'sulfur',
-]);
 const BODY_KINDS = new Set(['planet', 'moon', 'belt', 'ring']);
 const BODY_SOURCES = new Set(['catalog', 'procgen']);
 // belt_class and population_model are vestigial columns kept in the
@@ -550,6 +594,12 @@ const BODY_NUMERIC_FIELDS = [
   ['res_rare_earths',        'resRareEarths'],
   ['res_radioactives',       'resRadioactives'],
   ['res_exotics',            'resExotics'],
+  ['biotic_carbon_aqueous',     'bioticCarbonAqueous'],
+  ['biotic_subsurface_aqueous', 'bioticSubsurfaceAqueous'],
+  ['biotic_aerial',             'bioticAerial'],
+  ['biotic_cryogenic',          'bioticCryogenic'],
+  ['biotic_silicate',           'bioticSilicate'],
+  ['biotic_sulfur',             'bioticSulfur'],
   ['inner_au',               'innerAu'],
   ['outer_au',               'outerAu'],
   ['inner_planet_radii',     'innerPlanetRadii'],
@@ -587,8 +637,6 @@ function parseCsvBodies(text, label) {
     belt_class: colIdx('belt_class'),
     population_model: colIdx('population_model'),
     shepherd_id: colIdx('shepherd_id'),
-    biosphere_archetype: colIdx('biosphere_archetype'),
-    biosphere_tier: colIdx('biosphere_tier'),
   };
   for (const [csvName] of BODY_NUMERIC_FIELDS) ix[csvName] = colIdx(csvName);
   for (const [csvName] of BODY_STRING_FIELDS)  ix[csvName] = colIdx(csvName);
@@ -643,24 +691,10 @@ function parseCsvBodies(text, label) {
     if (shepherdId !== null && kind !== 'belt') {
       throw new Error(`${label}: ${id} shepherd_id only valid on kind='belt' (got ${kind})`);
     }
-    const biosphereArchetype = trackedCell('biosphere_archetype', 'biosphereArchetype');
-    if (biosphereArchetype !== null && !BIOSPHERE_ARCHETYPES_SET.has(biosphereArchetype)) {
-      throw new Error(`${label}: ${id} invalid biosphere_archetype=${biosphereArchetype}`);
-    }
-    const biosphereTier = trackedCell('biosphere_tier', 'biosphereTier');
-    if (biosphereTier !== null && !BIOSPHERE_TIERS_SET.has(biosphereTier)) {
-      throw new Error(`${label}: ${id} invalid biosphere_tier=${biosphereTier}`);
-    }
-    // Cross-axis consistency: a non-'none' tier requires an archetype, and
-    // an archetype requires a non-'none' tier. The Filler maintains this
-    // automatically; this check catches malformed catalog rows.
-    if (biosphereTier === 'none' && biosphereArchetype !== null) {
-      throw new Error(`${label}: ${id} biosphere_tier='none' incompatible with archetype=${biosphereArchetype}`);
-    }
-    if (biosphereTier !== null && biosphereTier !== 'none' && biosphereArchetype === null) {
-      throw new Error(`${label}: ${id} biosphere_tier=${biosphereTier} requires a biosphere_archetype`);
-    }
-
+    // biosphereArchetype + biosphereTier are no longer CSV-authored —
+    // they're derived from the per-archetype productivity scalars in
+    // the Filler. Initialized null here; Filler will overwrite via
+    // labelsFromProductivity.
     const body = {
       id,
       hostId: (row[ix.host_id] ?? '').trim(),
@@ -673,8 +707,8 @@ function parseCsvBodies(text, label) {
       worldClass,
       shepherdId,
       shepherdBodyIdx: null,
-      biosphereArchetype,
-      biosphereTier,
+      biosphereArchetype: null,
+      biosphereTier:      null,
       moons: [],
       ring: null,
     };

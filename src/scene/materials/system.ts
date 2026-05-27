@@ -245,7 +245,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // Per-band ± additive lightness perturbation. Keeps bands
       // visually distinct when the palette entries collapse to nearly
       // the same color — e.g. an H2/He gas giant with no cloud chemistry mix,
-      // where the 3 palette slots all reduce to a single near-beige
+      // where the palette slots all reduce to a single near-beige
       // and a per-band hue pick would otherwise paint every strip the
       // same RGB. 0.06 = ±6% value swing: invisible against a high-
       // contrast Jovian palette (where the inter-gas hue gap is much
@@ -367,16 +367,18 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // REGION_PATCH_FACTOR fine worley cells per axis into one
       // super-cell. The super-cell hash picks one of
       // REGION_BUCKET_COUNT (= 2^3 - 1 = 7) non-empty subsets of the
-      // body's three palette slots; that subset masks the body's
-      // natural weights, and the fine cell pick within the super-cell
-      // paints from the masked palette. Net visual: each region
-      // carries a distinct combination of the body's top-3 resource
-      // colors — Mercury's iron-grey, rare-earth rose, and silicate
-      // rust separate into spatial regions rather than mixing
-      // uniformly across the disc. This replaces the prior uniform-
-      // RGB lightness modifier (which collapsed multi-resource bodies
-      // to muddy shading on top of a uniform underlying texture);
-      // resource-based regions stay pixel-crisp and palette-coherent.
+      // body's three palette slots (top-1 archetype, top-1+top-2 pair
+      // archetype, body-tinted barren regolith); that subset masks the
+      // body's natural weights, and the fine cell pick within the
+      // super-cell paints from the masked palette. Net visual: each
+      // region carries a distinct combination of the body's archetype
+      // colors plus its tinted regolith — Mercury's iron-grey, basalt
+      // mosaic, and rust-stained dust separate into spatial regions
+      // rather than mixing uniformly across the disc. This replaces
+      // the prior uniform-RGB lightness modifier (which collapsed
+      // multi-resource bodies to muddy shading on top of a uniform
+      // underlying texture); resource-based regions stay pixel-crisp
+      // and palette-coherent.
       //
       // 6 → ~2-3 super-cells across the visible hemisphere of a 60-px
       // disc, the scale at which real planetary regional composition
@@ -805,9 +807,10 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           // super-cell hash discretizes into one of REGION_BUCKET_COUNT
           // non-empty subsets of {palette0, palette1, palette2}; the
           // subset masks the body's weights so each region paints from
-          // a different combination of its top-3 resources. The
-          // complement of the same bucket drives the subsurface — what
-          // the crater branch exposes.
+          // a different combination of its top-2 archetypes plus the
+          // body-tinted barren regolith. The complement of the same
+          // bucket drives the subsurface — what the crater branch
+          // exposes.
           vec2 regionCell = floor(winnerCell / REGION_PATCH_FACTOR);
           float regionH = hash21(regionCell + vec2(vSeed * 401.0, vSeed * 419.0));
           float bucketF = clamp(floor(regionH * REGION_BUCKET_COUNT), 0.0, REGION_BUCKET_COUNT - 1.0);
@@ -845,9 +848,12 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           }
           vec3 resourceSurface = liquidOceanHere ? OCEAN_COLOR : landCol;
 
-          // Subsurface (complement bucket) — drives crater color. Same
-          // resource hash so the surface and subsurface picks correlate
-          // per cell; only the mask differs.
+          // Subsurface (complement bucket within the 3-slot space) —
+          // drives crater color. Same resource hash so the surface and
+          // subsurface picks correlate per cell; only the mask differs.
+          // The {p0,p1,p2} surface bucket has an empty complement and
+          // falls back to the union — craters there expose the same
+          // mosaic as the surrounding regolith.
           vec3 subMask;
           if      (bucket == 0) subMask = vec3(0.0, 1.0, 1.0);
           else if (bucket == 1) subMask = vec3(1.0, 0.0, 1.0);
@@ -1206,29 +1212,34 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           vec2 cp = vec2(lon, lat) * vRadius / cAspect;
           vec2 cCellId = floor(cp);
           vec2 cCellFrac = cp - cCellId;
-          // Lat-only hash at high wind so cells in the same latitude
-          // band share a brightness pick (parallel bands); at low wind,
-          // both axes vary (patchy convective cells).
-          vec2 cHashKey = mix(cCellId, vec2(0.0, cCellId.y), cBandness);
+          // Lat-only hash at all wind speeds — convective belt/zone
+          // structure is zonal by physics regardless of jet speed. Wind
+          // controls cell aspect ratio (cLonPx widens), not whether
+          // cells stack as bands. A both-axes hash here would paint a
+          // hard grid checkerboard on bodies with bodyWind ≈ 0 (cold
+          // ice giants where no cloud deck fires, so the loop above
+          // can't surface a wind reference), since the lat-only dither
+          // below can't soften LON seams.
+          vec2 cHashKey = vec2(0.0, cCellId.y);
           float cBandHash = hash21(cHashKey + vec2(vSeed * 73.0, vSeed * 89.0));
           // ±0.08 brightness modulation on the atm column.
           float cMod = (cBandHash - 0.5) * 0.16;
 
           // Edge dither between adjacent lat bands. The column pass uses
           // grid-aligned cells (no worley jitter), so visible band seams
-          // are pure horizontal lines at every cLatPx env-pixels. At full
-          // cBandness adjacent LAT cells differ in brightness; LON-
-          // adjacent cells share lj via cHashKey, so lon seams are
-          // invisible and we only dither the lat axis. dyDir picks the
-          // closer lat edge, then we sample the neighbor's mod and
-          // Bayer-threshold so band-to-band transitions taper rather
-          // than meeting at a hard horizontal seam — same machinery as
-          // the firing/firing branch in the cloud loop below.
+          // are pure horizontal lines at every cLatPx env-pixels. LON-
+          // adjacent cells share lj via the lat-only cHashKey, so lon
+          // seams are invisible by construction — only the lat axis
+          // needs dithering. dyDir picks the closer lat edge, then we
+          // sample the neighbor's mod and Bayer-threshold so band-to-
+          // band transitions taper rather than meeting at a hard
+          // horizontal seam — same machinery as the firing/firing
+          // branch in the cloud loop below.
           float cDyDir = step(0.5, cCellFrac.y) * 2.0 - 1.0;
           float cLatDistFrac = (cDyDir > 0.0) ? (1.0 - cCellFrac.y) : cCellFrac.y;
           float cLatDistPx = cLatDistFrac * cLatPx;
           vec2 cCellId2 = cCellId + vec2(0.0, cDyDir);
-          vec2 cHashKey2 = mix(cCellId2, vec2(0.0, cCellId2.y), cBandness);
+          vec2 cHashKey2 = vec2(0.0, cCellId2.y);
           float cBandHash2 = hash21(cHashKey2 + vec2(vSeed * 73.0, vSeed * 89.0));
           float cMod2 = (cBandHash2 - 0.5) * 0.16;
           float cT = clamp(cLatDistPx / CLOUD_EDGE_DITHER_PX, 0.0, 1.0);

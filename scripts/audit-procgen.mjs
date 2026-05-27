@@ -41,7 +41,6 @@ import {
   BULK_METAL_FRACTION_BY_ZONE,
   BULK_VOLATILE_FRACTION_BY_ZONE,
   TRIPLE_POINT_BAR,
-  BIOSPHERE_HABITATS,
   BIOSPHERE_ARCHETYPES,
   BIOSPHERE_TIERS,
 } from './lib/procgen-priors.mjs';
@@ -838,49 +837,40 @@ for (const a of BIOSPHERE_ARCHETYPES) {
 }
 console.log();
 
-console.log('=== Biosphere habitats — physics-keyed observed vs prior occurrence ===');
-console.log('  archetype           habitat            |  n      hits   obs%     prior%');
-console.log('  --------------------+------------------+--------------------------------');
-// Walks each habitat's physics gates against every procgen planet/moon
-// to count eligible bodies, then compares observed archetype hits vs
-// the habitat's prior occurrence rate. Note observed hits are a LOWER
-// bound on raw rolls because tier resolution prefers higher tiers
-// across archetypes — a silicate hit can be overridden by a
-// carbon_aqueous hit on the same body.
-function bodyMatchesGates(b, g) {
-  const T = b.avgSurfaceTempK, water = b.waterFraction ?? 0, ice = b.iceFraction ?? 0;
-  const bulkWater = b.bulkWaterFraction ?? 0, P = b.surfacePressureBar ?? 0;
-  const R = b.radiusEarth ?? 0, tect = b.tectonicActivity ?? 0;
-  if (g.tempMinK != null && (T == null || T < g.tempMinK)) return false;
-  if (g.tempMaxK != null && (T == null || T > g.tempMaxK)) return false;
-  if (g.waterMin != null && water < g.waterMin) return false;
-  if (g.waterMax != null && water > g.waterMax) return false;
-  if (g.iceMin != null && ice < g.iceMin) return false;
-  if (g.iceMax != null && ice > g.iceMax) return false;
-  if (g.bulkWaterMin != null && bulkWater < g.bulkWaterMin) return false;
-  if (g.pressureMin != null && P < g.pressureMin) return false;
-  if (g.radiusMin != null && R < g.radiusMin) return false;
-  if (g.radiusMax != null && R > g.radiusMax) return false;
-  if (g.tectonicMin != null && tect < g.tectonicMin) return false;
-  return true;
-}
-for (const habitat of BIOSPHERE_HABITATS) {
-  let eligible = 0, hits = 0;
+console.log('=== Biotic productivity distribution (per archetype, procgen bodies) ===');
+console.log('  archetype           |  n>0      mean     >0.3      >0.5      >0.75');
+console.log('  --------------------+----------------------------------------------');
+const BIOTIC_FIELD_BY_ARCH = {
+  carbon_aqueous:     'bioticCarbonAqueous',
+  subsurface_aqueous: 'bioticSubsurfaceAqueous',
+  aerial:             'bioticAerial',
+  cryogenic:          'bioticCryogenic',
+  silicate:           'bioticSilicate',
+  sulfur:             'bioticSulfur',
+};
+for (const a of BIOSPHERE_ARCHETYPES) {
+  const f = BIOTIC_FIELD_BY_ARCH[a];
+  const vals = [];
   for (const b of bodies) {
     if ((b.kind !== 'planet' && b.kind !== 'moon') || b.source !== 'procgen') continue;
-    if (!bodyMatchesGates(b, habitat.gates)) continue;
-    eligible += 1;
-    if (b.biosphereArchetype === habitat.archetype) hits += 1;
+    const v = b[f];
+    if (v != null && v > 0) vals.push(v);
   }
-  if (!eligible) continue;
-  const obsRate = hits / eligible;
+  if (!vals.length) {
+    console.log('  ' + pad(a, 19) + ' |     0       —        —         —         —');
+    continue;
+  }
+  const mean = vals.reduce((s,v)=>s+v,0) / vals.length;
+  const above3 = vals.filter(v => v > 0.3).length;
+  const above5 = vals.filter(v => v > 0.5).length;
+  const above75 = vals.filter(v => v > 0.75).length;
   console.log(
-    '  ' + pad(habitat.archetype, 19) +
-    '  ' + pad(habitat.name, 17) +
-    ' | ' + pad(eligible, 6, true) +
-    ' ' + pad(hits, 5, true) +
-    '   ' + pad((obsRate * 100).toFixed(2) + '%', 6, true) +
-    '   ' + pad((habitat.occurrenceRate * 100).toFixed(2) + '%', 6, true),
+    '  ' + pad(a, 19) +
+    ' | ' + pad(vals.length, 6, true) +
+    '   ' + pad(mean.toFixed(3), 6, true) +
+    '   ' + pad(above3, 6, true) +
+    '   ' + pad(above5, 6, true) +
+    '   ' + pad(above75, 6, true),
   );
 }
 console.log();
