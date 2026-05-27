@@ -91,6 +91,14 @@ export const BODY_TEXTURE_WIDTH =
   MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1;
 export { ATM_COLUMN_TEXEL_OFFSET, DECK_COLOR_BASE_OFFSET, OCEAN_COLOR_TEXEL_OFFSET };
 
+// Body lighting (per-fragment colored highlight arc, driven by star
+// disc positions). Five-slot ceiling covers the largest realistic
+// multi-star clusters in the catalog (Capella's 4-star + room for a
+// distant companion) with headroom; per-fragment fragments past the
+// active count are gated by uLightCount, so unused slots cost nothing.
+// Layer code clamps the source list to MAX_LIGHTS before uploading.
+export const MAX_LIGHTS = 5;
+
 // mode='all' renders disc + halo (moons; keeps the original single-pass
 // behavior). mode='disc' or 'halo' splits the disc-interior and the
 // outward halo into two passes so the diagram can render all planet
@@ -109,6 +117,17 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       uViewport:  { value: new Vector2(window.innerWidth, window.innerHeight) },
       uCloudLayerData: { value: null },
       uCloudLayerRows: { value: 1 },
+      // Per-fragment lighting inputs (see MAX_LIGHTS comment).
+      // uLightCount gates the loop in the fragment shader; positions are
+      // in buffer-pixel coords (parity-snapped CPU-side), colors are
+      // the system-view-tuned star RGB triples (StarLightSource.color),
+      // intensities are per-cluster-normalized [0, 1]. Slot instances
+      // are stable so per-resize updates land via .set() / .setRGB()
+      // without garbage.
+      uLightCount:     { value: 0 },
+      uLightPos:       { value: Array.from({ length: MAX_LIGHTS }, () => new Vector2()) },
+      uLightColor:     { value: Array.from({ length: MAX_LIGHTS }, () => new Color()) },
+      uLightIntensity: { value: new Float32Array(MAX_LIGHTS) },
     },
     vertexShader: `
       // Per-body render metadata packed: x = size in px,
@@ -241,6 +260,17 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       varying vec3  vRimColor;
       uniform sampler2D uCloudLayerData;
       uniform float     uCloudLayerRows;
+
+      // Per-fragment lighting inputs. uLightCount is the active source
+      // count [0..MAX_LIGHTS]; positions are buffer-pixel coords
+      // (matched to vCenter's frame). Loop guarded against uLightCount
+      // so unused slots don't contribute; the JS side never writes past
+      // the active count, but zero-initialized slots wouldn't hurt
+      // visually either (intensity 0 nukes their lambert term).
+      uniform int       uLightCount;
+      uniform vec2      uLightPos[${MAX_LIGHTS}];
+      uniform vec3      uLightColor[${MAX_LIGHTS}];
+      uniform float     uLightIntensity[${MAX_LIGHTS}];
 
       // Perspective foreshortening for banded mode — the disc is treated
       // as the projection of a sphere whose rotation axis is tipped
@@ -551,6 +581,48 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       const float LINEA_BODY_THRESHOLD = 0.5;
       const float LINEA_WIDTH_FRAC     = 0.18;
       const float LINEA_DENSITY        = 0.18;
+
+      // ── Body lighting ──
+      // Pixel-art colored highlight arc keyed off the in-scene star disc
+      // positions (see MAX_LIGHTS in this file's preamble + StarsRowLayer.
+      // getLightSources). The body is treated as a sphere — un-inset
+      // normal N = (d.x/r, d.y/r, sqrt(1 − …)) covers the full visible
+      // hemisphere, no SPHERE_VISIBLE_FRAC inset because we want the
+      // lit zone to extend cleanly to the disc edge rather than pinch
+      // off like the surface worley cells do. vTilt is intentionally
+      // not applied — light comes from screen-space star positions,
+      // not the body's spin frame, so the lit side stays anchored to
+      // the geometric subsolar direction regardless of axial tilt.
+      //
+      // Per-light lambert:
+      //   dir2d = normalize(starPos − vCenter)
+      //   L     = normalize(vec3(dir2d, LIGHT_Z_BIAS))
+      //   λ_i   = max(0, dot(N, L)) × intensity_i
+      //
+      // LIGHT_Z_BIAS pushes the light source AWAY from the viewer (into
+      // the screen, behind the body) so the lit hemisphere faces away
+      // from us — and we only see the thin sliver of it that wraps
+      // around the limb on the star-facing side. Reads as "star is far
+      // in the distance behind the bodies" rather than "lamp suspended
+      // overhead." Negative because the disc normal's z-component is
+      // forward-facing (+z = toward viewer); a negative L.z makes dot(N,L)
+      // peak at the limb (where N.z ≈ 0 and N.xy aligns with L.xy)
+      // and trough at the disc center (where N = (0,0,1) is anti-
+      // parallel to L). Magnitude controls crescent thickness — more
+      // negative = thinner, almost edge-on rim; closer to 0 = thicker
+      // crescent reaching deeper toward disc center.
+      //
+      // Compositing: two bands, dithered against bayer4 so transitions
+      // stipple rather than ring. LIT band adds a per-light-color tint
+      // (weighted-average hue across all stars). HOT band stacks an
+      // additional brightness boost on the brightest crescent tip.
+      // Unlit fragments pass through untouched.
+      const float LIGHT_Z_BIAS         = -0.55;
+      const float LIGHT_BAND_LOW       = 0.18;
+      const float LIGHT_BAND_HIGH      = 0.52;
+      const float LIGHT_DITHER_WIDTH   = 0.08;
+      const float LIGHT_TINT_STRENGTH  = 0.12;
+      const float LIGHT_HOT_BOOST      = 0.10;
 
       float hash11(float x) {
         return fract(sin(x * 12.9898 + 78.233) * 43758.5453);
@@ -1375,6 +1447,43 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           vec3 tinted = mix(cloudCol, vHazeColor, hazeAbove);
 
           col = tinted;
+        }
+
+        // ── Lighting pass ──
+        // See the LIGHT_* constant block for the math + tuning rationale.
+        // Runs after all surface/cloud/haze paint so the tint composites
+        // onto the final body color, and BEFORE the hover rim so hover
+        // still wins on the outermost pixel ring.
+        //
+        // Per-light independent banding (NOT averaging across lights):
+        // each star runs its own band check on its own per-fragment
+        // lambert, then stacks its tint additively. Where star A
+        // dominates the local lambert (left rim) and star B is sub-
+        // threshold, only A's hue paints — B's contribution doesn't
+        // dilute the color signal. Overlap regions get both tints
+        // additively layered, which reads as a brighter combined zone
+        // where the crescents meet. The alternative — summing all
+        // lambert contributions and applying one averaged-hue tint —
+        // washes out the per-star color directionality even when
+        // each star physically dominates its own rim segment.
+        vec3 N_lit = vec3(d.x / vRadius, d.y / vRadius,
+                          sqrt(max(0.0, 1.0 - (d.x * d.x + d.y * d.y) / (vRadius * vRadius))));
+        for (int i = 0; i < ${MAX_LIGHTS}; i++) {
+          if (i >= uLightCount) break;
+          vec2 dir2d = normalize(uLightPos[i] - vCenter);
+          vec3 L = normalize(vec3(dir2d, LIGHT_Z_BIAS));
+          float lam = max(0.0, dot(N_lit, L)) * uLightIntensity[i];
+          // Per-light dither offset (7·i, 11·i) keeps each star's Bayer
+          // fringe from cascading on top of the next — independent
+          // stipple patterns per source.
+          float bL = bayer4(gl_FragCoord.xy + vec2(31.0 + float(i) * 7.0, 17.0 + float(i) * 11.0));
+          float ditheredMag = lam + (bL - 0.5) * 2.0 * LIGHT_DITHER_WIDTH;
+          if (ditheredMag > LIGHT_BAND_LOW) {
+            col = clamp(col + uLightColor[i] * LIGHT_TINT_STRENGTH, 0.0, 1.0);
+          }
+          if (ditheredMag > LIGHT_BAND_HIGH) {
+            col = clamp(col + uLightColor[i] * LIGHT_HOT_BOOST, 0.0, 1.0);
+          }
         }
 
         // 1-px hover rim — same as the previous flat-disc material. The

@@ -15,7 +15,8 @@ import {
 import { buildDiscPalette } from '../disc-palette';
 import { RENDER_ORDER_PLANET, RENDER_ORDER_PLANET_HALO, Z_PLANET, Z_STRIDE } from '../layout/constants';
 import type { RowSlot } from '../layout/row';
-import type { DiagramPick, PlanetCenterIndex } from '../types';
+import { writeLightUniforms } from '../lighting';
+import type { DiagramPick, PlanetCenterIndex, StarLightSource } from '../types';
 
 export class PlanetsLayer {
   // planetIndices[i] = bodyIdx of the i-th planet in row order.
@@ -238,6 +239,16 @@ export class PlanetsLayer {
   // first layout() call.
   getCenterIndex(): PlanetCenterIndex {
     return this.centerIndex;
+  }
+
+  // Push the current cluster's star positions / colors / intensities
+  // into both materials so the lighting pass in makePlanetMaterial picks
+  // up the per-fragment crescent tint. Cheap (a handful of uniform
+  // writes); called once per resize from SystemDiagram.layout.
+  setLightSources(lights: readonly StarLightSource[]): void {
+    if (!this.discMaterial || !this.haloMaterial) return;
+    writeLightUniforms(this.discMaterial, lights);
+    writeLightUniforms(this.haloMaterial, lights);
   }
 
   pickAt(x: number, y: number): DiagramPick | null {

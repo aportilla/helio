@@ -73,6 +73,13 @@ export class SystemDiagram {
     const centers = this.planets.getCenterIndex();
     this.moons.layout(centers);
     this.rings.layout(centers);
+    // Star positions are finalized — publish them to the body lighting
+    // pass. Pulls from stars (post-layout) and pushes to every body
+    // material; no per-tick update needed (the diagram is a static
+    // screen layout, so lighting only changes on resize).
+    const lights = this.stars.getLightSources();
+    this.planets.setLightSources(lights);
+    this.moons.setLightSources(lights);
   }
 
   // Hit-test the rendered discs at (x, y) in buffer-pixel coords. Walk

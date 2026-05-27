@@ -21,8 +21,9 @@ import {
   Z_BACK_MOON, Z_FRONT_MOON, Z_STRIDE,
 } from '../layout/constants';
 import type { RowSlot } from '../layout/row';
+import { writeLightUniforms } from '../lighting';
 import { hash32, mulberry32 } from '../geom/prng';
-import type { DiagramPick, PlanetCenterIndex } from '../types';
+import type { DiagramPick, PlanetCenterIndex, StarLightSource } from '../types';
 
 interface MoonSlot {
   // bodyIdx of this moon's parent planet. Layout looks the parent's
@@ -112,6 +113,18 @@ export class MoonsLayer {
       attr.needsUpdate = true;
       return;
     }
+  }
+
+  // Same contract as PlanetsLayer.setLightSources — push the current
+  // cluster's lights into both pool materials so each moon picks up its
+  // own per-fragment lit crescent. Moons sample the same star positions
+  // as their host planet; the geometric direction from a moon to a star
+  // is essentially identical to the parent's direction (separations are
+  // dozens of px, stars are off-screen above), so there's no per-moon
+  // light vector to compute.
+  setLightSources(lights: readonly StarLightSource[]): void {
+    if (this.backPool)  writeLightUniforms(this.backPool.material, lights);
+    if (this.frontPool) writeLightUniforms(this.frontPool.material, lights);
   }
 
   dispose(): void {

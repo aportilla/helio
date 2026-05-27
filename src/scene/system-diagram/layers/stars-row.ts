@@ -16,7 +16,7 @@ import {
   SYSTEM_VIEW_SATURATION_LIFT_MAX, SYSTEM_VIEW_SATURATION_LIFT_RATE,
 } from '../layout/constants';
 import { bigMiddleOrder, sumOf } from '../layout/row';
-import type { DiagramPick } from '../types';
+import type { DiagramPick, StarLightSource } from '../types';
 
 // Tune a galaxy-view class color for the system view. Lifts the minor
 // channels toward white by an amount proportional to color saturation
@@ -37,6 +37,21 @@ function tuneStarColorForSystemView(col: Color): Color {
   );
 }
 
+// Intensity proxy for per-body lighting. Uses the rendered disc area
+// (pxSize²) rather than bolometric luminosity — so the lighting that
+// reaches the planets agrees with the visual mass of each star disc on
+// screen. Real M-L luminosity spans ~4 orders of magnitude across
+// stellar classes (a Fomalhaut B/C-class companion is 50-3000× dimmer
+// than the A primary), which buries every dim companion below visual
+// detection. Rendered pxSize is already cube-root-compressed against
+// radiusSolar in build-catalog.mjs, so the dynamic range is tame and
+// a Fomalhaut triple lights every body with all three hues visible
+// rather than reading as a single-source A-class wash with imperceptible
+// red overtones.
+function discAreaIntensity(pxSize: number): number {
+  return pxSize * pxSize;
+}
+
 interface StarDisc {
   mesh: Mesh;
   geometry: PlaneGeometry;
@@ -51,6 +66,14 @@ interface StarDisc {
   // Cached current diameter in px — used to detect when layout()
   // needs to rebuild the geometry (size changed under width-fit scaling).
   currentDiam: number;
+  // Per-cluster-normalized intensity in [0, 1] driving body lighting
+  // contributions. Computed once at construction; the brightest member's
+  // raw approxLuminositySun is the normalization anchor.
+  intensity: number;
+  // System-view-tuned color (the same RGB the disc + halo shaders render).
+  // Cached as a plain triple to avoid copying out of a Three.js Color
+  // every frame.
+  lightColor: readonly [number, number, number];
 }
 
 export class StarsRowLayer {
@@ -72,6 +95,13 @@ export class StarsRowLayer {
     this.starMembers     = slotPerm.map(p => cluster.members[sortedIdx[p]]);
     this.starSlotDiscPx  = slotPerm.map(p => rawDiscPx[sortedIdx[p]]);
     this.slotByStarIdx   = new Map(this.starMembers.map((s, i) => [s, i]));
+
+    // Pre-normalize per-slot intensities so the largest cluster member
+    // anchors at 1.0. Floors at a small positive so a degenerate
+    // zero-pxSize input doesn't divide by zero.
+    const rawIntensity = this.starSlotDiscPx.map(d => discAreaIntensity(d));
+    const maxI = Math.max(1, ...rawIntensity);
+    const slotIntensity = rawIntensity.map(i => i / maxI);
 
     // Build one disc + one halo mesh per star. Both geometries are
     // sized to the star's natural diameter (before any width-fit
@@ -111,6 +141,8 @@ export class StarsRowLayer {
         mesh, geometry, material,
         halo, haloGeometry, haloMaterial,
         currentDiam: d,
+        intensity: slotIntensity[slot],
+        lightColor: [col.r, col.g, col.b],
       });
     });
   }
@@ -204,6 +236,24 @@ export class StarsRowLayer {
       }
     }
     return null;
+  }
+
+  // Snapshot of every cluster member's current screen position + tuned
+  // color + normalized intensity, for the body lighting pass in
+  // PlanetsLayer / MoonsLayer. Positions reflect the most recent
+  // layout() call (each star's mesh sits above the buffer top by
+  // STAR_OFFSCREEN_FRAC × radius); intensities and colors are static.
+  // Returns a fresh array each call — cheap (clusters cap at a handful
+  // of members) and lets the consumer hold it as long as needed without
+  // worrying about underlying mutation.
+  getLightSources(): readonly StarLightSource[] {
+    return this.starDiscs.map(disc => ({
+      x: disc.mesh.position.x,
+      y: disc.mesh.position.y,
+      r: disc.currentDiam / 2,
+      color: disc.lightColor,
+      intensity: disc.intensity,
+    }));
   }
 
   setHovered(pick: DiagramPick, value: 0 | 1): void {

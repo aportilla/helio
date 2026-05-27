@@ -29,3 +29,18 @@ export interface PlanetCenter {
   rowIdx: number;
 }
 export type PlanetCenterIndex = ReadonlyMap<number, PlanetCenter>;
+
+// StarsRowLayer publishes one entry per cluster member after its layout
+// pass; PlanetsLayer + MoonsLayer consume it to drive per-fragment
+// lighting on the body discs. Position is in buffer-pixel coords
+// (cy lands above the viewport top by STAR_OFFSCREEN_FRAC × radius — see
+// stars-row.ts), color is the system-view-tuned class color, intensity
+// is normalized within the cluster so the brightest member = 1.0.
+// Frozen tuple-style: every consumer reads, none mutates.
+export interface StarLightSource {
+  readonly x: number;
+  readonly y: number;
+  readonly r: number;
+  readonly color: readonly [number, number, number];
+  readonly intensity: number;
+}

@@ -15,6 +15,7 @@ export {
   BODY_TEXTURE_WIDTH,
   DECK_COLOR_BASE_OFFSET,
   MAX_CLOUD_LAYERS,
+  MAX_LIGHTS,
   OCEAN_COLOR_TEXEL_OFFSET,
   makeBlobMaterial,
   makePlanetMaterial,
