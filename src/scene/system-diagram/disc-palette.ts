@@ -92,7 +92,12 @@
 // (Jupiter's GRS, Saturn's polar hexagon) for a uniform haze tint.
 //
 // The rim halo uses the same weighted-average merger plus each cloud
-// deck's base color folded in by deck coverage.
+// deck's base color folded in by deck coverage — this is the loft's
+// base (Mie) hue, which the shader lights per-star. `scatteringRimFor`
+// additionally derives the per-gas limb Rayleigh scatter color (the
+// frac × SCATTERING_POTENCY blend of SCATTERING_COLOR) and a Rayleigh-
+// fraction strength; the shader rotates the lit rim toward that hue with
+// loft-column depth (hue only — see makePlanetMaterial's Rayleigh block).
 //
 // ─── Where chemistry lives ─────────────────────────────────────────
 //
@@ -685,6 +690,15 @@ export interface DiscPalette {
   // Earth, mineralogy-rust on Mars).
   readonly rimColor: readonly [number, number, number];
   readonly rimWidthPx: number;
+  // Per-body limb Rayleigh scattering (see scatteringRimFor). scatterColor
+  // is the gas-specific scatter hue the rim shifts toward (re-illuminated
+  // by starlight in the shader); scatterStrength [0..1] scales the maximum
+  // depth-graded hue shift so a clear-air body (Earth) shifts strongly
+  // while an absorption-dominated one (Venus) barely moves. Black /
+  // strength 0 on bodies with no clear-air signal — the shader then leaves
+  // the rim at its Mie color.
+  readonly scatterColor: readonly [number, number, number];
+  readonly scatterStrength: number;
   // Phase 1.4 surface age [0..1]. 1 = perpetually refreshed (Io's lava,
   // Enceladus's plumes); 0 = ancient unmodified (Mercury, Luna,
   // Callisto). Drives crater density and the ice-on-top-vs-buried mix.
@@ -799,6 +813,58 @@ function surfaceHazeContributors(body: Body): Array<{ color: Color; weight: numb
     }
   }
   return out;
+}
+
+// Per-body limb Rayleigh scattering — drives the rim halo's depth-graded
+// hue shift (see makePlanetMaterial's Rayleigh constant block). Returns
+// the per-gas scattering hue + a strength scalar:
+//
+//   color    — the frac × SCATTERING_POTENCY weighted blend of the body's
+//              atm gases' SCATTERING_COLOR. SCATTERING_COLOR already
+//              encodes each gas's wavelength-selective scatter/absorb hue
+//              (N2/O2 blue, CO2 warmer cool-grey, CH4 cyan, SO2 yellow),
+//              so this is the gas-specific limb color the starlight then
+//              re-illuminates in the shader.
+//   strength — the Rayleigh FRACTION of the co-located clear-air signal:
+//              rayleigh ÷ (rayleigh + bulk-gas absorption), using the same
+//              HAZE_*_SCALE weights the rim merger uses. Aerosols/dust are
+//              deliberately NOT in the denominator: at the limb the thin
+//              Rayleigh gas sits ABOVE the aerosol haze (the outer loft
+//              layers are clear gas), and the shader's depth gradient
+//              already models "haze is lower." Bulk-gas absorption IS
+//              co-located in the same column, so it competes. The column
+//              factor cancels in the ratio, leaving a pressure-independent
+//              hue-fraction (the rim's width + alpha already carry "how
+//              much atmosphere"). Earth → ~0.76 (clean blue), Titan → ~0.8
+//              (N2 blue fringe over the orange Mie haze), Venus → ~0.39
+//              (CO2's pale cool-grey, muted) — the three read distinctly.
+//
+// No-surface giants (null surface pressure) return strength 0: their limb
+// hue already comes from the cloud/atm-column signal in rimColor, and the
+// clear-air Rayleigh model doesn't apply.
+function scatteringRimFor(body: Body): { color: readonly [number, number, number]; strength: number } {
+  const P = body.surfacePressureBar;
+  if (P === null || P <= 0) return { color: [0, 0, 0], strength: 0 };
+  const atmPairs: Array<[AtmGas | null, number | null]> = [
+    [body.atm1 as AtmGas | null, body.atm1Frac],
+    [body.atm2 as AtmGas | null, body.atm2Frac],
+    [body.atm3 as AtmGas | null, body.atm3Frac],
+  ];
+  let mr = 0, mg = 0, mb = 0, rayW = 0, bulkW = 0;
+  for (const [gas, frac] of atmPairs) {
+    if (gas === null || frac === null || frac <= 0) continue;
+    const sCol = SCATTERING_COLOR[gas];
+    const sPotency = SCATTERING_POTENCY[gas] ?? 0;
+    if (sCol && sPotency > 0) {
+      const w = frac * sPotency;
+      mr += sCol.r * w; mg += sCol.g * w; mb += sCol.b * w; rayW += w;
+    }
+    bulkW += frac * (GAS_POTENCY[gas] ?? 0);
+  }
+  if (rayW <= 0) return { color: [0, 0, 0], strength: 0 };
+  const rs = rayW * HAZE_RAYLEIGH_SCALE;
+  const bs = bulkW * HAZE_BULK_GAS_SCALE;
+  return { color: [mr / rayW, mg / rayW, mb / rayW], strength: rs / (rs + bs) };
 }
 
 // Multiplier applied to stratosphericHazeStrengthFor when folding the
@@ -1177,6 +1243,12 @@ export function buildDiscPalette(
     }
   }
 
+  // Per-body limb Rayleigh scatter color + strength for the rim hue shift.
+  // Suppressed on tiny discs alongside the rest of the atmosphere paint.
+  const scatter = tinyDisc
+    ? { color: [0, 0, 0] as readonly [number, number, number], strength: 0 }
+    : scatteringRimFor(body);
+
   // Per-class hue tint applies to surface palette entries only. Cloud
   // palettes already derive from physically-anchored gas species and
   // skip the tint so cloud colors stay aligned with their condensates.
@@ -1206,6 +1278,8 @@ export function buildDiscPalette(
     hazeColor: hazeColorRgb,
     rimColor: rimColorRgb,
     rimWidthPx,
+    scatterColor: scatter.color,
+    scatterStrength: scatter.strength,
     surfaceAge,
     globalness,
   };

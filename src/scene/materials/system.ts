@@ -41,9 +41,22 @@ import { glsl, RASTER_PAD, snappedMaterials } from './shared';
 //      products (Titan tholin, Venus sulfate, Jovian NH4SH), and lifted
 //      mineral dust. Surface bodies only (no-surface uniform overlay
 //      would crush the cloud-band structure on gas giants).
-//   4. **Rim** — outward halo driven by aAtmoScalars.w (rimWidthPx).
-//      Color is the merged-rim blend in vRimColor (cloud slot 0 +
-//      surface haze contributors, or cloud + atm column on giants).
+//   4. **Rim** — outward atmospheric-loft halo driven by aAtmoScalars.y
+//      (rimWidthPx). The base hue is the merged-rim blend in vRimColor
+//      (cloud slot 0 + surface haze contributors, or cloud + atm column
+//      on giants), but the halo is LIT by the in-scene stars rather than
+//      a flat ring (see the "atmospheric loft glow" + "Rayleigh hue
+//      shift" constant blocks). Per fragment: a half-lambert angular wrap
+//      glows the loft on the star-facing limb (extending past the
+//      terminator, further than the disc-interior crescent), colored as
+//      gas × starlight (hue-preserving multiply) with a gated white
+//      forward-scatter tip; opacity ramps from a faint night floor to
+//      full on the lit limb. Then a depth-graded, hue-ONLY Rayleigh shift
+//      rotates the color toward the body's per-gas scatter hue (sampled
+//      from the body texture) re-illuminated by the starlight — strongest
+//      in the outermost loft layer — scaled by the body's Rayleigh
+//      fraction (vWeights.w) so a clear-air limb (Earth) shifts blue
+//      while an absorption/aerosol-dominated one (Venus) barely moves.
 //
 // Cloud-structure snaps binary at 0.5 in v1; the procgen distributions
 // produce mostly 0 (terrestrial patchy) or 1 (banded / venusian / gas
@@ -75,6 +88,11 @@ import { glsl, RASTER_PAD, snappedMaterials } from './shared';
 //   [MAX_CLOUD_LAYERS+1+N]           — per-body ocean color (rgb, .a unused).
 //                                       Painted in surface-liquid cells (see
 //                                       `oceanColorFor` in disc-palette.ts).
+//   [MAX_CLOUD_LAYERS+1+N+1]          — per-body limb Rayleigh scatter color
+//                                       (rgb, .a unused). Target hue for the
+//                                       rim's depth-graded Rayleigh shift (see
+//                                       `scatteringRimFor` in disc-palette.ts);
+//                                       its strength rides on aWeights.w.
 // Pulling everything off vertex attributes brings the per-pool attribute
 // count back under the gl_MaxVertexAttribs cap.
 // Up to 4 stratified decks per body — 3 chemistry decks (Jupiter
@@ -87,9 +105,13 @@ export const MAX_CLOUD_LAYERS = 4;
 const ATM_COLUMN_TEXEL_OFFSET = MAX_CLOUD_LAYERS;
 const DECK_COLOR_BASE_OFFSET = MAX_CLOUD_LAYERS + 1;
 const OCEAN_COLOR_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS;
+// Per-body limb Rayleigh scatter color (rgb; .a unused) — the gas-specific
+// hue the rim halo's depth-graded Rayleigh shift targets. Strength rides
+// on aWeights.w, so only the color needs a texel here.
+const SCATTER_COLOR_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1;
 export const BODY_TEXTURE_WIDTH =
-  MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1;
-export { ATM_COLUMN_TEXEL_OFFSET, DECK_COLOR_BASE_OFFSET, OCEAN_COLOR_TEXEL_OFFSET };
+  MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1 + 1;
+export { ATM_COLUMN_TEXEL_OFFSET, DECK_COLOR_BASE_OFFSET, OCEAN_COLOR_TEXEL_OFFSET, SCATTER_COLOR_TEXEL_OFFSET };
 
 // Body lighting (per-fragment colored highlight arc, driven by star
 // disc positions). Five-slot ceiling covers the largest realistic
@@ -148,7 +170,9 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       attribute vec4  aPalette1;
       attribute vec4  aPalette2;
       // xyz = surface palette resource weights (sum-to-1 normalized);
-      // w currently unused — reserved for layer payload in PR 3.
+      // w = per-body limb Rayleigh scatter strength [0..1] (scales the
+      // rim's depth-graded hue shift; see scatteringRimFor in
+      // disc-palette.ts). Reaches the fragment shader via vWeights.w.
       attribute vec4  aWeights;
       // Surface scalars: x = waterFrac, y = iceFrac, z = surfaceAge,
       // w = globalness.
@@ -401,7 +425,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // layers fade naturally as fewer strokes overlap them. Computed
       // inline rather than actually painting W strokes — the math is
       // the closed form of multiple back-to-front blends.
-      const float OUTER_BASE_ALPHA = 0.35;
+      const float OUTER_BASE_ALPHA = 0.5;
 
       // Per-region primary/secondary/tertiary slot election. Aggregate
       // REGION_PATCH_FACTOR fine worley cells per axis into one super-
@@ -624,6 +648,85 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       const float LIGHT_TINT_STRENGTH  = 0.12;
       const float LIGHT_HOT_BOOST      = 0.10;
 
+      // ── Atmospheric loft glow ──
+      // The outward rim halo (the puffy atmosphere lofted past the limb)
+      // glows with the host star's color filtered through the gas's own
+      // hue, brightest on the star-facing limb and dim on the night side.
+      // Geometry is purely angular — the rim has no surface normal, so we
+      // compare each rim fragment's outward direction (normalize(d)) to
+      // the screen-space direction toward each star. A HALF-LAMBERT wrap
+      // (dot × 0.5 + 0.5) is used rather than a clamped max(0, dot): the
+      // lofted atmosphere is lit by forward-scattered starlight that
+      // wraps around the whole limb when the body is backlit, so the glow
+      // must extend PAST the terminator and reach well into the night-
+      // side rim — further around than the disc-interior surface crescent
+      // (which uses a clamped lambert and dies at the terminator). The
+      // wrap is 1 on the star-facing limb, 0.5 at the terminator, and
+      // tapers toward 0 at the anti-solar point. RIM_GLOW_FOCUS (a power
+      // > 1) then steepens that taper so the glow reaches a bit past the
+      // terminator and fades out, rather than carrying all the way around
+      // to the night-side limb.
+      //
+      // Color model (multiplicative — the naturalistic core): the
+      // atmosphere scatters incident starlight filtered through its own
+      // gas color, so the lit hue is vRimColor × uLightColor. A
+      // white/cream star leaves the gas hue INTACT (Titan stays orange);
+      // a red dwarf warms it; a blue star cools it — the light modulates
+      // the atmosphere's color rather than replacing it. Because both
+      // inputs are ≤ 1 the product never clips, so the gas character is
+      // preserved. Critically the glow's STRENGTH comes from alpha +
+      // extent (below), NOT from over-driving the color: a large
+      // RIM_GLOW_GAIN clips the dominant channels to 1.0, equalizes them,
+      // and bleaches the hue toward the raw star white — exactly the wash
+      // we're avoiding. Keep RIM_GLOW_GAIN modest (a touch over 1 for a
+      // gentle luminous lift).
+      //
+      // The one star-colored term is RIM_TIP_WHITE: a small white
+      // forward-scatter highlight gated to the very brightest sunward
+      // sliver via pow(lit, RIM_TIP_FOCUS), so the extreme limb catches a
+      // bright-edge pop (as on real backlit hazes) without bleaching the
+      // rest of the arc. Set RIM_TIP_WHITE = 0 for a pure gas×light glow.
+      //
+      // mix() runs from vRimColor (the gas's own color, shown on the deep
+      // night limb) toward that illuminated hue by the per-fragment lit
+      // factor.
+      //
+      // Alpha: the existing radial stack falloff is multiplied by an
+      // angular term that ramps from RIM_DARK_FLOOR (faint night-side
+      // ambient band — the atmosphere is still there, just unlit) to 1.0
+      // on the lit limb. Dithered against bayer4 so the angular fade
+      // stipples instead of feathering (pixel-crisp aesthetic).
+      const float RIM_GLOW_FOCUS   = 2.0;
+      const float RIM_GLOW_GAIN    = 1.25;
+      const float RIM_TIP_WHITE    = 0.35;
+      const float RIM_TIP_FOCUS    = 5.0;
+      const float RIM_DARK_FLOOR   = 0.15;
+      const float RIM_DITHER_WIDTH = 0.10;
+
+      // ── Rayleigh hue shift through the lofted column ──
+      // The lofted atmosphere progressively re-tints the glow toward the
+      // Rayleigh-scattered hue with COLUMN DEPTH — strongest in the
+      // outermost loft layer, weakest at the inner edge (a 1-px loft gets
+      // the full single-layer shift). This is a HUE-ONLY operator: it
+      // never changes the glow's brightness or opacity. Brightness is held
+      // by renormalizing the shifted color back to the base color's
+      // luminance (so mixing toward it preserves luminance exactly, since
+      // luminance is linear in the channels), and the alpha is left
+      // untouched — it only rotates the color.
+      //
+      // The target hue is the body's PER-GAS scatter color (vScatterColor,
+      // sampled from the per-body texture; the frac×SCATTERING_POTENCY
+      // blend computed in disc-palette.ts — N2/O2 blue, CO2 cool-grey, CH4
+      // cyan, SO2 yellow) re-illuminated by the STARLIGHT. So it's dynamic
+      // to BOTH: the gas sets the scatter hue, the star sets the incident
+      // spectrum — a white/blue star yields a vivid fringe, a red dwarf a
+      // dim grey-violet one. The per-body Rayleigh FRACTION (vWeights.w)
+      // scales the shift so clear-air bodies (Earth) shift strongly while
+      // absorption- / aerosol-dominated ones (Venus) barely move.
+      // RIM_RAYLEIGH_STRENGTH is a global trim on top of that per-body
+      // amount; set it to 0 to disable the hue shift.
+      const float RIM_RAYLEIGH_STRENGTH = 1.0;
+
       float hash11(float x) {
         return fract(sin(x * 12.9898 + 78.233) * 43758.5453);
       }
@@ -684,6 +787,10 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         return ivec3(primary, secondary, tertiary);
       }
 
+      // Rec.709 relative luminance — used by the Rayleigh rim hue shift
+      // to renormalize the re-tinted color back to the base brightness.
+      float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
       // Look up a palette slot by index.
       vec3 slotColor(int idx, vec3 p0, vec3 p1, vec3 p2) {
         if (idx == 0) return p0;
@@ -715,7 +822,72 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
             float layer = floor(distOut);
             float stackCount = vRimWidthPx - layer;
             float rimA = 1.0 - pow(1.0 - OUTER_BASE_ALPHA, stackCount);
-            gl_FragColor = vec4(vRimColor, rimA);
+
+            // Directional loft glow — see the atmospheric-loft constant
+            // block. With no active lights, fall back to the static gas-
+            // color ring (no angular term) so a lightless body doesn't
+            // render a black-on-one-side halo.
+            vec3  rimCol = vRimColor;
+            if (uLightCount > 0) {
+              vec2  rimDir = normalize(d);
+              vec3  glowAccum = vec3(0.0);
+              vec3  lightAccum = vec3(0.0);
+              float litSum = 0.0;
+              float litMax = 0.0;
+              for (int i = 0; i < ${MAX_LIGHTS}; i++) {
+                if (i >= uLightCount) break;
+                vec2 Ldir = normalize(uLightPos[i] - vCenter);
+                // Half-lambert wrap so the loft glow reaches past the
+                // terminator around the whole backlit limb (see block).
+                float facing = dot(rimDir, Ldir) * 0.5 + 0.5;
+                float lit = pow(facing, RIM_GLOW_FOCUS) * uLightIntensity[i];
+                // Per-light dither offset so multiple stars' stipple
+                // patterns don't cascade (mirrors the disc lighting pass).
+                float bL = bayer4(gl_FragCoord.xy + vec2(43.0 + float(i) * 7.0, 29.0 + float(i) * 11.0));
+                lit = clamp(lit + (bL - 0.5) * 2.0 * RIM_DITHER_WIDTH, 0.0, 1.0);
+                // Gas filters the starlight (hue-preserving multiply,
+                // gentle gain), plus a small white tip gated to the
+                // brightest sunward sliver so only the extreme limb pops.
+                vec3 scattered = vRimColor * uLightColor[i] * RIM_GLOW_GAIN;
+                float tip = pow(lit, RIM_TIP_FOCUS) * RIM_TIP_WHITE;
+                vec3 illum = scattered + uLightColor[i] * tip;
+                glowAccum += mix(vRimColor, illum, lit) * lit;
+                lightAccum += uLightColor[i] * lit;
+                litSum += lit;
+                litMax = max(litMax, lit);
+              }
+              // Color: per-star illuminated hues averaged by their lit
+              // weights (each star paints its own arc its own color); the
+              // gas color shows through where nothing lights the rim.
+              rimCol = (litSum > 0.0) ? glowAccum / litSum : vRimColor;
+              // Alpha: radial stack falloff × angular ramp from the faint
+              // night-side ambient floor to full on the lit limb. litMax
+              // (not the sum) so overlapping crescents don't double-opaque.
+              rimA *= mix(RIM_DARK_FLOOR, 1.0, litMax);
+
+              // Rayleigh hue shift, graded by column depth — outermost loft
+              // layer most, inner edge least. HUE ONLY: the target hue is
+              // renormalized to rimCol's luminance, so mixing toward it
+              // leaves brightness unchanged, and rimA is never touched.
+              // Target = the body's per-gas scatter color re-illuminated by
+              // the lit-weighted average starlight; shift amount scales by
+              // the per-body Rayleigh fraction (vWeights.w). See block.
+              float scatterStrength = vWeights.w;
+              if (litSum > 0.0 && RIM_RAYLEIGH_STRENGTH > 0.0 && scatterStrength > 0.0) {
+                float scatV = (vBodyIndex + 0.5) / max(uCloudLayerRows, 1.0);
+                float scatU = (float(${SCATTER_COLOR_TEXEL_OFFSET}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
+                vec3  scatterColor = texture2D(uCloudLayerData, vec2(scatU, scatV)).rgb;
+                vec3  rayTarget = (lightAccum / litSum) * scatterColor;
+                float tgtL = lum(rayTarget);
+                if (tgtL > 0.0) {
+                  vec3 rayHue = rayTarget * (lum(rimCol) / tgtL);
+                  // Depth fraction: outermost layer → 1, inner → 1/width.
+                  float depth = clamp((floor(distOut) + 1.0) / vRimWidthPx, 0.0, 1.0);
+                  rimCol = mix(rimCol, rayHue, depth * scatterStrength * RIM_RAYLEIGH_STRENGTH);
+                }
+              }
+            }
+            gl_FragColor = vec4(rimCol, rimA);
             return;
           #endif
         }

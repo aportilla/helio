@@ -13,6 +13,7 @@ import { BODIES } from '../../../data/stars';
 import {
   ATM_COLUMN_TEXEL_OFFSET, BODY_TEXTURE_WIDTH, DECK_COLOR_BASE_OFFSET,
   makePlanetMaterial, MAX_CLOUD_LAYERS, OCEAN_COLOR_TEXEL_OFFSET,
+  SCATTER_COLOR_TEXEL_OFFSET,
 } from '../../materials';
 import { buildDiscPalette } from '../disc-palette';
 import {
@@ -290,7 +291,9 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
     weights[i * 4 + 0] = disc.weights[0];
     weights[i * 4 + 1] = disc.weights[1];
     weights[i * 4 + 2] = disc.weights[2];
-    weights[i * 4 + 3] = 0;
+    // .w carries the per-body limb Rayleigh scatter strength for the
+    // rim hue shift (see scatteringRimFor / makePlanetMaterial).
+    weights[i * 4 + 3] = disc.scatterStrength;
     renderMeta[i * 4 + 0] = slot.discPx;
     renderMeta[i * 4 + 1] = disc.surfaceOpacity;
     renderMeta[i * 4 + 2] = disc.seed;
@@ -317,6 +320,12 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
     cloudLayerData[oceanOff + 0] = disc.oceanColor[0];
     cloudLayerData[oceanOff + 1] = disc.oceanColor[1];
     cloudLayerData[oceanOff + 2] = disc.oceanColor[2];
+    // Per-body limb Rayleigh scatter color — target hue for the rim
+    // halo's depth-graded Rayleigh shift. One texel, RGB in xyz.
+    const scatOff = rowBase + SCATTER_COLOR_TEXEL_OFFSET * 4;
+    cloudLayerData[scatOff + 0] = disc.scatterColor[0];
+    cloudLayerData[scatOff + 1] = disc.scatterColor[1];
+    cloudLayerData[scatOff + 2] = disc.scatterColor[2];
     surfaceScalars[i * 4 + 0] = disc.waterFrac;
     surfaceScalars[i * 4 + 1] = disc.iceFrac;
     surfaceScalars[i * 4 + 2] = disc.surfaceAge;

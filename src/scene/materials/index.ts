@@ -17,6 +17,7 @@ export {
   MAX_CLOUD_LAYERS,
   MAX_LIGHTS,
   OCEAN_COLOR_TEXEL_OFFSET,
+  SCATTER_COLOR_TEXEL_OFFSET,
   makeBlobMaterial,
   makePlanetMaterial,
   makeRingMaterial,
