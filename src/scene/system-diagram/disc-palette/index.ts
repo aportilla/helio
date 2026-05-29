@@ -125,7 +125,7 @@
 // stay aligned with their gas species.
 
 import { Color } from 'three';
-import { AtmGas, BODIES, Body, CLASS_COLOR, STARS } from '../../data/stars';
+import { AtmGas, BODIES, Body, CLASS_COLOR, STARS } from '../../../data/stars';
 import {
   BARREN_ROCK_COLOR, barrenTintFor,
   GAS_COLOR, GAS_POTENCY,
@@ -136,10 +136,10 @@ import {
   biomePaintFor, deckGasesFor, RENDERER_SKIP_AEROSOLS,
   cloudDeckPalette, dominantResources, rockArchetypeFor,
   stratosphericHazeStrengthFor,
-} from './body-palette';
-import { hash32 } from './geom/prng';
-import { bodyVisualTiltRad } from './geom/ring';
-import { PROCEDURAL_TEXTURE_MIN_PX } from './layout/constants';
+} from '../body-palette';
+import { hash32 } from '../geom/prng';
+import { bodyVisualTiltRad } from '../geom/ring';
+import { PROCEDURAL_TEXTURE_MIN_PX } from '../layout/constants';
 
 // Outward rim width buckets for surface bodies — integer pixels of
 // atmospheric halo extending INTO SPACE beyond the disc edge. Driven
