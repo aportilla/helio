@@ -15,6 +15,14 @@ export const EARTH_PER_SOLAR_MASS = 333000;
 export const SIGMA_SB = 5.670374e-8;   // Stefan-Boltzmann constant (W/m²/K⁴)
 export const SOLAR_CONSTANT = 1361;    // Solar irradiance at 1 AU (W/m²)
 
+// Universal physical constants (SI), single-sourced here so every physics
+// relation across the build spells them once.
+export const BOLTZMANN = 1.380649e-23;             // Boltzmann constant (J/K)
+export const ATOMIC_MASS_UNIT = 1.66053906660e-27; // atomic mass unit (kg)
+export const GRAV_CONSTANT = 6.6743e-11;           // gravitational constant (m³/kg/s²)
+export const EARTH_MASS_KG = 5.9722e24;            // Earth mass (kg)
+export const EARTH_RADIUS_M = 6.371e6;             // Earth radius (m)
+
 // Stellar luminosity in solar units from mass in solar units.
 // Piecewise empirical: M dwarfs follow a shallower relation than FGK+
 // (Eker et al. 2015). The 0.43 M☉ break point is the conventional
@@ -199,12 +207,27 @@ export function isolationMass(aAu, starMassSun, surfaceDensity) {
   if (surfaceDensity == null || surfaceDensity <= 0) return null;
   const AU_CM = 1.495978707e13;
   const M_SUN_G = 1.98892e33;
-  const M_EARTH_G = 5.9722e27;
+  const M_EARTH_G = EARTH_MASS_KG * 1000;  // grams — this relation is worked in CGS
   const a_cm = aAu * AU_CM;
   const M_star_g = starMassSun * M_SUN_G;
   const numerator = Math.pow(8 * Math.PI * a_cm * a_cm * surfaceDensity, 1.5);
   const denominator = Math.sqrt(3 * M_star_g);
   return (numerator / denominator) / M_EARTH_G;
+}
+
+// Jeans escape parameter: the ratio of a body's surface escape velocity to
+// the RMS thermal velocity of a gas of molecular weight `amu`. This is the
+// dimensionless input to the atmospheric-retention sigmoid — a high ratio
+// means the species is gravitationally bound, a low one that it boils off
+// over Gyr. Callers apply their own smoothstep thresholds + magnetic/other
+// factors on top (the tuning lives with them, not here).
+//   massEarth, radiusEarth in Earth units; equilibriumT in K; amu in g/mol.
+export function jeansEscapeRatio(massEarth, radiusEarth, equilibriumT, amu) {
+  const M = massEarth * EARTH_MASS_KG;
+  const R = radiusEarth * EARTH_RADIUS_M;
+  const vEsc = Math.sqrt(2 * GRAV_CONSTANT * M / R);
+  const vTh = Math.sqrt(3 * BOLTZMANN * equilibriumT / (amu * ATOMIC_MASS_UNIT));
+  return vEsc / vTh;
 }
 
 // Hill radius in AU — the planet's gravitational sphere of influence.

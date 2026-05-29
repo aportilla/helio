@@ -241,6 +241,22 @@ export const ORBITAL_GEOMETRY_BY_CLASS = mergeTunes(
 // exoplanet scatter at fixed mass runs ~0.10–0.15 dex.
 export const RADIUS_SCATTER_LOG = 0.10;
 
+// Otegi et al. (2020) mass-radius relation — the empirical fit both
+// directions consume: radiusFromMass (procgen.mjs, forward) and
+// massFromRadius (procgen-architect.mjs, inverse). Single-sourced here so
+// re-tuning the fit touches one place, not two hand-synced copies.
+//   M < rockyMaxMass                 → R = M^rockyExp              (rocky line)
+//   rockyMaxMass ≤ M < subNepMaxMass → R = subNepCoeff·M^subNepExp (ice line)
+//   M ≥ subNepMaxMass                → R = giantRadius             (plateau)
+export const OTEGI_MR = {
+  rockyExp: 0.279,
+  subNepCoeff: 0.808,
+  subNepExp: 0.589,
+  rockyMaxMass: 2,
+  subNepMaxMass: 130,
+  giantRadius: 11.0,
+};
+
 // Moon count is sampled as Binomial(MOON_COUNT_MAX, p), where the
 // per-trial success probability `p` is a saturating function of the
 // host's Hill radius. Binomial (vs the older Poisson + clip) is

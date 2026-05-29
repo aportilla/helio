@@ -151,6 +151,7 @@ import {
   RING_RESOURCE_ICY,
   RING_RESOURCE_ROCKY,
   RESOURCE_KEYS,
+  OTEGI_MR,
 } from './procgen-priors.mjs';
 
 // =============================================================================
@@ -965,12 +966,13 @@ function buildPlanetCore(star, slotIdx, formationAu, letter, saltPrefix = '', di
 export const starDiskContext = buildStarDiskContext;
 
 // Radius-space branch boundaries of the inverse Otegi relation: the
-// 2 M⊕ and 130 M⊕ mass thresholds of radiusFromMass (procgen.mjs, kept
-// in lockstep by hand across the .mjs boundary) pushed through the
-// forward relation, so the inverse selects the same branch the forward
-// one would. Hoisted so they're computed once, not per massFromRadius call.
-const MR_ROCKY_MAX_RADIUS = Math.pow(2, 0.279);            // ≈ 1.213
-const MR_SUBNEP_MAX_RADIUS = 0.808 * Math.pow(130, 0.589); // ≈ 14.88
+// rockyMaxMass and subNepMaxMass thresholds pushed through the forward
+// relation, so the inverse selects the same branch the forward one would.
+// Both directions read the same OTEGI_MR coefficients (procgen-priors.mjs),
+// so the branches can't drift. Hoisted so they're computed once, not per
+// massFromRadius call.
+const MR_ROCKY_MAX_RADIUS = Math.pow(OTEGI_MR.rockyMaxMass, OTEGI_MR.rockyExp);                          // ≈ 1.213
+const MR_SUBNEP_MAX_RADIUS = OTEGI_MR.subNepCoeff * Math.pow(OTEGI_MR.subNepMaxMass, OTEGI_MR.subNepExp); // ≈ 14.88
 
 // Inverse Otegi mass-radius — the forward relation `radiusFromMass`
 // is monotonic per branch, so for catalog rows that arrived with a
@@ -987,16 +989,16 @@ export function massFromRadius(radius, planetId) {
   if (radius == null || radius <= 0) return null;
   const r = radius;
   if (r < MR_ROCKY_MAX_RADIUS) {
-    return Number(Math.pow(r, 1 / 0.279).toFixed(3));
+    return Number(Math.pow(r, 1 / OTEGI_MR.rockyExp).toFixed(3));
   }
   if (r < MR_SUBNEP_MAX_RADIUS) {
-    return Number(Math.pow(r / 0.808, 1 / 0.589).toFixed(3));
+    return Number(Math.pow(r / OTEGI_MR.subNepCoeff, 1 / OTEGI_MR.subNepExp).toFixed(3));
   }
   // Gas plateau: log-uniform between 130 M⊕ (Saturn-ish) and 3000 M⊕
   // (~10 M_J, near the deuterium burning limit). Salted so the draw
   // is stable per body across builds.
   const prng = partialPrng(planetId, 'gasMass');
-  const logM = Math.log(130) + prng() * (Math.log(3000) - Math.log(130));
+  const logM = Math.log(OTEGI_MR.subNepMaxMass) + prng() * (Math.log(3000) - Math.log(OTEGI_MR.subNepMaxMass));
   return Number(Math.exp(logM).toFixed(3));
 }
 

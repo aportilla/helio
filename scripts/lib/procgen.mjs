@@ -128,6 +128,7 @@ import {
   BIOSPHERE_COMPLEXITY,
   RESOURCE_OCCURRENCE,
   RESOURCE_KEYS,
+  OTEGI_MR,
 } from './procgen-priors.mjs';
 
 // Per-archetype productivity field — used by the CSV-authored biosphere
@@ -144,7 +145,7 @@ const BIOTIC_FIELD_BY_ARCH = {
 };
 const VALID_ARCHETYPES = new Set(BIOSPHERE_ARCHETYPES);
 const VALID_COMPLEXITY = new Set(BIOSPHERE_COMPLEXITY);
-import { insolation, tidalLockProxy, meanMetallicityForClass, meanAgeForClass, frostLineTrio, keplerPeriodDays, keplerSemiMajorAu, EARTH_PER_SOLAR_MASS, SIGMA_SB, SOLAR_CONSTANT } from './astrophysics.mjs';
+import { insolation, jeansEscapeRatio, tidalLockProxy, meanMetallicityForClass, meanAgeForClass, frostLineTrio, keplerPeriodDays, keplerSemiMajorAu, EARTH_PER_SOLAR_MASS, SIGMA_SB, SOLAR_CONSTANT } from './astrophysics.mjs';
 
 function fieldPrng(body, field) {
   return mulberry32(hash32(`${body.id}:${field}:${PROCGEN_VERSION}`));
@@ -153,12 +154,6 @@ function fieldPrng(body, field) {
 // =============================================================================
 // Physics helpers
 // =============================================================================
-
-const BOLTZMANN = 1.380649e-23; // Boltzmann constant (J/K)
-const ATOMIC_MASS_UNIT = 1.66053906660e-27;  // amu in kg
-const GRAV_CONSTANT = 6.6743e-11;            // m³/(kg·s²)
-const EARTH_MASS_KG = 5.9722e24;
-const EARTH_RADIUS_M = 6.371e6;
 
 // Mean molecular weight (amu) of the representative atmospheric
 // species used in the Jeans-escape ratio. N2 is the canonical anchor
@@ -205,9 +200,9 @@ function equilibriumTempK(S, bondAlbedo = 0.3) {
 export function radiusFromMass(massEarth) {
   if (massEarth == null || massEarth <= 0) return null;
   const m = massEarth;
-  if (m < 2)   return Number(Math.pow(m, 0.279).toFixed(3));
-  if (m < 130) return Number((0.808 * Math.pow(m, 0.589)).toFixed(3));
-  return 11.0;
+  if (m < OTEGI_MR.rockyMaxMass)  return Number(Math.pow(m, OTEGI_MR.rockyExp).toFixed(3));
+  if (m < OTEGI_MR.subNepMaxMass) return Number((OTEGI_MR.subNepCoeff * Math.pow(m, OTEGI_MR.subNepExp)).toFixed(3));
+  return OTEGI_MR.giantRadius;
 }
 
 // =============================================================================
@@ -461,12 +456,8 @@ function avgSurfaceTempFromAlbedo(radiusEarth, S, bondAlbedo, greenhouseK) {
 // Tuning anchors live in ATMOSPHERIC_RETENTION (procgen-priors.mjs).
 function atmosphericRetention(massEarth, radiusEarth, magneticFieldGauss, equilibriumT) {
   if (massEarth == null || radiusEarth == null || equilibriumT == null) return null;
-  const M = massEarth * EARTH_MASS_KG;
-  const R = radiusEarth * EARTH_RADIUS_M;
-  if (M <= 0 || R <= 0) return 0;
-  const vEsc = Math.sqrt(2 * GRAV_CONSTANT * M / R);
-  const vTh = Math.sqrt(3 * BOLTZMANN * equilibriumT / (RETENTION_SPECIES_AMU * ATOMIC_MASS_UNIT));
-  const ratio = vEsc / vTh;
+  if (massEarth <= 0 || radiusEarth <= 0) return 0;
+  const ratio = jeansEscapeRatio(massEarth, radiusEarth, equilibriumT, RETENTION_SPECIES_AMU);
   const jeans = smoothstep(ATMOSPHERIC_RETENTION.jeansLow, ATMOSPHERIC_RETENTION.jeansHigh, ratio);
   const B = magneticFieldGauss ?? 0;
   const shield = ATMOSPHERIC_RETENTION.magneticFloor +
@@ -759,12 +750,8 @@ function gasRetentionFraction(massEarth, radiusEarth, equilibriumT, gas) {
   const amu = GAS_MOLECULAR_WEIGHT_AMU[gas];
   if (amu == null || amu <= 0) return 1;
   if (massEarth == null || radiusEarth == null || equilibriumT == null) return 1;
-  const M = massEarth * EARTH_MASS_KG;
-  const R = radiusEarth * EARTH_RADIUS_M;
-  if (M <= 0 || R <= 0) return 0;
-  const vEsc = Math.sqrt(2 * GRAV_CONSTANT * M / R);
-  const vTh = Math.sqrt(3 * BOLTZMANN * equilibriumT / (amu * ATOMIC_MASS_UNIT));
-  const ratio = vEsc / vTh;
+  if (massEarth <= 0 || radiusEarth <= 0) return 0;
+  const ratio = jeansEscapeRatio(massEarth, radiusEarth, equilibriumT, amu);
   return smoothstep(ATMOSPHERIC_RETENTION.jeansLow, ATMOSPHERIC_RETENTION.jeansHigh, ratio);
 }
 
