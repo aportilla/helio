@@ -18,7 +18,7 @@ import {
   RENDER_ORDER_BACK_MOON, RENDER_ORDER_FRONT_MOON,
   Z_BACK_MOON, Z_FRONT_MOON, Z_STRIDE,
 } from '../layout/constants';
-import type { RowSlot } from '../layout/row';
+import { discPxFromRadius, type RowSlot } from '../layout/row';
 import { writeLightUniforms } from '../lighting';
 import { hash32, mulberry32 } from '../geom/prng';
 import type { DiagramPick, PlanetCenterIndex, StarLightSource } from '../types';
@@ -165,9 +165,9 @@ function writePoolPositions(pool: MoonPool | null, centers: PlanetCenterIndex, l
 }
 
 function moonDiscPx(radiusEarth: number | null): number {
-  const r = radiusEarth ?? 0.3;
-  const px = Math.cbrt(Math.max(r, 0.0001)) * MOON_DISC_BASE;
-  return Math.max(MOON_DISC_MIN, Math.min(MOON_DISC_MAX, Math.round(px)));
+  return discPxFromRadius(radiusEarth, {
+    base: MOON_DISC_BASE, min: MOON_DISC_MIN, max: MOON_DISC_MAX, fallback: 0.3,
+  });
 }
 
 // Procedural moon angle distribution: largest-gap-fill with geometric

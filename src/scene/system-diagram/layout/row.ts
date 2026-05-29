@@ -1,7 +1,7 @@
 // Row layout — planets + belts share one dome-arc row, sorted by
 // semi-major axis. This module owns the RowSlot datatype, the
 // dome-arc math, and a handful of small utilities (bigMiddleOrder,
-// sumOf, planetDiscPx) that the row build needs.
+// sumOf, discPxFromRadius/planetDiscPx) that the row build needs.
 
 import { BODIES, STARS, type StarCluster } from '../../../data/stars';
 import { sizes } from '../../../ui/theme';
@@ -28,14 +28,27 @@ export interface RowSlot {
   rowIdx: number;
 }
 
-// Per-planet disc diameter from radiusEarth with cube-root compression.
-// See PLANET_DISC_* in constants.ts for the rationale; this function is
-// kept here because both row construction (widthPx) and PlanetsLayer
-// (shader aSize) read it via RowSlot.widthPx.
+// Disc diameter (px) from a body's radiusEarth, cube-root-compressed so
+// the ~30× real radius span from Mercury to Jupiter collapses into a
+// legible ~3× rendered range. Shared by the planet row slots and the
+// moon pools (the same curve, per the PLANET_DISC_* / MOON_DISC_*
+// comments in constants.ts); each caller supplies its own base / clamp /
+// null-fallback, since the moon cap deliberately exceeds the planet floor.
+export function discPxFromRadius(
+  radiusEarth: number | null,
+  opts: { base: number; min: number; max: number; fallback: number },
+): number {
+  const r = radiusEarth ?? opts.fallback;
+  const px = Math.cbrt(Math.max(r, 0.0001)) * opts.base;
+  return Math.max(opts.min, Math.min(opts.max, Math.round(px)));
+}
+
+// Per-planet disc diameter. Kept here because both row construction
+// (widthPx) and PlanetsLayer (shader aSize) read it via RowSlot.widthPx.
 export function planetDiscPx(radiusEarth: number | null): number {
-  const r = radiusEarth ?? 1.0;
-  const px = Math.cbrt(Math.max(r, 0.0001)) * PLANET_DISC_BASE;
-  return Math.max(PLANET_DISC_MIN, Math.min(PLANET_DISC_MAX, Math.round(px)));
+  return discPxFromRadius(radiusEarth, {
+    base: PLANET_DISC_BASE, min: PLANET_DISC_MIN, max: PLANET_DISC_MAX, fallback: 1.0,
+  });
 }
 
 // Gather every planet + belt across a cluster's member stars, tag each
