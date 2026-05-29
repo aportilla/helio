@@ -504,10 +504,23 @@ function solventBaseColorFor(species: SolventSpecies): Color {
   }
 }
 
+// All present atmospheric gases as [species, fraction] pairs, filtered to
+// positive fractions. The single walk over atm1/atm2/atm3 that every
+// atmosphere consumer shares (column color, haze contributors, Rayleigh
+// rim, solvent pick, lava sulfur) — the null/≤0 guards live here rather
+// than being re-derived at each call site.
+function atmGasPairs(body: Body): Array<[AtmGas, number]> {
+  const out: Array<[AtmGas, number]> = [];
+  if (body.atm1 !== null && (body.atm1Frac ?? 0) > 0) out.push([body.atm1 as AtmGas, body.atm1Frac as number]);
+  if (body.atm2 !== null && (body.atm2Frac ?? 0) > 0) out.push([body.atm2 as AtmGas, body.atm2Frac as number]);
+  if (body.atm3 !== null && (body.atm3Frac ?? 0) > 0) out.push([body.atm3 as AtmGas, body.atm3Frac as number]);
+  return out;
+}
+
 function atmFracOf(body: Body, gas: AtmGas): number {
-  if (body.atm1 === gas) return body.atm1Frac ?? 0;
-  if (body.atm2 === gas) return body.atm2Frac ?? 0;
-  if (body.atm3 === gas) return body.atm3Frac ?? 0;
+  for (const [g, frac] of atmGasPairs(body)) {
+    if (g === gas) return frac;
+  }
   return 0;
 }
 
@@ -892,13 +905,7 @@ function surfaceHazeContributors(body: Body): Array<{ color: Color; weight: numb
   const P = body.surfacePressureBar;
   if (P === null || P <= 0) return out;
   const colFactor = atmColumnFactor(body);
-  const atmPairs: Array<[AtmGas | null, number | null]> = [
-    [body.atm1 as AtmGas | null, body.atm1Frac],
-    [body.atm2 as AtmGas | null, body.atm2Frac],
-    [body.atm3 as AtmGas | null, body.atm3Frac],
-  ];
-  for (const [gas, frac] of atmPairs) {
-    if (gas === null || frac === null || frac <= 0) continue;
+  for (const [gas, frac] of atmGasPairs(body)) {
     const col = GAS_COLOR[gas];
     const potency = GAS_POTENCY[gas] ?? 0;
     if (col && potency > 0) {
@@ -962,14 +969,8 @@ function surfaceHazeContributors(body: Body): Array<{ color: Color; weight: numb
 function scatteringRimFor(body: Body): { color: readonly [number, number, number]; strength: number } {
   const P = body.surfacePressureBar;
   if (P === null || P <= 0) return { color: [0, 0, 0], strength: 0 };
-  const atmPairs: Array<[AtmGas | null, number | null]> = [
-    [body.atm1 as AtmGas | null, body.atm1Frac],
-    [body.atm2 as AtmGas | null, body.atm2Frac],
-    [body.atm3 as AtmGas | null, body.atm3Frac],
-  ];
   let mr = 0, mg = 0, mb = 0, rayW = 0, bulkW = 0;
-  for (const [gas, frac] of atmPairs) {
-    if (gas === null || frac === null || frac <= 0) continue;
+  for (const [gas, frac] of atmGasPairs(body)) {
     const sCol = SCATTERING_COLOR[gas];
     const sPotency = SCATTERING_POTENCY[gas] ?? 0;
     if (sCol && sPotency > 0) {
@@ -1034,14 +1035,8 @@ function hazeBlendFor(body: Body): { color: Color; opacity: number } {
 // GAS_COLOR entries are already chosen pale enough that the result
 // reads as a natural "lighter at the limb" effect.
 function atmColumnColor(body: Body): Color | null {
-  const candidates: Array<[AtmGas | null, number | null]> = [
-    [body.atm1 as AtmGas | null, body.atm1Frac],
-    [body.atm2 as AtmGas | null, body.atm2Frac],
-    [body.atm3 as AtmGas | null, body.atm3Frac],
-  ];
   let r = 0, g = 0, b = 0, totalW = 0;
-  for (const [gas, frac] of candidates) {
-    if (gas === null || frac === null) continue;
+  for (const [gas, frac] of atmGasPairs(body)) {
     const col = GAS_COLOR[gas];
     if (!col) continue;
     const w = frac * (GAS_POTENCY[gas] ?? 1);
