@@ -133,7 +133,7 @@ import {
   MOON_CPD_WATER_FLOOR,
   MOON_MASS_LOG_EARTH,
   MOON_MAX_HOST_MASS_RATIO,
-  zoneForFormationAu,
+  sampleBulkFraction,
   BULK_WATER_FRACTION_BY_ZONE,
   BULK_METAL_FRACTION_BY_ZONE,
   BULK_VOLATILE_FRACTION_BY_ZONE,
@@ -197,8 +197,7 @@ function partialPrng(planetId, salt) {
 // composition is set at formation and persists, even if surface state
 // later reads as "dry."
 function sampleBulkWaterFraction(prng, formationAu, frostLinesAu) {
-  const zone = zoneForFormationAu(formationAu, frostLinesAu);
-  return Number(sampleLogTruncated(prng, BULK_WATER_FRACTION_BY_ZONE[zone]).toFixed(5));
+  return sampleBulkFraction(prng, formationAu, frostLinesAu, BULK_WATER_FRACTION_BY_ZONE);
 }
 
 // Refractory metals condense first in the protoplanetary disk; bodies
@@ -207,8 +206,7 @@ function sampleBulkWaterFraction(prng, formationAu, frostLinesAu) {
 // Independent per-body draw — moons sample independently, same posture
 // as bulkWater.
 function sampleBulkMetalFraction(prng, formationAu, frostLinesAu) {
-  const zone = zoneForFormationAu(formationAu, frostLinesAu);
-  return Number(sampleLogTruncated(prng, BULK_METAL_FRACTION_BY_ZONE[zone]).toFixed(5));
+  return sampleBulkFraction(prng, formationAu, frostLinesAu, BULK_METAL_FRACTION_BY_ZONE);
 }
 
 // Non-water condensable volatile inventory (NH3, CH4, CO/CO2, N2,
@@ -216,8 +214,7 @@ function sampleBulkMetalFraction(prng, formationAu, frostLinesAu) {
 // the refractory-trapped fraction; past CH4 it dominates. Feeds
 // atmosphere regime decisions and methane-world variety.
 function sampleBulkVolatileFraction(prng, formationAu, frostLinesAu) {
-  const zone = zoneForFormationAu(formationAu, frostLinesAu);
-  return Number(sampleLogTruncated(prng, BULK_VOLATILE_FRACTION_BY_ZONE[zone]).toFixed(5));
+  return sampleBulkFraction(prng, formationAu, frostLinesAu, BULK_VOLATILE_FRACTION_BY_ZONE);
 }
 
 // Per-(star, context, salt) PRNG. Belts are system-level structural

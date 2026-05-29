@@ -46,6 +46,8 @@
 // into every PRNG seed; bumping it reseeds the entire galaxy without
 // touching CSV ids. Per-generator version suffixes are layered on top.
 
+import { sampleLogTruncated } from './prng.mjs';
+
 // Deep merge a sparse `tune` over `base`. Plain objects are merged
 // recursively (so a tune entry can override a single nested field without
 // restating its siblings); everything else — primitives, arrays — is
@@ -566,6 +568,18 @@ export function zoneForFormationAu(formationAu, frostLinesAu) {
   if (formationAu < frostLinesAu.NH3) return 'H2O_to_NH3';
   if (formationAu < frostLinesAu.CH4) return 'NH3_to_CH4';
   return 'past_CH4';
+}
+
+// Sample a bulk-composition mass fraction (0..1) from a zone-keyed prior.
+// Classifies the body's formation zone, draws from that zone's log-normal
+// spec, and rounds to the stored 5-dp precision. Shared by the Architect
+// (top-down, per-slot PRNG) and the Filler (per-field PRNG for catalog
+// rows) so the water / metal / volatile draws can't drift between layers —
+// each caller supplies its own `prng` and the matching `BULK_*_BY_ZONE`
+// table.
+export function sampleBulkFraction(prng, formationAu, frostLinesAu, byZoneTable) {
+  const zone = zoneForFormationAu(formationAu, frostLinesAu);
+  return Number(sampleLogTruncated(prng, byZoneTable[zone]).toFixed(5));
 }
 
 // Body-mass fraction that is H₂O ice / liquid water. Architect samples

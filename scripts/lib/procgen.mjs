@@ -84,7 +84,7 @@ import {
   ECCENTRICITY,
   INCLINATION_DEG,
   AXIAL_TILT_DEG,
-  zoneForFormationAu,
+  sampleBulkFraction,
   SNOW_LINE_TEMPERATURES,
   BULK_WATER_FRACTION_BY_ZONE,
   BULK_METAL_FRACTION_BY_ZONE,
@@ -531,8 +531,7 @@ function boilingPointK(P_bar) {
 // Architect's sampleBulkWaterFraction. Returns null when formationAu /
 // frost lines are unknown.
 function bulkWaterFractionFor(body, formationAu, frostLinesAu) {
-  const zone = zoneForFormationAu(formationAu, frostLinesAu);
-  return Number(sampleLogTruncated(fieldPrng(body, 'bulk_water'), BULK_WATER_FRACTION_BY_ZONE[zone]).toFixed(5));
+  return sampleBulkFraction(fieldPrng(body, 'bulk_water'), formationAu, frostLinesAu, BULK_WATER_FRACTION_BY_ZONE);
 }
 
 // Architect's companion bulk-metal sampler for catalog rows. Same
@@ -540,16 +539,14 @@ function bulkWaterFractionFor(body, formationAu, frostLinesAu) {
 // the H2O line, each successive snow line dilutes metal fraction as
 // volatiles join the solid budget.
 function bulkMetalFractionFor(body, formationAu, frostLinesAu) {
-  const zone = zoneForFormationAu(formationAu, frostLinesAu);
-  return Number(sampleLogTruncated(fieldPrng(body, 'bulk_metal'), BULK_METAL_FRACTION_BY_ZONE[zone]).toFixed(5));
+  return sampleBulkFraction(fieldPrng(body, 'bulk_metal'), formationAu, frostLinesAu, BULK_METAL_FRACTION_BY_ZONE);
 }
 
 // Non-water condensable volatile inventory — same four-zone formation
 // gate. Past CH4 line this becomes the dominant ice; inside H2O it's
 // only the refractory-trapped CO2/N2 floor.
 function bulkVolatileFractionFor(body, formationAu, frostLinesAu) {
-  const zone = zoneForFormationAu(formationAu, frostLinesAu);
-  return Number(sampleLogTruncated(fieldPrng(body, 'bulk_volatile'), BULK_VOLATILE_FRACTION_BY_ZONE[zone]).toFixed(5));
+  return sampleBulkFraction(fieldPrng(body, 'bulk_volatile'), formationAu, frostLinesAu, BULK_VOLATILE_FRACTION_BY_ZONE);
 }
 
 // Fraction of surface covered by liquid water. Three gates compose:
