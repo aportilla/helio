@@ -1223,6 +1223,9 @@ export const ALBEDO_COMPONENTS = {
   cloudSatBulkWater: 3.3e-4,
   cloudTempMin: 240,
   cloudTempMax: 320,
+  // Cap on total Pass-B cloud bump — even a fully overcast Venus-class
+  // atm can't push surface-blend albedo past clean-snow territory.
+  cloudBumpMax: 0.6,
 };
 
 // ---------------------------------------------------------------------------
@@ -1775,6 +1778,25 @@ export const CONDENSABLES = [
     },
   },
 ];
+
+// Cloud-deck emission + coverage tuning consumed by cloudDecksFor in
+// procgen.mjs. `strengthThreshold` is the floor a species' deck must clear
+// to emit (and the floor on derived coverage). Coverage blends two modes:
+// `coverageFullMax` (deck IS the visible color) toward `coverageSparseMax`
+// (deck reads as scattered cirrus over a column the bulk gas already tints),
+// the blend weight ramping over `sparseSignal` for gases above
+// `strongAbsorberPotency`. Peak zonal wind at a deck's altitude scales off
+// `windBaseGaseousMS` / `windBaseTerrestrialMS` (gas giants run cloud-top
+// jets ~an order of magnitude faster than terrestrials).
+export const CLOUD_DECK = {
+  strengthThreshold: 0.01,
+  coverageFullMax: 0.90,
+  coverageSparseMax: 0.15,
+  strongAbsorberPotency: 5,
+  sparseSignal: [0.01, 0.05],
+  windBaseGaseousMS: 200,
+  windBaseTerrestrialMS: 30,
+};
 
 // Haze aerosol formation gates — per-species calibration windows consumed
 // by hazeContribution in procgen.mjs. The haze layer is still derived from

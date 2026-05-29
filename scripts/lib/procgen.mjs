@@ -85,6 +85,7 @@ import {
   INCLINATION_DEG,
   AXIAL_TILT_DEG,
   sampleBulkFraction,
+  CLOUD_DECK,
   HAZE_GATES,
   DUST_GATE,
   SNOW_LINE_TEMPERATURES,
@@ -360,7 +361,7 @@ function cloudBumpFromComposition(body) {
   }
   // Cap total cloud bump — even a fully overcast Venus-class atm
   // can't push surface-blend albedo past clean-snow territory.
-  return Math.min(bump, 0.6);
+  return Math.min(bump, ALBEDO_COMPONENTS.cloudBumpMax);
 }
 
 // Bond albedo — surface cover blend + cloud bump. Cover blend is always
@@ -872,18 +873,16 @@ function surfaceOpacityFor(body) {
 // Iterates
 // CONDENSABLES; for each species checks the body's T against the
 // species' condensation window AND runs the species' precursor gate.
-// Every species whose product strength > STRENGTH_THRESHOLD emits a
-// deck. Coverage is derived from strength + a sparse-cirrus mode
+// Every species whose product strength > CLOUD_DECK.strengthThreshold
+// emits a deck. Coverage is derived from strength + a sparse-cirrus mode
 // gate (see coverageFor below). Wind speed is a per-altitude proxy
 // (gas giants run cloud-top jets ~5–10x faster than terrestrials).
 //
 // No regime classification: Jupiter, Saturn, Uranus, Neptune,
 // Earth, Mars, Venus, Titan, Triton, and any procgen body all run
 // the same loop. Which decks emerge falls out of the body's actual
-// T + atm + waterFraction + bulkWaterFraction.
-const STRENGTH_THRESHOLD = 0.01;
-const COVERAGE_FULL_MAX  = 0.90;
-const COVERAGE_SPARSE_MAX = 0.15;
+// T + atm + waterFraction + bulkWaterFraction. Coverage / wind / strength
+// tuning lives in CLOUD_DECK (procgen-priors).
 
 // Approximate per-gas absorption strength for the sparse-cirrus mode
 // gate. Mirrors GAS_POTENCY in src/data/stars.ts for the species that
@@ -911,9 +910,9 @@ function isGaseousBody(body) {
 //     this gas → deck IS the planet's visible color. Coverage scales
 //     near-linearly with strength.
 //   • Sparse-cirrus: this gas is BOTH a strong absorber (potency ≥
-//     STRONG_ABSORBER_POTENCY) AND present in the atm at appreciable
-//     fraction. The column already paints the planet's bulk color
-//     (CH4 cyan on Neptune); the deck reads as scattered bright
+//     CLOUD_DECK.strongAbsorberPotency) AND present in the atm at
+//     appreciable fraction. The column already paints the planet's bulk
+//     color (CH4 cyan on Neptune); the deck reads as scattered bright
 //     cells on top. Coverage caps low even at peak strength.
 //
 // Restricting sparse mode to strong absorbers (CH4 potency 6, SO2
@@ -921,13 +920,12 @@ function isGaseousBody(body) {
 // procgen seeds NH3 into the atm record — NH3 doesn't tint a thick
 // column the way CH4 does, so it shouldn't behave like Neptune's
 // cirrus.
-const STRONG_ABSORBER_POTENCY = 5;
 function coverageFor(_body, _gas, strength, atmFrac, gasPotency) {
-  const strongAbsorber = gasPotency >= STRONG_ABSORBER_POTENCY;
+  const strongAbsorber = gasPotency >= CLOUD_DECK.strongAbsorberPotency;
   const absorptionSignal = atmFrac * gasPotency;
-  const sparse = strongAbsorber ? smoothstep(0.01, 0.05, absorptionSignal) : 0;
-  const fullCover = strength * COVERAGE_FULL_MAX;
-  const sparseCover = strength * COVERAGE_SPARSE_MAX;
+  const sparse = strongAbsorber ? smoothstep(CLOUD_DECK.sparseSignal[0], CLOUD_DECK.sparseSignal[1], absorptionSignal) : 0;
+  const fullCover = strength * CLOUD_DECK.coverageFullMax;
+  const sparseCover = strength * CLOUD_DECK.coverageSparseMax;
   return fullCover + (sparseCover - fullCover) * sparse;
 }
 
@@ -936,7 +934,7 @@ function coverageFor(_body, _gas, strength, atmFrac, gasPotency) {
 // decks see slower winds via the linear altitude factor. Curated Sol
 // giants override via body_layers.csv (Saturn 450, Neptune 600).
 function windAtAltitude(body, altitudeNorm) {
-  const base = isGaseousBody(body) ? 200 : 30;
+  const base = isGaseousBody(body) ? CLOUD_DECK.windBaseGaseousMS : CLOUD_DECK.windBaseTerrestrialMS;
   return base * (0.5 + altitudeNorm);
 }
 
@@ -969,12 +967,12 @@ function cloudDecksFor(body, _S) {
     const precursor = c.precursor(body, ctx);
     if (precursor <= 0) continue;
     const strength = tempGate * precursor;
-    if (strength < STRENGTH_THRESHOLD) continue;
+    if (strength < CLOUD_DECK.strengthThreshold) continue;
 
     const atmFrac = atmFracOf(body, c.gas);
     const gasPotency = CLOUD_GAS_POTENCY[c.gas] ?? 0;
     const coverage = coverageFor(body, c.gas, strength, atmFrac, gasPotency);
-    if (coverage < STRENGTH_THRESHOLD) continue;
+    if (coverage < CLOUD_DECK.strengthThreshold) continue;
 
     out.push({
       gas: c.gas,
