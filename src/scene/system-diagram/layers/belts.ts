@@ -4,7 +4,7 @@
 
 import { BufferAttribute, Color, Scene } from 'three';
 import { BODIES } from '../../../data/stars';
-import { BELT_RING_COLOR_ICY, BELT_RING_COLOR_ROCKY, bodyIcyness } from '../body-palette';
+import { BELT_RING_COLOR_ICY, BELT_RING_COLOR_ROCKY, bodyIcyness } from '../color-science';
 import {
   BELT_CHUNKS_MAX, BELT_CHUNKS_MIN, BELT_CHUNK_SIZES, BELT_HEIGHT_FACTOR,
   BELT_SLOT_WIDTH, PLANET_DISC_MIN, RENDER_ORDER_BELT, Z_BELT, Z_STRIDE,
@@ -12,10 +12,10 @@ import {
 import type { RowSlot } from '../layout/row';
 import {
   bakeBlob, buildChunkPool, sampleBeltChunks, shapesFor, type ChunkPool,
-} from '../geom/blob';
+} from './blob';
 import { hash32, mulberry32 } from '../geom/prng';
 import { writeLightUniforms } from '../lighting';
-import { disposePool } from './pool';
+import { disposePool } from './dispose';
 import type { DiagramPick, StarLightSource } from '../types';
 
 // One belt's footprint inside the shared chunk pool — vertex range +

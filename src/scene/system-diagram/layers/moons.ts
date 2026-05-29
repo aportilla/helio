@@ -12,7 +12,7 @@ import {
 import { BODIES } from '../../../data/stars';
 import { makePlanetMaterial } from '../../materials';
 import { buildBodyDiscGeometry, setBodyDiscHovered } from './body-disc';
-import { disposePool } from './pool';
+import { disposePool } from './dispose';
 import {
   MOON_DISC_BASE, MOON_DISC_MAX, MOON_DISC_MIN, MOON_EDGE_BIAS,
   RENDER_ORDER_BACK_MOON, RENDER_ORDER_FRONT_MOON,

@@ -17,7 +17,7 @@ import {
 } from '../layout/constants';
 import { bigMiddleOrder, sumOf } from '../layout/row';
 import { hitCircle } from '../geom/hit';
-import { disposePool } from './pool';
+import { disposePool } from './dispose';
 import type { DiagramPick, StarLightSource } from '../types';
 
 // Tune a galaxy-view class color for the system view. Lifts the minor

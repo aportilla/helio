@@ -16,7 +16,7 @@
 //
 // Body/planet render color-science (biome, gas, rock, haze, cloud and
 // resource palettes) is NOT here — it lives in
-// scene/system-diagram/body-palette.ts, which imports the types below.
+// scene/system-diagram/color-science.ts, which imports the types below.
 //
 // Adding a new CSV column? Update parseCsvCatalog in build-catalog.mjs
 // and add the field to the Star interface here. The two have to agree —
@@ -369,7 +369,7 @@ export interface StarCluster {
 // Body field vocabularies — the gas + resource enums that name the valid
 // values of Body's atmosphere and resource fields (stored loosely as
 // string / number on the interface). Mirror the procgen vocabulary; the
-// render palette (system-diagram/body-palette.ts) keys its color tables on them.
+// render palette (system-diagram/color-science.ts) keys its color tables on them.
 // =============================================================================
 
 // All gases the procgen vocabulary can emit. Mirrors the keys of

@@ -5,7 +5,7 @@
 
 import { BufferAttribute, BufferGeometry, Mesh, ShaderMaterial } from 'three';
 import { makeBlobMaterial } from '../../materials';
-import { disableCulling } from './cull';
+import { disableCulling } from '../geom/cull';
 
 // Two libraries of irregular convex polygon silhouettes — `potato`
 // shapes for asteroid + debris chunks (rounded, weathered boulder

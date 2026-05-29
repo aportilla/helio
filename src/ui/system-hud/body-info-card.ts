@@ -75,7 +75,7 @@ const RESOURCE_FIELDS: readonly ResourceKey[] = [
 // Top `count` resources by raw value, descending, each with the body's
 // absolute abundance ∈ [0..1] (value/10). Empty array when the body
 // carries no resource signal at all. Mirrors `dominantResources` in
-// system-diagram/body-palette.ts but uses display labels instead of
+// system-diagram/color-science.ts but uses display labels instead of
 // Color objects since the panel only needs names + numbers.
 function dominantResourceEntries(b: Body, count = 2): Array<{ label: string; abundance: number }> {
   return RESOURCE_FIELDS

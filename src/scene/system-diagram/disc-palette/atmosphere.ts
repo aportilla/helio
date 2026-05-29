@@ -11,7 +11,7 @@ import {
   HAZE_AEROSOL_SCALE, HAZE_BULK_GAS_SCALE, HAZE_DUST_SCALE, HAZE_RAYLEIGH_SCALE,
   RENDERER_SKIP_AEROSOLS, SCATTERING_COLOR, SCATTERING_POTENCY,
   stratosphericHazeStrengthFor,
-} from '../body-palette';
+} from '../color-science';
 import { atmGasPairs, dustColorFor } from './shared';
 
 // Outward rim width buckets for surface bodies — integer pixels of

@@ -63,7 +63,7 @@ src/
       index.ts              Coordinator: owns scene/camera + layers, runs layout, picks, hovers
       types.ts              DiagramPick + PlanetCenterIndex shared across layers
       lighting.ts           writeLightUniforms: pushes StarLightSource[] into a planet/moon material (PlanetsLayer + MoonsLayer share it)
-      body-palette.ts       Stateless color LUTs + lookups (world-class / gas / condensate colors, GAS_POTENCY, biome paint, icyness) — shared by discs, belts, rings, HUD
+      color-science.ts      Stateless color LUTs + lookups (world-class / gas / condensate colors, GAS_POTENCY, biome paint, icyness) — shared by discs, belts, rings, HUD
       disc-palette/         buildDiscPalette: per-body palette + seed + terrain inputs for makePlanetMaterial
         index.ts            Orchestrator: DiscPalette contract + surface resource-slot logic + assembly
         shared.ts           Cross-model primitives: identity colors, atmGasPairs, dustColorFor
@@ -74,17 +74,17 @@ src/
         stars-row.ts        StarsRowLayer: top-clipped Mesh discs hanging off the buffer top
         planets.ts          PlanetsLayer: single Points pool; publishes PlanetCenterIndex
         belts.ts            BeltsLayer: shared chunk pool, bbox picker
+        blob.ts             POTATO/CRYSTAL shapes, bakeBlob, sampleBeltChunks, buildChunkPool — belts-only
         moons.ts            MoonsLayer: back/front pools split by hemisphere
         rings.ts            RingsLayer: back/front triangle-strip annulus halves per ring
         body-disc.ts        buildBodyDiscGeometry: shared planet/moon disc attribute + cloud-texture packing
-        pool.ts             disposePool: null-safe geometry / material / cloud-texture teardown shared by the layers
+        dispose.ts          disposePool: null-safe geometry / material / cloud-texture teardown shared by the layers
       layout/
         row.ts              RowSlot + buildRowSlots + layoutRow (dome arc) + bigMiddleOrder
         constants.ts        Tuning knobs (disc sizes, dome geometry, Z bands, render orders)
       geom/
-        blob.ts             POTATO/CRYSTAL shapes, bakeBlob, sampleBeltChunks, buildChunkPool
         ring.ts             ringEllipseParams + hitsRing + bodyVisualTiltRad (shared band/ring tilt)
-        prng.ts             hash32 + mulberry32; mirrors scripts/lib/prng.mjs
+        prng.ts             re-exports hash32 + mulberry32 from scripts/lib/prng.mjs (single source)
         cull.ts             disableCulling: frustum-cull opt-out for pools that rewrite vertex positions
         hit.ts              hitCircle: point-in-disc pick test (sibling of ring.ts's hitsRing)
     input-controller.ts     InputController: classifies pointer/keyboard gestures into intents

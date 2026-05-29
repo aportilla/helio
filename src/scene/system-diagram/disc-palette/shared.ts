@@ -6,7 +6,7 @@
 
 import { Color } from 'three';
 import { AtmGas, Body } from '../../../data/stars';
-import { dominantResources } from '../body-palette';
+import { dominantResources } from '../color-science';
 
 // Identity colors reused as lerp targets / no-tint sentinels across the
 // palette code. Treated as read-only — callers pass them to lerpColor (which

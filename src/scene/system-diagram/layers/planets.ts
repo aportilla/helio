@@ -12,7 +12,7 @@ import { makePlanetMaterial } from '../../materials';
 import { buildBodyDiscGeometry, setBodyDiscHovered } from './body-disc';
 import { hitCircle } from '../geom/hit';
 import { disableCulling } from '../geom/cull';
-import { disposePool } from './pool';
+import { disposePool } from './dispose';
 import { RENDER_ORDER_PLANET, RENDER_ORDER_PLANET_HALO, Z_PLANET, Z_STRIDE } from '../layout/constants';
 import type { RowSlot } from '../layout/row';
 import { writeLightUniforms } from '../lighting';

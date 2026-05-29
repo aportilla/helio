@@ -15,7 +15,7 @@ import {
   BELT_RING_COLOR_ICY, BELT_RING_COLOR_ROCKY,
   bodyIcyness,
   RING_ALPHA_DUSTY, RING_ALPHA_ICY,
-} from '../body-palette';
+} from '../color-science';
 import { makeRingMaterial } from '../../materials';
 import {
   RENDER_ORDER_BACK_RING, RENDER_ORDER_FRONT_RING,
@@ -25,7 +25,7 @@ import {
 import type { RowSlot } from '../layout/row';
 import { hitsRing, ringEllipseParams } from '../geom/ring';
 import { disableCulling } from '../geom/cull';
-import { disposePool } from './pool';
+import { disposePool } from './dispose';
 import type { DiagramPick, PlanetCenterIndex } from '../types';
 
 interface Ring {

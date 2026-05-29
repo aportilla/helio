@@ -131,7 +131,7 @@ import {
   WORLD_CLASS_COLOR, WORLD_CLASS_TINT, WORLD_CLASS_UNKNOWN_COLOR,
   biomePaintFor, cloudDeckPalette, dominantResources, lerpColor,
   rockArchetypeFor,
-} from '../body-palette';
+} from '../color-science';
 import { hash32 } from '../geom/prng';
 import { bodyVisualTiltRad } from '../geom/ring';
 import { PROCEDURAL_TEXTURE_MIN_PX } from '../layout/constants';

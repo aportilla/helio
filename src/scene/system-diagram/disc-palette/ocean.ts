@@ -40,7 +40,7 @@
 
 import { Color } from 'three';
 import { BODIES, Body, CLASS_COLOR, STARS } from '../../../data/stars';
-import { lerpColor } from '../body-palette';
+import { lerpColor } from '../color-science';
 import { hazeBlendFor } from './atmosphere';
 import { atmFracOf, clamp01, dustColorFor, WHITE_COLOR } from './shared';
 
