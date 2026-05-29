@@ -7,11 +7,11 @@
 // shared buildBodyDiscGeometry (body-disc.ts) — same packing as planets.
 
 import {
-  BufferAttribute, BufferGeometry, DataTexture, Points, Scene, ShaderMaterial,
+  BufferGeometry, DataTexture, Points, Scene, ShaderMaterial,
 } from 'three';
 import { BODIES } from '../../../data/stars';
 import { makePlanetMaterial } from '../../materials';
-import { buildBodyDiscGeometry } from './body-disc';
+import { buildBodyDiscGeometry, setBodyDiscHovered } from './body-disc';
 import { disposePool } from './pool';
 import {
   MOON_DISC_BASE, MOON_DISC_MAX, MOON_DISC_MIN, MOON_EDGE_BIAS,
@@ -110,9 +110,7 @@ export class MoonsLayer {
       if (!pool) continue;
       const slotIdx = pool.slotByBodyIdx.get(pick.bodyIdx);
       if (slotIdx === undefined) continue;
-      const attr = pool.geometry.attributes.aHazeColor as BufferAttribute;
-      attr.setW(slotIdx, value);
-      attr.needsUpdate = true;
+      setBodyDiscHovered(pool.geometry, slotIdx, value);
       return;
     }
   }

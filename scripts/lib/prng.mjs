@@ -90,25 +90,6 @@ export function sampleMixture(prng, spec) {
   return sampleTruncated(prng, modes[modes.length - 1]);
 }
 
-// Poisson(λ) via Knuth's algorithm. Returns a non-negative integer.
-// Suitable for the small λ (≤ ~15) the build-time procgen uses; for
-// larger λ Atkinson's PA would be faster but we don't need it. Used in
-// preference to truncated-normal for discrete count priors where Var ≈ λ
-// is the natural shape — clamping a normal at 0 inflates the mean by
-// ~10-20% when λ is small (see audit-procgen.mjs's moon-count drift
-// before this sampler shipped).
-export function samplePoisson(prng, lambda) {
-  if (lambda <= 0) return 0;
-  const L = Math.exp(-lambda);
-  let k = 0;
-  let p = 1;
-  do {
-    k += 1;
-    p *= prng();
-  } while (p > L);
-  return k - 1;
-}
-
 // Binomial(n, p) — independent Bernoulli trials. Returns an integer in
 // [0, n] with mean np and variance np(1-p). Used for discrete counts
 // with a hard cap where a Poisson tail would either fail to fire or pile

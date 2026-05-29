@@ -6,10 +6,10 @@
 // body-disc.ts) — moons pack the identical attribute set.
 
 import {
-  BufferAttribute, BufferGeometry, DataTexture, Points, Scene, ShaderMaterial,
+  BufferGeometry, DataTexture, Points, Scene, ShaderMaterial,
 } from 'three';
 import { makePlanetMaterial } from '../../materials';
-import { buildBodyDiscGeometry } from './body-disc';
+import { buildBodyDiscGeometry, setBodyDiscHovered } from './body-disc';
 import { hitCircle } from '../geom/hit';
 import { disableCulling } from '../geom/cull';
 import { disposePool } from './pool';
@@ -137,9 +137,7 @@ export class PlanetsLayer {
     if (pick.kind !== 'planet' || !this.geometry) return;
     const slot = this.slotByBodyIdx.get(pick.bodyIdx);
     if (slot === undefined) return;
-    const attr = this.geometry.attributes.aHazeColor as BufferAttribute;
-    attr.setW(slot, value);
-    attr.needsUpdate = true;
+    setBodyDiscHovered(this.geometry, slot, value);
   }
 
   dispose(): void {

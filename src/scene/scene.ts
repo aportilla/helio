@@ -10,11 +10,13 @@ import {
 import { ClusterBrackets } from './cluster-brackets';
 import { Grid } from './grid';
 import { Droplines } from './droplines';
-import { FocusMarker, FOCUS_MARKER_NEAR } from './focus-marker';
+import { FocusMarker } from './focus-marker';
 import { InputController, type InputHandlers } from './input-controller';
 import { Labels } from './labels';
 import { StarPoints } from './stars';
-import { STAR_DIM_FULL_BELOW, STAR_DIM_OFF_ABOVE } from './cluster-fade';
+import {
+  resolveCandidateCluster, isTargetFocusedOnCom, dimAmountForOrbit,
+} from './selection-policy';
 import { ViewportSizer } from './viewport-sizer';
 import { MapHud } from '../ui/map-hud';
 import { STARS, STAR_CLUSTERS, clusterIndexFor, nearestClusterIdxTo } from '../data/stars';
@@ -49,12 +51,6 @@ const AUTOSPIN_RAD_PER_TICK = 0.0015;
 // Clamp per-frame dt so a stalled tab or breakpoint resume doesn't hurl the
 // camera across the scene on the next frame.
 const MAX_TICK_DT_MS = 100;
-
-// Squared-distance epsilon (ly²) used to decide whether view.target is "on"
-// the selected cluster's COM — drives the Focus button's enabled state.
-// 0.01 ly = ~38 AU; well below any visually significant offset and far
-// above FP jitter from the focus lerp's terminal copy().
-const FOCUS_EPSILON_SQ = 0.01 * 0.01;
 
 interface ViewState {
   target: Vector3;
@@ -469,11 +465,7 @@ export class StarmapScene {
   private updateSelectedFocusedState(): void {
     if (this.selectedClusterIdx < 0) return;
     const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
-    const dx = this.view.target.x - com.x;
-    const dy = this.view.target.y - com.y;
-    const dz = this.view.target.z - com.z;
-    const focused = (dx * dx + dy * dy + dz * dz) < FOCUS_EPSILON_SQ;
-    this.hud.setSelectedFocused(focused);
+    this.hud.setSelectedFocused(isTargetFocusedOnCom(this.view.target, com));
   }
 
   // -- camera + zoom -----------------------------------------------------
@@ -592,17 +584,7 @@ export class StarmapScene {
 
     this.starPoints.setFocus(this.view.target);
     this.starPoints.setPivot(this.view.target);
-    // Scale the local-focus dim by orbit distance: full effect when zoomed
-    // in, smoothly off when zoomed out. Keying to view.distance (camera-to-
-    // pivot) rather than a per-star camera ramp is what lets zoom-out
-    // restore every star to full brightness — at large orbit radii every
-    // star is far from the camera, so a per-star ramp would pin everything
-    // dim no matter how far the user zooms out.
-    const orbit = this.view.distance;
-    const dimAmount = orbit <= STAR_DIM_FULL_BELOW ? 1
-      : orbit >= STAR_DIM_OFF_ABOVE ? 0
-      : 1 - (orbit - STAR_DIM_FULL_BELOW) / (STAR_DIM_OFF_ABOVE - STAR_DIM_FULL_BELOW);
-    this.starPoints.setDimAmount(dimAmount);
+    this.starPoints.setDimAmount(dimAmountForOrbit(this.view.distance));
 
     // Nearest cluster to the orbit pivot — computed once per tick and shared
     // by the focus marker (anchor when nothing selected) and (next commit)
@@ -621,38 +603,15 @@ export class StarmapScene {
     this.droplines.update(this.camera, this.view.target);
     this.focusMarker.update(this.view.target, this.camera, this.focusAnimating, nearestClusterIdx);
 
-    // Candidate cluster — only one at a time. Hover beats focus-proximity:
-    // when the user is pointing at a star, that's the immediate target;
-    // when they're not, the candidate falls back to the nearest cluster to
-    // view.target (so the brackets reappear on whatever the keyboard pan
-    // has drifted near). Both branches honor "candidate != selection" (no
-    // point bracketing what's already selected).
-    //
-    // Hover candidate is independent of focusAnimating — cursor location
-    // is real regardless of camera motion. Proximity is suppressed during
-    // the glide because the pivot is in transit, not parked off a star,
-    // and the brackets would just trail the camera into the new selection.
-    //
-    // The proximity branch additionally suppresses below FOCUS_MARKER_NEAR
-    // so the brackets don't appear on the cluster the pivot is sitting on
-    // (initial-load Sol case, or panning back onto a star). Same threshold
-    // as the focus marker so the two indicators turn on/off together.
-    //
+    // Candidate cluster — the hover-beats-proximity rule lives in
+    // resolveCandidateCluster (see selection-policy.ts for the full rationale).
     // Snap visibility, no fade ramp — candidate is a discrete state. The
     // unified index is pushed to brackets, labels (yellow promotion +
     // fade-bypass), and stashed for the spacebar handler.
-    let candidate = -1;
-    if (hoveredCluster >= 0 && hoveredCluster !== this.selectedClusterIdx) {
-      candidate = hoveredCluster;
-    } else if (!this.focusAnimating && nearestClusterIdx >= 0 && nearestClusterIdx !== this.selectedClusterIdx) {
-      const com = STAR_CLUSTERS[nearestClusterIdx].com;
-      const dx = this.view.target.x - com.x;
-      const dy = this.view.target.y - com.y;
-      const dz = this.view.target.z - com.z;
-      if (dx * dx + dy * dy + dz * dz >= FOCUS_MARKER_NEAR * FOCUS_MARKER_NEAR) {
-        candidate = nearestClusterIdx;
-      }
-    }
+    const candidate = resolveCandidateCluster(
+      hoveredCluster, nearestClusterIdx, this.selectedClusterIdx,
+      this.view.target, this.focusAnimating,
+    );
     this.candidateClusterIdx = candidate;
     this.candidateBrackets.setCluster(candidate);
     this.labels.setCandidateCluster(candidate);

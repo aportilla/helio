@@ -186,3 +186,13 @@ export function buildBodyDiscGeometry(entries: readonly BodyDiscEntry[]): BodyDi
   }
   return { geometry, cloudTex };
 }
+
+// Stamp the per-vertex hover flag for one disc slot. Both planet and moon
+// layers pack the flag into aHazeColor.w (see the hazeColors note above), so
+// the write idiom lives here rather than being duplicated in each layer's
+// setHovered. The caller resolves which slot the picked body occupies.
+export function setBodyDiscHovered(geometry: BufferGeometry, slot: number, value: 0 | 1): void {
+  const attr = geometry.attributes.aHazeColor as BufferAttribute;
+  attr.setW(slot, value);
+  attr.needsUpdate = true;
+}
