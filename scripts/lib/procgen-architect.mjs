@@ -158,8 +158,19 @@ import {
 // =============================================================================
 
 
-// Per-(star, slot, salt) PRNG. slot=-1 reserved for system-level draws
-// (planet count, etc.) that aren't tied to a specific orbital slot.
+// Reserved negative slot indices for slotPrng draws that aren't tied to
+// a specific orbital slot. Centralized so a new system-level draw claims
+// a fresh index here instead of silently colliding with an existing one.
+// `system` (-1) is shared across per-star draws (disk gas lifetime,
+// planet count) — the salt keeps those independent.
+const SYSTEM_SLOT = {
+  system: -1,
+  prune: -2,
+  migration: -3,
+};
+
+// Per-(star, slot, salt) PRNG. Non-negative slots index orbital
+// positions; SYSTEM_SLOT.* covers draws not tied to a specific slot.
 function slotPrng(starId, slotIdx, salt) {
   return mulberry32(hash32(`${starId}:${slotIdx}:${salt}:${PROCGEN_VERSION}`));
 }
@@ -242,7 +253,7 @@ function buildStarDiskContext(star) {
   if (star == null || star.mass == null) return null;
   const cls = star.cls;
   const gasSpec = DISK_GAS_LIFETIME_MYR[cls] ?? DISK_GAS_LIFETIME_MYR.G;
-  const gasPrng = slotPrng(star.id, -1, 'disk_gas_lifetime');
+  const gasPrng = slotPrng(star.id, SYSTEM_SLOT.system, 'disk_gas_lifetime');
   const diskGasLifetimeMyr = sampleTruncated(gasPrng, gasSpec);
   return {
     frostLines: frostLineTrio(star.mass),
@@ -749,7 +760,7 @@ export function generateSystem(star, clusterRole = 'primary', clusterPlanetBudge
   // realistic walk below builds the full physics inventory; this K
   // sets how many of those survive into the player-visible system.
   // Cluster role suppression still applies (tight binaries are barren).
-  const countPrng = slotPrng(star.id, -1, 'planet_count');
+  const countPrng = slotPrng(star.id, SYSTEM_SLOT.system, 'planet_count');
   const rawK = sampleTruncated(countPrng, countSpec, true);
   const suppression = COMPANION_PLANET_SUPPRESSION[clusterRole] ?? 1.0;
   const K = Math.max(0, Math.min(clusterPlanetBudget, countSpec.max, Math.round(rawK * suppression)));
@@ -820,7 +831,7 @@ export function generateSystem(star, clusterRole = 'primary', clusterPlanetBudge
 function pruneToK(planets, K, starId) {
   if (planets.length <= K) return planets;
   if (K <= 0) return [];
-  const prng = slotPrng(starId, -2, 'prune');
+  const prng = slotPrng(starId, SYSTEM_SLOT.prune, 'prune');
   const arr = planets.slice();
   // Partial shuffle of the last K slots: swap arr[i] with a random
   // index in [0..i]. After K swaps, arr.slice(-K) is a uniform K-subset.
@@ -953,6 +964,14 @@ function buildPlanetCore(star, slotIdx, formationAu, letter, saltPrefix = '', di
 // generateSystem / generateOverlay).
 export const starDiskContext = buildStarDiskContext;
 
+// Radius-space branch boundaries of the inverse Otegi relation: the
+// 2 M⊕ and 130 M⊕ mass thresholds of radiusFromMass (procgen.mjs, kept
+// in lockstep by hand across the .mjs boundary) pushed through the
+// forward relation, so the inverse selects the same branch the forward
+// one would. Hoisted so they're computed once, not per massFromRadius call.
+const MR_ROCKY_MAX_RADIUS = Math.pow(2, 0.279);            // ≈ 1.213
+const MR_SUBNEP_MAX_RADIUS = 0.808 * Math.pow(130, 0.589); // ≈ 14.88
+
 // Inverse Otegi mass-radius — the forward relation `radiusFromMass`
 // is monotonic per branch, so for catalog rows that arrived with a
 // measured radius but no mass column (transit detections), we can
@@ -967,12 +986,10 @@ export const starDiskContext = buildStarDiskContext;
 export function massFromRadius(radius, planetId) {
   if (radius == null || radius <= 0) return null;
   const r = radius;
-  const rRocky = Math.pow(2, 0.279);                  // ≈ 1.213
-  const rSubNep = 0.808 * Math.pow(130, 0.589);       // ≈ 14.88
-  if (r < rRocky) {
+  if (r < MR_ROCKY_MAX_RADIUS) {
     return Number(Math.pow(r, 1 / 0.279).toFixed(3));
   }
-  if (r < rSubNep) {
+  if (r < MR_SUBNEP_MAX_RADIUS) {
     return Number(Math.pow(r / 0.808, 1 / 0.589).toFixed(3));
   }
   // Gas plateau: log-uniform between 130 M⊕ (Saturn-ish) and 3000 M⊕
@@ -1072,7 +1089,7 @@ function migratePass(planets, star, saltPrefix = '') {
   const migrator = eligible.reduce((a, b) =>
     a.formationAu < b.formationAu ? a : b);
 
-  const prng = slotPrng(star.id, -3, saltPrefix + 'migration');
+  const prng = slotPrng(star.id, SYSTEM_SLOT.migration, saltPrefix + 'migration');
   if (prng() >= MIGRATION_RATE) return planets;
 
   const newA = Math.max(

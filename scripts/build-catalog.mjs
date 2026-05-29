@@ -15,7 +15,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hash32, mulberry32 } from './lib/prng.mjs';
+import { hash32, mulberry32, sampleNormal } from './lib/prng.mjs';
 import { fillBodies, radiusFromMass } from './lib/procgen.mjs';
 import { generateSystem, generateMoons, generateRing, generateOverlay, starDiskContext, synthesizePartialAnchor, generateFloorBelt } from './lib/procgen-architect.mjs';
 import { MAX_PLANETS_PER_CLUSTER, CURATED_SYSTEM_HOSTS } from './lib/procgen-priors.mjs';
@@ -122,16 +122,6 @@ const AGE_BY_CLASS = {
 };
 const AGE_FLOOR_GYR = 0.001;
 
-// Box-Muller transform — sample from a standard Normal using two
-// uniforms. Used by ageFromClass and any other field that wants
-// Gaussian noise rather than uniform.
-function gaussianSample(rng) {
-  let u1 = 0, u2 = 0;
-  while (u1 === 0) u1 = rng();   // avoid log(0)
-  u2 = rng();
-  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-}
-
 // Derive a stellar age from class + an id-seeded PRNG. Truncated Gaussian
 // clamped to [AGE_FLOOR_GYR, min(13.8, maxMS)]. Catalog age (when set on
 // the CSV row) takes priority and skips this function entirely.
@@ -141,7 +131,7 @@ function ageFromClass(cls, id) {
   const rng = mulberry32(hash32(`age:${id}`));
   // Two-sample average dampens long tails — a Gaussian sample × sd plus
   // mean would land outside the cap too often for short-lived classes.
-  const z = (gaussianSample(rng) + gaussianSample(rng)) / 2;
+  const z = (sampleNormal(rng, 0, 1) + sampleNormal(rng, 0, 1)) / 2;
   const ageRaw = prior.mean + z * prior.sd;
   const cap = Math.min(13.8, prior.maxMS);
   return Math.max(AGE_FLOOR_GYR, Math.min(cap, ageRaw));
@@ -518,11 +508,15 @@ const WORLD_CLASSES = new Set([
 ]);
 const BODY_KINDS = new Set(['planet', 'moon', 'belt', 'ring']);
 const BODY_SOURCES = new Set(['catalog', 'procgen']);
-// belt_class and population_model are vestigial columns kept in the
-// CSV schema so column positions don't shift, but ignored at runtime.
-// Composition lives in the resource grid; size character emerges
-// from the architect's shepherding-conditional largestBodyKm draw.
-// See the validators below.
+// Vestigial CSV columns kept so column positions don't shift, but
+// ignored at runtime — their data now lives elsewhere (the per-row
+// `where` says where). Parsing rejects any non-null value to surface
+// stale rows; the column must read blank or 'n/a'. Driven as a table so
+// the reject-blocks stay uniform (see the loop in parseCsvBodies).
+const VESTIGIAL_COLUMNS = [
+  { csv: 'belt_class', js: 'beltClass', where: 'composition lives in the resource grid' },
+  { csv: 'population_model', js: 'populationModel', where: 'belt character lives in the resource grid + largestBodyKm' },
+];
 
 // Columns split by handling: numeric cells get parsed via Number(), value
 // cells stay as strings (or null). Both paths fold empty + 'n/a' to null.
@@ -634,20 +628,13 @@ function parseCsvBodies(text, label) {
     if (worldClass !== null && !WORLD_CLASSES.has(worldClass)) {
       throw new Error(`${label}: ${id} invalid world_class=${worldClass}`);
     }
-    // belt_class is vestigial — composition lives in the resource grid
-    // for both belts and rings. Reject any value to surface stale CSV
-    // rows; the column stays in the schema so column positions don't
-    // shift, but it always parses to null.
-    const beltClass = trackedCell('belt_class', 'beltClass');
-    if (beltClass !== null) {
-      throw new Error(`${label}: ${id} belt_class is vestigial; clear to n/a (composition lives in the resource grid)`);
-    }
-    // population_model is vestigial — belt character emerges from the
-    // resource grid + largestBodyKm. Reject any value to surface stale
-    // CSV rows; the column stays in the schema so positions don't shift.
-    const populationModel = trackedCell('population_model', 'populationModel');
-    if (populationModel !== null) {
-      throw new Error(`${label}: ${id} population_model is vestigial; clear to n/a (belt character lives in the resource grid + largestBodyKm)`);
+    // Vestigial columns: each must read blank or 'n/a'. trackedCell is
+    // called in table order so the blank→unknowns bookkeeping is
+    // unchanged from the open-coded blocks.
+    for (const { csv, js, where } of VESTIGIAL_COLUMNS) {
+      if (trackedCell(csv, js) !== null) {
+        throw new Error(`${label}: ${id} ${csv} is vestigial; clear to n/a (${where})`);
+      }
     }
     // shepherdId is a deferred reference resolved against the planet
     // index later in attachBodies. Validation here is just shape (set
@@ -1012,6 +999,63 @@ function backfillMoonsAndRings(rawBodies, starById) {
   return { backfillMoons, backfillRings };
 }
 
+// Dispatch one cluster's members through the architect / overlay / curated
+// paths, distributing a single MAX_PLANETS_PER_CLUSTER budget across them in
+// heaviest-first order. Catalog anchors are immovable (we never prune observed
+// planets), so every member's catalog count is reserved up-front and only the
+// slack goes to procgen.
+//
+// Per member i, the cap passed to the generator is:
+//   max(0, MAX − usedByEarlierMembers − catalogOnLaterMembers)
+// — the "total planets allowed on this member" headroom, accounting for what
+// earlier members already took and what later members will contribute via
+// catalog. The architect treats this as its target N; the overlay treats it as
+// its target N (its `toAdd = max(0, N − existing)` already handles the "catalog
+// is keeping me at or above the cap" case by adding zero).
+//
+// Per member:
+//   - architect path (no catalog planets): generateSystem with the cap.
+//   - overlay path (catalog planets present, non-curated): generateOverlay with
+//     the cap. Returned procgen additions count toward usedByEarlier alongside
+//     the catalog anchors on the same star.
+//   - curated catalog path (Sol): CSV is authoritative, no procgen runs; its
+//     catalog anchors still reserve cluster budget for any companion.
+//
+// Catalog totals exceeding MAX (no clusters today, but the algorithm tolerates
+// it) leave companions with a 0 cap and won't be pruned — catalog anchors win.
+function allocateClusterBudget(cluster, placedStars, catalogPlanetsByStarId) {
+  const procgenBodies = [];
+  const overlayBodies = [];
+  let catalogOnLaterMembers = 0;
+  for (const idx of cluster.members) {
+    const cp = catalogPlanetsByStarId.get(placedStars[idx].id);
+    if (cp) catalogOnLaterMembers += cp.length;
+  }
+  let usedByEarlierMembers = 0;
+  for (let i = 0; i < cluster.members.length; i++) {
+    const star = placedStars[cluster.members[i]];
+    const role = i === 0 ? 'primary' : i === 1 ? 'secondary' : 'tertiary_plus';
+    const catalogPlanets = catalogPlanetsByStarId.get(star.id) ?? [];
+    const existing = catalogPlanets.length;
+    catalogOnLaterMembers -= existing;  // this member's catalog moves into 'used'
+    const memberCap = Math.max(0, MAX_PLANETS_PER_CLUSTER - usedByEarlierMembers - catalogOnLaterMembers);
+    let procgenAdded = 0;
+    if (existing > 0) {
+      if (!CURATED_SYSTEM_HOSTS.has(star.id)) {
+        const bodies = generateOverlay(star, catalogPlanets, role, memberCap);
+        overlayBodies.push(...bodies);
+        procgenAdded = bodies.filter(b => b.kind === 'planet').length;
+      }
+    } else {
+      const bodies = generateSystem(star, role, memberCap);
+      procgenBodies.push(...bodies);
+      procgenAdded = bodies.filter(b => b.kind === 'planet').length;
+    }
+    usedByEarlierMembers += existing + procgenAdded;
+  }
+  return { procgenBodies, overlayBodies };
+}
+
 // =============================================================================
 // Main
 // =============================================================================
@@ -1062,61 +1106,14 @@ async function main() {
     catalogPlanetsByStarId.set(b.hostId, list);
   }
   // Cluster-driven dispatch. Iterating clusters (rather than stars) lets a
-  // single MAX_PLANETS_PER_CLUSTER budget travel through the cluster's
-  // members in heaviest-first order. Catalog anchors are immovable (we
-  // never prune observed planets), so we reserve every member's catalog
-  // count up-front and only distribute the slack to procgen.
-  //
-  // Per member i, the cap passed to the generator is:
-  //   max(0, MAX − usedByEarlierMembers − catalogOnLaterMembers)
-  // — the "total planets allowed on this member" headroom, accounting for
-  // what earlier members already took and what later members will
-  // contribute via catalog. The architect treats this as its target N; the
-  // overlay treats it as its target N (its `toAdd = max(0, N − existing)`
-  // already handles the "catalog is keeping me at or above the cap" case
-  // by adding zero).
-  //
-  // Per member:
-  //   - architect path (no catalog planets): generateSystem with the cap.
-  //   - overlay path (catalog planets present, non-curated): generateOverlay
-  //     with the cap. Returned procgen additions count toward usedByEarlier
-  //     alongside the catalog anchors on the same star.
-  //   - curated catalog path (Sol): CSV is authoritative, no procgen runs;
-  //     its catalog anchors still reserve cluster budget for any companion.
-  //
-  // Catalog totals exceeding MAX (no clusters today, but the algorithm
-  // tolerates it) leave companions with a 0 cap and won't be pruned —
-  // catalog anchors win.
+  // single MAX_PLANETS_PER_CLUSTER budget travel through the cluster's members
+  // in heaviest-first order — see allocateClusterBudget for the per-member cap.
   const procgenBodies = [];
   const overlayBodies = [];
   for (const cluster of clusters) {
-    let catalogOnLaterMembers = 0;
-    for (const idx of cluster.members) {
-      const cp = catalogPlanetsByStarId.get(placedStars[idx].id);
-      if (cp) catalogOnLaterMembers += cp.length;
-    }
-    let usedByEarlierMembers = 0;
-    for (let i = 0; i < cluster.members.length; i++) {
-      const star = placedStars[cluster.members[i]];
-      const role = i === 0 ? 'primary' : i === 1 ? 'secondary' : 'tertiary_plus';
-      const catalogPlanets = catalogPlanetsByStarId.get(star.id) ?? [];
-      const existing = catalogPlanets.length;
-      catalogOnLaterMembers -= existing;  // this member's catalog moves into 'used'
-      const memberCap = Math.max(0, MAX_PLANETS_PER_CLUSTER - usedByEarlierMembers - catalogOnLaterMembers);
-      let procgenAdded = 0;
-      if (existing > 0) {
-        if (!CURATED_SYSTEM_HOSTS.has(star.id)) {
-          const bodies = generateOverlay(star, catalogPlanets, role, memberCap);
-          overlayBodies.push(...bodies);
-          procgenAdded = bodies.filter(b => b.kind === 'planet').length;
-        }
-      } else {
-        const bodies = generateSystem(star, role, memberCap);
-        procgenBodies.push(...bodies);
-        procgenAdded = bodies.filter(b => b.kind === 'planet').length;
-      }
-      usedByEarlierMembers += existing + procgenAdded;
-    }
+    const alloc = allocateClusterBudget(cluster, placedStars, catalogPlanetsByStarId);
+    procgenBodies.push(...alloc.procgenBodies);
+    overlayBodies.push(...alloc.overlayBodies);
   }
 
   // Universal content floor — for any star that ended up with zero

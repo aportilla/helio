@@ -31,6 +31,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { insolation, frostLineAU, hillRadiusAu } from './lib/astrophysics.mjs';
 import {
+  STELLAR_CLASSES,
   PLANET_COUNT_BY_CLASS,
   MAX_PLANETS_PER_CLUSTER,
   RING_DISRUPTION_RATE,
@@ -62,8 +63,6 @@ const CURATED_HOSTS = new Set(['sol']);
 
 const cat = JSON.parse(readFileSync(CATALOG_PATH, 'utf8'));
 const { stars, bodies, clusters } = cat;
-
-const STELLAR_CLASSES = Object.keys(PLANET_COUNT_BY_CLASS);
 
 // --- helpers -----------------------------------------------------------------
 
