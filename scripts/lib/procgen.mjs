@@ -1685,6 +1685,13 @@ function fillBody(b, allBodies, stars) {
   // generator reads its dependencies from a working copy that includes
   // previously-filled values; that's how downstream rules pick up upstream
   // results within the same pass.
+  //
+  // ⚠ This destructure and the return object at the end of fillBody are the
+  // canonical Body field list. Nothing enforces it, but three other lists
+  // must stay in lockstep when a field is added/removed/renamed:
+  //   • makeBody                 (procgen-architect.mjs) — the architect's body factory
+  //   • BODY_NUMERIC_FIELDS /
+  //     BODY_STRING_FIELDS       (build-catalog.mjs) — JSON (de)serialization typing
   let {
     radiusEarth, worldClass, bulkWaterFraction, bulkMetalFraction, bulkVolatileFraction,
     waterFraction, iceFraction, surfaceAge,
