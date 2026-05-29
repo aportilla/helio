@@ -142,7 +142,7 @@ import {
 } from './atmosphere';
 import { lavaDrivesFor } from './lava';
 import { oceanColorFor, OCEAN_FALLBACK_COLOR } from './ocean';
-import { WHITE_COLOR } from './shared';
+import { BLACK_COLOR, WHITE_COLOR } from './shared';
 
 // Phase 1.6 ice-geometry temperature thresholds. globalness lerps from
 // 0 (cap-latitude pattern) at ICE_TEMP_CAP_K down to 1 (global pattern)
@@ -216,9 +216,9 @@ function applyPerBodyTints(c: Color, body: Body, seed: number): Color {
   // is preserved.
   const brightDelta = (seed - 0.5) * 2 * PER_BODY_BRIGHTNESS_RANGE;
   let shifted = brightDelta > 0
-    ? lerpColor(c, new Color(1, 1, 1), brightDelta)
+    ? lerpColor(c, WHITE_COLOR, brightDelta)
     : brightDelta < 0
-      ? lerpColor(c, new Color(0, 0, 0), -brightDelta)
+      ? lerpColor(c, BLACK_COLOR, -brightDelta)
       : c;
   // Temperature — split-piecewise around TEMP_NEUTRAL_K. Hot → warm
   // tint; cold → cool tint. Amount scales linearly to TEMP_HOT_K /
@@ -393,11 +393,7 @@ function worldClassColor(body: Body): Color {
 // in the per-class hue tint (gas-giant warm shift, etc.).
 function applyTint(c: Color, tint: { color: Color; amount: number } | undefined): Color {
   if (!tint) return c;
-  return new Color(
-    c.r + (tint.color.r - c.r) * tint.amount,
-    c.g + (tint.color.g - c.g) * tint.amount,
-    c.b + (tint.color.b - c.b) * tint.amount,
-  );
+  return lerpColor(c, tint.color, tint.amount);
 }
 
 // Build the per-body palette + scalars for one disc. discPx is the

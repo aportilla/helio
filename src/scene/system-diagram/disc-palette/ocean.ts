@@ -42,7 +42,7 @@ import { Color } from 'three';
 import { BODIES, Body, CLASS_COLOR, STARS } from '../../../data/stars';
 import { lerpColor } from '../body-palette';
 import { hazeBlendFor } from './atmosphere';
-import { atmFracOf, dustColorFor } from './shared';
+import { atmFracOf, dustColorFor, WHITE_COLOR } from './shared';
 
 // ─── Pathway 3: solvent intrinsic absorption ───────────────────────────────
 //
@@ -131,10 +131,10 @@ function hostStarOf(body: Body): { cls: string } | null {
 
 function stellarLightTintFor(body: Body): Color {
   const host = hostStarOf(body);
-  if (host === null) return new Color(1, 1, 1);
+  if (host === null) return WHITE_COLOR;
   const raw = CLASS_COLOR[host.cls as keyof typeof CLASS_COLOR];
-  if (!raw) return new Color(1, 1, 1);
-  return lerpColor(raw.clone(), new Color(1, 1, 1), STELLAR_TINT_PULL_TO_WHITE);
+  if (!raw) return WHITE_COLOR;
+  return lerpColor(raw.clone(), WHITE_COLOR, STELLAR_TINT_PULL_TO_WHITE);
 }
 
 // ─── Pathway 2: sky reflection (Fresnel + diffuse) ─────────────────────────
@@ -206,7 +206,7 @@ function pigmentTintFor(body: Body): { color: Color; amount: number } {
   const bca = body.bioticCarbonAqueous ?? 0;  // chlorophyll path
   const bsu = body.bioticSulfur        ?? 0;  // carotenoid path
   const total = bca + bsu;
-  if (total <= 0) return { color: new Color(1, 1, 1), amount: 0 };
+  if (total <= 0) return { color: WHITE_COLOR, amount: 0 };
   const wCa = bca / total;
   const wCb = bsu / total;
   const blended = new Color(
@@ -236,7 +236,7 @@ const SEDIMENT_STRENGTH_SCALE = 0.30;
 
 function sedimentTintFor(body: Body): { color: Color; amount: number } {
   const wf = body.waterFraction ?? 0;
-  if (wf <= 0) return { color: new Color(1, 1, 1), amount: 0 };
+  if (wf <= 0) return { color: WHITE_COLOR, amount: 0 };
   const color = dustColorFor(body);
   // Coastline density ∝ 1/wf, clamped so an ocean-world (wf=1) still
   // carries a baseline turbidity rather than going zero.
