@@ -1068,7 +1068,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // emission temperature never reaches ~800 K (a warm-but-solid
       // world, or a cryovolcanic body whose vent material is cold)
       // never paints, regardless of how much coverage it carries.
-      vec3 lavaPass(vec3 col, float lon, float lat, float vBodyV,
+      vec3 lavaPass(vec3 col, float lon, float lat, float sulfurFrac,
                     float minDist2, float secondMinDist2, vec2 winnerCell, vec2 secondCell,
                     out vec3 lavaEmissive) {
         lavaEmissive = vec3(0.0);
@@ -1138,8 +1138,6 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
             // Composition hue nudge — sulfurous volcanism reads yellower.
             // Lift green proportional to red so orange → yellow without
             // bleaching toward white; scaled by the body's sulfur frac.
-            float sulfurU    = (float(${LAVA_TINT_TEXEL_OFFSET}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
-            float sulfurFrac = texture2D(uCloudLayerData, vec2(sulfurU, vBodyV)).r;
             if (sulfurFrac > 0.0) {
               vec3 sulfurEmber = clamp(ember + vec3(0.0, ember.r * LAVA_SULFUR_GREEN_LIFT, 0.0), 0.0, 1.0);
               ember = mix(ember, sulfurEmber, sulfurFrac * LAVA_SULFUR_STRENGTH);
@@ -1160,6 +1158,232 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         return col;
       }
 
+      // Ice election: which fragments are icy, and by which geometry.
+      // Two physically distinct ice geometries, partitioned by
+      // vGlobalness:
+      //   Cap pattern (warm / transitional bodies, globalness <
+      //     CAP_GLOBALNESS_MAX) — surface deposit at high latitude.
+      //     Earth's water-ice caps, Mars's seasonal CO2 + water
+      //     polar caps. Independent of bulk surface composition;
+      //     paints pure ICE_COLOR (bypasses the surfaceAge blend
+      //     used by the global path below).
+      //   Global pattern (cold bodies, globalness ≥ CAP_GLOBALNESS_MAX)
+      //     — bulk cryosphere. Europa, Triton, Callisto. Random
+      //     scattered cells with effectiveIceFrac ramping to 1.0 at
+      //     extreme cold; surfaceAge controls how much ice sits on
+      //     top vs buried under regolith.
+      //
+      // The partition lines up with frozenBoost's smoothstep, so a
+      // body is either fully in the cap regime (frozenBoost=0) or
+      // moving into the global regime (frozenBoost > 0). Salts
+      // SALT_ICE_PRIORITY.
+      void iceComposite(vec2 winnerCell, float latSinDisc,
+                        out bool capIcyHere, out bool globalIcyHere, out bool icyHere) {
+        bool  capActive      = vGlobalness < CAP_GLOBALNESS_MAX;
+        // Per-cell threshold jitter so the cap boundary follows the
+        // worley grid's jittered shapes instead of reading as a clean
+        // foreshortened ellipse. Cells near the boundary go in or out
+        // by hash; cells well inside / outside are unaffected. Amplitude
+        // scales with iceFrac so Mars's tiny cap (iceFrac 0.02) gets a
+        // ~±0.01 wobble while Earth's larger cap (iceFrac 0.10) gets
+        // ~±0.05 — clamped to keep very-small caps visible and very-
+        // large caps from dissolving into noise. Salts SALT_CAP_JITTER.
+        float capJitterH    = hash21(winnerCell + vSeed * SALT_CAP_JITTER);
+        float capJitterAmp  = clamp(vIceFrac * 0.6, 0.01, 0.08);
+        float capJitter     = (capJitterH - 0.5) * 2.0 * capJitterAmp;
+        capIcyHere = capActive && (abs(latSinDisc) + capJitter) > (1.0 - vIceFrac);
+        float cellHashIce    = hash21(winnerCell + vSeed * SALT_ICE_PRIORITY);
+        // Cold bodies push iceFrac toward 1.0 (Europa-class: cold AND
+        // water-bearing → full shell rather than polar caps). Gated on
+        // vIceFrac > 0 so the boost doesn't fabricate ice on a cold
+        // body that has none in its composition — Io (lava class,
+        // 110 K, iceFraction=0) would otherwise render as a solid
+        // ICE_COLOR disc because the cold-→global rule overrode its
+        // actual zero ice content.
+        float frozenBoost    = smoothstep(CAP_GLOBALNESS_MAX, 1.0, vGlobalness) * step(0.01, vIceFrac);
+        float effectiveIceFrac = mix(vIceFrac, 1.0, frozenBoost);
+        globalIcyHere = !capActive && cellHashIce > (1.0 - effectiveIceFrac);
+        icyHere = capIcyHere || globalIcyHere;
+      }
+
+      // Phase 1.5c — discrete crater features + ejecta rays.
+      // Crater seed cells aggregate CRATER_PATCH_FACTOR² fine
+      // cells in the same sphere-projected frame as 1.5a/b. Scan
+      // the 5×5 neighborhood: existence hash against
+      // (1 - surfaceAge)², jittered center, cubic radius. Closest
+      // containing crater wins for the interior paint; ray
+      // contributions from any crater in scan whose rays reach
+      // this fragment accumulate alpha-stacked into rayAccumA.
+      //
+      // Crater interior paint composes by layer order:
+      //   young (ice on top): crater reveals the body's
+      //     subsurface palette (impact punches through the ice
+      //     layer to expose the other resources beneath).
+      //   old (regolith on top): crater reveals ICE_COLOR where
+      //     ice exists at this fragment, else subsurface palette
+      //     (no ice to reveal).
+      // Per-crater color uses the CRATER's region bucket (not the
+      // fragment's), so a crater straddling a region boundary paints
+      // one uniform color rather than fracturing along the seam.
+      //
+      // Ray paint is ICE_COLOR (matches the Tycho/Hokusai bright-
+      // fresh-material convention; works on icy bodies as exposed
+      // ice and on dry bodies as the canonical "fresh impact"
+      // signal). Painted only when the fragment isn't already
+      // inside a crater body — interior paint always wins.
+      //
+      // Salt allocation (vSeed × prime, vSeed × prime):
+      //   crater existence:  (547, 569)
+      //   crater jitter X:   (587, 547)
+      //   crater jitter Y:   (569, 587)
+      //   crater radius:     (569, 547) — reversed pair distinct from existence
+      //   crater palette:    (587, 569)
+      //   crater age (ray):  (631, 641) — per-crater impact recency
+      //   ray base angle:    (653, 659) — per-crater angular offset
+      //   per-ray length:    (677, 683) — per-(crater, ray-index) length jitter
+      vec3 craterRayPass(vec3 col, vec2 cellPos, bool icyHere) {
+        vec2 craterCellPos  = cellPos / CRATER_PATCH_FACTOR;
+        vec2 craterCellId   = floor(craterCellPos);
+        vec2 craterCellFrac = craterCellPos - craterCellId;
+        float ageMissing    = 1.0 - vSurfaceAge;
+        float craterDensity = ageMissing * ageMissing * CRATER_DENSITY_MAX;
+
+        float bestDist  = 1e9;
+        vec2  bestCraterId = vec2(0.0);
+        bool  inCrater  = false;
+
+        // Ejecta tracking — set when any ray-bearing crater in the
+        // 5×5 scan touches this fragment with one of its 3..6 rays.
+        // bestRayCraterId carries the CLOSEST ray-source so the
+        // post-loop paint can resolve the ray to the same fill
+        // color that crater's interior would paint. Rays are
+        // excavated material — they should match what the crater
+        // bowl exposes, not a universal ICE_COLOR.
+        // Gated on disc size — 1-px rays read as noise below
+        // RAY_MIN_DISC_RADIUS.
+        bool  onRay           = false;
+        bool  rayActive       = vRadius > RAY_MIN_DISC_RADIUS;
+        vec2  bestRayCraterId = vec2(0.0);
+        float bestRayDist     = 1e9;
+
+        for (int dx = -3; dx <= 3; dx++) {
+          for (int dy = -3; dy <= 3; dy++) {
+            vec2 off = vec2(float(dx), float(dy));
+            vec2 nCell = craterCellId + off;
+            float existH = hash21(nCell + vSeed * SALT_CRATER_EXIST);
+            if (existH > craterDensity) continue;
+            float jx = hash21(nCell + vSeed * SALT_CRATER_JITTER_X);
+            float jy = hash21(nCell + vSeed * SALT_CRATER_JITTER_Y);
+            vec2  cCenter = off + vec2(jx, jy);
+            float rH = hash21(nCell + vSeed * SALT_CRATER_RADIUS);
+            // Cubic bias: 50th percentile rH=0.5 → rH³=0.125 →
+            // tiny crater; only rH > ~0.95 produces big craters.
+            float radius = CRATER_RADIUS_MIN + (CRATER_RADIUS_MAX - CRATER_RADIUS_MIN) * rH * rH * rH;
+            float dist = length(cCenter - craterCellFrac);
+            if (dist < radius && dist < bestDist) {
+              bestDist = dist;
+              bestCraterId = nCell;
+              inCrater = true;
+            }
+
+            // Ejecta ray pass — fragment sits outside the crater
+            // body but possibly inside one of its rays. Per-crater
+            // age hash gates ray emission; ray count scales with
+            // crater radius (bigger craters throw more rays); each
+            // individual ray has its own hashed length so the
+            // silhouette isn't a perfect starburst. No distance
+            // fade: rays paint as solid strokes from the crater
+            // rim out to the per-ray length cutoff.
+            if (rayActive && radius >= RAY_MIN_RADIUS && dist > radius) {
+              // Size-driven max reach: tiny qualifying crater gets
+              // RAY_REACH_MAX_MUL as its top end, biggest crater
+              // gets RAY_REACH_BIG_MUL. Same radiusNorm drives ray
+              // count below — both effects scale together so big
+              // craters get MORE and LONGER rays.
+              float radiusNorm   = (radius - CRATER_RADIUS_MIN) / (CRATER_RADIUS_MAX - CRATER_RADIUS_MIN);
+              float craterMaxMul = mix(RAY_REACH_MAX_MUL, RAY_REACH_BIG_MUL, radiusNorm);
+              float rayMaxReach  = radius * craterMaxMul;
+              if (dist < rayMaxReach) {
+                float craterAgeH = hash21(nCell + vSeed * SALT_CRATER_AGE);
+                if (craterAgeH < RAY_AGE_THRESHOLD) {
+                  // Size-driven ray count: tiny crater → MIN, big
+                  // crater → MAX. Clamp guards the radiusNorm = 1
+                  // edge from rounding past MAX.
+                  float numRays = clamp(
+                    RAY_COUNT_MIN + floor(radiusNorm * (RAY_COUNT_MAX - RAY_COUNT_MIN + 1.0)),
+                    RAY_COUNT_MIN, RAY_COUNT_MAX);
+                  float baseAngle = hash21(nCell + vSeed * SALT_RAY_ANGLE) * TWO_PI;
+                  vec2  toFrag    = craterCellFrac - cCenter;
+                  float angle     = atan(toFrag.y, toFrag.x);
+                  float angleStep = TWO_PI / numRays;
+                  float relPhase  = (angle - baseAngle) / angleStep;
+                  float wedgeIdx  = floor(relPhase);
+                  float wedgeProg = fract(relPhase) - 0.5;
+                  // Per-ray length jitter — same crater, different
+                  // rays get different reach. Hash keyed on the
+                  // ray's wedge index so the length stays stable
+                  // across fragments inside one ray. Per-crater
+                  // craterMaxMul caps the upper end so big craters
+                  // can throw longer rays than small ones.
+                  float perRayH   = hash21(nCell + vSeed * SALT_RAY_PERRAY + vec2(wedgeIdx, 0.0));
+                  float perRayReach = radius * mix(RAY_REACH_MIN_MUL, craterMaxMul, perRayH);
+                  if (dist < perRayReach) {
+                    // Pixel-width tolerance: RAY_PIXEL_WIDTH px wide
+                    // = RAY_PIXEL_WIDTH/distPx radians; divided by
+                    // wedge angular width (angleStep) gives the
+                    // tolerance in wedgeProg units. Inverse-distance
+                    // keeps the streak the same pixel width along
+                    // its length.
+                    float distPx    = dist * CRATER_PATCH_FACTOR * SURFACE_PATCH_PX;
+                    float thickness = RAY_PIXEL_WIDTH * numRays / (max(distPx, 1.0) * TWO_PI);
+                    if (abs(wedgeProg) < thickness) {
+                      onRay = true;
+                      // Closest ray-source wins when multiple
+                      // craters' rays cross this fragment, so the
+                      // paint resolves to that crater's region.
+                      if (dist < bestRayDist) {
+                        bestRayDist = dist;
+                        bestRayCraterId = nCell;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        if (inCrater || onRay) {
+          // Unified crater-interior + ejecta-ray paint. Both branches
+          // share the same fill computation — they're the same
+          // excavated material, just deposited in different places
+          // (the bowl itself vs the radial ejecta). bestCraterId
+          // wins when the fragment is inside a crater body;
+          // otherwise the closest ray-source crater drives the
+          // paint, so a Mercury impact throws subsurface-grey
+          // rays and a Callisto impact throws ICE_COLOR rays —
+          // the same colors those impacts' bowls would expose.
+          //
+          // Per-crater region picks the subsurface mask, so every
+          // fragment of one crater (interior + every ray) paints
+          // the same color rather than fragmenting along the
+          // region-boundary seams the surface pass would normally
+          // honor.
+          vec2 paintCraterId = inCrater ? bestCraterId : bestRayCraterId;
+          float pjx = hash21(paintCraterId + vSeed * SALT_CRATER_JITTER_X);
+          float pjy = hash21(paintCraterId + vSeed * SALT_CRATER_JITTER_Y);
+          vec2  pCenter = (paintCraterId + vec2(pjx, pjy)) * CRATER_PATCH_FACTOR;
+          vec2  pRegionCell = floor(pCenter / REGION_PATCH_FACTOR);
+          ivec3 pSlots = pickRegionSlots(pRegionCell, vWeights.xyz, vSeed);
+          vec3 pRevealCol = slotColor(pSlots.z, vPalette0, vPalette1, vPalette2);
+
+          vec3 pYoung = pRevealCol;
+          vec3 pOld   = icyHere ? ICE_COLOR : pRevealCol;
+          col = mix(pOld, pYoung, vSurfaceAge);
+        }
+        return col;
+      }
+
       // Surface (or atm-column) base color for one fragment. Composes the
       // full terrestrial surface stack — worley patches, ice/cap regime,
       // ocean + coastal fringe, region palette election, biome stipple,
@@ -1168,10 +1392,10 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // the rest. lavaEmissive returns the self-luminous lava contribution
       // (zero off molten bodies) for the caller to add back after lighting.
       // The sphere-projection locals (d/lxs/lys/lon/lat) and per-body texture
-      // samples (ocean / atm-column color, body-row v) come from main();
+      // samples (ocean / atm-column color, sulfur frac) come from main();
       // everything else reads from varyings/uniforms in scope.
       vec3 surfaceColor(vec2 d, float lxs, float lys, float lon, float lat,
-                        vec3 vOceanColor, vec3 vAtmColumnColor, float vBodyV,
+                        vec3 vOceanColor, vec3 vAtmColumnColor, float sulfurFrac,
                         out vec3 lavaEmissive) {
         lavaEmissive = vec3(0.0);
         vec3 col;
@@ -1230,49 +1454,8 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           //   old   (low age)  → resource on top (regolith), ice below.
           // Continuous lerp so a mid-age body mixes both reads.
 
-          // Two physically distinct ice geometries, partitioned by
-          // vGlobalness:
-          //   Cap pattern (warm / transitional bodies, globalness <
-          //     CAP_GLOBALNESS_MAX) — surface deposit at high latitude.
-          //     Earth's water-ice caps, Mars's seasonal CO2 + water
-          //     polar caps. Independent of bulk surface composition;
-          //     paints pure ICE_COLOR (bypasses the surfaceAge blend
-          //     used by the global path below).
-          //   Global pattern (cold bodies, globalness ≥ CAP_GLOBALNESS_MAX)
-          //     — bulk cryosphere. Europa, Triton, Callisto. Random
-          //     scattered cells with effectiveIceFrac ramping to 1.0 at
-          //     extreme cold; surfaceAge controls how much ice sits on
-          //     top vs buried under regolith.
-          //
-          // The partition lines up with frozenBoost's smoothstep, so a
-          // body is either fully in the cap regime (frozenBoost=0) or
-          // moving into the global regime (frozenBoost > 0). Salts
-          // SALT_ICE_PRIORITY.
-          bool  capActive      = vGlobalness < CAP_GLOBALNESS_MAX;
-          // Per-cell threshold jitter so the cap boundary follows the
-          // worley grid's jittered shapes instead of reading as a clean
-          // foreshortened ellipse. Cells near the boundary go in or out
-          // by hash; cells well inside / outside are unaffected. Amplitude
-          // scales with iceFrac so Mars's tiny cap (iceFrac 0.02) gets a
-          // ~±0.01 wobble while Earth's larger cap (iceFrac 0.10) gets
-          // ~±0.05 — clamped to keep very-small caps visible and very-
-          // large caps from dissolving into noise. Salts SALT_CAP_JITTER.
-          float capJitterH    = hash21(winnerCell + vSeed * SALT_CAP_JITTER);
-          float capJitterAmp  = clamp(vIceFrac * 0.6, 0.01, 0.08);
-          float capJitter     = (capJitterH - 0.5) * 2.0 * capJitterAmp;
-          bool  capIcyHere    = capActive && (abs(latSinDisc) + capJitter) > (1.0 - vIceFrac);
-          float cellHashIce    = hash21(winnerCell + vSeed * SALT_ICE_PRIORITY);
-          // Cold bodies push iceFrac toward 1.0 (Europa-class: cold AND
-          // water-bearing → full shell rather than polar caps). Gated on
-          // vIceFrac > 0 so the boost doesn't fabricate ice on a cold
-          // body that has none in its composition — Io (lava class,
-          // 110 K, iceFraction=0) would otherwise render as a solid
-          // ICE_COLOR disc because the cold-→global rule overrode its
-          // actual zero ice content.
-          float frozenBoost    = smoothstep(CAP_GLOBALNESS_MAX, 1.0, vGlobalness) * step(0.01, vIceFrac);
-          float effectiveIceFrac = mix(vIceFrac, 1.0, frozenBoost);
-          bool  globalIcyHere  = !capActive && cellHashIce > (1.0 - effectiveIceFrac);
-          bool  icyHere        = capIcyHere || globalIcyHere;
+          bool capIcyHere, globalIcyHere, icyHere;
+          iceComposite(winnerCell, latSinDisc, capIcyHere, globalIcyHere, icyHere);
 
           // CONTINENT_GROUP-sized blocks of worley cells share one
           // ocean/land coin flip. Salt offset from the resource-pick
@@ -1400,180 +1583,12 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
             col = resourceSurface;
           }
 
-          // Phase 1.5c — discrete crater features + ejecta rays.
-          // Crater seed cells aggregate CRATER_PATCH_FACTOR² fine
-          // cells in the same sphere-projected frame as 1.5a/b. Scan
-          // the 5×5 neighborhood: existence hash against
-          // (1 - surfaceAge)², jittered center, cubic radius. Closest
-          // containing crater wins for the interior paint; ray
-          // contributions from any crater in scan whose rays reach
-          // this fragment accumulate alpha-stacked into rayAccumA.
-          //
-          // Crater interior paint composes by layer order:
-          //   young (ice on top): crater reveals the body's
-          //     subsurface palette (impact punches through the ice
-          //     layer to expose the other resources beneath).
-          //   old (regolith on top): crater reveals ICE_COLOR where
-          //     ice exists at this fragment, else subsurface palette
-          //     (no ice to reveal).
-          // Per-crater color uses the CRATER's region bucket (not the
-          // fragment's), so a crater straddling a region boundary paints
-          // one uniform color rather than fracturing along the seam.
-          //
-          // Ray paint is ICE_COLOR (matches the Tycho/Hokusai bright-
-          // fresh-material convention; works on icy bodies as exposed
-          // ice and on dry bodies as the canonical "fresh impact"
-          // signal). Painted only when the fragment isn't already
-          // inside a crater body — interior paint always wins.
-          //
-          // Salt allocation (vSeed × prime, vSeed × prime):
-          //   crater existence:  (547, 569)
-          //   crater jitter X:   (587, 547)
-          //   crater jitter Y:   (569, 587)
-          //   crater radius:     (569, 547) — reversed pair distinct from existence
-          //   crater palette:    (587, 569)
-          //   crater age (ray):  (631, 641) — per-crater impact recency
-          //   ray base angle:    (653, 659) — per-crater angular offset
-          //   per-ray length:    (677, 683) — per-(crater, ray-index) length jitter
-          vec2 craterCellPos  = cellPos / CRATER_PATCH_FACTOR;
-          vec2 craterCellId   = floor(craterCellPos);
-          vec2 craterCellFrac = craterCellPos - craterCellId;
-          float ageMissing    = 1.0 - vSurfaceAge;
-          float craterDensity = ageMissing * ageMissing * CRATER_DENSITY_MAX;
-
-          float bestDist  = 1e9;
-          vec2  bestCraterId = vec2(0.0);
-          bool  inCrater  = false;
-
-          // Ejecta tracking — set when any ray-bearing crater in the
-          // 5×5 scan touches this fragment with one of its 3..6 rays.
-          // bestRayCraterId carries the CLOSEST ray-source so the
-          // post-loop paint can resolve the ray to the same fill
-          // color that crater's interior would paint. Rays are
-          // excavated material — they should match what the crater
-          // bowl exposes, not a universal ICE_COLOR.
-          // Gated on disc size — 1-px rays read as noise below
-          // RAY_MIN_DISC_RADIUS.
-          bool  onRay           = false;
-          bool  rayActive       = vRadius > RAY_MIN_DISC_RADIUS;
-          vec2  bestRayCraterId = vec2(0.0);
-          float bestRayDist     = 1e9;
-
-          for (int dx = -3; dx <= 3; dx++) {
-            for (int dy = -3; dy <= 3; dy++) {
-              vec2 off = vec2(float(dx), float(dy));
-              vec2 nCell = craterCellId + off;
-              float existH = hash21(nCell + vSeed * SALT_CRATER_EXIST);
-              if (existH > craterDensity) continue;
-              float jx = hash21(nCell + vSeed * SALT_CRATER_JITTER_X);
-              float jy = hash21(nCell + vSeed * SALT_CRATER_JITTER_Y);
-              vec2  cCenter = off + vec2(jx, jy);
-              float rH = hash21(nCell + vSeed * SALT_CRATER_RADIUS);
-              // Cubic bias: 50th percentile rH=0.5 → rH³=0.125 →
-              // tiny crater; only rH > ~0.95 produces big craters.
-              float radius = CRATER_RADIUS_MIN + (CRATER_RADIUS_MAX - CRATER_RADIUS_MIN) * rH * rH * rH;
-              float dist = length(cCenter - craterCellFrac);
-              if (dist < radius && dist < bestDist) {
-                bestDist = dist;
-                bestCraterId = nCell;
-                inCrater = true;
-              }
-
-              // Ejecta ray pass — fragment sits outside the crater
-              // body but possibly inside one of its rays. Per-crater
-              // age hash gates ray emission; ray count scales with
-              // crater radius (bigger craters throw more rays); each
-              // individual ray has its own hashed length so the
-              // silhouette isn't a perfect starburst. No distance
-              // fade: rays paint as solid strokes from the crater
-              // rim out to the per-ray length cutoff.
-              if (rayActive && radius >= RAY_MIN_RADIUS && dist > radius) {
-                // Size-driven max reach: tiny qualifying crater gets
-                // RAY_REACH_MAX_MUL as its top end, biggest crater
-                // gets RAY_REACH_BIG_MUL. Same radiusNorm drives ray
-                // count below — both effects scale together so big
-                // craters get MORE and LONGER rays.
-                float radiusNorm   = (radius - CRATER_RADIUS_MIN) / (CRATER_RADIUS_MAX - CRATER_RADIUS_MIN);
-                float craterMaxMul = mix(RAY_REACH_MAX_MUL, RAY_REACH_BIG_MUL, radiusNorm);
-                float rayMaxReach  = radius * craterMaxMul;
-                if (dist < rayMaxReach) {
-                  float craterAgeH = hash21(nCell + vSeed * SALT_CRATER_AGE);
-                  if (craterAgeH < RAY_AGE_THRESHOLD) {
-                    // Size-driven ray count: tiny crater → MIN, big
-                    // crater → MAX. Clamp guards the radiusNorm = 1
-                    // edge from rounding past MAX.
-                    float numRays = clamp(
-                      RAY_COUNT_MIN + floor(radiusNorm * (RAY_COUNT_MAX - RAY_COUNT_MIN + 1.0)),
-                      RAY_COUNT_MIN, RAY_COUNT_MAX);
-                    float baseAngle = hash21(nCell + vSeed * SALT_RAY_ANGLE) * TWO_PI;
-                    vec2  toFrag    = craterCellFrac - cCenter;
-                    float angle     = atan(toFrag.y, toFrag.x);
-                    float angleStep = TWO_PI / numRays;
-                    float relPhase  = (angle - baseAngle) / angleStep;
-                    float wedgeIdx  = floor(relPhase);
-                    float wedgeProg = fract(relPhase) - 0.5;
-                    // Per-ray length jitter — same crater, different
-                    // rays get different reach. Hash keyed on the
-                    // ray's wedge index so the length stays stable
-                    // across fragments inside one ray. Per-crater
-                    // craterMaxMul caps the upper end so big craters
-                    // can throw longer rays than small ones.
-                    float perRayH   = hash21(nCell + vSeed * SALT_RAY_PERRAY + vec2(wedgeIdx, 0.0));
-                    float perRayReach = radius * mix(RAY_REACH_MIN_MUL, craterMaxMul, perRayH);
-                    if (dist < perRayReach) {
-                      // Pixel-width tolerance: RAY_PIXEL_WIDTH px wide
-                      // = RAY_PIXEL_WIDTH/distPx radians; divided by
-                      // wedge angular width (angleStep) gives the
-                      // tolerance in wedgeProg units. Inverse-distance
-                      // keeps the streak the same pixel width along
-                      // its length.
-                      float distPx    = dist * CRATER_PATCH_FACTOR * SURFACE_PATCH_PX;
-                      float thickness = RAY_PIXEL_WIDTH * numRays / (max(distPx, 1.0) * TWO_PI);
-                      if (abs(wedgeProg) < thickness) {
-                        onRay = true;
-                        // Closest ray-source wins when multiple
-                        // craters' rays cross this fragment, so the
-                        // paint resolves to that crater's region.
-                        if (dist < bestRayDist) {
-                          bestRayDist = dist;
-                          bestRayCraterId = nCell;
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-
-          if (inCrater || onRay) {
-            // Unified crater-interior + ejecta-ray paint. Both branches
-            // share the same fill computation — they're the same
-            // excavated material, just deposited in different places
-            // (the bowl itself vs the radial ejecta). bestCraterId
-            // wins when the fragment is inside a crater body;
-            // otherwise the closest ray-source crater drives the
-            // paint, so a Mercury impact throws subsurface-grey
-            // rays and a Callisto impact throws ICE_COLOR rays —
-            // the same colors those impacts' bowls would expose.
-            //
-            // Per-crater region picks the subsurface mask, so every
-            // fragment of one crater (interior + every ray) paints
-            // the same color rather than fragmenting along the
-            // region-boundary seams the surface pass would normally
-            // honor.
-            vec2 paintCraterId = inCrater ? bestCraterId : bestRayCraterId;
-            float pjx = hash21(paintCraterId + vSeed * SALT_CRATER_JITTER_X);
-            float pjy = hash21(paintCraterId + vSeed * SALT_CRATER_JITTER_Y);
-            vec2  pCenter = (paintCraterId + vec2(pjx, pjy)) * CRATER_PATCH_FACTOR;
-            vec2  pRegionCell = floor(pCenter / REGION_PATCH_FACTOR);
-            ivec3 pSlots = pickRegionSlots(pRegionCell, vWeights.xyz, vSeed);
-            vec3 pRevealCol = slotColor(pSlots.z, vPalette0, vPalette1, vPalette2);
-
-            vec3 pYoung = pRevealCol;
-            vec3 pOld   = icyHere ? ICE_COLOR : pRevealCol;
-            col = mix(pOld, pYoung, vSurfaceAge);
-          }
+          // Phase 1.5c — discrete crater features + ejecta rays (see
+          // craterRayPass): the closest containing crater paints its
+          // excavated subsurface palette into the bowl, and any crater
+          // whose rays reach this fragment throws the same material
+          // along its ejecta — layer-ordered against ice by vSurfaceAge.
+          col = craterRayPass(col, cellPos, icyHere);
 
           // Phase 1.5d — linea. Voronoi cell-boundary cracks painted
           // with the body's subsurface palette. Fires where the body
@@ -1606,7 +1621,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
 
           // ── Lava emission ── composite molten incandescence onto the
           // crust and accumulate the post-lighting emissive (see lavaPass()).
-          col = lavaPass(col, lon, lat, vBodyV,
+          col = lavaPass(col, lon, lat, sulfurFrac,
                          minDist2, secondMinDist2, winnerCell, secondCell,
                          lavaEmissive);
 
@@ -1925,6 +1940,12 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         // constant so two close-analog bodies get distinguishable hues.
         float oceanColU = (float(${OCEAN_COLOR_TEXEL_OFFSET}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
         vec3 vOceanColor = texture2D(uCloudLayerData, vec2(oceanColU, vBodyV)).rgb;
+        // Sulfur frac (volcanic composition) — sampled here beside the
+        // ocean / atm-column reads so lavaPass takes a value, consistent
+        // with the other per-body texture samples, rather than its own
+        // pushed-down texel read.
+        float sulfurU = (float(${LAVA_TINT_TEXEL_OFFSET}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
+        float vSulfurFrac = texture2D(uCloudLayerData, vec2(sulfurU, vBodyV)).r;
 
         // Surface (or atm-column) base color + self-luminous lava emission.
         // lavaEmissive is added back AFTER the reflectance lighting pass (see
@@ -1933,7 +1954,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         // non-molten body. col is the base the haze + cloud decks composite over.
         vec3 lavaEmissive;
         vec3 col = surfaceColor(d, lxs, lys, lon, lat,
-                                vOceanColor, vAtmColumnColor, vBodyV,
+                                vOceanColor, vAtmColumnColor, vSulfurFrac,
                                 lavaEmissive);
 
         // ── Haze blanket ──
