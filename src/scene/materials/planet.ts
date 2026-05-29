@@ -89,11 +89,11 @@ import { MAX_LIGHTS, BAYER4_GLSL, STAR_CRESCENT_LIGHTING_GLSL } from './chunks';
 //                                       not from in-deck mixing.
 //   [MAX_CLOUD_LAYERS+1+N]           — per-body ocean color (rgb, .a unused).
 //                                       Painted in surface-liquid cells (see
-//                                       `oceanColorFor` in disc-palette.ts).
+//                                       `oceanColorFor` in disc-palette/ocean.ts).
 //   [MAX_CLOUD_LAYERS+1+N+1]          — per-body limb Rayleigh scatter color
 //                                       (rgb, .a unused). Target hue for the
 //                                       rim's depth-graded Rayleigh shift (see
-//                                       `scatteringRimFor` in disc-palette.ts);
+//                                       `scatteringRimFor` in disc-palette/atmosphere.ts);
 //                                       its strength rides on aWeights.w.
 //   [MAX_CLOUD_LAYERS+1+N+2]          — per-body lava composition signal
 //                                       (.r = sulfur fraction; gba unused).
@@ -101,7 +101,7 @@ import { MAX_LIGHTS, BAYER4_GLSL, STAR_CRESCENT_LIGHTING_GLSL } from './chunks';
 //                                       green channel by .r so sulfurous
 //                                       volcanism (Io) reads yellower than
 //                                       silicate lava (see lavaSulfurFrac in
-//                                       disc-palette.ts).
+//                                       disc-palette/lava.ts).
 // Pulling everything off vertex attributes brings the per-pool attribute
 // count back under the gl_MaxVertexAttribs cap.
 // Up to 4 stratified decks per body — 3 chemistry decks (Jupiter
@@ -120,7 +120,7 @@ const OCEAN_COLOR_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS;
 const SCATTER_COLOR_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1;
 // Per-body lava composition signal (.r = sulfur fraction; gba unused) —
 // the abiotic surface-sulfur fraction that the molten sub-pass uses to
-// shift the ember yellower (see lavaSulfurFrac in disc-palette.ts). One
+// shift the ember yellower (see lavaSulfurFrac in disc-palette/lava.ts). One
 // channel today; the rest of the texel is reserved for future
 // compositional lava hues.
 const LAVA_TINT_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1 + 1;
@@ -179,7 +179,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // xyz = surface palette resource weights (sum-to-1 normalized);
       // w = per-body limb Rayleigh scatter strength [0..1] (scales the
       // rim's depth-graded hue shift; see scatteringRimFor in
-      // disc-palette.ts). Reaches the fragment shader via vWeights.w.
+      // disc-palette/atmosphere.ts). Reaches the fragment shader via vWeights.w.
       attribute vec4  aWeights;
       // Surface scalars: x = waterFrac, y = iceFrac, z = surfaceAge,
       // w = globalness.
@@ -196,7 +196,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // Shared rim + haze-layer color + per-vertex hover flag.
       // Layout: xyz = MERGED rim/haze color (weighted-average blend
       // across cloud, photochemistry haze, scattering, and dust — see
-      // disc-palette.ts), w = hover flag (0/1, flipped by setHovered).
+      // disc-palette/index.ts), w = hover flag (0/1, flipped by setHovered).
       // Conflated to keep the attribute count under gl_MaxVertexAttribs.
       attribute vec4  aHazeColor;
 
@@ -386,7 +386,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       const float CONTINENT_GROUP = 4.0;
 
       // Ocean fill color is per-body and read from vOceanColor (sampled
-      // from uCloudLayerData), derived in disc-palette.ts so two
+      // from uCloudLayerData), derived in disc-palette/ocean.ts so two
       // close-analog bodies get distinguishable hues. See
       // oceanColorFor.
 
@@ -428,7 +428,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
 
       // Outward atmospheric halo — paints OUTSIDE the disc, 0..3 px wide
       // driven by atmospheric column depth (see rimWidthFor* in
-      // disc-palette.ts). No inward fade — the flat pixel aesthetic
+      // disc-palette/atmosphere.ts). No inward fade — the flat pixel aesthetic
       // doesn't want a soft gradient inside the disc edge.
       //
       // **Stroke-stacking model.** For a halo of width W, conceptually
@@ -456,7 +456,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // random pick across multiple palette slots paints near-50/50
       // alternation between adjacent cells, which on barren bodies —
       // archetype slots collapsed toward similar mid-greys via the
-      // abundance lerp in disc-palette.ts — reads as a hard
+      // abundance lerp in disc-palette/index.ts — reads as a hard
       // checkerboard at SURFACE_PATCH_PX cell pitch. Keeping each
       // region monochromatic-ish (~80% one slot) breaks the alternation
       // grain while preserving inter-region color variety.
@@ -624,7 +624,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // ── Lava / molten-surface emission ──
       // Self-luminous incandescence composed onto the surface from two
       // physically distinct drives folded CPU-side into two scalars
-      // (disc-palette.ts): vMoltenCoverage (how much of the disc is molten)
+      // (disc-palette/lava.ts): vMoltenCoverage (how much of the disc is molten)
       // and vEmissionTempNorm (normalized emission temperature → emberRamp).
       // Insolation-hot worlds get full coverage at the surface temperature;
       // tidally-heated bodies (Io) get sparse hot pools at intrinsic lava
@@ -822,7 +822,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       //
       // The target hue is the body's PER-GAS scatter color (vScatterColor,
       // sampled from the per-body texture; the frac×SCATTERING_POTENCY
-      // blend computed in disc-palette.ts — N2/O2 blue, CO2 cool-grey, CH4
+      // blend computed in disc-palette/atmosphere.ts — N2/O2 blue, CO2 cool-grey, CH4
       // cyan, SO2 yellow) re-illuminated by the STARLIGHT. So it's dynamic
       // to BOTH: the gas sets the scatter hue, the star sets the incident
       // spectrum — a white/blue star yields a vivid fringe, a red dwarf a
@@ -949,7 +949,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         // it (the planet material is transparent=true for this reason —
         // see the material config below). vRimColor is the weighted-
         // average merger across cloud + species haze + scattering + dust
-        // contributors (see disc-palette.ts).
+        // contributors (see disc-palette/index.ts).
         if (r > vRadius) {
           #ifdef DISC_ONLY
             discard;
@@ -1086,7 +1086,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         // Per-body ocean color — derived from solvent species, biotic
         // pigment mix, suspended mineral sediment, CDOM yellow substance,
         // host-star SED, and sky reflection (see oceanColorFor in
-        // disc-palette.ts). Replaces the old hard-coded OCEAN_COLOR
+        // disc-palette/ocean.ts). Replaces the old hard-coded OCEAN_COLOR
         // constant so two close-analog bodies get distinguishable hues.
         float oceanColU = (float(${OCEAN_COLOR_TEXEL_OFFSET}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
         vec3 vOceanColor = texture2D(uCloudLayerData, vec2(oceanColU, vBodyV)).rgb;

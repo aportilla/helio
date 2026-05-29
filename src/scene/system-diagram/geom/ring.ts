@@ -1,6 +1,6 @@
 // Ring ellipse math — shared by the ring renderer (layers/rings.ts builds
 // the tilted annulus halves) and the picker's tilted-ellipse hit test.
-// `bodyVisualTiltRad` is also consumed by disc-palette.ts so a banded
+// `bodyVisualTiltRad` is also consumed by disc-palette/index.ts so a banded
 // gas giant's atmospheric bands run parallel to its ring plane.
 
 import type { Body } from '../../../data/stars';

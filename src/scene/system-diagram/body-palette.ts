@@ -5,7 +5,7 @@
 // stellar shift, the world-class diagrammatic colors, per-gas cloud /
 // scattering / haze hues + potencies, the rock-archetype mineralogy
 // LUTs, cloud-deck + stratospheric-haze derivation, and the
-// resource→color helpers. Consumed by disc-palette.ts (the per-body
+// resource→color helpers. Consumed by disc-palette/ (the per-body
 // palette orchestrator), the belt / ring layers, and the system-view
 // HUD cards.
 //
@@ -275,7 +275,7 @@ export const HAZE_RAYLEIGH_SCALE = 0.15;
 // Per-gas clear-air scattering color — the visible tint of an
 // atmosphere viewed edge-on through a long column with no haze layer
 // to obscure it. Used by the disc rim's clear-air branch in
-// disc-palette.ts (formerly a fixed THEME_RAYLEIGH_COLOR token).
+// disc-palette/atmosphere.ts (formerly a fixed THEME_RAYLEIGH_COLOR token).
 //
 // Rayleigh-blue is the canonical case (N2/O2/Ar bulk atmospheres),
 // but CH4-absorbing columns tint cyan-blue (the Uranus/Neptune signal,
@@ -463,7 +463,7 @@ const ROCK_ARCHETYPE_SHADE_AMOUNT = 0.3;
 // without leaning toward any of the six resource archetypes. Used by
 // the disc-palette grey-lerp on the archetype slots (low-abundance
 // resources fade toward this) AND by barrenTintFor below as the base
-// the body's mineralogy nudges away from. Exported so disc-palette.ts
+// the body's mineralogy nudges away from. Exported so disc-palette/index.ts
 // can share one source of truth.
 export const BARREN_ROCK_COLOR = new Color(0x6c6864);
 
@@ -576,7 +576,7 @@ export function rockArchetypeFor(
 // No atm-gas folding here. Transparent atm species (N2, O2, H2, He)
 // don't form clouds and don't tint cloud cells. Atm-column absorption
 // is a separate concept that paints the void between cloud cells on
-// no-surface bodies (see `atmColumnColor` in disc-palette.ts), not the
+// no-surface bodies (see `atmColumnColor` in disc-palette/atmosphere.ts), not the
 // cloud itself.
 //
 // Multi-deck bodies (Jupiter) get one palette per deck: NH3 deck reads
@@ -614,7 +614,7 @@ export interface CloudDeckPalette {
 // / hycean / helium). Photochemical haze accumulates above the cloud
 // decks; colder bodies hold thicker stratospheric haze under their
 // slower atmospheric dynamics. Consumed by `hazeBlendFor`
-// (disc-palette.ts) to weight the atm column color as a haze
+// (disc-palette/atmosphere.ts) to weight the atm column color as a haze
 // contributor, so the haze blanket pre-tint inside the per-deck loop
 // has a non-zero signal on gas giants. Anchors are temperature, value
 // pairs. Piecewise linear; clamped at extremes. Null temperature →

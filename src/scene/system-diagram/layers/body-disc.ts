@@ -130,7 +130,7 @@ export function buildBodyDiscGeometry(entries: readonly BodyDiscEntry[]): BodyDi
     cloudLayerData[atmOff + 1] = disc.atmColumnColor[1];
     cloudLayerData[atmOff + 2] = disc.atmColumnColor[2];
     // Per-body ocean color — sampled by the surface block for liquid-
-    // water cells. See `oceanColorFor` in disc-palette.ts.
+    // water cells. See `oceanColorFor` in disc-palette/ocean.ts.
     const oceanOff = rowBase + OCEAN_COLOR_TEXEL_OFFSET * 4;
     cloudLayerData[oceanOff + 0] = disc.oceanColor[0];
     cloudLayerData[oceanOff + 1] = disc.oceanColor[1];
