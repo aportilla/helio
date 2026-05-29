@@ -96,7 +96,7 @@ export class SystemDiagram {
         ?? this.rings.pickFront(x, y, centers)
         ?? this.planets.pickAt(x, y)
         ?? this.rings.pickBack(x, y, centers)
-        ?? this.belts.pickAt(x, y, this.rowSlots)
+        ?? this.belts.pickAt(x, y)
         ?? this.moons.pickBack(x, y)
         ?? this.stars.pickAt(x, y);
   }
@@ -111,7 +111,11 @@ export class SystemDiagram {
     this.hoveredPick = pick;
   }
 
-  // Dispatch to the layer that owns the picked kind.
+  // Dispatch to the layer that owns the picked kind. Each layer's
+  // setHovered writes its own hover convention (per-vertex aHazeColor.w
+  // on planets/moons, per-vertex aHovered on belts, a uHovered uniform
+  // on stars/rings). The `satisfies never` default makes a newly-added
+  // DiagramPick.kind fail to compile here until it's wired.
   private writeHover(pick: DiagramPick | null, value: 0 | 1): void {
     if (!pick) return;
     switch (pick.kind) {
@@ -120,6 +124,7 @@ export class SystemDiagram {
       case 'belt':   this.belts.setHovered(pick, value); return;
       case 'moon':   this.moons.setHovered(pick, value); return;
       case 'ring':   this.rings.setHovered(pick, value); return;
+      default:       pick satisfies never;
     }
   }
 

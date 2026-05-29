@@ -22,6 +22,7 @@ import { discPxFromRadius, type RowSlot } from '../layout/row';
 import { writeLightUniforms } from '../lighting';
 import { hash32, mulberry32 } from '../geom/prng';
 import { hitCircle } from '../geom/hit';
+import { disableCulling } from '../geom/cull';
 import type { DiagramPick, PlanetCenterIndex, StarLightSource } from '../types';
 
 interface MoonSlot {
@@ -256,12 +257,8 @@ function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   material.uniforms.uCloudLayerRows.value = N;
   const points = new Points(geometry, material);
   points.renderOrder = renderOrder;
-  // Stale-bounding-sphere workaround — same as planetPoints. Moon
-  // positions move per resize; the cached sphere doesn't, so Three.js
-  // would eventually cull the whole pool after the points shift outside
-  // their original bounds. GPU per-vertex clipping handles anything
-  // actually off-screen.
-  points.frustumCulled = false;
+  // Moon positions move per resize — see disableCulling.
+  disableCulling(points);
   const slotByBodyIdx = new Map(slots.map((s, i) => [s.bodyIdx, i]));
   return { slots, geometry, material, points, cloudTex, slotByBodyIdx };
 }

@@ -35,6 +35,11 @@ interface BeltSlot {
   // layer translates these to world-space chunk-center coords and
   // writes them into aChunkCenter for the sphere-lighting pass.
   chunkCenterOffsets: ReadonlyArray<{ dx: number; dy: number }>;
+  // Slot center in buffer-pixel coords, written by layout() from the
+  // row item's cx/cy. Lets the picker bbox-test against the slot
+  // without re-walking rowSlots (matches the moon/planet picker shape).
+  cx: number;
+  cy: number;
   // Bounding box half-extents used by the picker.
   halfW: number;
   halfH: number;
@@ -77,6 +82,8 @@ export class BeltsLayer {
     for (const item of rowSlots) {
       if (item.kind !== 'belt') continue;
       const slot = this.pool.slots[bi];
+      slot.cx = item.cx;
+      slot.cy = item.cy;
       const z = slot.rowIdx * Z_STRIDE + Z_BELT;
       for (let v = slot.startVertex; v < slot.endVertex; v++) {
         const off    = slot.chunkOffsets[v - slot.startVertex];
@@ -102,18 +109,15 @@ export class BeltsLayer {
     writeLightUniforms(this.pool.material, lights);
   }
 
-  // Bbox test against each belt slot. Iterate rowSlots to pair each
-  // belt slot with its laid-out cx/cy.
-  pickAt(x: number, y: number, rowSlots: readonly RowSlot[]): DiagramPick | null {
+  // Bbox test against each belt slot's laid-out center (written by
+  // layout()), so the picker needs no rowSlots — same shape as the
+  // moon/planet pickers.
+  pickAt(x: number, y: number): DiagramPick | null {
     if (!this.pool) return null;
-    let bi = 0;
-    for (const item of rowSlots) {
-      if (item.kind !== 'belt') continue;
-      const slot = this.pool.slots[bi];
-      if (Math.abs(x - item.cx) <= slot.halfW && Math.abs(y - item.cy) <= slot.halfH) {
+    for (const slot of this.pool.slots) {
+      if (Math.abs(x - slot.cx) <= slot.halfW && Math.abs(y - slot.cy) <= slot.halfH) {
         return { kind: 'belt', bodyIdx: slot.bodyIdx };
       }
-      bi++;
     }
     return null;
   }
@@ -196,6 +200,7 @@ function buildBeltPool(
       endVertex: cursor,
       chunkOffsets: offsets,
       chunkCenterOffsets: centerOffsets,
+      cx: 0, cy: 0,   // filled by layout()
       halfW, halfH,
     });
   }

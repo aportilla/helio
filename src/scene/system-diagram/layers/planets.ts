@@ -11,6 +11,7 @@ import {
 import { makePlanetMaterial } from '../../materials';
 import { buildBodyDiscGeometry } from './body-disc';
 import { hitCircle } from '../geom/hit';
+import { disableCulling } from '../geom/cull';
 import { disposePool } from './pool';
 import { RENDER_ORDER_PLANET, RENDER_ORDER_PLANET_HALO, Z_PLANET, Z_STRIDE } from '../layout/constants';
 import type { RowSlot } from '../layout/row';
@@ -75,13 +76,9 @@ export class PlanetsLayer {
     this.discPoints.renderOrder = RENDER_ORDER_PLANET;
     this.haloPoints = new Points(this.geometry, this.haloMaterial);
     this.haloPoints.renderOrder = RENDER_ORDER_PLANET_HALO;
-    // Three.js computes the bounding sphere from the initial all-zero
-    // positions and never recomputes it when the position attribute
-    // changes on resize. Disabling frustum culling sidesteps the stale
-    // sphere; per-vertex GPU clipping still discards anything genuinely
-    // off-screen.
-    this.discPoints.frustumCulled = false;
-    this.haloPoints.frustumCulled = false;
+    // Position attribute is rewritten each layout — see disableCulling.
+    disableCulling(this.discPoints);
+    disableCulling(this.haloPoints);
     scene.add(this.discPoints);
     scene.add(this.haloPoints);
   }

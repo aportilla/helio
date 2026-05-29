@@ -5,6 +5,7 @@
 
 import { BufferAttribute, BufferGeometry, Mesh, ShaderMaterial } from 'three';
 import { makeBlobMaterial } from '../../materials';
+import { disableCulling } from './cull';
 
 // Two libraries of irregular convex polygon silhouettes — `potato`
 // shapes for asteroid + debris chunks (rounded, weathered boulder
@@ -237,10 +238,7 @@ export function buildChunkPool<S>(
   const material = makeBlobMaterial();
   const mesh = new Mesh(geometry, material);
   mesh.renderOrder = renderOrder;
-  // Three.js computes the bounding sphere from the initial positions
-  // and never recomputes it when positions change on resize. Disabling
-  // frustum culling sidesteps the stale sphere; per-vertex GPU clipping
-  // still discards anything genuinely off-screen.
-  mesh.frustumCulled = false;
+  // Chunk positions are rewritten each resize — see disableCulling.
+  disableCulling(mesh);
   return { slots, geometry, material, mesh };
 }

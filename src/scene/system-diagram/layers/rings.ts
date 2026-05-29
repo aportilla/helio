@@ -24,6 +24,7 @@ import {
 } from '../layout/constants';
 import type { RowSlot } from '../layout/row';
 import { hitsRing, ringEllipseParams } from '../geom/ring';
+import { disableCulling } from '../geom/cull';
 import { disposePool } from './pool';
 import type { DiagramPick, PlanetCenterIndex } from '../types';
 
@@ -127,9 +128,10 @@ function buildRing(ring: Body, hostPlanet: Body, ringBodyIdx: number, hostBodyId
   frontMesh.renderOrder = RENDER_ORDER_FRONT_RING;
   // Geometry vertices live in planet-local coords; layout writes the
   // per-row z into mesh.position.z so the host planet's disc paints
-  // over the back mesh and the front mesh paints over the disc.
-  backMesh.frustumCulled  = false;
-  frontMesh.frustumCulled = false;
+  // over the back mesh and the front mesh paints over the disc. The
+  // mesh.position moves each layout — see disableCulling.
+  disableCulling(backMesh);
+  disableCulling(frontMesh);
   return { bodyIdx: ringBodyIdx, hostBodyIdx, backMesh, frontMesh, backGeometry, frontGeometry, material, outerR, innerR, tiltRad };
 }
 
