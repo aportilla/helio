@@ -139,7 +139,7 @@ const BIOTIC_FIELD_BY_ARCH = {
 };
 const VALID_ARCHETYPES = new Set(BIOSPHERE_ARCHETYPES);
 const VALID_COMPLEXITY = new Set(BIOSPHERE_COMPLEXITY);
-import { insolation, tidalLockProxy, meanMetallicityForClass, meanAgeForClass, frostLineAU, EARTH_PER_SOLAR_MASS } from './astrophysics.mjs';
+import { insolation, tidalLockProxy, meanMetallicityForClass, meanAgeForClass, frostLineAU, keplerPeriodDays, keplerSemiMajorAu, EARTH_PER_SOLAR_MASS } from './astrophysics.mjs';
 
 function fieldPrng(body, field) {
   return mulberry32(hash32(`${body.id}:${field}:${PROCGEN_VERSION}`));
@@ -205,24 +205,6 @@ export function radiusFromMass(massEarth) {
   if (m < 2)   return Number(Math.pow(m, 0.279).toFixed(3));
   if (m < 130) return Number((0.808 * Math.pow(m, 0.589)).toFixed(3));
   return 11.0;
-}
-
-// =============================================================================
-// Kepler period ↔ semi-major axis
-// =============================================================================
-
-// Kepler's third law in solar units: P² (years) = a³ (AU) / M (solar).
-// Day form: P_days = 365.25 · √(a³ / M).
-function keplerPeriodDays(aAu, hostMassSolar) {
-  if (aAu == null || hostMassSolar == null || hostMassSolar <= 0) return null;
-  return Number((365.25 * Math.sqrt(Math.pow(aAu, 3) / hostMassSolar)).toFixed(3));
-}
-
-// Inverse: a = ((P_years)² · M)^(1/3).
-export function keplerSemiMajorAu(periodDays, hostMassSolar) {
-  if (periodDays == null || hostMassSolar == null || hostMassSolar <= 0) return null;
-  const pYears = periodDays / 365.25;
-  return Number(Math.pow(pYears * pYears * hostMassSolar, 1 / 3).toFixed(5));
 }
 
 // =============================================================================
@@ -1671,11 +1653,11 @@ function fillBody(b, allBodies, stars) {
   // and the body renders as a featureless gray disc.
   if (unknowns.has('periodDays') && semiMajorAu != null) {
     const p = keplerPeriodDays(semiMajorAu, hostMassSolar);
-    if (p != null) periodDays = p;
+    if (p != null) periodDays = Number(p.toFixed(3));
   }
   if (unknowns.has('semiMajorAu') && periodDays != null) {
     const a = keplerSemiMajorAu(periodDays, hostMassSolar);
-    if (a != null) semiMajorAu = a;
+    if (a != null) semiMajorAu = Number(a.toFixed(5));
   }
 
   // Insolation always traces up to the host star, so a moon inherits its

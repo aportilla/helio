@@ -28,6 +28,24 @@ export function insolation(hostStarMass, aAu) {
   return L / (aAu * aAu);
 }
 
+// Kepler's third law in solar units: P² (years) = a³ (AU) / M (solar),
+// so P_days = 365.25 · √(a³ / M). For a moon, the "host mass" is its
+// planet's mass expressed in solar units — the law is scale-free, so the
+// caller supplies whatever mass floor (e.g. a star-mass guard) makes
+// sense for its body class. These return the raw period / axis; callers
+// round to the precision they serialize at.
+export function keplerPeriodDays(aAu, hostMassSolar) {
+  if (aAu == null || hostMassSolar == null || hostMassSolar <= 0) return null;
+  return 365.25 * Math.sqrt(Math.pow(aAu, 3) / hostMassSolar);
+}
+
+// Inverse: a = ((P_years)² · M)^(1/3).
+export function keplerSemiMajorAu(periodDays, hostMassSolar) {
+  if (periodDays == null || hostMassSolar == null || hostMassSolar <= 0) return null;
+  const pYears = periodDays / 365.25;
+  return Math.pow(pYears * pYears * hostMassSolar, 1 / 3);
+}
+
 // Stellar metallicity proxy from spectral class. Returns a coarse [Fe/H]
 // estimate (-0.5 to +0.3 dex) per spectral class typical-population
 // mapping. Higher metallicity → more refractory + radioactive material

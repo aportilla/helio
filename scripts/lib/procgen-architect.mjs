@@ -106,8 +106,8 @@
 // both zero planets and zero belts gets one trace cold free-float
 // belt so the "no fully empty systems" gameplay invariant holds.
 
-import { hash32, mulberry32, sampleNormal, sampleTruncated, sampleLogTruncated, samplePhysical, sampleMixture, samplePoisson, sampleBinomial, drawWeightedDeposits } from './prng.mjs';
-import { insolation, frostLineAU, solidSurfaceDensity, isolationMass, hillRadiusAu, EARTH_PER_SOLAR_MASS } from './astrophysics.mjs';
+import { hash32, mulberry32, sampleNormal, sampleTruncated, sampleLogTruncated, samplePhysical, sampleMixture, sampleBinomial, drawWeightedDeposits } from './prng.mjs';
+import { insolation, frostLineAU, solidSurfaceDensity, isolationMass, hillRadiusAu, keplerPeriodDays, EARTH_PER_SOLAR_MASS } from './astrophysics.mjs';
 import { radiusFromMass } from './procgen.mjs';
 import {
   PROCGEN_VERSION,
@@ -418,10 +418,10 @@ export function generateMoons(planet, star, hostFormationAu = null, frostLinesAu
     // by ~factor 1.6. Galilean spacing is ~1.4–1.8x consecutive.
     const baseA = 0.002;
     const semiMajorAu = baseA * Math.pow(1.6, mIdx) * (0.8 + orbitPrng() * 0.4);
-    // Kepler in days, Earth-mass planet at 1 AU around Sol = 365.25 days
-    // (P² = a³ / M_host_solar). Convert to moon-around-planet: M_host is
-    // the planet's mass in solar units (massEarth / EARTH_PER_SOLAR_MASS).
-    const periodDays = 365.25 * Math.sqrt(Math.pow(semiMajorAu, 3) / (planet.massEarth / EARTH_PER_SOLAR_MASS));
+    // Moon-around-planet: the Kepler host mass is the planet's mass in
+    // solar units (massEarth / EARTH_PER_SOLAR_MASS) — far below any
+    // star-mass floor, so no floor is applied here.
+    const periodDays = keplerPeriodDays(semiMajorAu, planet.massEarth / EARTH_PER_SOLAR_MASS);
 
     moons.push(makeBody({
       id: `${planet.id}-m${mIdx + 1}`,
@@ -914,10 +914,10 @@ function buildPlanetCore(star, slotIdx, formationAu, letter, saltPrefix = '', di
   const bulkVolatilePrng = slotPrng(star.id, slotIdx, saltPrefix + 'bulk_volatile');
   const bulkVolatileFraction = sampleBulkVolatileFraction(bulkVolatilePrng, formationAu, diskCtx.frostLines);
 
-  // Kepler: P² = a³ / M_host_solar. Computed against semiMajorAu (which
-  // currently equals formationAu); the migration pass recomputes period
-  // for any body whose semiMajorAu moves.
-  const periodDays = 365.25 * Math.sqrt(Math.pow(formationAu, 3) / Math.max(star.mass, 0.01));
+  // Computed against semiMajorAu (which currently equals formationAu); the
+  // migration pass recomputes period for any body whose semiMajorAu moves.
+  // The 0.01 floor guards against a degenerate near-zero star mass.
+  const periodDays = keplerPeriodDays(formationAu, Math.max(star.mass, 0.01));
 
   return makeBody({
     id: `${star.id}-${letter}`,
@@ -1100,7 +1100,7 @@ function migratePass(planets, star, saltPrefix = '') {
   );
   migrator.semiMajorAu = Number(newA.toFixed(4));
   migrator.periodDays = Number(
-    (365.25 * Math.sqrt(Math.pow(newA, 3) / Math.max(star.mass, 0.01))).toFixed(2),
+    keplerPeriodDays(newA, Math.max(star.mass, 0.01)).toFixed(2),
   );
 
   // Sweep planets that were in the migrator's path. Type II migration
