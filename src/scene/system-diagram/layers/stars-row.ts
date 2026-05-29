@@ -70,7 +70,7 @@ interface StarDisc {
   currentDiam: number;
   // Per-cluster-normalized intensity in [0, 1] driving body lighting
   // contributions. Computed once at construction; the brightest member's
-  // raw approxLuminositySun is the normalization anchor.
+  // rendered disc area is the normalization anchor.
   intensity: number;
   // System-view-tuned color (the same RGB the disc + halo shaders render).
   // Cached as a plain triple to avoid copying out of a Three.js Color

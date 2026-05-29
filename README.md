@@ -55,7 +55,8 @@ src/
     system-scene.ts         SystemScene: cluster close-up, lazily built/disposed
     system-diagram/         SystemDiagram coordinator + per-render-kind layers
       index.ts              Coordinator: owns scene/camera + layers, runs layout, picks, hovers
-      types.ts              BodyPick + PlanetCenterIndex shared across layers
+      types.ts              DiagramPick + PlanetCenterIndex shared across layers
+      lighting.ts           writeLightUniforms: pushes StarLightSource[] into a planet/moon material (PlanetsLayer + MoonsLayer share it)
       disc-palette/         buildDiscPalette: per-body palette + seed + terrain inputs for makePlanetMaterial
         index.ts            Orchestrator: DiscPalette contract + surface resource-slot logic + assembly
         shared.ts           Cross-model primitives: identity colors, atmGasPairs, dustColorFor
@@ -70,17 +71,19 @@ src/
         rings.ts            RingsLayer: back/front triangle-strip annulus halves per ring
         body-disc.ts        buildBodyDiscGeometry: shared planet/moon disc attribute + cloud-texture packing
       layout/
-        row.ts              RowItem + buildRowItems + layoutRow (dome arc) + bigMiddleOrder
+        row.ts              RowSlot + buildRowSlots + layoutRow (dome arc) + bigMiddleOrder
         constants.ts        Tuning knobs (disc sizes, dome geometry, Z bands, render orders)
       geom/
-        blob.ts             POTATO/CRYSTAL shapes, bakeBlob, sampleBeltChunks, BlobPool builder
+        blob.ts             POTATO/CRYSTAL shapes, bakeBlob, sampleBeltChunks, buildChunkPool
         ring.ts             ringEllipseParams + hitsRing + bodyVisualTiltRad (shared band/ring tilt)
         prng.ts             hash32 + mulberry32; mirrors scripts/lib/prng.mjs
+        cull.ts             disableCulling: frustum-cull opt-out for pools that rewrite vertex positions
     input-controller.ts     InputController: classifies pointer/keyboard gestures into intents
     grid.ts                 Range rings + axes + galactic-centre arrow; ring expand/collapse choreography
     droplines.ts            Per-cluster vertical pins to the selected COM.z plane
     cluster-fade.ts         Distance fade thresholds shared by labels, droplines, and the star pivot-dim
     focus-marker.ts         view.target ring + dropline; fades in when pivot pans off anchors
+    dot-pin.ts              fillVerticalDotPin: shared dotted Z-column writer (droplines + focus-marker)
     cluster-brackets.ts     Yellow corner brackets — selection arms + candidate dots
     stars.ts                gl.POINTS starfield with per-star size + color
     labels.ts               Bitmap-font overlay pass: star names + axis ticks
@@ -353,12 +356,12 @@ White dwarfs (`pxSize ≈ 3`) hit the size-2 floor first as their depth crosses 
 
 ### Star pivot-dim (local-focus brightness)
 
-Stars outside the user's current point of interest are dimmed toward `FADE_MIN = 0.1` brightness so dense starfields read as a focused local volume rather than a wall of equally-bright dots. The dim is computed per-vertex in the stars shader and applied by multiplying `vColor` toward black — **not via alpha**, because stars render `transparent: false, depthWrite: true` for the "closer stars occlude farther ones" guarantee, and going transparent would break attribute-order rendering in dense fields.
+Stars outside the user's current point of interest are dimmed toward `FADE_MIN` brightness so dense starfields read as a focused local volume rather than a wall of equally-bright dots. The dim is computed per-vertex in the stars shader and applied by multiplying `vColor` toward black — **not via alpha**, because stars render `transparent: false, depthWrite: true` for the "closer stars occlude farther ones" guarantee, and going transparent would break attribute-order rendering in dense fields.
 
 Three signals combine:
 
 - **Pivot ramp.** Per-star world-distance to `view.target` (the orbit pivot), keyed to `PIVOT_FADE_NEAR / PIVOT_FADE_FAR` from `cluster-fade.ts` — the same thresholds the cluster label fade uses, so a star and its label dim together at the same distance. (The cluster-fade module's `CAMERA_FADE_*` thresholds are intentionally NOT consulted here; see below.)
-- **Zoom-distance scaling.** A per-frame `uDimAmount` uniform driven CPU-side from `view.distance`: full effect when zoomed in, smoothly off when zoomed out. Bounds are `STAR_DIM_FULL_BELOW = 40` and `STAR_DIM_OFF_ABOVE = 100` (also in `cluster-fade.ts`). At default zoom (`view.distance = 30`) the effect is at full strength; past 100 ly orbit radius the dim is gone entirely so a zoomed-out player sees every star at its natural brightness — the galaxy "opens up."
+- **Zoom-distance scaling.** A per-frame `uDimAmount` uniform driven CPU-side from `view.distance`: full effect when zoomed in, smoothly off when zoomed out. Bounds are `STAR_DIM_FULL_BELOW` and `STAR_DIM_OFF_ABOVE` (also in `cluster-fade.ts`). At the default orbit radius the effect is at full strength; past `STAR_DIM_OFF_ABOVE` the dim is gone entirely so a zoomed-out player sees every star at its natural brightness — the galaxy "opens up."
 - **Selection / candidate bypass.** A per-star `aClusterIdx` attribute lets the shader compare against `uSelectedCluster` and `uCandidateCluster` uniforms; matching stars render at full brightness regardless of pivot distance. Mirrors the yellow-label promotion in labels.ts so hovering a far-away star isn't an awkward "the dot dims while the bracket and label pop on top." Hover wins via the same candidate slot the brackets read.
 
 **Why orbit-distance scaling and not a per-star camera ramp** like the labels use: when zoomed all the way out, every star is far from the camera, so a per-star camera ramp would never re-brighten on zoom-out — it would pin even the nearby stars dim. The label fade tolerates this because hiding distant labels at zoom-out is desirable (the waymarker ramp brings back a curated few); for stars the desired behavior is the opposite, so the camera signal is reinterpreted as an orbit-radius "is the effect even active" gate.

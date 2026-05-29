@@ -235,9 +235,9 @@ function ringPrng(planetId, salt) {
 // lifetime is the single stochastic draw at this layer; frost-line positions
 // are deterministic functions of stellar luminosity.
 //
-// Returns null on missing inputs — callers fall back to legacy behavior
-// would-be, but every real catalog star has mass + class so this is
-// defensive against future stripped-down callers, not a hot path.
+// Returns null on missing inputs; every real catalog star has mass + class,
+// so this guard is defensive against future stripped-down callers — not a
+// hot path.
 function buildStarDiskContext(star) {
   if (star == null || star.mass == null) return null;
   const cls = star.cls;

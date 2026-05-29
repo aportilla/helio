@@ -32,8 +32,8 @@ export function setSnappedLineViewport(w: number, h: number): void {
 // becomes "50.0", not the bare "50" that glsl rejects as an int literal.
 export const glsl = (n: number): string => Number.isInteger(n) ? n.toFixed(1) : n.toString();
 
-// Rasterizer padding around the integer-pixel disc, shared by both the
-// perspective and flat stars shaders. Adding +2 (preserving parity)
+// Rasterizer padding around the integer-pixel disc, shared by the
+// perspective stars shader and the planet disc. Adding +2 (preserving parity)
 // keeps every fragment we care about safely inside the rasterized
 // square so the rasterizer never has to make a tie-breaking call at the
 // bounding-box edges that would drop a row/column on one side. Cost: a
