@@ -8,11 +8,10 @@ import { Color } from 'three';
 import { AtmGas, Body } from '../../../data/stars';
 import { dominantResources } from '../color-science';
 
-// Identity colors reused as lerp targets / no-tint sentinels across the
-// palette code. Treated as read-only — callers pass them to lerpColor (which
-// allocates a fresh Color) and never mutate them in place.
-export const WHITE_COLOR = new Color(1, 1, 1);
-export const BLACK_COLOR = new Color(0, 0, 0);
+// Identity colors live in color-science.ts (the leaf both layers share);
+// re-exported here so disc-palette consumers keep importing them from their
+// local shared module.
+export { WHITE_COLOR, BLACK_COLOR } from '../color-science';
 
 // Clamp to [0, 1] — the GLSL `clamp(x, 0.0, 1.0)` the shader applies to every
 // normalized signal, mirrored CPU-side so palette scalars derived here land in

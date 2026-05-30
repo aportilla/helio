@@ -20,6 +20,14 @@ import {
   type BiosphereArchetype, type AtmGas, type ResourceKey,
 } from '../../data/stars';
 
+// Identity colors — the single source for white / black across the render
+// palette. They live in this leaf module (not disc-palette/shared.ts, which
+// depends on it) so both layers share one instance; disc-palette/shared.ts
+// re-exports them for its own consumers. Treated as read-only: callers pass
+// them to lerpColor (which allocates a fresh Color) and never mutate in place.
+export const WHITE_COLOR = new Color(1, 1, 1);
+export const BLACK_COLOR = new Color(0, 0, 0);
+
 // Diagrammatic disc color per WorldClass. Used by SystemDiagram (and any
 // future planet-rendering consumer). Bodies whose worldClass is still null
 // (catalog rows the scraper couldn't classify, awaiting build-time procgen)
@@ -101,7 +109,7 @@ export const BIOME_STELLAR_SHIFT: Record<SpectralClass, { color: Color; amount: 
   B:  null,
   A:  { color: new Color(0xd4a050), amount: 0.40 },   // warm gold — reflect red/orange under blue input
   F:  { color: new Color(0xc8a868), amount: 0.25 },   // subtle warm shift from G baseline
-  G:  { color: new Color(0xffffff), amount: 0.00 },   // identity — Earth baseline
+  G:  { color: WHITE_COLOR, amount: 0.00 },           // identity — Earth baseline
   K:  { color: new Color(0xa04030), amount: 0.50 },   // rust-red under K-dwarf reddening
   M:  { color: new Color(0x6a3088), amount: 0.70 },   // "Purple Earth" under M-dwarf red/IR
   WD: null,
@@ -181,11 +189,10 @@ export function biomePaintFor(body: Body): { color: Color; coverage: number } | 
   return { color, coverage };
 }
 
-// Endpoints of the rocky↔icy palette lerp shared by belts and rings.
-// `bodyIcyness` returns a 0..1 scalar from a body's resource grid
-// (resVolatiles vs. rocky resources); the renderer lerps between these.
-export const BELT_RING_COLOR_ICY   = new Color(0xb8d8e8);  // pale cyan (Saturn/KBO ice)
-export const BELT_RING_COLOR_ROCKY = new Color(0xa89060);  // brown-tan (Main Belt rocky)
+// Endpoints of the rocky↔icy palette lerp, private to beltRingColor below —
+// belts and rings consume the blend through that helper, not the raw colors.
+const BELT_RING_COLOR_ICY   = new Color(0xb8d8e8);  // pale cyan (Saturn/KBO ice)
+const BELT_RING_COLOR_ROCKY = new Color(0xa89060);  // brown-tan (Main Belt rocky)
 export const RING_ALPHA_ICY   = 1.0;
 export const RING_ALPHA_DUSTY = 0.55;
 
@@ -201,6 +208,14 @@ export function bodyIcyness(body: Body): number {
   const denom = v + rocky;
   if (denom <= 0) return 0.5;
   return v / denom;
+}
+
+// Rocky↔icy disc color for a belt or ring at the given icyness scalar.
+// Takes the scalar (not the body) because belts also reuse it for chunk
+// shape selection, so the caller computes bodyIcyness once and shares it.
+// Allocates a fresh Color so the BELT_RING_COLOR_* endpoints stay read-only.
+export function beltRingColor(icyness: number): Color {
+  return new Color().copy(BELT_RING_COLOR_ROCKY).lerp(BELT_RING_COLOR_ICY, icyness);
 }
 
 // Archetypal hue per atmospheric gas. Picked to read at small disc sizes
@@ -556,8 +571,6 @@ export function rockArchetypeFor(
 // stain NH3; the H2O deck below stays plain white because no chromophore
 // stains H2O. Renderer paints exactly what procgen + this mapping emit.
 
-const ZERO_COLOR = new Color(0, 0, 0);
-
 // Aerosol species the renderer should not paint into the haze blanket
 // even if procgen emits a non-zero strength. CHROMOPHORE (PH3 photolysis
 // red) is parked here: its visible signal lives in narrow lat-bands and
@@ -623,7 +636,7 @@ export function stratosphericHazeStrengthFor(tempK: number | null): number {
 export function cloudDeckPalette(_body: Body, layerGas: string): CloudDeckPalette {
   const gas = layerGas as AtmGas;
   return {
-    color: CONDENSATE_COLOR[gas] ?? GAS_COLOR[gas] ?? ZERO_COLOR,
+    color: CONDENSATE_COLOR[gas] ?? GAS_COLOR[gas] ?? BLACK_COLOR,
   };
 }
 

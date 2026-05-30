@@ -63,7 +63,7 @@ src/
       index.ts              Coordinator: owns scene/camera + layers, runs layout, picks, hovers
       types.ts              DiagramPick + PlanetCenterIndex shared across layers
       lighting.ts           writeLightUniforms: pushes StarLightSource[] into a planet/moon material (PlanetsLayer + MoonsLayer share it)
-      color-science.ts      Stateless color LUTs + lookups (world-class / gas / condensate colors, GAS_POTENCY, biome paint, icyness, hostStarIdxOf walk) — shared by discs, belts, rings, HUD
+      color-science.ts      Stateless color LUTs + lookups (world-class / gas / condensate colors, GAS_POTENCY, biome paint, icyness + beltRingColor, hostStarIdxOf walk) — shared by discs, belts, rings, HUD
       disc-palette/         buildDiscPalette: per-body palette + seed + terrain inputs for makePlanetMaterial
         index.ts            Orchestrator: DiscPalette contract + surface resource-slot logic + assembly
         shared.ts           Cross-model primitives: identity colors, atmGasPairs, dustColorFor, clamp01/smoothstep01, weightedColorBlend

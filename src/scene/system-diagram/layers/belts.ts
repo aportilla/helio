@@ -2,9 +2,9 @@
 // counts and per-chunk offsets bake at construction so layout only
 // translates each cluster around its slot center (no re-roll on resize).
 
-import { BufferAttribute, Color, Scene } from 'three';
+import { BufferAttribute, Scene } from 'three';
 import { BODIES } from '../../../data/stars';
-import { BELT_RING_COLOR_ICY, BELT_RING_COLOR_ROCKY, bodyIcyness } from '../color-science';
+import { beltRingColor, bodyIcyness } from '../color-science';
 import {
   BELT_CHUNKS_MAX, BELT_CHUNKS_MIN, BELT_CHUNK_SIZES, BELT_HEIGHT_FACTOR,
   BELT_SLOT_WIDTH, PLANET_DISC_MIN, RENDER_ORDER_BELT, Z_BELT, Z_STRIDE,
@@ -164,7 +164,7 @@ function buildBeltPool(
     const N = Math.round(BELT_CHUNKS_MIN + t * (BELT_CHUNKS_MAX - BELT_CHUNKS_MIN));
 
     const icyness = bodyIcyness(belt);
-    const col = new Color().copy(BELT_RING_COLOR_ROCKY).lerp(BELT_RING_COLOR_ICY, icyness);
+    const col = beltRingColor(icyness);
     const halfW = BELT_SLOT_WIDTH / 2;
     const halfH = heightPx / 2;
     const shapes = shapesFor(icyness);

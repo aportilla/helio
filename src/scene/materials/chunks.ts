@@ -67,8 +67,11 @@ export const HUEDIR_GLSL = /* glsl */ `
 // threshold, only A's hue paints, so the per-star color directionality
 // survives instead of washing to an averaged hue. The per-light dither
 // offset (7·i, 11·i) keeps each star's Bayer fringe from cascading on top
-// of the next. LIGHT_Z_BIAS pushes the source into the screen so the lit
-// hemisphere faces away from the viewer (a crescent, not a full face).
+// of the next; the (31, 17) base seed keeps this crescent pass's fringe
+// distinct from the planet rim (43+7i, 29+11i) and lava (53, 19) passes so
+// their stipple patterns never phase-align. LIGHT_Z_BIAS pushes the source
+// into the screen so the lit hemisphere faces away from the viewer (a
+// crescent, not a full face).
 //
 // Depends on bayer4 (interpolate BAYER4_GLSL before this) and the
 // uLight* uniforms (uLightCount / uLightPos / uLightColor /

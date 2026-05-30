@@ -176,6 +176,12 @@ export const RING_WIDTH_VIZ_SCALE = 0.5;
 // realistic planet sizes; bumping past 32 is wasted geometry.
 export const RING_SEGMENTS = 24;
 
+// Fallback ring extent (in host-planet radii) when the body carries no
+// innerPlanetRadii / outerPlanetRadii — a generic Saturn-ish band so a
+// ring still renders rather than collapsing to zero width.
+export const RING_INNER_FRAC_FALLBACK = 1.1;
+export const RING_OUTER_FRAC_FALLBACK = 2.0;
+
 // --- Per-row-item depth ---
 //
 // Each row item (planet or belt) gets a slot of z range Z_STRIDE in

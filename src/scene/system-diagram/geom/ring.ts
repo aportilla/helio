@@ -4,7 +4,10 @@
 // gas giant's atmospheric bands run parallel to its ring plane.
 
 import type { Body } from '../../../data/stars';
-import { RING_MINOR_OVER_MAJOR, RING_TILT_DEG_MAX, RING_WIDTH_VIZ_SCALE } from '../layout/constants';
+import {
+  RING_INNER_FRAC_FALLBACK, RING_MINOR_OVER_MAJOR, RING_OUTER_FRAC_FALLBACK,
+  RING_TILT_DEG_MAX, RING_WIDTH_VIZ_SCALE,
+} from '../layout/constants';
 import { hash32, mulberry32 } from './prng';
 
 // Map astronomical axialTiltDeg → visual render tilt. Real values span
@@ -34,8 +37,8 @@ export function bodyVisualTiltRad(body: Body): number {
 // tilt comes from the HOST PLANET (rings sit in the planet's equatorial
 // plane by physics) so a ringed giant's bands and rings always align.
 export function ringEllipseParams(ring: Body, hostPlanet: Body, hostDiscPx: number): { innerR: number; outerR: number; tiltRad: number } {
-  const innerFrac = ring.innerPlanetRadii ?? 1.1;
-  const outerFrac = ring.outerPlanetRadii ?? 2.0;
+  const innerFrac = ring.innerPlanetRadii ?? RING_INNER_FRAC_FALLBACK;
+  const outerFrac = ring.outerPlanetRadii ?? RING_OUTER_FRAC_FALLBACK;
   const planetRadius = hostDiscPx / 2;
   const innerR = innerFrac * planetRadius;
   // Scale only the band's WIDTH — inner edge stays at innerR (outside

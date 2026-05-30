@@ -189,8 +189,9 @@ export class StarsRowLayer {
 
       // Parity-aware snap for pixel-perfect rasterization: even diameter
       // → center on integer (pixel boundary), odd diameter → center on
-      // integer+0.5 (pixel center). Same algorithm as the GL_POINTS
-      // shader's vertex snap, just CPU-side now.
+      // integer+0.5 (pixel center). Same parity-aware floor the disc vertex
+      // shaders apply via snapToPixelGrid (materials PIXEL_SNAP_GLSL),
+      // computed CPU-side here because the star row resolves centers on the CPU.
       const oddOff = (d & 1) * 0.5;
       const cx = Math.floor(cxTarget - oddOff + 0.5) + oddOff;
       const cy = Math.floor(cyTarget - oddOff + 0.5) + oddOff;

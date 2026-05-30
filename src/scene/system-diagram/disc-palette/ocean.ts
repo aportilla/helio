@@ -263,23 +263,23 @@ export const OCEAN_FALLBACK_COLOR: readonly [number, number, number] =
 export function oceanColorFor(body: Body): readonly [number, number, number] {
   if ((body.waterFraction ?? 0) <= 0) return OCEAN_FALLBACK_COLOR;
 
-  // 3. Solvent base.
+  // 1. Solvent base.
   const species = pickPrimarySolvent(body);
   let col = solventBaseColorFor(species);
 
-  // 4. CDOM yellow-substance absorption.
+  // 2. CDOM yellow-substance absorption.
   const cdom = cdomTintFor(body);
   col = lerpColor(col, cdom.color, cdom.amount);
 
-  // 5. Photosynthetic pigment scatter.
+  // 3. Photosynthetic pigment scatter.
   const pig = pigmentTintFor(body);
   col = lerpColor(col, pig.color, pig.amount);
 
-  // 6. Mineral suspended sediment.
+  // 4. Mineral suspended sediment.
   const sed = sedimentTintFor(body);
   col = lerpColor(col, sed.color, sed.amount);
 
-  // 2. Sky reflection on top — Fresnel-gated additive. Uses the body's
+  // 5. Sky reflection on top — Fresnel-gated additive. Uses the body's
   // unified haze blend as a stand-in for sky color; falls back to a
   // neutral grey for bodies with no atmosphere data so the Fresnel
   // term doesn't multiply against zero.
@@ -287,7 +287,7 @@ export function oceanColorFor(body: Body): readonly [number, number, number] {
   const sky = haze.opacity > 0 ? haze.color : new Color(0.5, 0.5, 0.5);
   col = lerpColor(col, sky, OCEAN_FRESNEL);
 
-  // 1. Stellar SED tint applied last (multiplicative through the
+  // 6. Stellar SED tint applied last (multiplicative through the
   // entire stack — what light is even reaching the ocean).
   const stellar = stellarLightTintFor(body);
   col.r = clamp01(col.r * stellar.r);

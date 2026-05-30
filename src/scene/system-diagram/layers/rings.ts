@@ -9,10 +9,10 @@
 // Uranus/Neptune-class palette. The same data drives mining yields,
 // so visual character and gameplay attribute can't disagree.
 
-import { BufferAttribute, BufferGeometry, Color, Mesh, Scene, ShaderMaterial } from 'three';
+import { BufferAttribute, BufferGeometry, Mesh, Scene, ShaderMaterial } from 'three';
 import { BODIES, type Body } from '../../../data/stars';
 import {
-  BELT_RING_COLOR_ICY, BELT_RING_COLOR_ROCKY,
+  beltRingColor,
   bodyIcyness,
   RING_ALPHA_DUSTY, RING_ALPHA_ICY,
 } from '../color-science';
@@ -114,7 +114,7 @@ export class RingsLayer {
 function buildRing(ring: Body, hostPlanet: Body, ringBodyIdx: number, hostBodyIdx: number, hostDiscPx: number): Ring {
   const { innerR, outerR, tiltRad } = ringEllipseParams(ring, hostPlanet, hostDiscPx);
   const t = bodyIcyness(ring);
-  const color = new Color().copy(BELT_RING_COLOR_ROCKY).lerp(BELT_RING_COLOR_ICY, t);
+  const color = beltRingColor(t);
   const alpha = RING_ALPHA_DUSTY + (RING_ALPHA_ICY - RING_ALPHA_DUSTY) * t;
   const material = makeRingMaterial(color, alpha);
   const backGeometry  = buildHalfAnnulusGeometry(innerR, outerR, tiltRad, /*upperHalf=*/ true);

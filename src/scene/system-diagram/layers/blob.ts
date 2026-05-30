@@ -155,6 +155,16 @@ export function overlapsAny(cx: number, cy: number, size: number, placed: Readon
 //     times before being skipped (skipped chunks naturally rarefy the
 //     edges where placement is already sparse anyway)
 export const CHUNK_PLACE_ATTEMPTS = 10;
+// Gaussian SD for chunk placement, as a fraction of the slot half-extent —
+// y clusters tighter (SD = halfH·0.33) than x (SD = halfW·0.50) so the belt
+// reads as a thin band stretched along its slot.
+const CHUNK_CY_SD_FRAC = 0.33;
+const CHUNK_CX_SD_FRAC = 0.50;
+// Size-bias exponent for pow(u, k): k = BASE − CENTER_GAIN·centerProx, so a
+// center chunk (centerProx→1) gets k≈0.4 (skews toward the largest size) and
+// an edge chunk gets k≈2.2 (skews toward the smallest). Eyeball-tuned.
+const CHUNK_SIZE_BIAS_BASE = 2.2;
+const CHUNK_SIZE_BIAS_CENTER_GAIN = 1.8;
 export function sampleBeltChunks(
   rng: () => number,
   N: number,
@@ -167,13 +177,13 @@ export function sampleBeltChunks(
   for (let i = 0; i < N; i++) {
     let chosen: ChunkSpec | null = null;
     for (let attempt = 0; attempt < CHUNK_PLACE_ATTEMPTS; attempt++) {
-      const cy = sampleGaussian(rng, halfH * 0.33, halfH);
-      const cx = sampleGaussian(rng, halfW * 0.50, halfW);
+      const cy = sampleGaussian(rng, halfH * CHUNK_CY_SD_FRAC, halfH);
+      const cx = sampleGaussian(rng, halfW * CHUNK_CX_SD_FRAC, halfW);
       // Size: biased upward when near center. Pick a uniform index,
       // then bias via pow(u, k): k<1 skews toward last (largest), k>1
       // toward first (smallest). centerProx ∈ [0, 1].
       const centerProx = 1 - Math.abs(cy) / Math.max(halfH, 1);
-      const k = 2.2 - 1.8 * centerProx;
+      const k = CHUNK_SIZE_BIAS_BASE - CHUNK_SIZE_BIAS_CENTER_GAIN * centerProx;
       const u = rng();
       const sizeIdx = Math.min(sizes.length - 1, Math.floor(Math.pow(u, k) * sizes.length));
       const size = sizes[sizeIdx];
