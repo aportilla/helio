@@ -224,6 +224,8 @@ export function buildChunkPool<S>(
   positions: number[],
   indices: number[],
   colors: number[],
+  colorsB: number[],
+  blendDirs: number[],
   chunkCenters: number[],
   chunkSizes: number[],
   renderOrder: number,
@@ -231,12 +233,16 @@ export function buildChunkPool<S>(
   const V = positions.length / 3;
   const posArr = new Float32Array(positions);
   const colorArr = new Float32Array(colors);
+  const colorBArr = new Float32Array(colorsB);
+  const blendDirArr = new Float32Array(blendDirs);
   const hoverArr = new Float32Array(V);
   const chunkCenterArr = new Float32Array(chunkCenters);
   const chunkSizeArr   = new Float32Array(chunkSizes);
   const geometry = new BufferGeometry();
   geometry.setAttribute('position',     new BufferAttribute(posArr, 3));
   geometry.setAttribute('color',        new BufferAttribute(colorArr, 3));
+  geometry.setAttribute('aColorB',      new BufferAttribute(colorBArr, 3));
+  geometry.setAttribute('aBlendDir',    new BufferAttribute(blendDirArr, 2));
   geometry.setAttribute('aHovered',     new BufferAttribute(hoverArr, 1));
   geometry.setAttribute('aChunkCenter', new BufferAttribute(chunkCenterArr, 2));
   geometry.setAttribute('aChunkSize',   new BufferAttribute(chunkSizeArr, 1));

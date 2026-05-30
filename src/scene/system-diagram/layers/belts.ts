@@ -2,7 +2,7 @@
 // counts and per-chunk offsets bake at construction so layout only
 // translates each cluster around its slot center (no re-roll on resize).
 
-import { BufferAttribute, Scene } from 'three';
+import { BufferAttribute, Color, Scene } from 'three';
 import { BODIES } from '../../../data/stars';
 import { beltRingColor, bodyIcyness, dominantResources, resourceMineralColor } from '../color-science';
 import {
@@ -179,6 +179,8 @@ function buildBeltPool(
   const positions:    number[] = [];
   const indices:      number[] = [];
   const colors:       number[] = [];
+  const colorsB:      number[] = [];
+  const blendDirs:    number[] = [];
   const hovered:      number[] = [];
   const chunkCenters: number[] = [];
   const chunkSizes:   number[] = [];
@@ -210,28 +212,47 @@ function buildBeltPool(
     const shapes = shapesFor(icyness);
     const chunks = sampleBeltChunks(rng, N, halfW, halfH, sizes, shapes);
 
-    // Per-chunk color: each chunk represents one of the belt's two
-    // deposits, drawn weighted by abundance, painted in the muted
+    // Per-chunk color: each chunk's PRIMARY hue is one of the belt's two
+    // deposits, drawn weighted by abundance and painted in the muted
     // single-resource mineralogy palette — so a metals+volatiles belt
     // reads as a mix of grey rock and pale ice rather than one flat
-    // icyness lerp. Abundance-weighted, so a 70/30 belt is mostly its
-    // dominant resource. Color picks consume the rng *after* placement,
+    // icyness lerp. Each chunk also carries the belt's OTHER deposit as a
+    // SECONDARY hue plus a random blend direction; the shader dithers a
+    // faint directional stipple of the secondary into the rock, so every
+    // chunk reads as its primary mineral tinged by the second deposit
+    // from one side. Color picks consume the rng *after* placement,
     // leaving the sampled scatter byte-identical. Resource-less belts
     // (defensive — every emit should set the grid) fall back to the
-    // rocky↔icy lerp.
+    // rocky↔icy lerp with no hint.
     const deposits = dominantResources(belt, 2);
     const totalAb = deposits.reduce((s, d) => s + d.abundance, 0);
     const fallback = beltRingColor(icyness);
-    const chunkColors = chunks.map(() => {
-      if (totalAb <= 0) return fallback;
+    const depCols = deposits.map(d => resourceMineralColor(d.key));
+    const chunkPrimary:   Color[] = [];
+    const chunkSecondary: Color[] = [];
+    const chunkBlendDir:  Array<{ x: number; y: number }> = [];
+    for (let ci = 0; ci < chunks.length; ci++) {
+      if (totalAb <= 0) {
+        chunkPrimary.push(fallback);
+        chunkSecondary.push(fallback);
+        chunkBlendDir.push({ x: 1, y: 0 });
+        continue;
+      }
       const u = rng();
       let acc = 0;
-      for (const d of deposits) {
-        acc += d.abundance / totalAb;
-        if (u <= acc) return resourceMineralColor(d.key);
+      let pi = deposits.length - 1;
+      for (let d = 0; d < deposits.length; d++) {
+        acc += deposits[d].abundance / totalAb;
+        if (u <= acc) { pi = d; break; }
       }
-      return resourceMineralColor(deposits[deposits.length - 1].key);
-    });
+      // Secondary = the other deposit (or the same one if the belt only
+      // drew a single deposit, which makes the hint a no-op).
+      const si = deposits.length > 1 ? (pi === 0 ? 1 : 0) : pi;
+      chunkPrimary.push(depCols[pi]);
+      chunkSecondary.push(depCols[si]);
+      const ang = rng() * Math.PI * 2;
+      chunkBlendDir.push({ x: Math.cos(ang), y: Math.sin(ang) });
+    }
 
     // Picker box tracks the real chunk scatter on BOTH axes, not the full
     // slot box. Each shape is inscribed in the unit circle, so a chunk
@@ -256,7 +277,9 @@ function buildBeltPool(
     const centerOffsets:  { dx: number; dy: number }[] = [];
     for (let ci = 0; ci < chunks.length; ci++) {
       const chunk = chunks[ci];
-      const col = chunkColors[ci];
+      const col = chunkPrimary[ci];
+      const colB = chunkSecondary[ci];
+      const dir = chunkBlendDir[ci];
       const scratchPos:    number[] = [];
       const scratchCenter: number[] = [];
       const scratchSize:   number[] = [];
@@ -274,6 +297,10 @@ function buildBeltPool(
         positions.push(0, 0, 0);
         chunkCenters.push(0, 0);
         chunkSizes.push(scratchSize[v]);
+        // Secondary hue + blend direction are constant across the chunk's
+        // vertices (the per-fragment ramp lives in the shader).
+        colorsB.push(colB.r, colB.g, colB.b);
+        blendDirs.push(dir.x, dir.y);
       }
       cursor += written;
     }
@@ -289,6 +316,7 @@ function buildBeltPool(
   }
   return buildChunkPool(
     slots, positions, indices, colors,
+    colorsB, blendDirs,
     chunkCenters, chunkSizes,
     RENDER_ORDER_BELT,
   );

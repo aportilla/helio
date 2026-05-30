@@ -45,15 +45,26 @@ export function makeBlobMaterial(): ShaderMaterial {
       // primitive uniform path.
       attribute vec2  aChunkCenter;
       attribute float aChunkSize;
+      // Off-deposit color + blend direction (both constant across a
+      // chunk's vertices). aColorB is the belt's OTHER deposit hue; the
+      // fragment shader dithers a directional hint of it into the chunk
+      // along aBlendDir, so each rock reads as its primary mineral
+      // tinged by the belt's second deposit from one side.
+      attribute vec3  aColorB;
+      attribute vec2  aBlendDir;
       varying vec3  vColor;
       varying float vHovered;
       varying vec2  vChunkCenter;
       varying float vChunkSize;
+      varying vec3  vColorB;
+      varying vec2  vBlendDir;
       void main() {
         vColor = color;
         vHovered = aHovered;
         vChunkCenter = aChunkCenter;
         vChunkSize   = aChunkSize;
+        vColorB      = aColorB;
+        vBlendDir    = aBlendDir;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }
     `,
@@ -62,6 +73,8 @@ export function makeBlobMaterial(): ShaderMaterial {
       varying float vHovered;
       varying vec2  vChunkCenter;
       varying float vChunkSize;
+      varying vec3  vColorB;
+      varying vec2  vBlendDir;
       uniform int       uLightCount;
       uniform vec2      uLightPos[${MAX_LIGHTS}];
       uniform vec3      uLightColor[${MAX_LIGHTS}];
@@ -74,6 +87,12 @@ export function makeBlobMaterial(): ShaderMaterial {
       ${BAYER4_GLSL}
       ${STAR_CRESCENT_LIGHTING_GLSL}
 
+      // Peak coverage of the off-deposit stipple on the strong side of
+      // the chunk (fades to 0 on the far side). Kept low so the chunk
+      // reads as its primary mineral with a directional tinge of the
+      // belt's other deposit, not a two-tone split. Eyeball-tuned.
+      const float OFFCOLOR_HINT = 0.4;
+
       void main() {
         // Hover wins early — chunks under hover flip to solid white
         // exactly like the previous behavior; lighting doesn't paint
@@ -82,16 +101,28 @@ export function makeBlobMaterial(): ShaderMaterial {
           gl_FragColor = vec4(1.0);
           return;
         }
-        vec3 col = vColor;
+
+        // chunkR floor at 1 px keeps the tiniest chunks (size = 2 px
+        // half-extent) from divide-by-zero on the normalize. dLocal +
+        // chunkR are reused below for the sphere normal.
+        vec2 dLocal = gl_FragCoord.xy - vChunkCenter;
+        float chunkR = max(vChunkSize, 1.0);
+
+        // Directional off-deposit hint: a 0→1 ramp over the FAR HALF of
+        // the chunk along vBlendDir (clamping proj drops the near half to
+        // 0, so only ~half the rock is stippled), scaled to OFFCOLOR_HINT
+        // and stippled via an offset Bayer sample (distinct from the
+        // crescent fringe seeds) so one side picks up a sparse stipple of
+        // the other deposit's color that fades to none toward the middle.
+        float proj = dot(dLocal, normalize(vBlendDir)) / chunkR;   // ~[-1, 1]
+        float ramp = clamp(proj, 0.0, 1.0);
+        float bOff = bayer4(gl_FragCoord.xy + vec2(19.0, 5.0));
+        vec3 col = (ramp * OFFCOLOR_HINT > bOff) ? vColorB : vColor;
 
         // Per-fragment sphere lighting — treat the chunk as a unit-disc-
         // inscribed shape. Polygon silhouette already clips the
         // rasterizer to the chunk's actual outline; the disc math just
-        // yields a smooth depth signal inside the polygon. chunkR floor
-        // at 1 px keeps the tiniest chunks (size = 2 px half-extent)
-        // from divide-by-zero on the normalize.
-        vec2 dLocal = gl_FragCoord.xy - vChunkCenter;
-        float chunkR = max(vChunkSize, 1.0);
+        // yields a smooth depth signal inside the polygon.
         float tSq = dot(dLocal, dLocal) / (chunkR * chunkR);
         float nz = sqrt(max(0.0, 1.0 - tSq));
         vec3 N = vec3(dLocal / chunkR, nz);
