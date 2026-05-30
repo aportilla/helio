@@ -292,13 +292,12 @@ export const MOON_PROBABILITY_CAP      = 0.60;
 // Binomial(n, p) sampler above. Setting it to 5 caps Saturn-class arcs
 // at a readable size on the system-diagram rim split (no 6-to-8-moon
 // arcs overlapping into illegibility) and keeps the per-cluster
-// colonization decision space tractable. The realistic peer at 8
-// preserves more of the gas-giant moon variety; the gameplay tune
-// trades that for legibility. Combined with `MOON_PROBABILITY_CAP =
+// colonization decision space tractable. A physically realistic bound
+// sits nearer 8 and preserves more of the gas-giant moon variety; the
+// gameplay tune trades that for legibility. Combined with `MOON_PROBABILITY_CAP =
 // 0.60`, the maximum mean moon count for the largest Hill spheres is
 // `5 × 0.60 = 3.0`, with a smooth bell across 0..5 rather than a
 // pile-up at the cap.
-const MOON_COUNT_MAX_REALISTIC = 8;
 const MOON_COUNT_MAX_TUNE = 5;
 
 export const MOON_COUNT_MAX = MOON_COUNT_MAX_TUNE;
@@ -468,7 +467,7 @@ const ACCRETION_EFFICIENCY_REALISTIC = {
 // mean 20→35 pushes the temperate-mass distribution toward the
 // observed M-dwarf range without modeling pebble accretion explicitly.
 const ACCRETION_EFFICIENCY_TUNE = {
-  inner: { mean: 80 },
+  inner: { mean: 35 },
 };
 
 export const ACCRETION_EFFICIENCY = mergeTunes(
@@ -513,10 +512,10 @@ export const TIME_TO_RUNAWAY_MYR = 0.5;
 //   innermost eligible giant and rolls once. Real Kepler hot-Jupiter
 //   occurrence around Sun-likes is ~1%, but our visible eligible pool
 //   (Architect-only stars with a gas giant) is smaller than the
-//   catalog-wide observed rate would suggest. 10% per eligible system
-//   produces a noticeable but-not-dominant population of hot Jupiters
-//   without cascading migration sweeping inner systems away from their
-//   physics-produced body-type mix.
+//   catalog-wide observed rate would suggest, so MIGRATION_RATE sits
+//   above the Kepler occurrence to produce a noticeable but-not-dominant
+//   population of hot Jupiters without cascading migration sweeping inner
+//   systems away from their physics-produced body-type mix.
 // MIGRATION_FRACTION: how far inward, sampled as fraction of formation
 //   distance. Real hot Jupiters sit at 0.02–0.10 AU after forming at
 //   3–10 AU — fractions in the 0.005–0.05 band.

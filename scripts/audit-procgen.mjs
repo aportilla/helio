@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { insolation, frostLineAU, hillRadiusAu } from './lib/astrophysics.mjs';
 import {
   STELLAR_CLASSES,
+  ACCRETION_EFFICIENCY,
   PLANET_COUNT_BY_CLASS,
   MAX_PLANETS_PER_CLUSTER,
   RING_DISRUPTION_RATE,
@@ -976,3 +977,81 @@ for (const a of BIOSPHERE_ARCHETYPES) {
   );
 }
 console.log();
+
+// =============================================================================
+// Structural invariants — hard assertions that FAIL the build (exit 1) rather
+// than just reporting a distribution. Everything above is advisory (z-scores a
+// human reads); these BITE. Each guards one defect class from the 2026-05
+// render+procgen review so the next tuning cycle can't silently re-introduce
+// it. Tag each with the review item id it descends from.
+// =============================================================================
+console.log('=== Structural invariants (hard gate) ===');
+const invariantFailures = [];
+function invariant(id, label, ok, detail) {
+  console.log('  ' + (ok ? 'PASS' : 'FAIL') + '  [' + id + '] ' + label + (detail ? '  (' + detail + ')' : ''));
+  if (!ok) invariantFailures.push(`[${id}] ${label}${detail ? '  (' + detail + ')' : ''}`);
+}
+
+// B5 — the cold extreme is floored at absolute zero. A large swing on a hot,
+// high-tilt airless body used to drive surfaceTempMinK negative (unphysical,
+// and it feeds surfaceIceCover as T_pole).
+{
+  const neg = bodies.filter(b => b.surfaceTempMinK != null && b.surfaceTempMinK < 0);
+  invariant('B5', 'no body has surfaceTempMinK < 0 K', neg.length === 0,
+    neg.length ? `${neg.length} negative, e.g. ${neg.slice(0, 3).map(b => `${b.id}:${b.surfaceTempMinK}`).join(', ')}`
+               : `${bodies.length} bodies checked`);
+}
+
+// B2 — the accretion-efficiency priors aren't degenerate. A log-truncated
+// draw with mean pinned at (or above) max clamps roughly half its mass to the
+// ceiling, collapsing the intended mass variety. Guard: min < mean < max.
+{
+  const bad = [];
+  for (const zone of ['inner', 'outer']) {
+    const s = ACCRETION_EFFICIENCY[zone];
+    if (!s || !(s.min < s.mean && s.mean < s.max)) {
+      bad.push(`${zone}={mean:${s?.mean}, min:${s?.min}, max:${s?.max}}`);
+    }
+  }
+  invariant('B2', 'ACCRETION_EFFICIENCY not ceiling-pinned (min < mean < max)', bad.length === 0,
+    bad.length ? bad.join(' ') : 'inner + outer well-formed');
+}
+
+// B3/B4 — the subsurface_aqueous archetype actually fires. Both of its drivers
+// were starved (bulk_water read the volatile fraction; the radiogenic term ran
+// read-before-write and was structurally 0), zeroing the Europa/Enceladus
+// biosphere. Tripwire: a healthy population fires AND at least one is purely
+// radiogenic-driven (negligible tidal heating, real resRadioactives) — the
+// exact case B4 resurrected.
+{
+  const fire = bodies.filter(b => b.bioticSubsurfaceAqueous > 0);
+  const radiogenic = fire.filter(b => (b.eccentricity ?? 0) < 0.02 && (b.resRadioactives ?? 0) > 0);
+  invariant('B3/B4', 'subsurface_aqueous fires, incl. radiogenic-driven cases',
+    fire.length > 50 && radiogenic.length > 0,
+    `${fire.length} fire, ${radiogenic.length} radiogenic-driven`);
+}
+
+// B1 — procgen never emits more real cloud decks than the renderer can hold.
+// The disc palette prepends a synthetic base deck on no-surface bodies and
+// trims the lowest real deck to fit MAX_CLOUD_LAYERS; that trim relies on
+// procgen itself staying within budget. cloudDecksFor has no explicit cap (it
+// emits one deck per condensing species), so this enforces the otherwise-
+// emergent procgen→renderer contract. CLOUD_DECK_BUDGET mirrors
+// MAX_CLOUD_LAYERS in src/scene/materials/planet.ts (not importable from a
+// .mjs); keep the two in sync.
+{
+  const CLOUD_DECK_BUDGET = 4;
+  const over = bodies.filter(b => Array.isArray(b.cloudLayers) && b.cloudLayers.length > CLOUD_DECK_BUDGET);
+  const maxObserved = bodies.reduce((m, b) => Array.isArray(b.cloudLayers) ? Math.max(m, b.cloudLayers.length) : m, 0);
+  invariant('B1', `no body emits > CLOUD_DECK_BUDGET (${CLOUD_DECK_BUDGET}) real cloud decks`, over.length === 0,
+    over.length ? `${over.length} over budget, e.g. ${over.slice(0, 3).map(b => `${b.id}:${b.cloudLayers.length}`).join(', ')}`
+                : `max observed ${maxObserved}`);
+}
+
+console.log();
+if (invariantFailures.length > 0) {
+  process.stderr.write(`audit-procgen: ${invariantFailures.length} structural invariant(s) FAILED:\n`);
+  for (const f of invariantFailures) process.stderr.write('  - ' + f + '\n');
+  process.exit(1);
+}
+console.log('Structural invariants: all passed.');

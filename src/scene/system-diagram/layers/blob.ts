@@ -124,7 +124,7 @@ export function bakeBlob(
 // Box-Muller normal sample, clamped to ±clamp. Returns a single value
 // from N(0, sd); the second normal sample (cos vs sin pair) is
 // discarded — cheap for our chunk densities.
-export function sampleGaussian(rng: () => number, sd: number, clamp: number): number {
+function sampleGaussian(rng: () => number, sd: number, clamp: number): number {
   const u1 = Math.max(rng(), 1e-6);
   const u2 = rng();
   const g = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
@@ -135,7 +135,7 @@ export function sampleGaussian(rng: () => number, sd: number, clamp: number): nu
 // bounding-circle overlap. Returns true if the candidate collides with
 // any prior placement (within sumOfRadii + CHUNK_GAP_PX).
 const CHUNK_GAP_PX = 1;
-export function overlapsAny(cx: number, cy: number, size: number, placed: ReadonlyArray<ChunkSpec>): boolean {
+function overlapsAny(cx: number, cy: number, size: number, placed: ReadonlyArray<ChunkSpec>): boolean {
   for (const p of placed) {
     const dx = cx - p.cx;
     const dy = cy - p.cy;

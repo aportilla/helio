@@ -107,7 +107,7 @@
 // belt so the "no fully empty systems" gameplay invariant holds.
 
 import { hash32, mulberry32, sampleNormal, sampleTruncated, sampleLogTruncated, samplePhysical, sampleMixture, sampleBinomial, drawWeightedDeposits } from './prng.mjs';
-import { insolation, frostLineTrio, moonRadiusFromMass, solidSurfaceDensity, isolationMass, hillRadiusAu, keplerPeriodDays, EARTH_PER_SOLAR_MASS } from './astrophysics.mjs';
+import { frostLineTrio, moonRadiusFromMass, solidSurfaceDensity, isolationMass, hillRadiusAu, keplerPeriodDays, EARTH_PER_SOLAR_MASS } from './astrophysics.mjs';
 import { radiusFromMass, sampleOrbitalFlavor, sampleBulkWaterFraction, sampleBulkMetalFraction, sampleBulkVolatileFraction } from './procgen.mjs';
 import {
   PROCGEN_VERSION,
@@ -329,21 +329,17 @@ export function generateMoons(planet, star, hostFormationAu = null, frostLinesAu
   const hillAu = hillRadiusAu(planet.semiMajorAu, planet.massEarth, star.mass);
   if (hillAu == null || hillAu <= 0) return [];
   const countPrng = moonPrng(planet.id, -1, 'count');
-  // Sample N ~ Binomial(MOON_COUNT_MAX, p) where p is calibrated by
-  // Hill sphere. Binomial is naturally bounded at MOON_COUNT_MAX so
-  // the distribution shape is smooth across 0..MAX — no post-hoc
-  // prune, no pile-up at the cap (which is what Poisson + clamp
-  // produces when λ saturates). Sol anchors at MOON_PROB_PER_HILL=2.3,
-  // MOON_PROB_CAP=0.85:
-  //   Mercury (R_H=0.0015): p=0.003  → mean 0.02  (effectively 0)
-  //   Earth   (R_H=0.010):  p=0.023  → mean 0.11
-  //   Mars    (R_H=0.007):  p=0.016  → mean 0.08
-  //   Jupiter (R_H=0.354):  p=0.81   → mean 4.05  (Galileans)
-  //   Saturn  (R_H=0.434):  p=0.85   → mean 4.25  (capped)
-  //   Uranus  (R_H=0.469):  p=0.85   → mean 4.25
-  //   Neptune (R_H=0.771):  p=0.85   → mean 4.25
-  //   Hot Jupiter (R_H=0.003): p=0.007 → mean 0.04 (migration-stripped)
-  //   Warm Jupiter at 1 AU (R_H=0.032): p=0.07 → mean 0.37
+  // Sample N ~ Binomial(MOON_COUNT_MAX, p) where p scales linearly with
+  // Hill-sphere radius (hillAu × MOON_PROBABILITY_PER_HILL) and saturates
+  // at MOON_PROBABILITY_CAP. Binomial is naturally bounded at
+  // MOON_COUNT_MAX so the distribution shape is smooth across 0..MAX —
+  // no post-hoc prune, no pile-up at the cap (which is what Poisson +
+  // clamp produces when λ saturates). The linear-in-Hill slope keeps the
+  // small-Hill bodies (rocky inners, migration-stripped hot Jupiters)
+  // near zero moons and pushes the wide-Hill gas giants toward the cap,
+  // so the gas-giant-vs-rocky moon contrast emerges from physics rather
+  // than a class switch — see the same anchors documented at
+  // MOON_PROBABILITY_PER_HILL in procgen-priors.mjs.
   const p = Math.min(MOON_PROBABILITY_CAP, hillAu * MOON_PROBABILITY_PER_HILL);
   const N = sampleBinomial(countPrng, MOON_COUNT_MAX, p);
   if (N === 0) return [];
@@ -1035,10 +1031,15 @@ function attachMoonsAndRing(planet, star, diskCtx) {
 function migratePass(planets, star, saltPrefix = '') {
   if (planets.length === 0) return planets;
   // Eligibility: massive bodies (cleared the migration mass floor) that
-  // carry a formation orbit. Both gates are required — the floor models
-  // disk-coupling strength, formationAu is the orbital anchor.
+  // formed past the H2O frost line (gas giants accrete their envelope in
+  // the icy outer disk — an inside-the-line body that cleared the mass
+  // floor is a rocky super-Earth, not a Type-II migrator). The floor
+  // models disk-coupling strength, formationAu is the orbital anchor.
+  const frostH2O = frostLineTrio(star.mass)?.H2O ?? 0;
   const eligible = planets.filter(p =>
-    p.massEarth >= MIGRATION_MIN_MASS_EARTH && p.formationAu != null);
+    p.massEarth >= MIGRATION_MIN_MASS_EARTH &&
+    p.formationAu != null &&
+    p.formationAu > frostH2O);
   if (eligible.length === 0) return planets;
 
   // One migrator per system, ever. Two-giant hot chains are dynamically

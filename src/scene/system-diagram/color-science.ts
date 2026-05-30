@@ -181,7 +181,9 @@ export function biomePaintFor(body: Body): { color: Color; coverage: number } | 
 
   const starIdx = hostStarIdxOf(body);
   if (starIdx === null) return null;
-  const shift = BIOME_STELLAR_SHIFT[STARS[starIdx].cls];
+  const star = STARS[starIdx];
+  if (!star) return null;
+  const shift = BIOME_STELLAR_SHIFT[star.cls];
   if (shift === null) return null;
 
   const color = shift.amount > 0 ? lerpColor(base, shift.color, shift.amount) : base;

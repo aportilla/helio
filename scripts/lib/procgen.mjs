@@ -719,8 +719,12 @@ function surfaceTempRangeFor(body) {
   const eccFactor = 1 + ecc * 2;
   const swing = Math.min(2.5, baseSwing * tiltFactor * eccFactor * noise);
   const half = swing / 2;
+  // Floor the cold extreme at absolute zero — a large swing on a hot,
+  // high-tilt airless body can drive (1 - half) negative, and a sub-zero
+  // Kelvin temperature is unphysical (it also feeds surfaceIceCover as
+  // T_pole, where any value at/below freezing already saturates the cap).
   return {
-    min: Math.round(body.avgSurfaceTempK * (1 - half)),
+    min: Math.max(0, Math.round(body.avgSurfaceTempK * (1 - half))),
     max: Math.round(body.avgSurfaceTempK * (1 + half)),
   };
 }
@@ -1264,31 +1268,27 @@ const TERRESTRIAL_SOLID_CLASSES = new Set([
   'magma_ocean', 'chthonian', 'solid_giant',
 ]);
 
-// Pre-atm productivity — carbon_aqueous + subsurface_aqueous. Neither
-// archetype depends on atmospheric composition, so both can fire
-// before the atmosphere is sampled. carbon_aqueous productivity then
-// drives biotic O2 atmospheric lift (clean acyclic dependency: bio
-// productivity → atm composition).
-function productivityPreAtm(body, hostStar, hostBody) {
+// Pre-atm productivity — carbon_aqueous only. Its biotic O2 drives
+// atmospheric lift in the atm step, so it must settle before the
+// atmosphere is sampled (clean acyclic dependency: bio productivity →
+// atm composition). subsurface_aqueous moved to productivityPostAtm: it
+// needs the settled resource grid (resRadioactives) and the final
+// composition-refined temperature, both of which post-date the atm pass.
+function productivityPreAtm(body, hostStar) {
   const T = body.avgSurfaceTempK;
   const Tmin = body.surfaceTempMinK;
   const Tmax = body.surfaceTempMaxK;
   const water = body.waterFraction ?? 0;
-  const ice = body.iceFraction ?? 0;
-  const bulkVol = body.bulkVolatileFraction ?? 0;
   const P = body.surfacePressureBar ?? 0;
   const g = bodyGravityEarth(body);
   const colMass = P > 0 ? Math.log10(P / g + 1) : 0;
   const B = body.magneticFieldGauss ?? 0;
-  const r = body.radiusEarth ?? 0;
-  const e = body.eccentricity ?? 0;
   const age = hostStar?.ageGyr ?? 5.0;
   const cls = hostStar?.cls ?? null;
   const isGaseous = isGaseousBody(body);
 
   const aw = BIOSPHERE_PRODUCTIVITY.ageWindow;
   const ageWindowCarbon     = smoothstep(aw.carbonAqueous.rise[0], aw.carbonAqueous.rise[1], age) * (1 - smoothstep(aw.carbonAqueous.fall[0], aw.carbonAqueous.fall[1], age));
-  const ageWindowSubsurface = smoothstep(aw.subsurfaceAqueous.rise[0], aw.subsurfaceAqueous.rise[1], age);
 
   // ── carbon_aqueous (Earth-standard, water + carbon + photosynthesis) ──
   // The N2_buffer factor was dropped: Earth's 78% N2 is BIOTIC-co-evolved,
@@ -1316,39 +1316,18 @@ function productivityPreAtm(body, hostStar, hostBody) {
                           * stellar_PAR * ageWindowCarbon;
   }
 
-  // ── subsurface_aqueous (Europa/Enceladus, chemosynthesis at vents) ──
-  let bioticSubsurfaceAqueous;
-  if (isGaseous) {
-    bioticSubsurfaceAqueous = null;
-  } else if (T == null) {
-    bioticSubsurfaceAqueous = 0;
-  } else {
-    const k = BIOSPHERE_PRODUCTIVITY.subsurfaceAqueous;
-    const bulk_water = smoothstep(k.bulkWater[0], k.bulkWater[1], bulkVol);
-    const ice_shell = bellGate(ice, k.iceShell.center, k.iceShell.halfwidth);
-    const cold_surface = smoothstep(k.coldSurface[0], k.coldSurface[1], k.coldSurfaceRefK - T);
-    const size_floor = smoothstep(k.sizeFloor[0], k.sizeFloor[1], r);
-    const hostMassEarth = hostBody?.massEarth ?? 0;
-    const a = body.semiMajorAu ?? 0;
-    const tidalProxy = (e > 0 && hostMassEarth > 0 && a > 0)
-      ? e * (hostMassEarth / EARTH_PER_SOLAR_MASS) / Math.pow(a, 3)
-      : 0;
-    const tidal_score = smoothstep(k.tidalScore[0], k.tidalScore[1], tidalProxy);
-    const radio_score = smoothstep(k.radioScore[0], k.radioScore[1], body.resRadioactives ?? 0);
-    const tidal_or_radiogenic = Math.max(tidal_score, radio_score);
-    bioticSubsurfaceAqueous = bulk_water * ice_shell * cold_surface
-                              * size_floor * tidal_or_radiogenic
-                              * ageWindowSubsurface;
-  }
-
-  return { bioticCarbonAqueous, bioticSubsurfaceAqueous };
+  return { bioticCarbonAqueous };
 }
 
-// Post-atm productivity — aerial / cryogenic / silicate / sulfur all
-// read atmospheric composition (CH4, N2, NH3, SO2, H2S, H2SO4, …) and
-// in cryogenic's case the haze aerosol output (THOLIN). Runs after
-// haze in the Filler pipeline.
-function productivityPostAtm(body, hostStar) {
+// Post-atm productivity — subsurface_aqueous / aerial / cryogenic /
+// silicate / sulfur. The latter four read atmospheric composition (CH4,
+// N2, NH3, SO2, H2S, H2SO4, …) and in cryogenic's case the haze aerosol
+// output (THOLIN). subsurface_aqueous reads no atm composition, but runs
+// here so it sees the settled resource grid (resRadioactives) and the
+// final composition-refined temperature — both post-date the atm pass.
+// Runs after haze + resources in the Filler pipeline; hostBody feeds
+// subsurface_aqueous's tidal-heating proxy.
+function productivityPostAtm(body, hostStar, hostBody) {
   const T = body.avgSurfaceTempK;
   const P = body.surfacePressureBar ?? 0;
   const g = bodyGravityEarth(body);
@@ -1364,10 +1343,42 @@ function productivityPostAtm(body, hostStar) {
   const isTerrestrialSolid = body.worldClass != null && TERRESTRIAL_SOLID_CLASSES.has(body.worldClass);
 
   const aw = BIOSPHERE_PRODUCTIVITY.ageWindow;
+  const ageWindowSubsurface = smoothstep(aw.subsurfaceAqueous.rise[0], aw.subsurfaceAqueous.rise[1], age);
   const ageWindowAerial    = smoothstep(aw.aerial.rise[0], aw.aerial.rise[1], age);
   const ageWindowCryogenic = smoothstep(aw.cryogenic.rise[0], aw.cryogenic.rise[1], age);
   const ageWindowSilicate  = smoothstep(aw.silicate.rise[0], aw.silicate.rise[1], age);
   const ageWindowSulfur    = smoothstep(aw.sulfur.rise[0], aw.sulfur.rise[1], age);
+
+  // ── subsurface_aqueous (Europa/Enceladus, chemosynthesis at vents) ──
+  // Energy source is tidal heating OR radiogenic decay — radio_score
+  // reads resRadioactives, which is settled by the time this post-atm
+  // pass runs. bulk_water reads bulkWaterFraction (the H2O budget the
+  // ice-shell ocean draws from), not the volatile fraction. No atm
+  // dependency; ordered here only so resRadioactives + final T are ready.
+  let bioticSubsurfaceAqueous;
+  if (isGaseous) {
+    bioticSubsurfaceAqueous = null;
+  } else if (T == null) {
+    bioticSubsurfaceAqueous = 0;
+  } else {
+    const k = BIOSPHERE_PRODUCTIVITY.subsurfaceAqueous;
+    const bulk_water = smoothstep(k.bulkWater[0], k.bulkWater[1], body.bulkWaterFraction ?? 0);
+    const ice_shell = bellGate(body.iceFraction ?? 0, k.iceShell.center, k.iceShell.halfwidth);
+    const cold_surface = smoothstep(k.coldSurface[0], k.coldSurface[1], k.coldSurfaceRefK - T);
+    const size_floor = smoothstep(k.sizeFloor[0], k.sizeFloor[1], body.radiusEarth ?? 0);
+    const hostMassEarth = hostBody?.massEarth ?? 0;
+    const a = body.semiMajorAu ?? 0;
+    const e = body.eccentricity ?? 0;
+    const tidalProxy = (e > 0 && hostMassEarth > 0 && a > 0)
+      ? e * (hostMassEarth / EARTH_PER_SOLAR_MASS) / Math.pow(a, 3)
+      : 0;
+    const tidal_score = smoothstep(k.tidalScore[0], k.tidalScore[1], tidalProxy);
+    const radio_score = smoothstep(k.radioScore[0], k.radioScore[1], body.resRadioactives ?? 0);
+    const tidal_or_radiogenic = Math.max(tidal_score, radio_score);
+    bioticSubsurfaceAqueous = bulk_water * ice_shell * cold_surface
+                              * size_floor * tidal_or_radiogenic
+                              * ageWindowSubsurface;
+  }
 
   // ── aerial (Sagan-Salpeter floaters in gas-giant clouds) ──
   let bioticAerial;
@@ -1459,7 +1470,7 @@ function productivityPostAtm(body, hostStar) {
                    * sulfur_substrate * ageWindowSulfur;
   }
 
-  return { bioticAerial, bioticCryogenic, bioticSilicate, bioticSulfur };
+  return { bioticSubsurfaceAqueous, bioticAerial, bioticCryogenic, bioticSilicate, bioticSulfur };
 }
 
 // Argmax over the per-archetype productivity scalars. Returns the
@@ -1840,16 +1851,15 @@ function fillBody(b, allBodies, stars) {
   }
   working = { ...working, surfaceAge };
 
-  // Pre-atm biotic productivity — carbon_aqueous + subsurface_aqueous.
-  // Neither depends on atmospheric composition. Runs before atm so the
-  // atm step can read productivity[carbon_aqueous] for biotic O2 lift
-  // (clean acyclic dependency: bio productivity → atm composition).
-  if (unknowns.has('bioticCarbonAqueous') || unknowns.has('bioticSubsurfaceAqueous')) {
-    const p = productivityPreAtm(working, hostStar, hostBody);
-    if (unknowns.has('bioticCarbonAqueous'))     bioticCarbonAqueous     = p.bioticCarbonAqueous;
-    if (unknowns.has('bioticSubsurfaceAqueous')) bioticSubsurfaceAqueous = p.bioticSubsurfaceAqueous;
+  // Pre-atm biotic productivity — carbon_aqueous only. Runs before atm
+  // so the atm step can read productivity[carbon_aqueous] for biotic O2
+  // lift (clean acyclic dependency: bio productivity → atm composition).
+  // subsurface_aqueous runs post-atm (needs resRadioactives + final T).
+  if (unknowns.has('bioticCarbonAqueous')) {
+    const p = productivityPreAtm(working, hostStar);
+    bioticCarbonAqueous = p.bioticCarbonAqueous;
   }
-  working = { ...working, bioticCarbonAqueous, bioticSubsurfaceAqueous };
+  working = { ...working, bioticCarbonAqueous };
 
   // Atmosphere — regime-keyed top-3 gas dispatch with biosphere O2 lift.
   if (unknowns.has('atm1') || unknowns.has('atm2') || unknowns.has('atm3')) {
@@ -1933,16 +1943,20 @@ function fillBody(b, allBodies, stars) {
     resRareEarths, resRadioactives, resExotics,
   };
 
-  // Post-atm biotic productivity — aerial / cryogenic / silicate /
-  // sulfur. Reads worldClass (for the gaseous / terrestrial-solid
-  // gates) and atm composition + haze aerosols + resource grid
-  // (silicate substrate, sulfur substrate). Must run AFTER worldClass
-  // and resources are settled — both feed gating factors here.
+  // Post-atm biotic productivity — subsurface_aqueous / aerial /
+  // cryogenic / silicate / sulfur. Reads worldClass (for the gaseous /
+  // terrestrial-solid gates) and atm composition + haze aerosols +
+  // resource grid (radiogenic energy, silicate / sulfur substrate). Must
+  // run AFTER worldClass and resources are settled — both feed gating
+  // factors here (subsurface_aqueous's radiogenic term needs the drawn
+  // resRadioactives, unavailable in the pre-atm pass).
   if (
+    unknowns.has('bioticSubsurfaceAqueous') ||
     unknowns.has('bioticAerial')   || unknowns.has('bioticCryogenic') ||
     unknowns.has('bioticSilicate') || unknowns.has('bioticSulfur')
   ) {
-    const p = productivityPostAtm(working, hostStar);
+    const p = productivityPostAtm(working, hostStar, hostBody);
+    if (unknowns.has('bioticSubsurfaceAqueous')) bioticSubsurfaceAqueous = p.bioticSubsurfaceAqueous;
     if (unknowns.has('bioticAerial'))    bioticAerial    = p.bioticAerial;
     if (unknowns.has('bioticCryogenic')) bioticCryogenic = p.bioticCryogenic;
     if (unknowns.has('bioticSilicate'))  bioticSilicate  = p.bioticSilicate;

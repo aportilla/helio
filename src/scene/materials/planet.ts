@@ -373,9 +373,11 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // disc edge sits at asin(0.85) = 58° from the pole; edge cells
       // are ~53% of disc-center size; the disc still reads as a globe
       // but stays pixel-coherent under the chunky aesthetic.
-      // Surface-mode only — banded mode keeps the full FRAC = 1.0
-      // projection because its latitude arcs need the strong
-      // foreshortening to look spherical.
+      // One projection feeds surface worley cells AND both cloud modes
+      // (patchy + banded), so clouds and continents foreshorten together.
+      // The surface block alone recomputes an un-inset latitude
+      // (latSinDisc) for its cap / biome tests, where a thin polar cap
+      // must reach the disc edge or it clips entirely.
       const float SPHERE_VISIBLE_FRAC = 0.85;
 
       // Continent grouping: every CONTINENT_GROUP worley cells along
@@ -1882,12 +1884,12 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         // matches banded mode so a ringed terrestrial's caps and ring
         // share one vantage.
         //
-        // Hoisted above the surface gate because two consumers need it:
-        // the surface block (worley cells in lon/lat) and the patchy
-        // cloud block (worley cells in the same frame, so clouds and
-        // continents compress toward the limb together). Banded clouds
-        // keep their own un-inset projection because their latitude
-        // arcs need to reach the true pole.
+        // Hoisted above the surface gate because both consumers need it:
+        // the surface block (worley cells in lon/lat) and the cloud block
+        // (patchy + banded, worley cells in the same frame, so clouds and
+        // continents compress toward the limb together). The surface block
+        // alone recomputes an un-inset latitude (latSinDisc) for its cap /
+        // biome tests, where a thin polar cap must reach the disc edge.
         //
         // Frame derivation: in the band-aligned tilted frame the pole
         // points along P = (0, POLE_COS, POLE_SIN) and the prime

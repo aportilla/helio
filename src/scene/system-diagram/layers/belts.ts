@@ -41,10 +41,11 @@ interface BeltSlot {
   // without re-walking rowSlots (matches the moon/planet picker shape).
   cx: number;
   cy: number;
-  // Bounding box half-extents used by the picker. halfH is clamped to
-  // the baked chunk-cluster extent (not the full slot height) so the
-  // hit-box bounds the visible scatter rather than the empty sky above
-  // and below a tall row.
+  // Bounding box half-extents used by the picker. Both are sized to the
+  // baked chunk-cluster extent rather than the raw slot box: halfW widens
+  // past the slot to cover chunks whose polygons spill beyond their
+  // edge-clamped centers, and halfH clamps down to the scatter so the
+  // hit-box drops the empty sky above and below a tall row.
   halfW: number;
   halfH: number;
 }
@@ -180,16 +181,22 @@ function buildBeltPool(
     const shapes = shapesFor(icyness);
     const chunks = sampleBeltChunks(rng, N, halfW, halfH, BELT_CHUNK_SIZES, shapes);
 
-    // Picker halfH tracks the real chunk scatter, not the full slot box.
-    // Chunks cluster near center (Gaussian SD = halfH·CHUNK_CY_SD_FRAC), so
-    // a tall slot (sized off the largest planet on the row) leaves empty
-    // sky above/below the band that would otherwise still report a hit.
-    // Each shape is inscribed in the unit circle, so a chunk reaches at
-    // most |cy| + size from center; clamp to that extent plus a small pad.
+    // Picker box tracks the real chunk scatter on BOTH axes, not the full
+    // slot box. Each shape is inscribed in the unit circle, so a chunk
+    // reaches at most |c| + size from center. Horizontally, chunk cx is
+    // clamped to ±halfW but the polygon still extends `size` beyond, so the
+    // box must widen PAST the slot — otherwise the left/right-most chunks of
+    // a wide belt don't pick. Vertically, chunks cluster near center
+    // (Gaussian SD = halfH·CHUNK_CY_SD_FRAC) inside a slot sized off the
+    // largest planet on the row, so halfH additionally clamps DOWN to the
+    // scatter to drop the empty sky above and below the band.
+    let chunkHalfW = 0;
     let chunkHalfH = 0;
     for (const chunk of chunks) {
+      chunkHalfW = Math.max(chunkHalfW, Math.abs(chunk.cx) + chunk.size);
       chunkHalfH = Math.max(chunkHalfH, Math.abs(chunk.cy) + chunk.size);
     }
+    const pickHalfW = chunkHalfW + BELT_PICK_PAD_PX;
     const pickHalfH = Math.min(halfH, chunkHalfH + BELT_PICK_PAD_PX);
 
     const slotStart = cursor;
@@ -223,7 +230,7 @@ function buildBeltPool(
       chunkOffsets: offsets,
       chunkCenterOffsets: centerOffsets,
       cx: 0, cy: 0,   // filled by layout()
-      halfW, halfH: pickHalfH,
+      halfW: pickHalfW, halfH: pickHalfH,
     });
   }
   return buildChunkPool(

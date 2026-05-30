@@ -126,6 +126,7 @@
 
 import { Color } from 'three';
 import { Body } from '../../../data/stars';
+import { MAX_CLOUD_LAYERS } from '../../materials';
 import {
   BARREN_ROCK_COLOR, barrenTintFor,
   WORLD_CLASS_COLOR, WORLD_CLASS_TINT, WORLD_CLASS_UNKNOWN_COLOR,
@@ -574,6 +575,17 @@ export function buildDiscPalette(
             (max, d) => (d.windSpeedMS > max ? d.windSpeedMS : max),
             BASE_DECK_WIND_DEFAULT,
           );
+          // The base deck claims slot 0, so the real decks must fit in the
+          // remaining MAX_CLOUD_LAYERS-1 slots — the geometry packer
+          // (body-disc.ts) and shader both hard-cap at MAX_CLOUD_LAYERS and
+          // would otherwise silently drop the tail. Trim from the BOTTOM:
+          // decks are altitude-ascending, the base already supplies the
+          // banded foundation, and the highest deck carries the identity
+          // color (e.g. the CH4 cyan that reads an ice giant as Uranus/
+          // Neptune-class). Keeping the trim here also keeps the rim merger
+          // below consistent with what the disc actually renders.
+          const maxRealDecks = MAX_CLOUD_LAYERS - 1;
+          if (decks.length > maxRealDecks) decks.splice(0, decks.length - maxRealDecks);
           const baseColor = lerpColor(atmColC, WHITE_COLOR, BASE_DECK_LIGHTNESS_LIFT);
           decks.unshift({
             coverage: BASE_DECK_COVERAGE,

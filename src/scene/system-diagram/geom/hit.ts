@@ -12,7 +12,7 @@
 // radii + tilt), so it stays next to the geometry that feeds it rather
 // than being co-located here.
 
-export function hitCircle(x: number, y: number, cx: number, cy: number, r: number): boolean {
+function hitCircle(x: number, y: number, cx: number, cy: number, r: number): boolean {
   const dx = x - cx;
   const dy = y - cy;
   return dx * dx + dy * dy <= r * r;
