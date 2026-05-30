@@ -825,44 +825,52 @@ export const BELT_CONTEXTS = ['warm', 'cold'];
 
 // Per-stellar-class occurrence probability for each belt context.
 // Rolled independently per context — a system can host warm + cold,
-// either alone, or neither. Belts represent NOTABLE structural bands
-// worth a player's attention (resource clusters, mining sites), not
-// every system's background Kuiper-analog. Sol's Main Belt counts as
-// notable (named, hand-curated); Sol's Kuiper Belt does not. These
-// rates are pulled down from the underlying physical occurrence stats
-// by an order of magnitude — most stars have *some* belt structure,
-// but only a minority host one that reads as a navigable / mine-able
-// landmark in the game.
-//
-// Each context's rate combines the discrete + collisional belt
-// occurrences into one roll — their union, minus the small double-belt
-// overlap (rolling each independently yields the same total). Survey anchors: Spitzer/
-// Herschel debris statistics (Su 2006, Thureau 2014, Chen 2014).
-// WD/BD rates are theory-anchored rather than detection-anchored:
-// metal-pollution evidence puts 25–50% of WDs accreting tidally-
-// disrupted debris (Zuckerman 2010), and BDs show protoplanetary
-// discs across surveys of young clusters — the in-game framing is
-// "what could a remnant disc look like," not "what fraction has been
-// confirmed at multi-kpc distances."
+// either alone, or neither (max two belts per star, the warm+cold
+// structure being the cap). The REALISTIC block is the science
+// baseline: survey-anchored detection fractions for a NOTABLE debris
+// band, following the physical class ordering — debris incidence peaks
+// at A and declines through F → G → K → M (Spitzer/Herschel debris
+// statistics: Su 2006, Thureau 2014, Chen 2014). WD/BD rates are
+// theory-anchored rather than detection-anchored: metal-pollution
+// evidence puts 25–50% of WDs accreting tidally-disrupted debris
+// (Zuckerman 2010), and BDs show protoplanetary discs across surveys
+// of young clusters — the in-game framing is "what could a remnant
+// disc look like," not "what fraction has been confirmed at multi-kpc
+// distances." The TUNE overlay below lifts these for game-feel.
 const BELT_OCCURRENCE_BY_CLASS_REALISTIC = {
-  O:  { warm: 0.15, cold: 0.19 },
-  B:  { warm: 0.21, cold: 0.26 },
-  A:  { warm: 0.25, cold: 0.32 },
-  F:  { warm: 0.25, cold: 0.25 },
-  G:  { warm: 0.26, cold: 0.19 },
-  K:  { warm: 0.25, cold: 0.18 },
-  M:  { warm: 0.22, cold: 0.14 },
+  O:  { warm: 0.12, cold: 0.15 },
+  B:  { warm: 0.15, cold: 0.20 },
+  A:  { warm: 0.18, cold: 0.24 },   // debris incidence peaks at A
+  F:  { warm: 0.15, cold: 0.18 },
+  G:  { warm: 0.12, cold: 0.14 },
+  K:  { warm: 0.10, cold: 0.11 },
+  M:  { warm: 0.07, cold: 0.08 },   // lowest — sensitivity-limited, intrinsically sparse
   WD: { warm: 0.35, cold: 0.35 },
   BD: { warm: 0.25, cold: 0.25 },
 };
 
-// No gameplay tunes on belt occurrence today — the realistic rates above
-// already track survey statistics closely, and the perceptual filtering
-// happens at the renderer (sub-pixel belts wouldn't read anyway, but the
-// scale we draw at can carry the survey-anchored rates without flooding
-// the view). Structural placeholder kept for symmetry with ring /
-// resource priors so future game-feel adjustments have a clear home.
-const BELT_OCCURRENCE_BY_CLASS_TUNE = {};
+// Gameplay overlay. A 4X galaxy where most stars are click-to-confirm-
+// nothing feels barren, so belts are lifted well above the survey-
+// detection baseline: belts are a routine, mine-able feature of the
+// galaxy, not a rare landmark. Design targets:
+//   - ≥50% of stars carry at least one belt;
+//   - exactly one belt is by far the most common outcome, so `warm`
+//     is the dominant (primary) context and `cold` stays low — that
+//     keeps the two-belt overlap P(warm)·P(cold) small;
+//   - the physical class ordering is preserved (A leads, M trails),
+//     so the galaxy-view star color still reads as a belt-richness cue.
+// WD/BD are left to the realistic block — their high realized rate
+// already comes from the empty-system floor belt (remnants rarely keep
+// planets, so the "no system is fully empty" fallback fires often).
+const BELT_OCCURRENCE_BY_CLASS_TUNE = {
+  O:  { warm: 0.54, cold: 0.19 },
+  B:  { warm: 0.56, cold: 0.19 },
+  A:  { warm: 0.58, cold: 0.20 },
+  F:  { warm: 0.55, cold: 0.18 },
+  G:  { warm: 0.52, cold: 0.17 },
+  K:  { warm: 0.49, cold: 0.16 },
+  M:  { warm: 0.46, cold: 0.15 },
+};
 
 export const BELT_OCCURRENCE_BY_CLASS = mergeTunes(
   BELT_OCCURRENCE_BY_CLASS_REALISTIC,
@@ -1003,12 +1011,16 @@ export const BELT_GIANT_ADJACENCY = {
 };
 
 // Occurrence multiplier applied when the system has no shepherding body.
-// Without a shepherd, belts can still form but are rarer (Wyatt 2008
-// estimates <20% of the giant-shepherded rate for primordial belts;
-// dust cascades are less affected because they don't depend on
-// resonance trapping). 0.50/0.60 lands between the primordial-only
-// extreme and the dust-cascade-only no-penalty, weighting toward
-// "many real belts have at least some collisional component."
+// Without a shepherd, primordial resonance-trapped belts are rarer
+// (Wyatt 2008 estimates <20% of the giant-shepherded rate), but dust
+// cascades — the collisional grinding of leftover planetesimals — don't
+// depend on resonance trapping and are essentially ubiquitous. Most
+// stars in the catalog are giantless M-dwarfs, so this multiplier sets
+// the galaxy's belt baseline; the values weight heavily toward the
+// dust-cascade interpretation (belts are a near-universal disc end-
+// state) so a shepherd makes a belt MORE likely rather than being a
+// near-prerequisite. The largestBodyKm draw still separates the two
+// physically — giantless belts read as small dust-cascade bands.
 //
 // Per-class to express the physics of each stellar archetype: WD belts
 // are tidally-disrupted-planet rubble (Zuckerman 2010), not shepherded
@@ -1017,13 +1029,13 @@ export const BELT_GIANT_ADJACENCY = {
 // discs around sub-stellar masses; they don't depend on internal-giant
 // resonance trapping either — set 1.0.
 export const GIANTLESS_BELT_PENALTY = {
-  O:  { warm: 0.50, cold: 0.60 },
-  B:  { warm: 0.50, cold: 0.60 },
-  A:  { warm: 0.50, cold: 0.60 },
-  F:  { warm: 0.50, cold: 0.60 },
-  G:  { warm: 0.50, cold: 0.60 },
-  K:  { warm: 0.50, cold: 0.60 },
-  M:  { warm: 0.50, cold: 0.60 },
+  O:  { warm: 0.75, cold: 0.85 },
+  B:  { warm: 0.75, cold: 0.85 },
+  A:  { warm: 0.75, cold: 0.85 },
+  F:  { warm: 0.75, cold: 0.85 },
+  G:  { warm: 0.75, cold: 0.85 },
+  K:  { warm: 0.75, cold: 0.85 },
+  M:  { warm: 0.75, cold: 0.85 },
   WD: { warm: 1.00, cold: 1.00 },
   BD: { warm: 1.00, cold: 1.00 },
 };
