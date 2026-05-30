@@ -19,7 +19,7 @@ import { bigMiddleOrder, sumOf } from '../layout/row';
 import { snapPxParity } from '../geom/snap';
 import { pickDiscPool } from '../geom/hit';
 import { disposePool } from './dispose';
-import type { DiagramPick, StarLightSource } from '../types';
+import type { DiagramHit, DiagramPick, StarLightSource } from '../types';
 
 // Tune a galaxy-view class color for the system view. Lifts the minor
 // channels toward white by an amount proportional to color saturation
@@ -226,13 +226,18 @@ export class StarsRowLayer {
     }
   }
 
-  pickAt(x: number, y: number): DiagramPick | null {
+  pickAt(x: number, y: number): DiagramHit | null {
     return pickDiscPool(
       x, y, this.starDiscs.length,
       i => this.starDiscs[i].mesh.position.x,
       i => this.starDiscs[i].mesh.position.y,
       i => this.starDiscs[i].currentDiam / 2,
-      i => ({ kind: 'star', starIdx: this.starMembers[i] }),
+      // Stars sit at z 0 (their own row, above the dome bands), so they
+      // lose every band tie to a body — matching their last-place spot
+      // in the coordinator's priority list. Flat z across the pool, so
+      // the in-pool resolve is a no-op tiebreak (earliest slot wins).
+      i => this.starDiscs[i].mesh.position.z,
+      i => ({ pick: { kind: 'star', starIdx: this.starMembers[i] }, z: this.starDiscs[i].mesh.position.z }),
     );
   }
 

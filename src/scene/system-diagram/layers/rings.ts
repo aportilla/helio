@@ -27,7 +27,7 @@ import { hitsRing, ringEllipseParams } from '../geom/ring';
 import { bandZ } from '../geom/snap';
 import { disableCulling } from '../geom/cull';
 import { disposePool } from './dispose';
-import type { DiagramPick, PlanetCenterIndex } from '../types';
+import type { DiagramHit, DiagramPick, PlanetCenterIndex } from '../types';
 
 interface Ring {
   bodyIdx: number;
@@ -76,15 +76,17 @@ export class RingsLayer {
     }
   }
 
-  pickFront(x: number, y: number, centers: PlanetCenterIndex): DiagramPick | null {
+  pickFront(x: number, y: number, centers: PlanetCenterIndex): DiagramHit | null {
     return this.pick(x, y, centers, 'front');
   }
 
-  pickBack(x: number, y: number, centers: PlanetCenterIndex): DiagramPick | null {
+  pickBack(x: number, y: number, centers: PlanetCenterIndex): DiagramHit | null {
     return this.pick(x, y, centers, 'back');
   }
 
-  private pick(x: number, y: number, centers: PlanetCenterIndex, half: 'back' | 'front'): DiagramPick | null {
+  private pick(x: number, y: number, centers: PlanetCenterIndex, half: 'back' | 'front'): DiagramHit | null {
+    const layerZ = half === 'front' ? Z_FRONT_RING : Z_BACK_RING;
+    let best: DiagramHit | null = null;
     for (const ring of this.rings) {
       const c = centers.get(ring.hostBodyIdx);
       if (!c) continue;
@@ -93,9 +95,14 @@ export class RingsLayer {
         outerR: ring.outerR, innerR: ring.innerR, tiltRad: ring.tiltRad,
         innerRho2: ring.innerRho2,
       }, half);
-      if (hit) return { kind: 'ring', bodyIdx: ring.bodyIdx };
+      // Same band z layout() wrote into this half's mesh.position.z;
+      // keep the topmost when two planets' rings overlap.
+      if (hit) {
+        const z = bandZ(c.rowIdx, layerZ);
+        if (best === null || z > best.z) best = { pick: { kind: 'ring', bodyIdx: ring.bodyIdx }, z };
+      }
     }
-    return null;
+    return best;
   }
 
   setHovered(pick: DiagramPick, value: 0 | 1): void {

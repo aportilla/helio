@@ -10,6 +10,17 @@ export type DiagramPick =
   | { readonly kind: 'star'; readonly starIdx: number }
   | { readonly kind: 'planet' | 'moon' | 'belt' | 'ring'; readonly bodyIdx: number };
 
+// A pick paired with the world-z it was rendered at (bandZ — see
+// geom/snap.ts). The diagram's depth test resolves overlaps by largest
+// world z, so the picker carries z out of each layer and returns the
+// topmost hit, keeping cursor and eye in agreement across row bands.
+// Internal to the pick pass — SystemDiagram.pickAt unwraps it to a
+// bare DiagramPick for consumers.
+export interface DiagramHit {
+  readonly pick: DiagramPick;
+  readonly z: number;
+}
+
 export function picksEqual(a: DiagramPick | null, b: DiagramPick | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;

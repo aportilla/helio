@@ -24,7 +24,7 @@ import { hash32, mulberry32 } from '../geom/prng';
 import { bandZ, snapPx } from '../geom/snap';
 import { pickDiscPool } from '../geom/hit';
 import { disableCulling } from '../geom/cull';
-import type { DiagramPick, PlanetCenterIndex, StarLightSource } from '../types';
+import type { DiagramHit, DiagramPick, PlanetCenterIndex, StarLightSource } from '../types';
 
 interface MoonSlot {
   // bodyIdx of this moon's parent planet. Layout looks the parent's
@@ -96,11 +96,11 @@ export class MoonsLayer {
     writePoolPositions(this.frontPool, centers, Z_FRONT_MOON);
   }
 
-  pickFront(x: number, y: number): DiagramPick | null {
+  pickFront(x: number, y: number): DiagramHit | null {
     return pickFromPool(this.frontPool, x, y);
   }
 
-  pickBack(x: number, y: number): DiagramPick | null {
+  pickBack(x: number, y: number): DiagramHit | null {
     return pickFromPool(this.backPool, x, y);
   }
 
@@ -134,7 +134,7 @@ export class MoonsLayer {
   }
 }
 
-function pickFromPool(pool: MoonPool | null, x: number, y: number): DiagramPick | null {
+function pickFromPool(pool: MoonPool | null, x: number, y: number): DiagramHit | null {
   if (!pool) return null;
   const pos = pool.geometry.attributes.position.array as Float32Array;
   return pickDiscPool(
@@ -142,7 +142,12 @@ function pickFromPool(pool: MoonPool | null, x: number, y: number): DiagramPick 
     i => pos[i * 3 + 0],
     i => pos[i * 3 + 1],
     i => pool.slots[i].discPx / 2,
-    i => ({ kind: 'moon', bodyIdx: pool.slots[i].bodyIdx }),
+    // z is the bandZ writePoolPositions wrote into the moon vertex (its
+    // parent's row band + the back/front sub-offset). One front/back pool
+    // mixes moons from every parent, so this resolves the topmost when
+    // moons of different planets overlap.
+    i => pos[i * 3 + 2],
+    i => ({ pick: { kind: 'moon', bodyIdx: pool.slots[i].bodyIdx }, z: pos[i * 3 + 2] }),
   );
 }
 

@@ -17,7 +17,7 @@ import { hash32, mulberry32 } from '../geom/prng';
 import { bandZ, snapPx } from '../geom/snap';
 import { writeLightUniforms } from '../lighting';
 import { disposePool } from './dispose';
-import type { DiagramPick, StarLightSource } from '../types';
+import type { DiagramHit, DiagramPick, StarLightSource } from '../types';
 
 // One belt's footprint inside the shared chunk pool — vertex range +
 // the vertical extent used by the picker's bounding-box test.
@@ -117,14 +117,17 @@ export class BeltsLayer {
   // Bbox test against each belt slot's laid-out center (written by
   // layout()), so the picker needs no rowSlots — same shape as the
   // moon/planet pickers.
-  pickAt(x: number, y: number): DiagramPick | null {
+  pickAt(x: number, y: number): DiagramHit | null {
     if (!this.pool) return null;
+    let best: DiagramHit | null = null;
     for (const slot of this.pool.slots) {
       if (Math.abs(x - slot.cx) <= slot.halfW && Math.abs(y - slot.cy) <= slot.halfH) {
-        return { kind: 'belt', bodyIdx: slot.bodyIdx };
+        // Same band z the chunk vertices carry (slot.rowIdx · Z_STRIDE).
+        const z = bandZ(slot.rowIdx, Z_BELT);
+        if (best === null || z > best.z) best = { pick: { kind: 'belt', bodyIdx: slot.bodyIdx }, z };
       }
     }
-    return null;
+    return best;
   }
 
   setHovered(pick: DiagramPick, value: 0 | 1): void {

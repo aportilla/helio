@@ -19,7 +19,7 @@ import { PlanetsLayer } from './layers/planets';
 import { RingsLayer } from './layers/rings';
 import { StarsRowLayer } from './layers/stars-row';
 import { buildRowSlots, layoutRow, type RowSlot } from './layout/row';
-import { type DiagramPick, picksEqual } from './types';
+import { type DiagramHit, type DiagramPick, picksEqual } from './types';
 
 export type { DiagramPick } from './types';
 
@@ -83,22 +83,38 @@ export class SystemDiagram {
     this.belts.setLightSources(lights);
   }
 
-  // Hit-test the rendered discs at (x, y) in buffer-pixel coords. Walk
-  // layers in render-order priority (later-rendered wins, so the eye
-  // and the cursor agree): front moons → front rings → planets →
-  // back rings → belts → back moons → stars. The first matching slot
-  // wins, with no smaller-radius tiebreaker (so a moon overlapping its
-  // parent's rim always wins because the moon pool draws after the
-  // planet pool).
+  // Hit-test the rendered discs at (x, y) in buffer-pixel coords and
+  // return the topmost body — the one the depth test would have left
+  // visible at that pixel, so the cursor and the eye always agree.
+  //
+  // Each row item (planet/belt + its moons/rings) draws in its own z
+  // band (rowIdx · Z_STRIDE, see geom/snap.ts:bandZ), so a body in a
+  // higher band fully occludes a lower band's whole stack regardless of
+  // sublayer. A flat layer-priority walk gets this wrong across bands —
+  // e.g. a left planet's front moon would out-rank a right planet's
+  // disc even though the disc renders on top. So we collect every hit
+  // with the world z it was drawn at and keep the largest z (the
+  // depth-test winner). The query order below is the tiebreaker for the
+  // equal-z case (one row item's own stack: front moon → front ring →
+  // disc → back ring → belt → back moon → star), mirroring the
+  // back-to-front render order within a band.
   pickAt(x: number, y: number): DiagramPick | null {
     const centers = this.planets.getCenterIndex();
-    return this.moons.pickFront(x, y)
-        ?? this.rings.pickFront(x, y, centers)
-        ?? this.planets.pickAt(x, y)
-        ?? this.rings.pickBack(x, y, centers)
-        ?? this.belts.pickAt(x, y)
-        ?? this.moons.pickBack(x, y)
-        ?? this.stars.pickAt(x, y);
+    const hits: (DiagramHit | null)[] = [
+      this.moons.pickFront(x, y),
+      this.rings.pickFront(x, y, centers),
+      this.planets.pickAt(x, y),
+      this.rings.pickBack(x, y, centers),
+      this.belts.pickAt(x, y),
+      this.moons.pickBack(x, y),
+      this.stars.pickAt(x, y),
+    ];
+    let best: DiagramHit | null = null;
+    // Strict `>` keeps the earlier (higher-priority) hit on a z tie.
+    for (const hit of hits) {
+      if (hit && (best === null || hit.z > best.z)) best = hit;
+    }
+    return best?.pick ?? null;
   }
 
   // Stamp the 1-px outline onto the picked disc, clearing the previous

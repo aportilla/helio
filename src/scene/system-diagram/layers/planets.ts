@@ -17,7 +17,7 @@ import { RENDER_ORDER_PLANET, RENDER_ORDER_PLANET_HALO, Z_PLANET } from '../layo
 import type { RowSlot } from '../layout/row';
 import { bandZ } from '../geom/snap';
 import { writeLightUniforms } from '../lighting';
-import type { DiagramPick, PlanetCenterIndex, StarLightSource } from '../types';
+import type { DiagramHit, DiagramPick, PlanetCenterIndex, StarLightSource } from '../types';
 
 export class PlanetsLayer {
   // planetIndices[i] = bodyIdx of the i-th planet in row order.
@@ -125,7 +125,7 @@ export class PlanetsLayer {
     writeLightUniforms(this.haloMaterial, lights);
   }
 
-  pickAt(x: number, y: number): DiagramPick | null {
+  pickAt(x: number, y: number): DiagramHit | null {
     if (!this.geometry) return null;
     const pos = this.geometry.attributes.position.array as Float32Array;
     return pickDiscPool(
@@ -133,7 +133,10 @@ export class PlanetsLayer {
       i => pos[i * 3 + 0],
       i => pos[i * 3 + 1],
       i => this.planetDiscPx[i] / 2,
-      i => ({ kind: 'planet', bodyIdx: this.planetIndices[i] }),
+      // z is the bandZ layout() wrote into the disc vertex — drives both
+      // the in-pool topmost pick and the coordinator's cross-pool resolve.
+      i => pos[i * 3 + 2],
+      i => ({ pick: { kind: 'planet', bodyIdx: this.planetIndices[i] }, z: pos[i * 3 + 2] }),
     );
   }
 
