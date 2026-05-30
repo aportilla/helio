@@ -236,6 +236,16 @@ export const RING_WIDTH_VIZ_SCALE = 0.5;
 // realistic planet sizes; bumping past 32 is wasted geometry.
 export const RING_SEGMENTS = 24;
 
+// Opacity of the ring's solid translucent floor — the disc that sits
+// UNDER the dithered ringlet structure (see makeRingMaterial). The
+// icy↔dusty scalar (bodyIcyness) lerps between them: an icy Saturn-class
+// ring rides a near-solid floor, a dusty Uranus/Neptune-class ring rides
+// a faint one so the background reads through. The dither layers brighter,
+// more-opaque ringlets ON TOP of this floor; the floor is what stops the
+// stipple from reading as scattered noise at low coverage.
+export const RING_FLOOR_ALPHA_ICY   = 0.62;
+export const RING_FLOOR_ALPHA_DUSTY = 0.30;
+
 // Fallback ring extent (in host-planet radii) when the body carries no
 // innerPlanetRadii / outerPlanetRadii — a generic Saturn-ish band so a
 // ring still renders rather than collapsing to zero width.

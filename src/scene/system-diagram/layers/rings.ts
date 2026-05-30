@@ -14,16 +14,17 @@ import { BODIES, type Body } from '../../../data/stars';
 import {
   beltRingColor,
   bodyIcyness,
-  RING_ALPHA_DUSTY, RING_ALPHA_ICY,
 } from '../color-science';
 import { makeRingMaterial } from '../../materials';
 import {
   RENDER_ORDER_BACK_RING, RENDER_ORDER_FRONT_RING,
+  RING_FLOOR_ALPHA_DUSTY, RING_FLOOR_ALPHA_ICY,
   RING_MINOR_OVER_MAJOR, RING_SEGMENTS,
   Z_BACK_RING, Z_FRONT_RING,
 } from '../layout/constants';
 import type { RowSlot } from '../layout/row';
 import { hitsRing, ringEllipseParams } from '../geom/ring';
+import { hash32, mulberry32 } from '../geom/prng';
 import { bandZ } from '../geom/snap';
 import { disableCulling } from '../geom/cull';
 import { disposePool } from './dispose';
@@ -126,8 +127,15 @@ function buildRing(ring: Body, hostPlanet: Body, ringBodyIdx: number, hostBodyId
   const { innerR, outerR, tiltRad } = ringEllipseParams(ring, hostPlanet, hostDiscPx);
   const t = bodyIcyness(ring);
   const color = beltRingColor(t);
-  const alpha = RING_ALPHA_DUSTY + (RING_ALPHA_ICY - RING_ALPHA_DUSTY) * t;
-  const material = makeRingMaterial(color, alpha);
+  // Icy↔dusty drives the solid floor's opacity; dusty rings ride a faint
+  // floor so the background reads through. The dither layers ringlets on
+  // top of this floor.
+  const floorAlpha = RING_FLOOR_ALPHA_DUSTY + (RING_FLOOR_ALPHA_ICY - RING_FLOOR_ALPHA_DUSTY) * t;
+  // Per-ring seed off the body id (same convention as bodyVisualTiltRad)
+  // so each ring's band frequencies / phases / gap position are stable
+  // across builds yet don't comb-align between planets.
+  const seed = mulberry32(hash32(`ring-density:${ring.id}`))();
+  const material = makeRingMaterial(color, floorAlpha, seed);
   const backGeometry  = buildHalfAnnulusGeometry(innerR, outerR, tiltRad, /*upperHalf=*/ true);
   const frontGeometry = buildHalfAnnulusGeometry(innerR, outerR, tiltRad, /*upperHalf=*/ false);
   const backMesh  = new Mesh(backGeometry,  material);
@@ -151,11 +159,20 @@ function buildRing(ring: Body, hostPlanet: Body, ringBodyIdx: number, hostBodyId
 // runs from angle 0 to π (upperHalf=true) or π to 2π (upperHalf=false)
 // in the ring's local frame, then rotates by tiltRad so the visible
 // silhouette matches the picker's hit-test math.
+//
+// Beyond position, each vertex carries `aRho` (0 on the inner edge, 1 on
+// the outer edge — the strip interpolates it to a smooth radial
+// coordinate per fragment) and `aAngle` (the parametric angle normalized
+// over the FULL ellipse, so the two halves share one continuous phase
+// where they meet). makeRingMaterial reads both to drive the radial
+// density profile + faint azimuthal break-up.
 function buildHalfAnnulusGeometry(innerR: number, outerR: number, tiltRad: number, upperHalf: boolean): BufferGeometry {
   const N = RING_SEGMENTS;
   const start = upperHalf ? 0 : Math.PI;
   const end   = start + Math.PI;
   const positions = new Float32Array((N + 1) * 2 * 3);
+  const rho      = new Float32Array((N + 1) * 2);
+  const angle    = new Float32Array((N + 1) * 2);
   const indices: number[] = [];
   const cosT = Math.cos(tiltRad);
   const sinT = Math.sin(tiltRad);
@@ -176,6 +193,11 @@ function buildHalfAnnulusGeometry(innerR: number, outerR: number, tiltRad: numbe
     const oyR = ox * sinT + oy * cosT;
     positions[i * 6 + 0] = ixR; positions[i * 6 + 1] = iyR; positions[i * 6 + 2] = 0;
     positions[i * 6 + 3] = oxR; positions[i * 6 + 4] = oyR; positions[i * 6 + 5] = 0;
+    // Inner vertex → rho 0, outer vertex → rho 1. Angle normalized by the
+    // full circle so upper (0..π) and lower (π..2π) halves stay in phase.
+    const a = t / (2 * Math.PI);
+    rho[i * 2 + 0] = 0; angle[i * 2 + 0] = a;
+    rho[i * 2 + 1] = 1; angle[i * 2 + 1] = a;
     if (i < N) {
       const v0 = i * 2, v1 = i * 2 + 1, v2 = (i + 1) * 2, v3 = (i + 1) * 2 + 1;
       indices.push(v0, v1, v2);
@@ -184,6 +206,8 @@ function buildHalfAnnulusGeometry(innerR: number, outerR: number, tiltRad: numbe
   }
   const geometry = new BufferGeometry();
   geometry.setAttribute('position', new BufferAttribute(positions, 3));
+  geometry.setAttribute('aRho', new BufferAttribute(rho, 1));
+  geometry.setAttribute('aAngle', new BufferAttribute(angle, 1));
   geometry.setIndex(indices);
   return geometry;
 }

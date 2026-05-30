@@ -195,8 +195,6 @@ export function biomePaintFor(body: Body): { color: Color; coverage: number } | 
 // belts and rings consume the blend through that helper, not the raw colors.
 const BELT_RING_COLOR_ICY   = new Color(0xb8d8e8);  // pale cyan (Saturn/KBO ice)
 const BELT_RING_COLOR_ROCKY = new Color(0xa89060);  // brown-tan (Main Belt rocky)
-export const RING_ALPHA_ICY   = 1.0;
-export const RING_ALPHA_DUSTY = 0.55;
 
 // Map a body's resource grid to a 0..1 icyness scalar. Volatiles drive
 // the bright icy end; metals + silicates + rare earths drive the rocky

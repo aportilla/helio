@@ -6,7 +6,7 @@
 // ./chunks.
 
 import { AdditiveBlending, Color, ShaderMaterial, Vector2 } from 'three';
-import { MAX_LIGHTS, BAYER4_GLSL, HUEDIR_GLSL, STAR_CRESCENT_LIGHTING_GLSL } from './chunks';
+import { MAX_LIGHTS, BAYER4_GLSL, HASH_GLSL, HUEDIR_GLSL, STAR_CRESCENT_LIGHTING_GLSL } from './chunks';
 
 // Blob material — flat-color triangle-mesh fill for irregular polygon
 // chunks (belt + debris-ring debris). Geometry is indexed triangles
@@ -141,52 +141,153 @@ export function makeBlobMaterial(): ShaderMaterial {
   });
 }
 
-// Solid-fill mesh material for planetary rings — used by the
-// triangle-strip annulus halves in SystemDiagram. Flat color, no
-// shading, no AA. The caller provides geometry whose vertex positions
-// live in the host planet's local frame (origin at planet center,
-// env-pixel units); the mesh is positioned at the planet's cx/cy.
+// Ring material for planetary rings — a solid translucent floor disc with
+// a dithered ringlet structure layered on top, used by the triangle-strip
+// annulus halves in SystemDiagram. The floor gives the ring its body
+// (a smooth translucent band); the Bayer-stippled overlay paints brighter,
+// more-opaque ringlets — broad + fine bands, one Cassini-like gap, faint
+// azimuthal break-up — so the structure reads as ring detail rather than
+// scattered noise. No AA, no smooth radial gradient: the only soft term is
+// the per-pixel alpha of the floor, everything structural is stippled.
 //
-// The caller pre-lerps `color` from the icy/dusty palette endpoints
-// based on the ring's resource mix (see bodyIcyness in color-science.ts).
-// `alpha` is similarly lerped — icy rings paint opaque (Saturn-class
-// bright band) while dusty rings paint translucent (Uranus/Neptune-
-// class faint dust). When alpha < 1 the material flips to transparent
-// so the alpha lane of the fragment actually blends.
+// The caller provides geometry carrying `aRho` (0 inner edge → 1 outer
+// edge) and `aAngle` (0..1 around the full ellipse), with positions in the
+// host planet's local frame. `color` is pre-lerped from the icy/dusty
+// palette endpoints by the ring's resource mix (see bodyIcyness in
+// color-science.ts). `floorAlpha` is the lerped icy↔dusty opacity of the
+// solid floor (RING_FLOOR_ALPHA_*): icy rings ride a near-solid floor,
+// dusty rings a faint one. `seed` is a per-ring [0,1) hash that jitters
+// band frequencies / phases / gap position so two rings never comb-align.
 //
-// Per-mesh uHovered uniform (0 / 1) inverts the entire fill to white
-// on hover. No per-vertex outline math because the geometry is a
-// continuous arc rather than a sprite — a 1-px rim would need a
-// second pass.
-export function makeRingMaterial(color: Color, alpha: number): ShaderMaterial {
+// Per-mesh uHovered uniform (0 / 1) fills the entire annulus solid white
+// on hover — matches the blob/disc hover convention.
+export function makeRingMaterial(color: Color, floorAlpha: number, seed: number): ShaderMaterial {
   return new ShaderMaterial({
     uniforms: {
-      uColor:   { value: new Color().copy(color) },
-      uAlpha:   { value: alpha },
-      uHovered: { value: 0 },
+      uColor:      { value: new Color().copy(color) },
+      uFloorAlpha: { value: floorAlpha },
+      uSeed:       { value: seed },
+      uHovered:    { value: 0 },
     },
     vertexShader: `
+      attribute float aRho;
+      attribute float aAngle;
+      varying float vRho;
+      varying float vAngle;
       void main() {
+        vRho   = aRho;
+        vAngle = aAngle;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }
     `,
     fragmentShader: `
-      uniform vec3 uColor;
-      uniform float uAlpha;
+      uniform vec3  uColor;
+      uniform float uFloorAlpha;
+      uniform float uSeed;
       uniform float uHovered;
+      varying float vRho;
+      varying float vAngle;
+
+      ${BAYER4_GLSL}
+      ${HASH_GLSL}
+
+      // Ringlet frequencies (radians of phase swept across the radial
+      // span). F1 is the broad-band set (~3-5 ringlets at the band's
+      // pixel scale); F2 overlays a finer ripple. Ranges keep the
+      // structure reading as banding rather than a high-frequency buzz.
+      const float F1_MIN = 9.0;
+      const float F1_MAX = 16.0;
+      const float F2_MIN = 22.0;
+      const float F2_MAX = 34.0;
+
+      // One Cassini-like division: a hard notch centered in the mid-band
+      // (kept off the edges so it reads as an internal gap, not an edge
+      // erosion). It cuts the floor AND the ringlet overlay to nothing.
+      // HALF_WIDTH is its radial half-extent in rho.
+      const float GAP_POS_MIN    = 0.35;
+      const float GAP_POS_MAX    = 0.62;
+      const float GAP_HALF_WIDTH = 0.05;
+
+      // Faint per-arc variation so the ring isn't a perfect radially-
+      // symmetric stencil. Bucketed into AZIMUTH_CELLS sectors and kept
+      // low-amplitude — concentric rings ARE near-symmetric, so this is
+      // just enough to break the stencil look.
+      const float AZIMUTH_CELLS   = 7.0;
+      const float AZIMUTH_BREAKUP = 0.18;
+
+      // Extra opacity a lit (stipple-plotted) ringlet pixel adds on top of
+      // the floor — dense bands push toward near-opaque.
+      const float BAND_ALPHA = 0.42;
+
+      // Tone (not hue) tracks structure: floor pixels paint dim, lit
+      // ringlet pixels paint slightly hot. Gentle spread around 1.0 keeps
+      // the resource hue dominant — contrast, not recoloring.
+      const float FLOOR_DIM   = 0.72;
+      const float BAND_BRIGHT = 1.12;
+
+      // Per-band brightness jitter: the broad ringlets are quantized into
+      // discrete bands and each is hashed to its own multiplier, so some
+      // ringlets render lighter than their neighbors instead of every band
+      // sharing one tone (Saturn's bright B-ring vs dimmer A-ring read).
+      // Applied to brightness, with a mild coupling into opacity so a
+      // lighter band also sits a touch more solid.
+      const float BAND_JITTER_MIN = 0.78;
+      const float BAND_JITTER_MAX = 1.38;
+
       void main() {
-        vec3 col = uHovered > 0.5 ? vec3(1.0) : uColor;
-        float a  = uHovered > 0.5 ? 1.0 : uAlpha;
+        // Hover wins early — solid white over the whole annulus.
+        if (uHovered > 0.5) { gl_FragColor = vec4(1.0); return; }
+
+        float rho = vRho;
+
+        // Seed-derived band parameters — stable per ring, varied across
+        // rings.
+        float f1  = mix(F1_MIN, F1_MAX, hash11(uSeed + 1.0));
+        float f2  = mix(F2_MIN, F2_MAX, hash11(uSeed + 2.0));
+        float p1  = hash11(uSeed + 3.0) * 6.2831853;
+        float p2  = hash11(uSeed + 4.0) * 6.2831853;
+        float gap = mix(GAP_POS_MIN, GAP_POS_MAX, hash11(uSeed + 5.0));
+
+        // 0 at the gap center, ramping to 1 at GAP_HALF_WIDTH away — cuts
+        // both floor and ringlets so the division reads as empty space.
+        float gapMask = smoothstep(0.0, GAP_HALF_WIDTH, abs(rho - gap));
+
+        // Ringlet density profile in [0,1] (broad × fine bands, broken up
+        // azimuthally). Drives the dither threshold for the overlay only;
+        // the floor is uniform.
+        float ringlets = (0.65 + 0.35 * sin(rho * f1 + p1))
+                       * (0.80 + 0.20 * sin(rho * f2 + p2));
+        ringlets *= 1.0 - AZIMUTH_BREAKUP * hash11(floor(vAngle * AZIMUTH_CELLS) + uSeed);
+        ringlets = clamp(ringlets, 0.0, 1.0);
+
+        // Stipple gate for the overlay: a ringlet pixel lights when its
+        // density beats the Bayer threshold. Suppressed inside the gap.
+        float lit = step(bayer4(gl_FragCoord.xy), ringlets) * step(0.5, gapMask);
+
+        // Quantize the broad ringlet phase into discrete bands (one id per
+        // sine cycle), hash each to a brightness multiplier.
+        float bandId = floor((rho * f1 + p1) / 6.2831853);
+        float bandJitter = mix(BAND_JITTER_MIN, BAND_JITTER_MAX, hash11(bandId * 1.37 + uSeed * 7.0));
+
+        // Solid floor (cut by the gap) + dithered ringlet opacity (a lighter
+        // band rides a touch more opaque via the half-strength coupling).
+        float a = uFloorAlpha * gapMask + lit * BAND_ALPHA * mix(1.0, bandJitter, 0.5);
+        a = clamp(a, 0.0, 1.0);
+        if (a < 0.02) discard;   // genuinely empty in the gap — no depth write
+
+        vec3 col = uColor * mix(FLOOR_DIM, BAND_BRIGHT * bandJitter, lit);
         gl_FragColor = vec4(col, a);
       }
     `,
-    transparent: alpha < 1,
-    // depthWrite stays on even when translucent. The diagram threads
-    // a per-row-item z so each planet's stack (back-ring / disc /
-    // front-ring / moons) reads as one occluding band against its
-    // neighbors; without depthWrite the back half wouldn't block a
-    // left-neighbor planet from painting over it at the planets pass
-    // (renderOrder primary, z secondary).
+    // Translucent floor blends over the background; the dithered overlay
+    // rides on top. Fragments in the gap discard, so the division reads
+    // as true empty space.
+    transparent: true,
+    // The diagram threads a per-row-item z so each planet's stack
+    // (back-ring / disc / front-ring / moons) reads as one occluding band
+    // against its neighbors; without depthWrite the back half wouldn't
+    // block a left-neighbor planet from painting over it at the planets
+    // pass (renderOrder primary, z secondary).
     depthWrite: true,
   });
 }
