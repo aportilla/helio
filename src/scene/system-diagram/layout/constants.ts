@@ -62,7 +62,7 @@ export const SYSTEM_VIEW_SATURATION_LIFT_MAX  = 0.35;
 // middle planet sits). Fixed — the top of the arc stays at a constant
 // gap below the stars regardless of viewport size; only the dome's
 // edges move (see DOME_PEAK_*_PX below).
-export const PLANET_PEAK_FROM_TOP = 120;
+export const PLANET_PEAK_FROM_TOP = 100;
 
 // Dome height — vertical drop from the peak to the edges. Scales with
 // viewport area so bigger screens get a more pronounced arc; the edges
