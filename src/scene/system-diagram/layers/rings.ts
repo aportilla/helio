@@ -8,8 +8,8 @@
 // Saturn-class palette (and a more opaque floor), rocky-dominant rings
 // toward the dark Uranus/Neptune-class palette (and a fainter floor). The
 // same data drives mining yields, so visual character and gameplay
-// attribute can't disagree. The dithered ringlet structure on top of that
-// floor lives in makeRingMaterial, seeded per ring off the body id.
+// attribute can't disagree. The concentric-ringline structure on top of
+// that floor lives in makeRingMaterial, seeded per ring off the body id.
 //
 // layout() also resolves each ring's planet-shadow inputs: it picks the
 // dominant star from the published lights and writes the screen-space
@@ -175,15 +175,18 @@ function buildRing(ring: Body, hostPlanet: Body, ringBodyIdx: number, hostBodyId
   const { innerR, outerR, tiltRad } = ringEllipseParams(ring, hostPlanet, hostDiscPx);
   const t = bodyIcyness(ring);
   const color = beltRingColor(t);
-  // Icy↔dusty drives the solid floor's opacity; dusty rings ride a faint
-  // floor so the background reads through. The dither layers ringlets on
-  // top of this floor.
+  // Icy↔dusty drives the floor opacity; dusty rings ride a faint floor so
+  // the background reads through. The concentric lines modulate their
+  // opacity around this floor — denser lines more solid, sparser fainter.
   const floorAlpha = RING_FLOOR_ALPHA_DUSTY + (RING_FLOOR_ALPHA_ICY - RING_FLOOR_ALPHA_DUSTY) * t;
   // Per-ring seed off the body id (same convention as bodyVisualTiltRad)
   // so each ring's band frequencies / phases / gap position are stable
   // across builds yet don't comb-align between planets.
   const seed = mulberry32(hash32(`ring-density:${ring.id}`))();
-  const material = makeRingMaterial(color, floorAlpha, seed);
+  // One concentric line per pixel of radial width (major axis), floored at
+  // a handful so the thinnest rings still read as a few lines.
+  const ringCount = Math.max(4, Math.round(outerR - innerR));
+  const material = makeRingMaterial(color, floorAlpha, seed, ringCount);
   // Constant per-ring shadow inputs (the rest — center, light dir — are
   // written each layout). Both normalized into outerR units, matching the
   // shader's frame.

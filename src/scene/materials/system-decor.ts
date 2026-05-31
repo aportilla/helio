@@ -1,6 +1,6 @@
-// System-view decor materials: chunk-pool fill (belts), the dithered-
-// density ring annulus (translucent floor + stippled ringlet overlay +
-// planet shadow), per-mesh star disc, outer star halo. All render under an
+// System-view decor materials: chunk-pool fill (belts), the concentric-
+// ringline annulus (translucent floor + discrete shaded lines + planet
+// shadow), per-mesh star disc, outer star halo. All render under an
 // OrthographicCamera at 1 unit = 1 buffer pixel. The big planet/moon disc
 // material lives in ./planet; shared Bayer dither, hue-direction
 // saturation, and star-crescent lighting GLSL come from ./chunks.
@@ -141,23 +141,24 @@ export function makeBlobMaterial(): ShaderMaterial {
   });
 }
 
-// Ring material for planetary rings — a solid translucent floor disc with
-// a dithered ringlet structure layered on top, used by the triangle-strip
-// annulus halves in SystemDiagram. The floor gives the ring its body
-// (a smooth translucent band); the Bayer-stippled overlay paints brighter,
-// more-opaque ringlets — broad + fine bands, one Cassini-like gap, faint
-// azimuthal break-up — so the structure reads as ring detail rather than
-// scattered noise. No AA, no smooth radial gradient: the only soft term is
-// the per-pixel alpha of the floor, everything structural is stippled.
+// Ring material for planetary rings — a stack of discrete concentric
+// ringlines around a translucent floor, used by the triangle-strip annulus
+// halves in SystemDiagram. The radial span is quantized into uRingCount
+// 1px-wide bands; each band shades independently off a smooth density
+// envelope (broad + fine) times a per-line hash, so the disc reads as many
+// fine concentric lines of varying density — Saturn's bright B-ring vs
+// dimmer A-ring — with one Cassini-like gap. No dither, no AA, no radial
+// gradient across a line: each line is one crisp constant tone.
 //
 // The caller provides geometry carrying `aRho` (0 inner edge → 1 outer
 // edge) and `aAngle` (0..1 around the full ellipse), with positions in the
 // host planet's local frame. `color` is pre-lerped from the icy/dusty
 // palette endpoints by the ring's resource mix (see bodyIcyness in
-// color-science.ts). `floorAlpha` is the lerped icy↔dusty opacity of the
-// solid floor (RING_FLOOR_ALPHA_*): icy rings ride a near-solid floor,
-// dusty rings a faint one. `seed` is a per-ring [0,1) hash that jitters
-// band frequencies / phases / gap position so two rings never comb-align.
+// color-science.ts). `floorAlpha` is the lerped icy↔dusty floor opacity
+// (RING_FLOOR_ALPHA_*) the lines modulate around: icy rings ride a near-
+// solid floor, dusty rings a faint one. `seed` is a per-ring [0,1) hash
+// that jitters envelope frequencies / phases / gap position so two rings
+// never comb-align. `ringCount` is the line count across the radial span.
 //
 // The shadow block (gated by uHasShadow) casts the host planet's shadow
 // onto the ring: it reconstructs a faked-3D fragment position (screen x,y
@@ -168,12 +169,16 @@ export function makeBlobMaterial(): ShaderMaterial {
 //
 // Per-mesh uHovered uniform (0 / 1) fills the entire annulus solid white
 // on hover — matches the blob/disc hover convention.
-export function makeRingMaterial(color: Color, floorAlpha: number, seed: number): ShaderMaterial {
+export function makeRingMaterial(color: Color, floorAlpha: number, seed: number, ringCount: number): ShaderMaterial {
   return new ShaderMaterial({
     uniforms: {
       uColor:      { value: new Color().copy(color) },
       uFloorAlpha: { value: floorAlpha },
       uSeed:       { value: seed },
+      // Number of discrete concentric ringlines across the radial span —
+      // set to the band's pixel width so each line is ~1px on the major
+      // axis. Drives the radial quantization in the fragment shader.
+      uRingCount:  { value: ringCount },
       uHovered:    { value: 0 },
       // Planet-shadow inputs, written per layout by RingsLayer (see
       // setLightSources / layout). uCenter is the host planet's screen-px
@@ -204,6 +209,7 @@ export function makeRingMaterial(color: Color, floorAlpha: number, seed: number)
       uniform vec3  uColor;
       uniform float uFloorAlpha;
       uniform float uSeed;
+      uniform float uRingCount;
       uniform float uHovered;
       uniform vec2  uCenter;
       uniform float uInvOuterR;
@@ -214,7 +220,6 @@ export function makeRingMaterial(color: Color, floorAlpha: number, seed: number)
       varying float vRho;
       varying float vAngle;
 
-      ${BAYER4_GLSL}
       ${HASH_GLSL}
 
       // Planet-shadow on the ring. The annulus is a circle viewed at an
@@ -236,10 +241,13 @@ export function makeRingMaterial(color: Color, floorAlpha: number, seed: number)
       // faintly, so the silhouette doesn't look chunk-missing.
       const float SHADOW_DARK = 0.30;
 
-      // Ringlet frequencies (radians of phase swept across the radial
-      // span). F1 is the broad-band set (~3-5 ringlets at the band's
-      // pixel scale); F2 overlays a finer ripple. Ranges keep the
-      // structure reading as banding rather than a high-frequency buzz.
+      const float TAU = 6.2831853;
+
+      // Density-envelope frequencies (radians of phase swept across the
+      // radial span). F1 is the broad grouping (a few bright/dim zones
+      // across the disc — Saturn's B-ring vs A-ring read); F2 overlays a
+      // finer ripple. The envelope sets the large-scale shade; the
+      // per-line hash below adds the line-to-line variation.
       const float F1_MIN = 9.0;
       const float F1_MAX = 16.0;
       const float F2_MIN = 22.0;
@@ -247,37 +255,29 @@ export function makeRingMaterial(color: Color, floorAlpha: number, seed: number)
 
       // One Cassini-like division: a hard notch centered in the mid-band
       // (kept off the edges so it reads as an internal gap, not an edge
-      // erosion). It cuts the floor AND the ringlet overlay to nothing.
-      // HALF_WIDTH is its radial half-extent in rho.
+      // erosion). It cuts the disc to nothing. HALF_WIDTH is its radial
+      // half-extent in rho.
       const float GAP_POS_MIN    = 0.35;
       const float GAP_POS_MAX    = 0.62;
-      const float GAP_HALF_WIDTH = 0.05;
+      const float GAP_HALF_WIDTH = 0.04;
 
-      // Faint per-arc variation so the ring isn't a perfect radially-
-      // symmetric stencil. Bucketed into AZIMUTH_CELLS sectors and kept
-      // low-amplitude — concentric rings ARE near-symmetric, so this is
-      // just enough to break the stencil look.
-      const float AZIMUTH_CELLS   = 7.0;
-      const float AZIMUTH_BREAKUP = 0.18;
+      // Per-line shade jitter: each concentric ringline hashes to its own
+      // multiplier, so neighbouring lines differ in tone — the read is a
+      // stack of fine lines of varying density, not a smooth gradient.
+      // Centered loosely around 1.0; the envelope still governs the
+      // large-scale grouping.
+      const float LINE_JITTER_MIN = 0.55;
+      const float LINE_JITTER_MAX = 1.25;
 
-      // Extra opacity a lit (stipple-plotted) ringlet pixel adds on top of
-      // the floor — dense bands push toward near-opaque.
-      const float BAND_ALPHA = 0.42;
-
-      // Tone (not hue) tracks structure: floor pixels paint dim, lit
-      // ringlet pixels paint slightly hot. Gentle spread around 1.0 keeps
-      // the resource hue dominant — contrast, not recoloring.
-      const float FLOOR_DIM   = 0.72;
-      const float BAND_BRIGHT = 1.12;
-
-      // Per-band brightness jitter: the broad ringlets are quantized into
-      // discrete bands and each is hashed to its own multiplier, so some
-      // ringlets render lighter than their neighbors instead of every band
-      // sharing one tone (Saturn's bright B-ring vs dimmer A-ring read).
-      // Applied to brightness, with a mild coupling into opacity so a
-      // lighter band also sits a touch more solid.
-      const float BAND_JITTER_MIN = 0.78;
-      const float BAND_JITTER_MAX = 1.38;
+      // A line's density maps to opacity and tone. Opacity stays high
+      // across the board (ALPHA_MIN keeps even sparse lines clearly
+      // present, so the disc never washes out to near-black) — the
+      // line-to-line read is carried mostly by the wider BRIGHTNESS
+      // spread. SHADE spread is contrast, not recoloring; the resource
+      // hue stays dominant.
+      const float ALPHA_MIN    = 0.80;
+      const float SHADE_DIM    = 0.82;
+      const float SHADE_BRIGHT = 1.45;
 
       void main() {
         // Hover wins early — solid white over the whole annulus.
@@ -285,42 +285,42 @@ export function makeRingMaterial(color: Color, floorAlpha: number, seed: number)
 
         float rho = vRho;
 
-        // Seed-derived band parameters — stable per ring, varied across
-        // rings.
+        // Seed-derived envelope parameters — stable per ring, varied
+        // across rings.
         float f1  = mix(F1_MIN, F1_MAX, hash11(uSeed + 1.0));
         float f2  = mix(F2_MIN, F2_MAX, hash11(uSeed + 2.0));
-        float p1  = hash11(uSeed + 3.0) * 6.2831853;
-        float p2  = hash11(uSeed + 4.0) * 6.2831853;
+        float p1  = hash11(uSeed + 3.0) * TAU;
+        float p2  = hash11(uSeed + 4.0) * TAU;
         float gap = mix(GAP_POS_MIN, GAP_POS_MAX, hash11(uSeed + 5.0));
 
+        // Quantize the radial span into uRingCount discrete concentric
+        // lines and sample everything at the band CENTER, so every
+        // fragment of one line shares one shade — the line stays a crisp
+        // constant-tone band (no gradient across it, no dither). With
+        // uRingCount set to the radial pixel width, each line is ~1px on
+        // the major axis; the minor-axis compression naturally crowds many
+        // lines into a pixel toward the disc's top and bottom edges.
+        float band    = floor(rho * uRingCount) + 0.5;
+        float bandRho = band / uRingCount;
+
         // 0 at the gap center, ramping to 1 at GAP_HALF_WIDTH away — cuts
-        // both floor and ringlets so the division reads as empty space.
-        float gapMask = smoothstep(0.0, GAP_HALF_WIDTH, abs(rho - gap));
+        // the disc so the division reads as empty space.
+        float gapMask = smoothstep(0.0, GAP_HALF_WIDTH, abs(bandRho - gap));
 
-        // Ringlet density profile in [0,1] (broad × fine bands, broken up
-        // azimuthally). Drives the dither threshold for the overlay only;
-        // the floor is uniform.
-        float ringlets = (0.65 + 0.35 * sin(rho * f1 + p1))
-                       * (0.80 + 0.20 * sin(rho * f2 + p2));
-        ringlets *= 1.0 - AZIMUTH_BREAKUP * hash11(floor(vAngle * AZIMUTH_CELLS) + uSeed);
-        ringlets = clamp(ringlets, 0.0, 1.0);
+        // Per-line density: a smooth envelope (broad × fine) times a
+        // per-line hash, so adjacent lines differ in tone while the
+        // envelope groups them into bright/dim zones.
+        float density = (0.6 + 0.4 * sin(bandRho * f1 + p1))
+                      * (0.78 + 0.22 * sin(bandRho * f2 + p2));
+        density *= mix(LINE_JITTER_MIN, LINE_JITTER_MAX, hash11(band * 1.37 + uSeed * 7.0));
+        density = clamp(density, 0.0, 1.0);
 
-        // Stipple gate for the overlay: a ringlet pixel lights when its
-        // density beats the Bayer threshold. Suppressed inside the gap.
-        float lit = step(bayer4(gl_FragCoord.xy), ringlets) * step(0.5, gapMask);
-
-        // Quantize the broad ringlet phase into discrete bands (one id per
-        // sine cycle), hash each to a brightness multiplier.
-        float bandId = floor((rho * f1 + p1) / 6.2831853);
-        float bandJitter = mix(BAND_JITTER_MIN, BAND_JITTER_MAX, hash11(bandId * 1.37 + uSeed * 7.0));
-
-        // Solid floor (cut by the gap) + dithered ringlet opacity (a lighter
-        // band rides a touch more opaque via the half-strength coupling).
-        float a = uFloorAlpha * gapMask + lit * BAND_ALPHA * mix(1.0, bandJitter, 0.5);
-        a = clamp(a, 0.0, 1.0);
+        // Density drives opacity and tone together: dense lines paint
+        // brighter + more opaque, sparse lines fade toward the background.
+        float a = uFloorAlpha * gapMask * mix(ALPHA_MIN, 1.0, density);
         if (a < 0.02) discard;   // genuinely empty in the gap — no depth write
 
-        vec3 col = uColor * mix(FLOOR_DIM, BAND_BRIGHT * bandJitter, lit);
+        vec3 col = uColor * mix(SHADE_DIM, SHADE_BRIGHT, density);
 
         // Planet shadow: reconstruct the fragment's faked-3D position
         // (screen x,y exact from the pixel; depth from the parametric
@@ -349,9 +349,9 @@ export function makeRingMaterial(color: Color, floorAlpha: number, seed: number)
         gl_FragColor = vec4(col, a);
       }
     `,
-    // Translucent floor blends over the background; the dithered overlay
-    // rides on top. Fragments in the gap discard, so the division reads
-    // as true empty space.
+    // Each ringline blends over the background at its own opacity.
+    // Fragments in the gap discard, so the division reads as true empty
+    // space.
     transparent: true,
     // The diagram threads a per-row-item z so each planet's stack
     // (back-ring / disc / front-ring / moons) reads as one occluding band
