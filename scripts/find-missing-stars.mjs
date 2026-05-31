@@ -124,5 +124,5 @@ if (ADD && missing.length) {
   });
   const all = [header, ...csvRows, ...newRows];
   writeFileSync(CSV_PATH, serializeCsv(all));
-  console.error(`\nappended ${newRows.length} rows to ${CSV_PATH} (name + distance only — run fill-from-stellarcatalog --needs=any to populate the rest)`);
+  console.error(`\nappended ${newRows.length} rows to ${CSV_PATH} (name + distance only — run fill-from-stellarcatalog --needs=any to populate the rest, then lint-star-csv to drop any the catalog couldn't class)`);
 }

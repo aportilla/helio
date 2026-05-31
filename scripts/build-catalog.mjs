@@ -19,7 +19,7 @@ import { hash32, mulberry32, sampleNormal } from './lib/prng.mjs';
 import { fillBodies, radiusFromMass } from './lib/procgen.mjs';
 import { generateSystem, generateMoons, generateRing, generateOverlay, starDiskContext, synthesizePartialAnchor, generateFloorBelt } from './lib/procgen-architect.mjs';
 import { MAX_PLANETS_PER_CLUSTER, CURATED_SYSTEM_HOSTS } from './lib/procgen-priors.mjs';
-import { frostLineTrio, deriveSemiMajorAu } from './lib/astrophysics.mjs';
+import { frostLineTrio, deriveSemiMajorAu, resolveSpectralClass } from './lib/astrophysics.mjs';
 import { parseCsv } from './lib/catalog-index.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -60,17 +60,6 @@ function equatorialToGalactic(raDeg, decDeg, distLy) {
     y: distLy * (M[1][0] * xe + M[1][1] * ye + M[1][2] * ze),
     z: distLy * (M[2][0] * xe + M[2][1] * ye + M[2][2] * ze),
   };
-}
-
-function normalizeSpectralClass(raw) {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  if (/^D[A-Z]/.test(trimmed)) return 'WD';
-  const m = /[OBAFGKMLTY]/.exec(trimmed);
-  if (!m) return null;
-  const c = m[0];
-  if (c === 'L' || c === 'T' || c === 'Y') return 'BD';
-  return c;
 }
 
 const CLASS_MASS_RANGE = {
@@ -184,7 +173,7 @@ function radiusToPxSize(radiusSolar) {
 // (imported above); the parseCsv*-prefixed helpers below add per-file schema.
 // =============================================================================
 
-function parseCsvCatalog(text, label) {
+function parseCsvCatalog(text, label, drops) {
   const rows = parseCsv(text);
   const header = rows.shift();
   if (!header) throw new Error(`${label}: empty CSV`);
@@ -202,12 +191,22 @@ function parseCsvCatalog(text, label) {
   const CLASS = required('spectral_class');
   const MASS = optional('mass_msun');
   const APP_MAG = optional('app_mag');
+  const ABS_MAG = optional('abs_mag');
   const IAU_NAME = optional('iau_name');
 
   const out = [];
   const num = (cell) => {
     const t = (cell ?? '').trim();
     return t ? Number(t) : NaN;
+  };
+  // Apparent magnitude as a number for class inference: reject infrared
+  // J-band readings (the M-L mass chain does the same) so a brown dwarf's IR
+  // magnitude can't masquerade as a visual one in the distance modulus.
+  const appMagNum = (cell) => {
+    const s = String(cell ?? '');
+    if (/\bJ\b/.test(s)) return NaN;
+    const m = /-?\d+(?:\.\d+)?/.exec(s.replace(/−/g, '-'));
+    return m ? Number(m[0]) : NaN;
   };
   for (const row of rows) {
     if (!row.length || (row.length === 1 && !row[0])) continue;
@@ -217,30 +216,46 @@ function parseCsvCatalog(text, label) {
     const raDeg = num(row[RA]);
     const decDeg = num(row[DEC]);
     if (![distLy, raDeg, decDeg].every(Number.isFinite)) {
-      console.warn(`${label}: skipping ${name} (incomplete RA/Dec/distance)`);
+      drops.push({ label, name, reason: 'incomplete RA/Dec/distance' });
       continue;
     }
-    const rawClass = (row[CLASS] ?? '').trim();
-    const cls = normalizeSpectralClass(rawClass);
-    if (cls === null) {
-      console.warn(`${label}: skipping ${name} (no spectral class)`);
-      continue;
-    }
-    const pos = equatorialToGalactic(raDeg, decDeg, distLy);
     const id = (row[ID] ?? '').trim();
     const massCell = MASS >= 0 ? (row[MASS] ?? '').trim() : '';
     const massRaw = massCell ? Number(massCell) : NaN;
+    const appMagCell = APP_MAG >= 0 ? (row[APP_MAG] ?? '') : '';
+    const absMagCell = ABS_MAG >= 0 ? (row[ABS_MAG] ?? '').trim() : '';
+
+    // Spectral class is the root input every later field derives from. Prefer
+    // the catalog string; when it's blank, recover the class from the row's
+    // own physics (mass, else absolute/apparent magnitude) rather than
+    // dropping the star — the same "derive what we don't know" rule the rest
+    // of the pipeline runs on. Only a row with no class and no usable
+    // mass/magnitude is truly unrecoverable.
+    const cls = resolveSpectralClass({
+      rawClass: (row[CLASS] ?? '').trim(),
+      massSun: massRaw,
+      absMag: absMagCell ? Number(absMagCell) : NaN,
+      appMag: appMagNum(appMagCell),
+      distLy,
+    });
+    if (cls === null) {
+      drops.push({ label, name, reason: 'no spectral class' });
+      continue;
+    }
+    const pos = equatorialToGalactic(raDeg, decDeg, distLy);
     let mass;
     if (Number.isFinite(massRaw)) {
       mass = massRaw;
     } else {
-      const appMagCell = APP_MAG >= 0 ? (row[APP_MAG] ?? '') : '';
       const ml = massFromMagnitude(cls, appMagCell, distLy);
       mass = ml ?? syntheticMass(cls, id);
     }
     const radiusSolar = radiusFromClassMass(cls, mass);
     const iauName = IAU_NAME >= 0 ? (row[IAU_NAME] ?? '').trim() : '';
     const ageGyr = ageFromClass(cls, id);
+    // Display string: the catalog's literal class when present, else the
+    // inferred bucket so the HUD shows the derived class rather than a blank.
+    const rawClass = (row[CLASS] ?? '').trim() || cls;
     out.push({
       id, name, iauName, ...pos, cls, rawClass, distLy, mass, radiusSolar,
       pxSize: radiusToPxSize(radiusSolar),
@@ -250,7 +265,7 @@ function parseCsvCatalog(text, label) {
   return out;
 }
 
-function loadCatalog(sources) {
+function loadCatalog(sources, drops) {
   const stars = [{
     id: 'sol',
     name: 'Sol',
@@ -266,7 +281,7 @@ function loadCatalog(sources) {
   }];
   const seen = new Set(['sol']);
   for (const { text, label } of sources) {
-    for (const s of parseCsvCatalog(text, label)) {
+    for (const s of parseCsvCatalog(text, label, drops)) {
       if (seen.has(s.id)) {
         console.warn(`${label}: dropping duplicate ${s.id} (${s.name}) (already loaded from earlier source)`);
         continue;
@@ -1079,7 +1094,8 @@ async function main() {
     text: await readFile(resolve(DATA_DIR, f), 'utf8'),
     label: f,
   })));
-  const raw = loadCatalog(sources);
+  const starDrops = [];
+  const raw = loadCatalog(sources, starDrops);
   const placedStars = expandCoincidentSets(raw);
   const clusters = buildClusters(placedStars);
 
@@ -1186,6 +1202,22 @@ async function main() {
   await writeFile(OUT_PATH, JSON.stringify({ stars, clusters, bodies }));
   const ms = (performance.now() - t0).toFixed(0);
   console.log(`build-catalog: ${stars.length} stars, ${clusters.length} clusters, ${bodies.length} bodies → ${OUT_PATH} (${ms} ms)`);
+
+  // Star rows that couldn't yield a class or a position are reported as a
+  // single categorized line rather than per-row spam. A clean catalog drops
+  // nothing; `--strict` (wired into `npm run check`) turns any drop into a
+  // build failure so a reintroduced dead row can't slip in silently. Run
+  // `node scripts/lint-star-csv.mjs --prune` to scrub them from the CSVs.
+  if (starDrops.length) {
+    const byReason = new Map();
+    for (const d of starDrops) byReason.set(d.reason, (byReason.get(d.reason) ?? 0) + 1);
+    const summary = [...byReason].map(([r, n]) => `${n} ${r}`).join(', ');
+    console.warn(`build-catalog: dropped ${starDrops.length} star row(s) — ${summary} (run \`node scripts/lint-star-csv.mjs\` to list)`);
+    if (process.argv.includes('--strict')) {
+      console.error('build-catalog: --strict set and rows were dropped; failing.');
+      process.exit(1);
+    }
+  }
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

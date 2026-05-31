@@ -271,4 +271,5 @@ if (DRY_RUN) {
 } else {
   writeFileSync(CSV_PATH, serializeCsv([header, ...csvRows]));
   console.error(`wrote ${CSV_PATH}`);
+  console.error('run `node scripts/lint-star-csv.mjs` to flag any rows the catalog left without a usable class or position');
 }

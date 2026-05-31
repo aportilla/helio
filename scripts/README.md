@@ -23,15 +23,16 @@ If a CSV gets corrupted (e.g. by a scraper bug), the recovery path is to clear t
 | `expand-systems-from-catalog.mjs` | For every row whose `id` is a catalog primary slug ending in `-a`, fetch the primary's detail page, parse `<h2 class='title'>` blocks for sibling components, and (a) update existing sibling rows' ids to the canonical convention or (b) add missing sibling rows with the catalog-derived spectral class + mass + the primary's RA/Dec. Default dry-run; `--apply` to write. **Largely superseded by `import-system-from-catalog.mjs`** for new system additions; kept for incremental id-suffix migrations on existing data. |
 | `import-system-from-catalog.mjs` | Take a primary catalog slug and rewrite all CSV rows for that system from the catalog's detail page. The catalog is the source of truth for everything: per-component display names, spectral_class, mass, V magnitudes from each `<h2 class='title'>` section; position fields (distance/RA/Dec/parallax) from the primary's section, inherited by all siblings (so the renderer's `expandCoincidentSets` rings them as one cluster). Hand-curated names (Toliman, Guniibuu) and existing field values are preserved when the catalog is silent or wrong. Default dry-run; `--apply` to write. |
 | `audit-unresolved.mjs` | Read-only report. Categorize every row whose id isn't a literal catalog slug as OVERLAP / NEAR / DISTINCT based on 3D distance to the nearest catalog-matched row. Useful for spotting truly orphaned rows after sync + expand. |
+| `lint-star-csv.mjs` | Flag every star-CSV row the build can't use — no numeric position, or no spectral class and no mass/magnitude to infer one (the same `resolveSpectralClass` predicate `build-catalog.mjs` runs). Exit 1 if any. `--prune` rewrites the CSVs with those rows removed. Run after scrape/fill/hand-edit; wired into `check.mjs`. |
 | `lookup-star.mjs` | Resolve a star name (or distance range) to a stellarcatalog URL. Useful for ad-hoc poking. |
 | `scrape-planets-from-stellarcatalog.mjs` | Read-only walk over the cached star detail pages; write `src/data/bodies.csv` with one row per exoplanet listed in each system-structure table (semi-major axis, mass M⊕, radius R⊕, period days). Resolves the host star from the planet's catalog name (so Proxima's planets land on `alpha-centauri-c`, not on Alpha Cen A's page slug). Default dry-run; `--apply` to write, `--force` to overwrite. |
 | `lib/catalog-index.mjs` | Shared helpers: catalog HTML parsing, name normalization + variant generation, per-component section parsing for detail pages, CSV (de)serialization. Imported by the other scripts. |
 | `lib/prng.mjs` | Shared seeded-RNG primitives: FNV-1a `hash32`, `mulberry32`, Box-Muller `sampleNormal`, truncated-normal `sampleTruncated`. Lifted into one module so the procgen Architect and Filler derive identical seeds from the same id strings and sample from the same distributions. |
-| `lib/astrophysics.mjs` | Shared physical-relation approximations (`luminositySun(M)`, `insolation(M, a)`) used by both the procgen Architect and Filler. Piecewise mass-luminosity (M dwarfs vs FGK+). |
+| `lib/astrophysics.mjs` | Shared physical-relation approximations (`luminositySun(M)`, `insolation(M, a)`) used by both the procgen Architect and Filler. Piecewise mass-luminosity (M dwarfs vs FGK+). Also `resolveSpectralClass` — the build + lint's shared "class from the catalog string, else inferred from mass or magnitude" predicate. |
 | `lib/procgen-priors.mjs` | Data file — the entire tuning surface for body procgen. Per-class planet counts, orbital geometry, insolation-zone weights, type multipliers, mass/radius specs, moon counts, belt occurrence + placement, ring occurrence + extent, and the layered resource model (occurrence weights, star-type bias, scarcity tiers, pair affinity, motherlode + hostility shaping, deposit count, belt/ring differentiation). No code, just exports. Edit + re-run `npm run build:catalog`. |
 | `lib/procgen-architect.mjs` | System Architect — top-down procgen. For each star with zero catalog planets, samples a full planetary system (planets + moons + rings + belts) from the priors. Also exports `generateOverlay` (partial-system overlay — adds outer procgen siblings + system belts to catalog-anchored stars) and `generateMoons` / `generateRing` (per-planet backfill on catalog rows). |
 | `audit-procgen.mjs` | Procgen distribution report **+ hard-gate invariants**. Reports observed planet count per stellar class, planet-type mix, ring rates by host type, moon counts by type, belt rates by stellar class, and the resource-model distributions (presence/tier, pair coverage, abundance + hostility, per-class lean, deposit count) — each with a z-score against its prior. Ends with structural invariants (`B`-series render/procgen defects, `R`-series resource-scheme guarantees) that **exit 1** on violation, so a bad prior tweak fails the build. Run after `npm run build:catalog`. Alias: `npm run audit:procgen`. |
-| `check.mjs` | Validation umbrella for the iterative edit loop. Runs `build:catalog` → `tsc --noEmit` → `audit-procgen` in sequence and fails fast on the first non-zero exit. Catches schema regressions, type errors, and out-of-envelope distribution shifts in one command. Alias: `npm run check`. |
+| `check.mjs` | Validation umbrella for the iterative edit loop. Runs `lint-star-csv` → `build:catalog --strict` → `tsc --noEmit` → `audit-procgen` in sequence and fails fast on the first non-zero exit. Catches dead CSV rows, schema regressions, type errors, and out-of-envelope distribution shifts in one command. Alias: `npm run check`. |
 | `inspect-body.mjs` | Pretty-print one body's post-procgen record from `catalog.generated.json` — host, orbital geometry, worldClass / extent, atmosphere, biosphere, resources, derived icyness (belts + rings), moons + ring (planets). Suggests near-matches on typo. Alias: `npm run inspect:body <id>` (e.g. `inspect:body saturn-ring`). |
 | `inspect-csv.mjs` | Pretty-print one row from a CSV (`bodies.csv` by default; `--csv=<path>` overrides) with column names spelled out and the three CSV-side cell states distinguished — literal value, `(n/a)` (does-not-apply), `(empty — procgen)` (Filler target). Useful when authoring curated rows or verifying column alignment after a schema tweak. Alias: `npm run inspect:csv <id>`. |
 | `lib/procgen.mjs` | Body Filler — bottom-up procgen. Walks empty cells in topological order: `radiusEarth` from a mass-radius relation, then the `worldClass` cascade (`avgSurfaceTempK`, `surfacePressureBar`), then `periodDays ↔ semiMajorAu` via Kepler's third law (bidirectional, so RV and transit discoveries both round-trip), then orbital flavor (eccentricity / inclination / axial tilt / orbital phase). Exports `radiusFromMass`, `worldClassFor`, `planetTypeFor` for the moon-and-ring backfill pass to reuse. Imported by `build-catalog.mjs`. Belts and rings bypass the Filler — their structural fields are baked at architect time, not derived from physics. |
@@ -43,7 +44,7 @@ The local stellarcatalog listing defaults to `~/Documents/catalog.html` (overrid
 After editing priors, the architect, the Filler, the runtime body schema, or `bodies.csv`:
 
 ```bash
-npm run check               # build:catalog + tsc --noEmit + audit-procgen
+npm run check               # lint-star-csv + build:catalog --strict + tsc --noEmit + audit-procgen
 ```
 
 That's the universal "did I break anything" sweep. The audit step prints z-scores per (prior × observed) cell — anomalies are marked `*` when statistically significant, so an out-of-envelope distribution surfaces above sample noise.
@@ -78,11 +79,16 @@ node scripts/fill-from-stellarcatalog.mjs --csv=src/data/stars-40-45ly.csv --nee
 # 4. Pull in sibling rows for any multi-star primaries the bootstrap added
 node scripts/expand-systems-from-catalog.mjs --apply
 
-# 5. Wire into src/data/stars.ts:
+# 5. Drop faint rows the catalog couldn't give a class or position (the build
+#    would skip them anyway). Review the report, then prune.
+node scripts/lint-star-csv.mjs
+node scripts/lint-star-csv.mjs --prune
+
+# 6. Wire into src/data/stars.ts:
 #    - add `import fortyFortyFiveCsv from './stars-40-45ly.csv?raw';`
 #    - add `{ text: fortyFortyFiveCsv, label: 'stars-40-45ly.csv' }` to the sources array
 
-# 6. Update README's project layout to mention the new file
+# 7. Update README's project layout to mention the new file
 ```
 
 ### Bootstrap a new distance bracket from Wikipedia (closer brackets)
@@ -106,7 +112,10 @@ node scripts/fill-from-stellarcatalog.mjs --csv=src/data/stars-15-20ly.csv --nee
 # 4. Pull in sibling rows for any multi-star primaries
 node scripts/expand-systems-from-catalog.mjs --apply
 
-# 5. Wire into stars.ts as above
+# 5. Drop faint rows the catalog couldn't give a class or position
+node scripts/lint-star-csv.mjs --prune
+
+# 6. Wire into stars.ts as above
 ```
 
 The two known schemas are `--schema=nearest` (11-col, used by "List of nearest stars") and `--schema=20-25` (9-col, used by every "List of star systems within X-Y light-years" page). If a future Wikipedia page uses yet another column layout, add a profile to the `SCHEMAS` dict in `scrape-wiki-stars.mjs`.
@@ -196,6 +205,9 @@ node scripts/fill-from-stellarcatalog.mjs --csv=src/data/stars-NN-MMly.csv --nee
 # 4. Optionally re-add stars Wikipedia missed
 node scripts/find-missing-stars.mjs --csv=src/data/stars-NN-MMly.csv --add
 node scripts/fill-from-stellarcatalog.mjs --csv=src/data/stars-NN-MMly.csv --needs=any
+
+# 5. Drop any rows the catalog couldn't class or place
+node scripts/lint-star-csv.mjs --prune
 ```
 
 For partial repair (a few corrupt rows in an otherwise good CSV), hand-clear the bad cells and run `fill-from-stellarcatalog.mjs --needs=any` — only the empty cells get refilled.

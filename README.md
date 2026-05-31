@@ -45,8 +45,9 @@ scripts/                    Star-data tooling — read scripts/README.md first
   audit-unresolved.mjs      Categorize non-catalog rows as OVERLAP / NEAR / DISTINCT
   audit-procgen.mjs         Procgen distribution audit — observed vs. priors with z-scores
   audit-variety.mjs         Exotic / iconic archetype rarity audit
+  lint-star-csv.mjs         Flag (or --prune) star rows with no derivable class / position
   check-disk-physics.mjs    Disk-physics anchor regression gate
-  check.mjs                 Umbrella gate: build:catalog + tsc + audit-procgen
+  check.mjs                 Umbrella gate: lint-star-csv + build:catalog + tsc + audit-procgen
   inspect-body.mjs          Pretty-print one body's post-procgen record
   inspect-csv.mjs           Pretty-print one CSV row with column names
   lookup-star.mjs           Ad-hoc: name (or distance range) → catalog URL
@@ -54,7 +55,7 @@ scripts/                    Star-data tooling — read scripts/README.md first
   lib/procgen-architect.mjs Architect: top-down system gen (generateSystem/Overlay, moons, rings, belts) from disk physics
   lib/procgen.mjs           Filler: bottom-up fillBody (14 passes) → every _unknowns field; shared body-derivation helpers
   lib/procgen-priors.mjs    Procgen tuning surface — all priors as plain JS data (counts, zones, occurrence, thresholds)
-  lib/astrophysics.mjs      Shared physics: luminositySun / insolation / Kepler / isolationMass / deriveSemiMajorAu
+  lib/astrophysics.mjs      Shared physics: luminositySun / insolation / Kepler / isolationMass / deriveSemiMajorAu / resolveSpectralClass (class from mass-or-magnitude)
   lib/prng.mjs              hash32 + mulberry32 + sampling helpers + drawWeightedDeposits (+ .d.mts type surface)
   lib/gas-potency.mjs       GAS_POTENCY table — single source for renderer + procgen cirrus gate (+ .d.mts type surface)
 src/
@@ -161,7 +162,7 @@ CSV (×7 stars + bodies.csv) ──► build-catalog.mjs ──► catalog.gener
                                 (Node, no deps)        (gitignored)              (typed re-export)
 ```
 
-The build script runs the full derivation pipeline that used to live in `src/data/stars.ts` at module load — CSV parsing, spectral-class normalization, mass priority chain (catalog value → mass-luminosity from V-mag → position-seeded jitter), radius-from-class-mass, pxSize mapping, hierarchical multi-star ring placement, cluster union-find + COM. It also parses `bodies.csv` (planets + moons + belts + rings), validates enums (`world_class`, `kind`, `source`; `biosphere_archetype` and `biosphere_complexity` are enum-validated downstream in the Filler since their `n/a`-vs-authored-vs-blank handling drives different paths), and joins each body to its host: planets and belts to a `Star.id`, moons and rings to another `Body.id` (which must be `kind=planet` — no sub-moons, no nested rings; rings are capped at one per planet). Sorted child-index lists land on `Star.planets[]`, `Star.belts[]`, and `Body.moons[]`, all ordered by semi-major axis; the per-planet ring (if any) sits on `Body.ring` as a singular index. Bodies whose host doesn't survive the star pipeline (e.g. TOI-540 has no spectral class and gets dropped upstream) are warned-and-dropped rather than failing the build. Procgen then runs (see the next section). The script writes a single JSON object `{ stars, clusters, bodies }` to `src/data/catalog.generated.json`. The runtime `stars.ts` is now a thin wrapper: imports the JSON, casts it to `readonly Star[]` / `readonly StarCluster[]` / `readonly Body[]`, builds the cluster k-d tree, and re-exports.
+The build script runs the full derivation pipeline that used to live in `src/data/stars.ts` at module load — CSV parsing, spectral-class normalization (with a derivation fallback when the class cell is blank: invert mass→class, else read class off absolute/apparent magnitude, so a row carrying measured physics but no observed type is recovered rather than dropped — `resolveSpectralClass` in `astrophysics.mjs`), mass priority chain (catalog value → mass-luminosity from V-mag → position-seeded jitter), radius-from-class-mass, pxSize mapping, hierarchical multi-star ring placement, cluster union-find + COM. It also parses `bodies.csv` (planets + moons + belts + rings), validates enums (`world_class`, `kind`, `source`; `biosphere_archetype` and `biosphere_complexity` are enum-validated downstream in the Filler since their `n/a`-vs-authored-vs-blank handling drives different paths), and joins each body to its host: planets and belts to a `Star.id`, moons and rings to another `Body.id` (which must be `kind=planet` — no sub-moons, no nested rings; rings are capped at one per planet). Sorted child-index lists land on `Star.planets[]`, `Star.belts[]`, and `Body.moons[]`, all ordered by semi-major axis; the per-planet ring (if any) sits on `Body.ring` as a singular index. A star row survives only if it yields both a position (numeric distance/RA/Dec) and a class; the genuinely unrecoverable (no class and nothing to infer one from) are reported as one categorized line, and `scripts/lint-star-csv.mjs` keeps them out of the CSVs in the first place. Bodies whose host doesn't survive are then warned-and-dropped rather than failing the build. Procgen then runs (see the next section). The script writes a single JSON object `{ stars, clusters, bodies }` to `src/data/catalog.generated.json`. The runtime `stars.ts` is now a thin wrapper: imports the JSON, casts it to `readonly Star[]` / `readonly StarCluster[]` / `readonly Body[]`, builds the cluster k-d tree, and re-exports.
 
 ### Body procgen pipeline
 

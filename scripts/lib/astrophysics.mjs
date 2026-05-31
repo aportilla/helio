@@ -127,6 +127,87 @@ export function meanAgeForClass(cls) {
   }
 }
 
+const PARSEC_PER_LY = 1 / 3.2615637;
+
+// Normalize a catalog spectral-class string to a single bucket the pipeline
+// keys off: a `D…` prefix is a white dwarf (WD); the first MK letter wins;
+// L/T/Y collapse to brown dwarf (BD). Returns null when the cell is blank or
+// carries no recognizable class letter — the caller's cue to try inference.
+export function normalizeSpectralClass(raw) {
+  const trimmed = String(raw ?? '').trim();
+  if (!trimmed) return null;
+  if (/^D[A-Z]/.test(trimmed)) return 'WD';
+  const m = /[OBAFGKMLTY]/.exec(trimmed);
+  if (!m) return null;
+  const c = m[0];
+  if (c === 'L' || c === 'T' || c === 'Y') return 'BD';
+  return c;
+}
+
+// Spectral class inferred from stellar mass (solar units). The inverse of
+// the class→mass synthesis the build's mass-priority chain already runs:
+// when a row has a catalog mass but no class, the class is the band the mass
+// falls in. White dwarfs are deliberately absent — their mass overlaps G/K/F
+// main-sequence, so mass alone can't identify one, and a real WD always
+// arrives with a `D…` spectral string the normalizer catches upstream. The
+// hydrogen-burning limit (~0.075 M☉) is the M/BD divide.
+export function classFromMass(massSun) {
+  if (!Number.isFinite(massSun) || massSun <= 0) return null;
+  if (massSun >= 16)    return 'O';
+  if (massSun >= 2.1)   return 'B';
+  if (massSun >= 1.4)   return 'A';
+  if (massSun >= 1.04)  return 'F';
+  if (massSun >= 0.80)  return 'G';
+  if (massSun >= 0.45)  return 'K';
+  if (massSun >= 0.075) return 'M';
+  return 'BD';
+}
+
+// Spectral class inferred from visual absolute magnitude (M_V). The fallback
+// when a row has no mass: the main-sequence M_V ladder (Pecaut & Mamajek
+// MK tables). The M/BD cut at M_V ≈ 16 sits at the late-M / early-L
+// transition; fainter than that is treated as a brown dwarf. Like
+// classFromMass this never returns WD — a faint WD masquerades as a late
+// dwarf here, but WDs always carry a `D…` class string handled upstream.
+export function classFromAbsMag(absMag) {
+  if (!Number.isFinite(absMag)) return null;
+  if (absMag <= -4)   return 'O';
+  if (absMag <= -0.5) return 'B';
+  if (absMag <= 1.4)  return 'A';
+  if (absMag <= 2.6)  return 'F';
+  if (absMag <= 5.1)  return 'G';
+  if (absMag <= 7.5)  return 'K';
+  if (absMag <= 16)   return 'M';
+  return 'BD';
+}
+
+// Recover a spectral class for a star whose catalog class cell is blank,
+// extending the build's existing "derive what we don't know" chain to the
+// one field that otherwise hard-drops the row. Mass is the authoritative
+// signal (some ultra-cool dwarfs carry a nonsense magnitude); absolute
+// magnitude is the fallback, computed from apparent magnitude + distance via
+// the distance modulus when no M_V is tabulated. Returns null only when the
+// row carries no mass and no usable magnitude — genuinely nothing to infer
+// from, the caller's cue to drop it.
+export function deriveSpectralClass({ massSun, absMag, appMag, distLy }) {
+  const fromMass = classFromMass(massSun);
+  if (fromMass) return fromMass;
+  let mv = Number.isFinite(absMag) ? absMag : NaN;
+  if (!Number.isFinite(mv) && Number.isFinite(appMag) && distLy > 0) {
+    mv = appMag - 5 * (Math.log10(distLy * PARSEC_PER_LY) - 1);
+  }
+  return classFromAbsMag(mv);
+}
+
+// The single viability predicate for a star row's class, shared by the build
+// (which consumes it) and the CSV lint (which flags rows that fail it):
+// the catalog string when usable, else inference from the row's own physics.
+// Null means the row carries no class and nothing to infer one from.
+export function resolveSpectralClass({ rawClass, massSun, absMag, appMag, distLy }) {
+  return normalizeSpectralClass(rawClass)
+    ?? deriveSpectralClass({ massSun, absMag, appMag, distLy });
+}
+
 // Frost-line insolation in Earth flux units. Below this S (closer to the
 // star, hotter) the volatile stays gaseous; above this S (farther, cooler)
 // it condenses out of the disk and joins the solid surface density.

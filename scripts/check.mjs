@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 //
-// One-shot validation umbrella. Runs the three checks that catch most
+// One-shot validation umbrella. Runs the four checks that catch most
 // problems after a procgen / schema / runtime change:
 //
-//   1. build:catalog — does the data pipeline parse + procgen + emit
-//      without throwing? Also gives an updated body count.
-//   2. tsc --noEmit  — does the runtime still type-check?
-//   3. audit-procgen — do the observed distributions match the priors,
+//   1. lint-star-csv — does every star CSV row carry (or yield) the class +
+//      position the build needs? Fails on a row a scrape/edit left dead.
+//   2. build:catalog — does the data pipeline parse + procgen + emit
+//      without throwing? `--strict` also fails on any dropped star row.
+//   3. tsc --noEmit  — does the runtime still type-check?
+//   4. audit-procgen — do the observed distributions match the priors,
 //      or did a tweak land outside its expected envelope?
 //
 // Each step streams its stdout/stderr live. On the first non-zero exit
@@ -20,11 +22,12 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const steps = [
-  { label: '[1/3] build:catalog', cmd: 'node',      args: ['scripts/build-catalog.mjs'] },
+  { label: '[1/4] lint-star-csv', cmd: 'node',      args: ['scripts/lint-star-csv.mjs'] },
+  { label: '[2/4] build:catalog', cmd: 'node',      args: ['scripts/build-catalog.mjs', '--strict'] },
   // Direct tsc to skip the pretypecheck hook (which would rebuild the
   // catalog a second time).
-  { label: '[2/3] tsc --noEmit',  cmd: 'npx',       args: ['tsc', '--noEmit'] },
-  { label: '[3/3] audit-procgen', cmd: 'node',      args: ['scripts/audit-procgen.mjs'] },
+  { label: '[3/4] tsc --noEmit',  cmd: 'npx',       args: ['tsc', '--noEmit'] },
+  { label: '[4/4] audit-procgen', cmd: 'node',      args: ['scripts/audit-procgen.mjs'] },
 ];
 
 for (const step of steps) {
