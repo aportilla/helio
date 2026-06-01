@@ -921,8 +921,8 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       const vec2 LAYER_SALT_CLOUD_JIT_A = vec2(13.0, 17.0);
       const vec2 LAYER_SALT_CLOUD_JIT_B = vec2(19.0, 23.0);
       const vec2 LAYER_SALT_CLOUD_EXIST = vec2(29.0, 31.0);
-      const vec2 SALT_CLOUD_CURL       = vec2(1039.0, 1049.0);
-      const vec2 LAYER_SALT_CLOUD_CURL = vec2(37.0, 41.0);
+      const vec2 SALT_CLOUD_VORTEX       = vec2(1039.0, 1049.0);
+      const vec2 LAYER_SALT_CLOUD_VORTEX = vec2(37.0, 41.0);
       const float SALT_BAND_LIGHTNESS  = 67.0;
       const float LAYER_SALT_BAND      = 13.0;
 
@@ -1677,47 +1677,63 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       //     magnitude across the gas giants and a linear curve
       //     leaves Jupiter under-stretched relative to its bands.
 
-      // ── Cloud curl-warp ──
-      // Domain-warp the cloud sampling coords along a divergence-free
-      // (curl) flow so the worley streaks bend into cyclonic spirals —
-      // the vortices Earth's weather shows from orbit. valueNoise is one
-      // smoothstep-interpolated octave of the sin-hash; cloudCurl returns
-      // the perpendicular gradient of that field (rot90 of grad), which is
-      // divergence-free, so advecting along it swirls the pattern without
-      // pumping cloud mass into or out of a region. The warp is applied to
-      // the sphere-surface position (px) BEFORE the divide into worley
-      // cells, so every fragment still floors into exactly one cell — the
-      // spiral lives in WHERE the crisp cell boundaries land, not in a soft
-      // blur, and the pixel-crisp aesthetic holds. Warping in px (then
-      // dividing by cellAspect) keeps the vortices round rather than
-      // inheriting the cells' zonal anisotropy.
-      //   CLOUD_CURL_SCALE    — flow-field frequency (1/px); smaller = a
-      //                         few big vortices, larger = many small ones.
-      //   CLOUD_CURL_STRENGTH — warp displacement in px; how tightly the
-      //                         streaks wind around each vortex.
-      // Scaled by (1 - bandness) at the call site so it only curls the slow-
-      // wind patchy decks; the gas giants' clean zonal bands (bandness → 1)
-      // stay ruler-straight. The whole warp is also guarded behind that
-      // factor so a fully-banded deck pays none of the noise cost.
-      const float CLOUD_CURL_SCALE    = 0.16;
-      const float CLOUD_CURL_STRENGTH = 2.0;
-      float valueNoise(vec2 x, vec2 salt) {
-        vec2 i = floor(x);
-        vec2 f = fract(x);
-        vec2 u = f * f * (3.0 - 2.0 * f);
-        float a = hash21(i + salt);
-        float b = hash21(i + vec2(1.0, 0.0) + salt);
-        float c = hash21(i + vec2(0.0, 1.0) + salt);
-        float d = hash21(i + vec2(1.0, 1.0) + salt);
-        return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-      }
-      vec2 cloudCurl(vec2 q, vec2 salt) {
-        // Perpendicular gradient (central differences) of the noise
-        // potential = its 2D curl. eps is in the same units as q.
-        const float e = 0.15;
-        float dndx = (valueNoise(q + vec2(e, 0.0), salt) - valueNoise(q - vec2(e, 0.0), salt)) / (2.0 * e);
-        float dndy = (valueNoise(q + vec2(0.0, e), salt) - valueNoise(q - vec2(0.0, e), salt)) / (2.0 * e);
-        return vec2(dndy, -dndx);
+      // ── Cloud vortex swirl ──
+      // Rotate the cloud sampling coords around a sparse field of vortex
+      // EYES so the worley streaks WRAP into spiral arms — genuine cyclones
+      // rather than the edge-wobble a plain noise displacement gives. Eyes
+      // sit on a jittered grid of pitch CLOUD_VORTEX_SPACING px; each
+      // fragment sums the rotational displacement contributed by the eyes
+      // in its 3×3 grid neighborhood (so the field is seamless across grid
+      // lines). Per eye: a hashed spin sign (CW / CCW) and a rotation that
+      // peaks at CLOUD_VORTEX_SWIRL radians at the eye and decays as
+      // exp(-d / (spacing·CLOUD_VORTEX_FALLOFF)). The radial falloff is the
+      // whole trick — concentric rings rotate by different amounts, and
+      // that shear is what winds a straight streak into a spiral; the
+      // displacement vanishes at the eye itself (delta → 0) so the center
+      // stays put rather than tearing. Applied to the sphere-surface
+      // position (px) BEFORE the divide into worley cells, so every
+      // fragment still floors into exactly one cell and the pixel-crisp
+      // aesthetic holds. Faded by (1 - bandness) at the call site so only
+      // slow-wind patchy decks swirl; the gas giants' clean zonal bands
+      // stay straight (and a fully-banded deck pays none of the cost).
+      // The eyes are SPARSE — only CLOUD_VORTEX_DENSITY of the grid cells
+      // actually spawn one — and each eye's reach is tight, so the zonal
+      // streaks survive untouched in the calm air between storms and read
+      // as the base weather pattern, with cyclones punctuating it rather
+      // than overrunning the whole disc.
+      //   CLOUD_VORTEX_SPACING — px between candidate eyes.
+      //   CLOUD_VORTEX_DENSITY — fraction of cells that spawn an eye.
+      //   CLOUD_VORTEX_SWIRL   — peak rotation at an eye, radians.
+      //   CLOUD_VORTEX_FALLOFF — radial reach as a fraction of spacing
+      //                          (× spacing = the vortex size).
+      const float CLOUD_VORTEX_SPACING = 6.0;
+      const float CLOUD_VORTEX_DENSITY = 0.15;
+      const float CLOUD_VORTEX_SWIRL   = 2.4;
+      const float CLOUD_VORTEX_FALLOFF = 0.45;
+      vec2 cloudSwirl(vec2 sphPx, vec2 salt) {
+        vec2 gid = floor(sphPx / CLOUD_VORTEX_SPACING);
+        vec2 disp = vec2(0.0);
+        for (int gy = -1; gy <= 1; gy++) {
+          for (int gx = -1; gx <= 1; gx++) {
+            vec2 nb = gid + vec2(float(gx), float(gy));
+            // Sparse-existence gate: most cells carry no eye, leaving their
+            // zonal streaks straight. The (53,59) offset decorrelates this
+            // draw from the jitter / spin / position hashes below.
+            if (hash21(nb + salt + vec2(53.0, 59.0)) >= CLOUD_VORTEX_DENSITY) continue;
+            // Jittered eye position inside the neighbor grid cell + a hashed
+            // spin direction. The (7,13)/(31,37) offsets decorrelate the
+            // draws taken off the one per-body salt.
+            vec2  jit  = vec2(hash21(nb + salt), hash21(nb + salt + vec2(7.0, 13.0)));
+            vec2  eye  = (nb + jit) * CLOUD_VORTEX_SPACING;
+            float spin = hash21(nb + salt + vec2(31.0, 37.0)) < 0.5 ? -1.0 : 1.0;
+            vec2  delta = sphPx - eye;
+            float d = length(delta);
+            float angle = spin * CLOUD_VORTEX_SWIRL * exp(-d / (CLOUD_VORTEX_SPACING * CLOUD_VORTEX_FALLOFF));
+            float c = cos(angle), s = sin(angle);
+            disp += mat2(c, -s, s, c) * delta - delta;
+          }
+        }
+        return sphPx + disp;
       }
       vec3 cloudLayers(vec3 col, float lon, float lat, float vBodyV) {
         for (int li = 0; li < ${MAX_CLOUD_LAYERS}; li++) {
@@ -1745,15 +1761,15 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
             mix(CLOUD_LAT_PX, BAND1_LAT_PX, bandness)
           );
 
-          // Curl-warp the sphere-surface position (px) into cyclonic
-          // spirals, faded out as the deck bands up so giants stay
-          // straight (see the cloud curl-warp block). Round in px-space,
+          // Swirl the sphere-surface position (px) around vortex eyes into
+          // cyclonic spirals, faded out as the deck bands up so giants stay
+          // straight (see the cloud vortex-swirl block). Round in px-space,
           // then divided into anisotropic worley cells below.
           vec2 sph = vec2(lon, lat) * vRadius;
-          float curlAmt = CLOUD_CURL_STRENGTH * (1.0 - bandness);
-          if (curlAmt > 0.0) {
-            vec2 curlSalt = vSeed * SALT_CLOUD_CURL + layerSeed * LAYER_SALT_CLOUD_CURL;
-            sph += cloudCurl(sph * CLOUD_CURL_SCALE, curlSalt) * curlAmt;
+          float swirlAmt = 1.0 - bandness;
+          if (swirlAmt > 0.0) {
+            vec2 swirlSalt = vSeed * SALT_CLOUD_VORTEX + layerSeed * LAYER_SALT_CLOUD_VORTEX;
+            sph = mix(sph, cloudSwirl(sph, swirlSalt), swirlAmt);
           }
           vec2 p = sph / cellAspect;
           vec2 cellId = floor(p);
