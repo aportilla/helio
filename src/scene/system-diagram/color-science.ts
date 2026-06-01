@@ -245,21 +245,48 @@ export const CONDENSATE_COLOR: Partial<Record<AtmGas, Color>> = {
 // × GAS_POTENCY) × scale, summed across the four contributor channels,
 // then soft-capped via 1 - exp(-Σ) to land in [0, 1).
 //
-// Every contributor's weight is multiplied by `atmColumnFactor(body)`
-// in `surfaceHazeContributors` — log10(P/g_norm + 1), the true
-// Earth-normalized vertical column-mass density. Low-gravity bodies
-// (Titan, Pluto) accumulate more atmospheric mass per unit surface
-// pressure than Earth, so their haze saturates at lower P than the raw
-// surface-pressure model implied. These scales are calibrated against
-// thick-column anchors (Titan-class for aerosol, Venus-class for bulk
-// gas). Tune these globals, not per-species coefficients, if anchors
-// drift. This is the single source of truth: the haze category scales
-// are applied renderer-side (disc-palette/atmosphere.ts), not in procgen,
-// which emits raw 0..1 strengths.
+// The bulk-gas, aerosol, and dust weights are each multiplied by
+// `atmColumnFactor(body)` in `surfaceHazeContributors` — log10(P/g_norm + 1),
+// a compressed Earth-normalized column that suits opacity saturation for
+// those terms. Low-gravity bodies (Titan, Pluto) accumulate more atmospheric
+// mass per unit surface pressure than Earth, so their haze saturates at lower
+// P than the raw surface-pressure model implied. These scales are calibrated
+// against thick-column anchors (Titan-class for aerosol, Venus-class for bulk
+// gas). The clear-gas Rayleigh term is the exception — it scales with the
+// LINEAR column (see CLEAR_GAS_OPACITY). Tune these globals, not per-species
+// coefficients, if anchors drift. This is the single source of truth: the
+// haze category scales are applied renderer-side (disc-palette/atmosphere.ts),
+// not in procgen, which emits raw 0..1 strengths.
 export const HAZE_BULK_GAS_SCALE = 0.2;
 export const HAZE_AEROSOL_SCALE  = 1.25;
 export const HAZE_DUST_SCALE     = 3.0;
+// Rim-hue ratio only. Sets the Rayleigh fraction of the limb's clear-air
+// color in `scatteringRimFor` (where its absolute value cancels in the
+// rs/(rs+bs) ratio); the haze OPACITY contribution from clear gas is driven
+// by CLEAR_GAS_OPACITY below, not this.
 export const HAZE_RAYLEIGH_SCALE = 0.15;
+
+// Clear-gas (Rayleigh) self-obscuration — how much a body's own clear
+// atmosphere veils its surface. This is the visual-tuning knob for "thick
+// clear air hides the ground."
+//
+// Physics: Rayleigh optical depth scales LINEARLY with the gas column (∝ P/g),
+// not logarithmically like the aerosol/dust terms. Earth's whole 1-bar air
+// column has τ ≈ 0.1 in the visible (which is why the ground stays crisp from
+// orbit), so the clear-gas haze weight is (Earth-normalized linear column,
+// `rayleighColumn`) × this anchor, fed through the shared 1 - exp(-Στ) soft
+// cap — which makes that cap the exact Beer–Lambert obscuration law. At the
+// physically faithful value 0.1: Earth reads as a faint blue veil, a ~10-bar
+// N₂ world (τ≈1) a strong haze, and 50–200-bar worlds saturate to a fully
+// obscured blue scattering ball (correct — 200 bar of clear N₂ has τ≈20, the
+// surface is genuinely invisible).
+//
+// Deliberately a GAMEPLAY lever, not only a physics constant: LOWER it to let
+// surface character bleed through thick clear atmospheres more than pure
+// optics allow (trading realism for legibility of the surface archetype);
+// raise it past 0.1 to over-obscure. Only the clear-gas Rayleigh term reads
+// this — absorbing-gas tint, aerosols, and dust keep their log-column scaling.
+export const CLEAR_GAS_OPACITY = 0.1;
 
 // Per-gas clear-air scattering color — the visible tint of an
 // atmosphere viewed edge-on through a long column with no haze layer

@@ -2011,10 +2011,26 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         // Added AFTER the reflectance lighting pass so molten zones exceed
         // the star-lit crescent (≤ ~0.22) and read as light sources rather
         // than bright albedo — and so the glow shows on the night-side limb
-        // (emission is star-independent). Scaled down by haze so a thick
-        // magma-ocean atmosphere veils the raw punch-through (the surface
-        // block already let the cloud/haze layers paint over the ember).
-        col = clamp(col + lavaEmissive * (1.0 - vHazeOpacity * 0.7), 0.0, 1.0);
+        // (emission is star-independent).
+        //
+        // Glowing lava is a light source, so an overlying haze veils it far
+        // less than it veils the reflective ground (which the haze blanket
+        // above already lerped toward vHazeColor). Two haze-proportional
+        // effects, both scaling with vHazeOpacity so a thin atmosphere barely
+        // touches the raw ember:
+        //   • punch-through — the ember keeps LAVA_HAZE_PUNCH of its
+        //     brightness through fully opaque haze, instead of being veiled
+        //     like ground. At 0 it dims with the haze; at 1 it ignores it.
+        //   • scattered glow — emitted light scatters in the haze above the
+        //     vent, blooming a soft halo tinted halfway toward the haze color
+        //     (city-lights-in-fog), proportional to how much haze there is to
+        //     scatter in. LAVA_HAZE_GLOW sets the bloom strength.
+        const float LAVA_HAZE_PUNCH = 0.55;
+        const float LAVA_HAZE_GLOW  = 0.5;
+        float emberSurvival = mix(1.0 - vHazeOpacity, 1.0, LAVA_HAZE_PUNCH);
+        vec3  hazeBloom = lavaEmissive * vHazeOpacity * LAVA_HAZE_GLOW
+                          * mix(vec3(1.0), vHazeColor, 0.5);
+        col = clamp(col + lavaEmissive * emberSurvival + hazeBloom, 0.0, 1.0);
 
         // 1-px hover rim — same as the previous flat-disc material. The
         // discard above bounds the disc; this swap stamps the outermost

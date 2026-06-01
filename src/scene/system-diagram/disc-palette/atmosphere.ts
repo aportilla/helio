@@ -7,7 +7,7 @@
 import { Color } from 'three';
 import { AtmGas, Body } from '../../../data/stars';
 import {
-  deckGasesFor, GAS_COLOR, GAS_POTENCY,
+  CLEAR_GAS_OPACITY, deckGasesFor, GAS_COLOR, GAS_POTENCY,
   HAZE_AEROSOL_SCALE, HAZE_BULK_GAS_SCALE, HAZE_DUST_SCALE, HAZE_RAYLEIGH_SCALE,
   RENDERER_SKIP_AEROSOLS, SCATTERING_COLOR, SCATTERING_POTENCY,
   stratosphericHazeStrengthFor,
@@ -74,18 +74,26 @@ const MU_FACTOR_BY_ARCHETYPE: Readonly<Record<string, number>> = {
 // (`hazeAerosols`), and lifted mineral dust colored by the body's
 // resource mineralogy.
 //
-// Every contributor weight is multiplied by `atmColumnFactor(body)` =
-// log10(P/g + 1) — true column-mass-per-unit-area proxy in Earth-
-// normalized units. Aerosol formation strength and dust suspension
+// The bulk-gas, aerosol, and dust weights are each multiplied by
+// `atmColumnFactor(body)` = log10(P/g + 1) — a compressed column proxy in
+// Earth-normalized units. Aerosol formation strength and dust suspension
 // strength are "per-unit-column" signals from the procgen gates;
 // multiplying by column thickness gives visible opacity. The 1/g
 // factor (over plain log10(P+1)) is the puffy-column effect: low-
 // gravity bodies pile more atmospheric mass per unit surface pressure,
 // so Titan-class (g=0.135) sits ~2.75× more opaque than its surface
 // pressure alone would suggest, matching the IRL observation that
-// Titan's surface is invisible from orbit. Surface bodies with no
-// atmosphere (P null/0) contribute nothing here — they're handled by
-// the no-surface stratospheric path in `hazeBlendFor`.
+// Titan's surface is invisible from orbit.
+//
+// The clear-gas (Rayleigh) scattering term is the exception: Rayleigh
+// optical depth scales with the LINEAR column (`rayleighColumn`, ∝ P/g),
+// not the log, so it feeds `frac × SCATTERING_POTENCY × rayleighColumn ×
+// CLEAR_GAS_OPACITY`. Fed through the same 1 - exp(-Σw) soft cap, that makes
+// the cap the exact Beer–Lambert law — a thick clear atmosphere obscures its
+// own surface (a 200-bar N₂ world reads as a blue scattering ball, not a
+// crisp surface), where the log proxy would leave it ~70% transparent.
+// Surface bodies with no atmosphere (P null/0) contribute nothing here —
+// they're handled by the no-surface stratospheric path in `hazeBlendFor`.
 //
 // Aerosol species that already paint as a cloud deck on this body are
 // skipped — they shouldn't double-count as stratospheric haze. Species
@@ -96,16 +104,19 @@ export function surfaceHazeContributors(body: Body): Array<{ color: Color; weigh
   const P = body.surfacePressureBar;
   if (P === null || P <= 0) return out;
   const colFactor = atmColumnFactor(body);
+  const rayCol = rayleighColumn(body);
   for (const [gas, frac] of atmGasPairs(body)) {
     const col = GAS_COLOR[gas];
     const potency = GAS_POTENCY[gas] ?? 0;
     if (col && potency > 0) {
       out.push({ color: col, weight: frac * potency * colFactor * HAZE_BULK_GAS_SCALE });
     }
+    // Clear-gas Rayleigh scattering: linear column × Earth-anchored opacity,
+    // so a thick clear atmosphere veils its own surface (see CLEAR_GAS_OPACITY).
     const sCol = SCATTERING_COLOR[gas];
     const sPotency = SCATTERING_POTENCY[gas] ?? 0;
     if (sCol && sPotency > 0) {
-      out.push({ color: sCol, weight: frac * sPotency * colFactor * HAZE_RAYLEIGH_SCALE });
+      out.push({ color: sCol, weight: frac * sPotency * rayCol * CLEAR_GAS_OPACITY });
     }
   }
   if (body.hazeAerosols !== null) {
@@ -258,6 +269,24 @@ function atmColumnFactor(body: Body): number {
   const gRel = m / (r * r);
   if (gRel <= 0) return Math.log10(p + 1);
   return Math.log10(p / gRel + 1);
+}
+
+// Linear Earth-normalized atmospheric column (P/g) — the physically correct
+// scaling for Rayleigh optical depth, where `atmColumnFactor`'s log10 would
+// understate how a thick CLEAR gas column obscures its surface (the log suits
+// aerosol/dust opacity saturation, not molecular scattering). Earth (1 bar,
+// 1 g) → 1.0; a 200-bar N₂ super-Earth at g≈1.5 → ~133, i.e. ~133× Earth's
+// Rayleigh depth. Falls back to surface pressure alone when mass/radius are
+// missing. Paired with CLEAR_GAS_OPACITY in `surfaceHazeContributors`.
+function rayleighColumn(body: Body): number {
+  const p = body.surfacePressureBar;
+  if (p === null || p <= 0) return 0;
+  const m = body.massEarth;
+  const r = body.radiusEarth;
+  if (m === null || r === null || r <= 0) return p;
+  const gRel = m / (r * r);
+  if (gRel <= 0) return p;
+  return p / gRel;
 }
 
 // Earth-relative atmospheric scale-height proxy. H = kT/(μg);
