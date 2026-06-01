@@ -876,7 +876,7 @@ function atmosphereFor(body, S) {
 // Surface opacity — 1 when the body has a solid surface the renderer
 // should paint underneath the cloud + haze stack (terrestrials), 0
 // when the bulk atm column shows through cloud rents instead (gas /
-// ice giants / hycean / helium / gas_dwarf). Intermediate values are
+// ice giants / veiled-ice / helium / gas_dwarf). Intermediate values are
 // possible later (partial gas-giant rents) but for now this is
 // binary, driven by world class.
 function surfaceOpacityFor(body) {

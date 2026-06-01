@@ -45,6 +45,7 @@ scripts/                    Star-data tooling — read scripts/README.md first
   audit-unresolved.mjs      Categorize non-catalog rows as OVERLAP / NEAR / DISTINCT
   audit-procgen.mjs         Procgen distribution audit — observed vs. priors with z-scores
   audit-variety.mjs         Exotic / iconic archetype rarity audit
+  dump-labels.mjs           Bulk-dump composed body labels (the real body-label.ts) galaxy-wide + vocabulary / collision analysis
   lint-star-csv.mjs         Flag (or --prune) star rows with no derivable class / position
   check-disk-physics.mjs    Disk-physics anchor regression gate
   check.mjs                 Umbrella gate: lint-star-csv + build:catalog + tsc + audit-procgen

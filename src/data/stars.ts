@@ -206,7 +206,7 @@ export interface Body {
   readonly radiusEarth: number | null;
   // 0..1 mass fraction of body that is H₂O (and other condensable
   // volatiles). Earth ≈ 0.00023 (ocean mass / Earth mass); Europa /
-  // Titan / Callisto ≈ 0.5 (water-ice mantle); Mercury ≈ 0; Hycean-
+  // Titan / Callisto ≈ 0.5 (water-ice mantle); Mercury ≈ 0; Veiled-ice-
   // world candidate ≈ 0.1. Sampled at Architect time from a formation-
   // zone prior gated on insolation, then persists — used by the Filler
   // to derive surface water/ice cover (Phase 3+). Null on belt/ring
@@ -311,7 +311,7 @@ export interface Body {
   // Surface opacity [0..1]. 1 = solid surface visible underneath the
   // atmospheric layers (terrestrials). 0 = no visible surface, the
   // bulk atm column shows through cloud rents instead (gas / ice giants
-  // / hycean / helium / gas_dwarf). The disc shader runs the surface
+  // / veiled-ice / helium / gas_dwarf). The disc shader runs the surface
   // pass regardless; this scalar controls how much it contributes to
   // the composition.
   readonly surfaceOpacity: number;

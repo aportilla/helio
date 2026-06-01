@@ -97,11 +97,11 @@ function insolationFor(body) {
 }
 
 // The gaseous archetypes — everything the old worldClass set
-// {gas_giant, ice_giant, gas_dwarf, hycean, helium} maps onto under the
+// {gas_giant, ice_giant, gas_dwarf, veiled_ice, helium} maps onto under the
 // richer enum (gas_giant splits into gas_giant/hot_jupiter; gas_dwarf is
 // now sub_neptune). Used wherever a check meant "skip the envelope worlds."
 const GASEOUS_ARCHETYPES = new Set([
-  'gas_giant', 'hot_jupiter', 'ice_giant', 'sub_neptune', 'hycean', 'helium',
+  'gas_giant', 'hot_jupiter', 'ice_giant', 'sub_neptune', 'veiled_ice', 'helium',
 ]);
 
 function pct(n, d, decimals = 2) {

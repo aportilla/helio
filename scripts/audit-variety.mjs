@@ -60,10 +60,11 @@ function insolationFor(body) {
 
 // classifyBody's archetype enum is richer than the old worldClass set, so a
 // gate that meant "any gaseous envelope world" maps onto several archetypes.
-// Old {gas_giant, ice_giant, gas_dwarf, hycean, helium} → these (gas_giant
-// splits into gas_giant/hot_jupiter; gas_dwarf became sub_neptune).
+// Old {gas_giant, ice_giant, gas_dwarf, veiled_ice, helium} → these (gas_giant
+// splits into gas_giant/hot_jupiter; gas_dwarf became sub_neptune; the
+// cold ice-rich H2 dwarf is now veiled_ice).
 const GASEOUS_ARCHETYPES = new Set([
-  'gas_giant', 'hot_jupiter', 'ice_giant', 'sub_neptune', 'hycean', 'helium',
+  'gas_giant', 'hot_jupiter', 'ice_giant', 'sub_neptune', 'veiled_ice', 'helium',
 ]);
 // Hosts a moon system can hang off: the old {gas_giant, ice_giant, gas_dwarf,
 // solid_giant} → gaseous giants plus super_earth (the old solid_giant).
@@ -173,10 +174,10 @@ const habitableEarthish = procgenPlanets.filter(b => {
 row('Earth-like habitables (T 250-320K, P 0.1-50bar)', habitableEarthish,
     procgenPlanets.length, topExamples(habitableEarthish, b => b.massEarth));
 
-// Hycean — its own archetype.
-const hyceans = procgenPlanets.filter(b => arch(b) === 'hycean');
-row('Hycean worlds (H2 atm, water-rich)', hyceans,
-    procgenPlanets.length, topExamples(hyceans, b => b.massEarth));
+// Veiled Ice — its own archetype (cold, ice-rich H2 dwarf / frozen mini-Neptune).
+const veiledIce = procgenPlanets.filter(b => arch(b) === 'veiled_ice');
+row('Veiled Ice worlds (cold H2 dwarf, ice-rich)', veiledIce,
+    procgenPlanets.length, topExamples(veiledIce, b => b.massEarth));
 
 // Gaian — living temperate water ocean (Earth). A first-class archetype
 // promoted out of the old 'ocean' worldClass by complex biosphere + temp band.

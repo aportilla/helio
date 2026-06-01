@@ -599,7 +599,7 @@ export interface CloudDeckPalette {
 }
 
 // Stratospheric haze strength for no-surface bodies (gas / ice giants
-// / hycean / helium). Photochemical haze accumulates above the cloud
+// / veiled-ice / helium). Photochemical haze accumulates above the cloud
 // decks; colder bodies hold thicker stratospheric haze under their
 // slower atmospheric dynamics. Consumed by `hazeBlendFor`
 // (disc-palette/atmosphere.ts) to weight the atm column color as a haze

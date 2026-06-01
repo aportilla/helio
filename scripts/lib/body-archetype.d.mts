@@ -10,7 +10,7 @@ import type { Body } from '../../src/data/stars';
 // surface-liquid types are first-class so the variety audit can gate them.
 export type Archetype =
   // gaseous
-  | 'hot_jupiter' | 'gas_giant' | 'ice_giant' | 'sub_neptune' | 'hycean' | 'helium'
+  | 'hot_jupiter' | 'gas_giant' | 'ice_giant' | 'sub_neptune' | 'veiled_ice' | 'helium'
   // iconic surface / subsurface liquid
   | 'gaian' | 'tholin' | 'brimstone' | 'ammonia_sea' | 'glacial_sea' | 'subglacial_ocean' | 'ocean'
   // terrestrial base

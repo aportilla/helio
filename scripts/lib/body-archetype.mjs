@@ -40,8 +40,8 @@ export const ARCHETYPE_THRESHOLDS = {
   gasDwarfRadius:         2,     // rocky / sub-Neptune boundary
   iceGiantTempCeilingK:   200,   // warm-vs-cold gate in the Neptune bracket
   hotJupiterTempFloorK:   700,   // gas giant hot enough to read "Hot Jupiter"
-  hyceanTempCeilingK:     300,
-  hyceanBulkWaterMin:     0.05,
+  veiledIceTempCeilingK:  300,   // cold ceiling for the ice-rich H2 dwarf gate
+  veiledIceBulkWaterMin:  0.05,
   lavaTempFloorK:         1000,
   magmaOceanTempFloorK:   700,
   magmaOceanTectMin:      0.5,
@@ -94,7 +94,7 @@ const TIDAL_VOLCANISM_TEMP_CEILING_K = 400;
 // the audit buckets rarity by these. Order is informational only.
 export const ARCHETYPES = [
   // gaseous
-  'hot_jupiter', 'gas_giant', 'ice_giant', 'sub_neptune', 'hycean', 'helium',
+  'hot_jupiter', 'gas_giant', 'ice_giant', 'sub_neptune', 'veiled_ice', 'helium',
   // iconic surface/subsurface liquid
   'gaian', 'tholin', 'brimstone', 'ammonia_sea', 'glacial_sea', 'subglacial_ocean', 'ocean',
   // terrestrial base
@@ -109,7 +109,7 @@ export const ARCHETYPES = [
 // palette tint, atmosphere μ-factor, info-card surface gating) keys off one
 // source instead of re-listing the set.
 export const GASEOUS_ARCHETYPES = new Set([
-  'hot_jupiter', 'gas_giant', 'ice_giant', 'sub_neptune', 'hycean', 'helium',
+  'hot_jupiter', 'gas_giant', 'ice_giant', 'sub_neptune', 'veiled_ice', 'helium',
 ]);
 
 // Classify a body into one archetype from its settled physical state. A
@@ -125,17 +125,17 @@ export function classifyBody(body) {
 
   // ─── Gaseous bracket (radius ≥ gasDwarfRadius) ───
   if (r >= W.gasDwarfRadius) {
-    // Hycean is a SUB-NEPTUNE (K2-18b-class): cold + H2-enveloped +
-    // water-rich AND small enough (r < neptuneRadius) that a liquid
-    // ocean sits at the base of the envelope. Above Neptune size the
-    // envelope is too deep/massive for a surface ocean — that's an ice
-    // giant, not a hycean. The size bound is as physical as the temp +
-    // composition conditions; without it the gate mislabels real giants.
+    // Veiled Ice world — a small (sub-Neptune size), cold, water/ice-rich
+    // world beneath an opaque H2 envelope: a frozen mini-Neptune whose
+    // interior ices never melt into a surface ocean. The size bound
+    // (r < neptuneRadius) keeps real ice giants out; the temperature ceiling
+    // keeps it cold (every such world procgen makes is far below freezing);
+    // H2 envelope + water-rich bulk are the defining composition.
     if (r < W.neptuneRadius &&
-        T != null && T < W.hyceanTempCeilingK &&
-        (body.bulkWaterFraction ?? 0) >= W.hyceanBulkWaterMin &&
+        T != null && T < W.veiledIceTempCeilingK &&
+        (body.bulkWaterFraction ?? 0) >= W.veiledIceBulkWaterMin &&
         body.atm1 === 'H2') {
-      return 'hycean';
+      return 'veiled_ice';
     }
     if (body.atm1 === 'He' && body.atm2 !== 'H2' && body.atm3 !== 'H2') {
       return 'helium';

@@ -28,7 +28,7 @@ import { classifyBody } from '../../../../scripts/lib/body-archetype.mjs';
 const RIM_EXTENT_THRESHOLDS = [0.02, 0.15, 0.7] as const;
 
 // Outward rim width buckets for no-surface bodies (gas / ice giants /
-// hycean / helium / gas dwarfs). No surfacePressureBar to anchor — at
+// veiled-ice / helium / gas dwarfs). No surfacePressureBar to anchor — at
 // the limb you're looking through a deep continuous H₂/He column whose
 // "pressure" is conventional, so width keys off the scale-height
 // proxy alone (already includes the per-class µ correction). All
@@ -61,7 +61,7 @@ const MU_FACTOR_BY_ARCHETYPE: Readonly<Record<string, number>> = {
   hot_jupiter: 13,
   ice_giant:   13,
   sub_neptune: 13,
-  hycean:      13,
+  veiled_ice:  13,
   helium:       7,
 };
 
