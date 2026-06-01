@@ -44,8 +44,10 @@ import { MAX_LIGHTS, BAYER4_GLSL, HASH_GLSL, RIM_GLOW_FOCUS, STAR_CRESCENT_LIGHT
 //          The vortex swirl fades out by bandness, so banded giants
 //          (Jupiter / Saturn / Uranus / Neptune) and Venus stay straight.
 //      A 1-px-down drop shadow (CLOUD_SHADOW_*) then darkens the layer
-//      beneath each cloud's lower edge — the cloud mask reprojected one
-//      screen-px up and re-tested — a pixel-art over/under depth cue.
+//      beneath each cloud's lower edge — the deck stack reprojected one
+//      screen-px up and re-tested, comparing topmost-deck indices so an
+//      upper deck shadows the lower deck exposed through a rent below it,
+//      not just the surface — a pixel-art over/under depth cue.
 //   3. **Haze** (when aAtmoScalars.x > 0, hazeOpacity) — uniform
 //      per-fragment lerp toward aHazeColor by hazeOpacity. Unified blend across bulk atm
 //      gases × pressure, Rayleigh scattering, formation-gated aerosol
@@ -1749,27 +1751,34 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       }
 
       // ── Cloud drop shadow ──
-      // A 1-px-down copy of the cloud silhouette, painted darker onto the
+      // A 1-px-down copy of each cloud's silhouette, painted darker onto the
       // layer beneath — a pixel-art over/under cue that reads the decks as
-      // floating above the surface. Cast in main(): a fragment with no cloud
-      // re-evaluates the WHOLE cloud mask at the screen position
-      // CLOUD_SHADOW_PX above it (reprojected through the sphere); if cloud
-      // renders there, this fragment is its shadow and the underlying color
-      // is multiplied down by CLOUD_SHADOW_DARKEN. Because the mask is the
-      // same cloudLayers() pass (dither + vortex swirl included), evaluated
-      // at the shifted fragment, the shadow is an EXACT copy of the rendered
-      // cloud shifted straight down — not an approximation.
+      // floating above whatever sits below them. Cast in main(): a fragment
+      // re-evaluates the WHOLE cloud stack at the screen position
+      // CLOUD_SHADOW_PX above it (reprojected through the sphere) and asks
+      // which is the topmost deck there. If that deck sits ABOVE whatever is
+      // visible at this fragment, this fragment is its shadow and the color
+      // is multiplied down by CLOUD_SHADOW_DARKEN. Comparing topmost-deck
+      // indices (not a binary mask) makes one rule cover both cases: a deck
+      // shadowing the bare surface (visible deck = -1) AND an upper deck
+      // shadowing the lower deck exposed through a rent below it. Because the
+      // sample is the same cloudLayers() pass (dither + vortex swirl
+      // included) evaluated at the shifted fragment, each shadow is an EXACT
+      // copy of the casting cloud shifted straight down — not an approximation.
       //   CLOUD_SHADOW_PX     — downward shift in screen px.
       //   CLOUD_SHADOW_DARKEN — multiplier on the shadowed underlying color.
       const float CLOUD_SHADOW_PX     = 1.0;
       const float CLOUD_SHADOW_DARKEN = 0.88;
-      // Composites the cloud decks over col and reports whether any deck
-      // painted at this fragment via cloudMask (1 = cloud, 0 = bare base) —
-      // the mask the drop-shadow pass samples one px up. fragXY drives the
-      // edge dither, passed in (not read from gl_FragCoord) so the shifted
-      // shadow sample dithers in its own screen cell, keeping the copy exact.
-      vec3 cloudLayers(vec3 col, float lon, float lat, float vBodyV, vec2 fragXY, out float cloudMask) {
-        cloudMask = 0.0;
+      // Composites the cloud decks over col and reports the topmost deck
+      // that painted at this fragment via topDeck (deck index, -1 = bare
+      // base) — the value the drop-shadow pass samples one px up to decide
+      // whether a HIGHER deck floats over this fragment. Decks composite in
+      // ascending-altitude index order, so the last (highest) index to paint
+      // is the visible one. fragXY drives the edge dither, passed in (not read
+      // from gl_FragCoord) so the shifted shadow sample dithers in its own
+      // screen cell, keeping the copy exact.
+      vec3 cloudLayers(vec3 col, float lon, float lat, float vBodyV, vec2 fragXY, out float topDeck) {
+        topDeck = -1.0;
         for (int li = 0; li < ${MAX_CLOUD_LAYERS}; li++) {
           float layerU = (float(li) + 0.5) / float(${BODY_TEXTURE_WIDTH});
           vec4 layer = texture2D(uCloudLayerData, vec2(layerU, vBodyV));
@@ -1886,7 +1895,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           vec3 tinted = mix(cloudCol, vHazeColor, hazeAbove);
 
           col = tinted;
-          cloudMask = 1.0;
+          topDeck = float(li);
         }
         return col;
       }
@@ -2099,28 +2108,26 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         // ── Cloud layers ── composite the stratified condensate decks over
         // the surface+haze base (or atm column on no-surface bodies). See
         // cloudLayers() for the wind→banding model + edge-dither cases.
-        float cloudMaskHere;
-        col = cloudLayers(col, lon, lat, vBodyV, gl_FragCoord.xy, cloudMaskHere);
+        float topDeckHere;
+        col = cloudLayers(col, lon, lat, vBodyV, gl_FragCoord.xy, topDeckHere);
 
-        // ── Cloud drop shadow ── a 1-px-down copy of the cloud silhouette
-        // darkening the layer beneath (see the cloud drop-shadow block). A
-        // bare fragment reprojects the sphere CLOUD_SHADOW_PX up-screen and
-        // re-runs the cloud mask there; if cloud renders at that shifted
-        // fragment, this one is its shadow. col already holds the bare base
-        // here (no deck painted), so the multiply lands on the surface/deck
-        // beneath. Skipped where cloud already covers — it overpaints anyway.
-        if (cloudMaskHere < 0.5) {
-          float lxsU = lxs + sT * CLOUD_SHADOW_PX;
-          float lysU = lys + cT * CLOUD_SHADOW_PX;
-          float nxsU = (lxsU / vRadius) * SPHERE_VISIBLE_FRAC;
-          float nysU = (lysU / vRadius) * SPHERE_VISIBLE_FRAC;
-          float nzsU = sqrt(max(0.0, 1.0 - nxsU * nxsU - nysU * nysU));
-          float latU = asin(nysU * POLE_COS + nzsU * POLE_SIN);
-          float lonU = atan(nxsU, nzsU * POLE_COS - nysU * POLE_SIN);
-          float cloudMaskAbove;
-          cloudLayers(col, lonU, latU, vBodyV, gl_FragCoord.xy + vec2(0.0, CLOUD_SHADOW_PX), cloudMaskAbove);
-          if (cloudMaskAbove > 0.5) col *= CLOUD_SHADOW_DARKEN;
-        }
+        // ── Cloud drop shadow ── a 1-px-down copy of each cloud silhouette
+        // darkening the layer beneath (see the cloud drop-shadow block).
+        // Reproject the sphere CLOUD_SHADOW_PX up-screen and ask which deck is
+        // topmost there; if that deck sits above whatever is visible at this
+        // fragment (topDeckHere — the bare base is -1), this fragment is its
+        // shadow. col holds the visible layer here (bare base, or the deck
+        // exposed through a rent above), so the multiply lands on it.
+        float lxsU = lxs + sT * CLOUD_SHADOW_PX;
+        float lysU = lys + cT * CLOUD_SHADOW_PX;
+        float nxsU = (lxsU / vRadius) * SPHERE_VISIBLE_FRAC;
+        float nysU = (lysU / vRadius) * SPHERE_VISIBLE_FRAC;
+        float nzsU = sqrt(max(0.0, 1.0 - nxsU * nxsU - nysU * nysU));
+        float latU = asin(nysU * POLE_COS + nzsU * POLE_SIN);
+        float lonU = atan(nxsU, nzsU * POLE_COS - nysU * POLE_SIN);
+        float topDeckAbove;
+        cloudLayers(col, lonU, latU, vBodyV, gl_FragCoord.xy + vec2(0.0, CLOUD_SHADOW_PX), topDeckAbove);
+        if (topDeckAbove > topDeckHere + 0.5) col *= CLOUD_SHADOW_DARKEN;
 
         // ── Lighting pass ──
         // See the LIGHT_* constant block for the math + tuning rationale.
