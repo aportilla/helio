@@ -22,6 +22,15 @@
 // envelope "Searing" — so the same 480 K doesn't flatten three very different
 // worlds into the same chip the way a single "Torrid" did.
 //
+// The voice leans on a few sensory registers beyond bare physics — colour
+// (a "Rust-Red" iron core, an "Ochre" dust world, a "Sallow"/"Bruised" tholin
+// sky), desolation (a "Bleak"/"Desolate" deep-cold moon), and grandeur — each
+// still gated by a real physical read. Two vocabulary registers are
+// deliberately UNwired: the "engineered / megastructural" and "eldritch /
+// otherworldly" sets only make sense for artificial or genuinely anomalous
+// bodies, which the data model doesn't carry yet; add them when those body
+// kinds exist rather than faking the physics to reach the words.
+//
 // Each concept is a SYNONYM POOL, not a single word: "hot dry rock" draws from
 // {Blistering, Baking, Torrid, …}, "cold" from {Frozen, Icebound, …}. The pick
 // is deterministic per (body, concept) — `pick`/`pickNoun` index the pool by
@@ -31,8 +40,17 @@
 // just multiply phrasings; they never change which CONCEPT fires (that's the
 // physics-keyed logic below). The coinage core nouns we own (Frostbound,
 // Glacial, Desert, Iron, Lava, Veiled Ice, Subglacial Ocean) are pooled too —
-// NOUN; the astronomy-canonical ones (Gas Giant, Sub-Neptune, Hot Jupiter, Ice
-// Giant, Super-Earth) stay fixed, players know them.
+// NOUN; the generic astronomy nouns (Gas Giant, Gas Dwarf, Ice Giant, Helium
+// Giant) stay fixed, players know them. We keep the chip free of Earth/Sol-
+// keyed anchors: there is deliberately no "Super-Earth" (→ scale tail
+// "Megaworld"), no "Hot Jupiter" (→ heat state "Searing Gas Giant"), no "Sub-
+// Neptune" (→ "Gas Dwarf"), and no "Gaian" (→ "Garden World").
+//
+// Bodies also wear their SCALE. The tail noun is size-keyed (see worldNoun): a
+// moon spans Fragment → Moonlet → Moon → Near-Planet, a planet Planetoid →
+// Worldlet → World → Megaworld. The gaseous giants instead take a grandeur
+// STATE word ("Colossal Gas Giant"), since their tail is a fixed archetype
+// noun, not "World" — same idea, different slot.
 //
 // Archetype → noun:
 //   - iconic types the surface-liquid data unlocks read as named worlds
@@ -65,26 +83,29 @@ import { hash32 } from '../../../scripts/lib/prng.mjs';
 const LEXICON = {
   // life — only when it has reshaped the world's physical essence (Verdant).
   // Lesser biospheres live in the info card's dedicated life row, not the chip.
-  verdant:     ['Verdant', 'Living', 'Flourishing', 'Teeming'],        // complex biosphere, high surface impact
+  verdant:     ['Verdant', 'Living', 'Flourishing', 'Teeming', 'Resplendent', 'Overgrown'], // complex biosphere, high surface impact
   // activity
-  tidal:       ['Tidal', 'Flexed', 'Kneaded', 'Churned'], // tidally-flexed, perpetually-resurfaced moon
   cryovolcanic:['Cryovolcanic', 'Geysered', 'Plumed', 'Venting', 'Spouting'], // young icy/watery surface — geyser resurfacing (no Ice-/Frost- stem: pairs with cold cores)
-  volcanic:    ['Volcanic', 'Eruptive', 'Smoldering', 'Smoking', 'Fuming'], // silicate volcanism on a hot dry body
+  volcanic:    ['Volcanic', 'Eruptive', 'Smoldering', 'Smoking', 'Fuming', 'Magma-Veined'], // silicate volcanism on a hot dry body
   sealedOcean: ['Sealed-Ocean', 'Hidden-Sea', 'Buried-Ocean', 'Under-Ice'], // buried ice-shell ocean — names a feature, so the compound stays
+  // scale — the visually-largest gaseous envelopes wear a grandeur word (keys
+  // off radiusEarth, gaseous cores only). Breaks up the bare-giant buckets and
+  // lets a super-jovian read as the landmark it is.
+  colossal:    ['Colossal', 'Titanic', 'Vast', 'Immense', 'Monumental', 'Cyclopean'],
   // heat (domain-aware — see stateModifier)
-  scorched:    ['Scorched', 'Charred', 'Cindered', 'Blasted', 'Incinerated'], // extreme dry-rock heat (T ≥ HOT_EXTREME_K)
-  searing:     ['Searing', 'Broiling', 'Seething', 'Roiling', 'Blazing'], // hot gaseous envelope
-  steaming:    ['Steaming', 'Scalding', 'Sweltering', 'Simmering', 'Vaporous'], // hot world with standing liquid
-  blistering:  ['Blistering', 'Baking', 'Torrid', 'Parched', 'Roasting'], // hot dry rock (sub-extreme)
-  hothouse:    ['Hothouse', 'Smothering', 'Stifling', 'Suffocating'], // runaway-greenhouse rock (thick hot atm, dry)
+  scorched:    ['Scorched', 'Charred', 'Cindered', 'Blasted', 'Incinerated', 'Infernal', 'Calcined'], // extreme dry-rock heat (T ≥ HOT_EXTREME_K)
+  searing:     ['Searing', 'Broiling', 'Seething', 'Roiling', 'Blazing', 'Incandescent'], // hot gaseous envelope
+  steaming:    ['Steaming', 'Scalding', 'Sweltering', 'Simmering', 'Vaporous', 'Humid'], // hot world with standing liquid
+  blistering:  ['Blistering', 'Baking', 'Torrid', 'Parched', 'Roasting', 'Sun-Scoured'], // hot dry rock (sub-extreme)
+  hothouse:    ['Hothouse', 'Smothering', 'Stifling', 'Suffocating', 'Miasmic', 'Choking'], // runaway-greenhouse rock (thick hot atm, dry)
   temperate:   ['Temperate', 'Clement', 'Mild', 'Balmy'],  // clement, liquid-bearing band
-  frozen:      ['Frozen', 'Icebound', 'Frostbitten', 'Glaciated'], // cold (T < COLD_K)
-  frigid:      ['Frigid', 'Cryogenic', 'Gelid', 'Bitter'], // deep cold (T < DEEP_COLD_K)
+  frozen:      ['Frozen', 'Icebound', 'Frostbitten', 'Glaciated', 'Hoarfrosted', 'Wind-Scoured'], // cold (T < COLD_K)
+  frigid:      ['Frigid', 'Cryogenic', 'Gelid', 'Bitter', 'Bleak', 'Desolate', 'Austere'], // deep cold (T < DEEP_COLD_K)
   // sky / surface
-  smog:        ['Smoggy', 'Hazy', 'Murky', 'Smoky'], // thick organic (tholin) haze
-  dust:        ['Dusty', 'Gritty', 'Sandblasted', 'Windswept'], // planet-wide dust load
+  smog:        ['Smoggy', 'Hazy', 'Murky', 'Smoky', 'Sallow', 'Bruised'], // thick organic (tholin) haze — sallow/bruised read the orange-brown sky as colour
+  dust:        ['Dusty', 'Gritty', 'Sandblasted', 'Windswept', 'Ochre'], // planet-wide dust load
   airless:     ['Airless', 'Bare', 'Stark', 'Exposed'], // no meaningful atmosphere over rock
-  cratered:    ['Cratered', 'Pockmarked', 'Pitted', 'Battered', 'Scarred'], // ancient, heavily-cratered surface
+  cratered:    ['Cratered', 'Pockmarked', 'Pitted', 'Battered', 'Scarred', 'Fissured', 'Serrated'], // ancient, heavily-cratered surface
   // exotic standing liquid (a film the core noun didn't already name). The
   // pools vary the vessel word only — the solvent name stays, so the chip
   // never lies about WHICH liquid it is.
@@ -103,14 +124,30 @@ const LEXICON = {
 
 // Core-noun synonym pools — only the evocative nouns we coined, so the biggest
 // bare-noun collision buckets ("Glacial Moon", "Frostbound Moon") break up too.
-// The astronomy-canonical nouns (Gas Giant, Sub-Neptune, Hot Jupiter, Ice
-// Giant, Super-Earth) stay fixed in `coreFor` — players recognize them. The
-// world/moon tail is appended at the call site, so these are the qualifier only.
+// The generic astronomy nouns (Gas Giant, Gas Dwarf, Ice Giant, Helium Giant)
+// stay fixed in `coreFor` — players recognize them. The label vocabulary stays
+// free of Earth/Sol-keyed anchors, so there is no Super-Earth / Hot Jupiter /
+// Sub-Neptune / Gaian (see coreFor). The world/moon tail is appended at the
+// call site, so these are the qualifier only.
 const NOUN = {
-  frostbound:      ['Frostbound', 'Frost-Sealed', 'Rime-Locked', 'Rimebound'],
-  glacial:         ['Glacial', 'Iceclad', 'Ice-Mantled', 'Frost-Plated'],
-  desert:          ['Desert', 'Barren', 'Arid', 'Bone-Dry'],
-  iron:            ['Iron', 'Ferrous', 'Iron-Cored', 'Metal'],
+  frostbound:      ['Frostbound', 'Frost-Sealed', 'Rime-Locked', 'Rimebound', 'Rime-Crusted', 'Frost-Caked'],
+  glacial:         ['Glacial', 'Iceclad', 'Ice-Mantled', 'Frost-Plated', 'Crystalline', 'Ice-Sheathed'],
+  desert:          ['Desert', 'Barren', 'Arid', 'Bone-Dry', 'Desiccated'],
+  iron:            ['Iron', 'Ferrous', 'Iron-Cored', 'Metal', 'Rust-Red', 'Leaden'], // Rust-Red / Leaden fold colour into the metal core
+  // Size tails — they REPLACE the bare "Moon" / "World" word for the size
+  // extremes (see worldNoun); medium bodies keep the plain tail. Single-token
+  // (hyphens count as one) so they never blow the 3-token budget. The qualifier
+  // still prefixes: "Iron Fragment", "Crystalline Near-Planet", "Hothouse
+  // Megaworld". Kept disjoint from every other pool — a tail is the noun, never
+  // a state/material word. Moons run the full four tiers; planets carry their
+  // scale here too (a large terrestrial reads "Megaworld", which is also where
+  // the old Earth-keyed "Super-Earth" went — see coreFor).
+  moonTiny:        ['Fragment', 'Splinter', 'Shard', 'Mote'],          // captured rubble below Pluto scale
+  moonSmall:       ['Moonlet', 'Sub-Moon', 'Satellite'],               // a small attendant moon
+  moonLarge:       ['Near-Planet', 'Sub-Planet', 'Planet-Moon'],       // Mars-plus — a world in its own right
+  planetTiny:      ['Planetoid', 'Dwarf-World', 'Minor-World'],        // dwarf-planet scale (sub-Mercury)
+  planetSmall:     ['Worldlet', 'Sub-World', 'Lesser-World'],          // a small sub-Mars world
+  planetLarge:     ['Megaworld', 'Great-World', 'Heavyworld'],         // a massive high-gravity world (absorbs Super-Earth)
   lava:            ['Lava', 'Molten'],
   // Iconic two-word nouns — a frozen volatile world under an opaque envelope,
   // and a liquid-water ocean buried beneath an ice shell. Both stand alone (the
@@ -153,6 +190,29 @@ const METHANE_SEA_COVER = 0.5;
 // economic landmark (~1% of worlds); a single deposit or a bulk-only pair
 // stays in the resource row.
 const ABUNDANT_DEPOSIT = 7;
+// Radius (Earth radii) at/above which a gaseous envelope reads as a landmark
+// of scale ("Colossal Gas Giant"). Set past Jupiter (~11.2 R⊕) so the grandeur
+// word is earned by genuine super-jovians, not every gas giant — the disc
+// physics saturates near 1 Jupiter radius, so this keys off the visually
+// largest discs in the galaxy.
+const COLOSSAL_RADIUS = 12;
+// Moon-size bins (Earth radii). Most moons stay a plain "Moon"; the tails peel
+// off only the genuine extremes — a captured fragment below MOON_TINY_R (sub-
+// Pluto), a small moonlet below MOON_SMALL_R, and a Mars-plus near-planet at/
+// above MOON_LARGE_R (our procgen moons skew large, so this earns its grandeur
+// near the top of the size distribution). Planets keep "World" — their
+// archetype noun already carries scale (Super-Earth, Gas Giant, Colossal …).
+const MOON_TINY_R = 0.07;
+const MOON_SMALL_R = 0.18;
+const MOON_LARGE_R = 0.80;
+// Planet-size bins (Earth radii), the terrestrial analogue. A sub-Mercury dwarf
+// reads "Planetoid", a sub-Mars world "Worldlet", and a massive high-gravity
+// world (≥ PLANET_LARGE_R, the old Super-Earth band) reads "Megaworld". Mars
+// (~0.53) and Earth-mass worlds stay a plain "World". Gaseous planets never
+// take a terrestrial tail (see worldNoun / coreFor's veiled-ice case).
+const PLANET_TINY_R = 0.30;
+const PLANET_SMALL_R = 0.50;
+const PLANET_LARGE_R = 1.25;
 // Heat bands. One temperature wears different words by domain (see above).
 const HOT_K = 330;          // standing-liquid steams / dry rock blisters
 const HOT_EXTREME_K = 600;  // dry rock reads "Scorched"
@@ -164,7 +224,6 @@ const DEEP_COLD_K = 90;     // reads "Frigid"
 // resurfacing signal that also keeps the dominant cold-moon buckets from
 // collapsing to one bare chip.
 const CRYOVOLCANIC_AGE = 0.7;
-const TIDAL_AGE = 0.85;
 const ANCIENT_AGE = 0.12;
 
 // Axes a core noun already conveys, so a state modifier on the same axis is
@@ -196,8 +255,31 @@ function isMoon(b: Body): boolean {
   return b.kind === 'moon';
 }
 
-// "Moon" for moons, "World" for planets.
+// The tail noun: a size-keyed word for the body's kind. Most bodies read the
+// plain tail ("Moon" / "World"); only the size extremes wear a distinct one
+// (see MOON_*_R / PLANET_*_R). The pick is the same deterministic per-(body)
+// draw as every other pool, so a body always wears the same size word. Gaseous
+// planets do NOT route through here for a terrestrial tail — coreFor's gaseous
+// cases carry their own fixed noun (the lone exception, veiled-ice, uses
+// plainTail), so "Megaworld" et al. only ever describe rock/ice surfaces.
 function worldNoun(b: Body): string {
+  const r = b.radiusEarth ?? 0;
+  if (isMoon(b)) {
+    if (r < MOON_TINY_R) return pickNoun(b, 'moonTiny');
+    if (r < MOON_SMALL_R) return pickNoun(b, 'moonSmall');
+    if (r >= MOON_LARGE_R) return pickNoun(b, 'moonLarge');
+    return 'Moon';
+  }
+  if (r < PLANET_TINY_R) return pickNoun(b, 'planetTiny');
+  if (r < PLANET_SMALL_R) return pickNoun(b, 'planetSmall');
+  if (r >= PLANET_LARGE_R) return pickNoun(b, 'planetLarge');
+  return 'World';
+}
+
+// The plain, size-agnostic tail — used where a size word would mislead (the
+// gaseous veiled-ice core, whose "World"/"Moon" must not read as a terrestrial
+// "Megaworld").
+function plainTail(b: Body): string {
   return isMoon(b) ? 'Moon' : 'World';
 }
 
@@ -216,17 +298,26 @@ function coreFor(b: Body): Core {
   const w = worldNoun(b);
   switch (classifyBody(b)) {
     // ─── gaseous ───
-    case 'hot_jupiter':      return { noun: 'Hot Jupiter', hot: true, material: 'gas' };
+    // A hot Jupiter is just a gas giant that's blazing — drop the Sol-keyed
+    // noun (and the hot flag) so the heat-domain state carries it instead:
+    // "Searing Gas Giant", "Broiling Gas Giant".
+    case 'hot_jupiter':
     case 'gas_giant':        return { noun: 'Gas Giant', material: 'gas' };
     case 'ice_giant':        return { noun: 'Ice Giant', cold: true, material: 'gas' };
-    case 'sub_neptune':      return { noun: 'Sub-Neptune', material: 'gas' };
+    // The small gaseous/volatile-envelope world — the "gas dwarf" to the gas
+    // giant. Replaces the Sol-keyed "Sub-Neptune"; heat/scale states still vary
+    // it ("Searing Gas Dwarf").
+    case 'sub_neptune':      return { noun: 'Gas Dwarf', material: 'gas' };
     // A cold, ice/water-rich sub-Neptune under an opaque H2 envelope — a
     // frozen mini-Neptune. cold + gaseous (no surface) → no temp/composition
     // modifier; the 3-token noun stands alone.
-    case 'veiled_ice':       return { noun: `${pickNoun(b, 'veiledIce')} ${w}`, cold: true, material: 'gas' };
+    case 'veiled_ice':       return { noun: `${pickNoun(b, 'veiledIce')} ${plainTail(b)}`, cold: true, material: 'gas' };
     case 'helium':           return { noun: 'Helium Giant', material: 'gas' };
     // ─── iconic surface / subsurface liquid ───
-    case 'gaian':            return { noun: `Gaian ${w}`, material: 'water', temperate: true };
+    // A temperate, life-bearing water world — the classic "garden world". Sol-
+    // free (was "Gaian", from Gaia/Earth); its scale tail still shows ("Garden
+    // Megaworld"). temperate skips the redundant Temperate/Verdant states.
+    case 'gaian':            return { noun: `Garden ${w}`, material: 'water', temperate: true };
     case 'tholin': {
       // A cold methane world: orange organic (tholin) smog over hydrocarbon
       // lakes. The smog is the player-facing noun (jargon-free, and it's what
@@ -253,7 +344,11 @@ function coreFor(b: Body): Core {
     case 'iron':             return { noun: `${pickNoun(b, 'iron')} ${w}`, material: 'iron' };
     case 'frostbound':       return { noun: `${pickNoun(b, 'frostbound')} ${w}`, cold: true, material: 'methane' };
     case 'glacial':          return { noun: `${pickNoun(b, 'glacial')} ${w}`, cold: true, material: 'ice' };
-    case 'super_earth':      return { noun: 'Super-Earth', material: 'rock' };
+    // A massive terrestrial — the band real astronomy calls a "super-Earth",
+    // which we don't: it's a generic big rock, so it reads exactly like 'rocky'
+    // and lets its scale tail ("Megaworld") and surface state carry it, with no
+    // Earth-keyed anchor in the chip.
+    case 'super_earth':      return { noun: `Rocky ${w}`, material: 'rock', generic: true };
     case 'desert':           return { noun: `${pickNoun(b, 'desert')} ${w}`, material: 'rock' };
     case 'rocky':            return { noun: `Rocky ${w}`, material: 'rock', generic: true };
     case 'unknown':          return { noun: 'Uncharted World', uncharted: true };
@@ -299,11 +394,10 @@ function stateModifier(b: Body, core: Core): { word: string; key: keyof typeof L
 
   // 2. Surface character. Methane lakes are the defining feature of a Smog
   //    world — shown above a low floor (Titan's are only ~3% cover); a drowned
-  //    surface is already named a Methane Sea by the core noun. Then tidal
-  //    resurfacing, then the other exotic-solvent films.
+  //    surface is already named a Methane Sea by the core noun. Then the other
+  //    exotic-solvent films.
   if (b.surfaceLiquidSpecies === 'hydrocarbon'
       && liquid >= METHANE_LAKE_FLOOR && liquid < METHANE_SEA_COVER) return fire('methaneLake');
-  if (isMoon(b) && (b.surfaceAge ?? 0) >= TIDAL_AGE) return fire('tidal');
   // Other exotic surface lakes the core noun didn't already name — ammonia /
   // nitrogen films on a cold base (Glacial / Frostbound) below their full-sea
   // threshold. (Hydrocarbon is handled above; sulfur reaches Brimstone, the
@@ -325,8 +419,7 @@ function stateModifier(b: Body, core: Core): { word: string; key: keyof typeof L
   if (lode !== null) return fire(lode);
 
   // 4. Surface activity.
-  // Cryovolcanism: a young icy/watery surface (planets, or moons the tidal
-  // branch missed).
+  // Cryovolcanism: a young icy/watery surface on a cold core.
   if ((core.material === 'ice' || core.material === 'methane' || core.material === 'water')
       && core.cold && (b.surfaceAge ?? 0) >= CRYOVOLCANIC_AGE) return fire('cryovolcanic');
   // A buried ice-shell ocean on a body that doesn't already wear one (a
@@ -354,6 +447,11 @@ function stateModifier(b: Body, core: Core): { word: string; key: keyof typeof L
     if (T >= HOT_K && gas) return fire('searing');
     if (T >= HOT_K) return fire('blistering');
   }
+
+  // 6b. Scale — a giant large enough to be a landmark of its own. Below the
+  //    heat block so a hot giant reads "Searing" first; a cold super-jovian
+  //    that fell through wears its grandeur. Gaseous cores only.
+  if (gas && !core.hot && (b.radiusEarth ?? 0) >= COLOSSAL_RADIUS) return fire('colossal');
 
   // 7. Distinctive atmosphere texture — organic smog (Titan tholin) or a
   //    dust-choked sky. Skipped on cores that already imply smog.
