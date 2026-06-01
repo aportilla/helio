@@ -8,19 +8,31 @@
 // turns the archetype into an evocative core noun and layers the single most
 // salient state + a composition adjective, so two bodies that share an
 // archetype but differ physically read distinctly ("Verdant Gaian World" vs
-// "Crater-Scarred Glacial Moon").
+// "Cratered Glacial Moon").
 //
 // Structure — `[state] [material] core-noun`, a hard 3-token budget so it
 // stays a glanceable chip. The noun is mandatory and claims first; state
 // outranks material for the remainder. A 3-token iconic noun ("Subglacial
 // Ocean Moon") stands alone; a short one ("Iron Moon") leaves room for a
-// state. Hyphenated compounds ("Tidally-Heated", "Crater-Scarred") count as
+// state. Hyphenated compounds ("Sealed-Ocean", "Bone-Dry") count as
 // one token, so the vivid words don't blow the budget.
 //
 // The vocabulary is HEAT-DOMAIN-AWARE: one temperature never wears one word.
 // A hot dry rock reads "Blistering", a hot ocean "Steaming", a hot gaseous
 // envelope "Searing" — so the same 480 K doesn't flatten three very different
 // worlds into the same chip the way a single "Torrid" did.
+//
+// Each concept is a SYNONYM POOL, not a single word: "hot dry rock" draws from
+// {Blistering, Baking, Torrid, …}, "cold" from {Frozen, Icebound, …}. The pick
+// is deterministic per (body, concept) — `pick`/`pickNoun` index the pool by
+// `hash32(body.id + concept)` — so a world always wears the same words across
+// reloads, two concepts on one body draw independently, and no word lives in
+// two pools (a state + material pair can never read "Frozen Frozen"). The pools
+// just multiply phrasings; they never change which CONCEPT fires (that's the
+// physics-keyed logic below). The coinage core nouns we own (Frostbound,
+// Glacial, Desert, Iron, Lava, Veiled Ice, Subglacial Ocean) are pooled too —
+// NOUN; the astronomy-canonical ones (Gas Giant, Sub-Neptune, Hot Jupiter, Ice
+// Giant, Super-Earth) stay fixed, players know them.
 //
 // Archetype → noun:
 //   - iconic types the surface-liquid data unlocks read as named worlds
@@ -40,46 +52,86 @@
 
 import type { AtmGas, Body } from '../../data/stars';
 import { classifyBody } from '../../../scripts/lib/body-archetype.mjs';
+import { hash32 } from '../../../scripts/lib/prng.mjs';
 
 // ─── Tunable vocabulary ─────────────────────────────────────────────────────
-// The swappable words, hoisted so a tone pass is one edit. Each is grounded
-// in a physical read (see the call sites); these are the words, not the gates.
+// The swappable words, hoisted so a tone pass is one edit. Each concept is a
+// SYNONYM POOL — `pick` draws one deterministically per (body, concept), so the
+// same world always wears the same word. Each is grounded in a physical read
+// (see the call sites); these are the words, not the gates. No word appears in
+// two pools, so a state + material pair can never read "Frozen Frozen".
+// Editing a pool's length reflows that concept's galaxy-wide distribution
+// (selection is hash % len) — harmless, since labels are pure presentation.
 const LEXICON = {
   // life — only when it has reshaped the world's physical essence (Verdant).
   // Lesser biospheres live in the info card's dedicated life row, not the chip.
-  verdant:     'Verdant',        // complex biosphere, high surface impact
+  verdant:     ['Verdant', 'Living', 'Flourishing', 'Teeming'],        // complex biosphere, high surface impact
   // activity
-  tidal:       'Tidally-Heated', // tidally-flexed, perpetually-resurfaced moon
-  cryovolcanic:'Cryovolcanic',   // young icy/watery surface — geyser resurfacing
-  volcanic:    'Volcanic',       // silicate volcanism on a hot dry body
-  sealedOcean: 'Sealed-Ocean',   // buried ice-shell ocean under a frozen crust
+  tidal:       ['Tidal', 'Flexed', 'Kneaded', 'Churned'], // tidally-flexed, perpetually-resurfaced moon
+  cryovolcanic:['Cryovolcanic', 'Geysered', 'Plumed', 'Venting', 'Spouting'], // young icy/watery surface — geyser resurfacing (no Ice-/Frost- stem: pairs with cold cores)
+  volcanic:    ['Volcanic', 'Eruptive', 'Smoldering', 'Smoking', 'Fuming'], // silicate volcanism on a hot dry body
+  sealedOcean: ['Sealed-Ocean', 'Hidden-Sea', 'Buried-Ocean', 'Under-Ice'], // buried ice-shell ocean — names a feature, so the compound stays
   // heat (domain-aware — see stateModifier)
-  scorched:    'Scorched',       // extreme dry-rock heat (T ≥ HOT_EXTREME_K)
-  searing:     'Searing',        // hot gaseous envelope
-  steaming:    'Steaming',       // hot world with standing liquid
-  blistering:  'Blistering',     // hot dry rock (sub-extreme)
-  hothouse:    'Hothouse',       // runaway-greenhouse rock (thick hot atm, dry)
-  temperate:   'Temperate',      // clement, liquid-bearing band
-  frozen:      'Frozen',         // cold (T < COLD_K)
-  frigid:      'Frigid',         // deep cold (T < DEEP_COLD_K)
+  scorched:    ['Scorched', 'Charred', 'Cindered', 'Blasted', 'Incinerated'], // extreme dry-rock heat (T ≥ HOT_EXTREME_K)
+  searing:     ['Searing', 'Broiling', 'Seething', 'Roiling', 'Blazing'], // hot gaseous envelope
+  steaming:    ['Steaming', 'Scalding', 'Sweltering', 'Simmering', 'Vaporous'], // hot world with standing liquid
+  blistering:  ['Blistering', 'Baking', 'Torrid', 'Parched', 'Roasting'], // hot dry rock (sub-extreme)
+  hothouse:    ['Hothouse', 'Smothering', 'Stifling', 'Suffocating'], // runaway-greenhouse rock (thick hot atm, dry)
+  temperate:   ['Temperate', 'Clement', 'Mild', 'Balmy'],  // clement, liquid-bearing band
+  frozen:      ['Frozen', 'Icebound', 'Frostbitten', 'Glaciated'], // cold (T < COLD_K)
+  frigid:      ['Frigid', 'Cryogenic', 'Gelid', 'Bitter'], // deep cold (T < DEEP_COLD_K)
   // sky / surface
-  smog:        'Smog-Shrouded',  // thick organic (tholin) haze
-  dust:        'Dust-Choked',    // planet-wide dust load
-  airless:     'Airless',        // no meaningful atmosphere over rock
-  cratered:    'Crater-Scarred', // ancient, heavily-cratered surface
-  // exotic standing liquid (a film the core noun didn't already name)
-  methaneLake: 'Methane-Lake',   // hydrocarbon lakes — the defining Smog-world feature
-  ammoniaLake: 'Ammonia-Lake',
-  nitrogenLake:'Nitrogen-Lake',
-  sulfurPool:  'Sulfur-Pool',
+  smog:        ['Smoggy', 'Hazy', 'Murky', 'Smoky'], // thick organic (tholin) haze
+  dust:        ['Dusty', 'Gritty', 'Sandblasted', 'Windswept'], // planet-wide dust load
+  airless:     ['Airless', 'Bare', 'Stark', 'Exposed'], // no meaningful atmosphere over rock
+  cratered:    ['Cratered', 'Pockmarked', 'Pitted', 'Battered', 'Scarred'], // ancient, heavily-cratered surface
+  // exotic standing liquid (a film the core noun didn't already name). The
+  // pools vary the vessel word only — the solvent name stays, so the chip
+  // never lies about WHICH liquid it is.
+  methaneLake: ['Methane-Lake', 'Methane-Pooled', 'Methane-Mere'], // hydrocarbon lakes — the defining Smog-world feature
+  ammoniaLake: ['Ammonia-Lake', 'Ammonia-Pooled', 'Ammonia-Mere'],
+  nitrogenLake:['Nitrogen-Lake', 'Nitrogen-Pooled'],
+  sulfurPool:  ['Sulfur-Pool', 'Sulfur-Pitted', 'Sulfur-Welled'],
   // composition
-  briny:       'Briny',          // heavy solute load in standing liquid
-  sulfurous:   'Sulfurous',      // sulfur-dominated surface / volcanism
+  briny:       ['Briny', 'Saline', 'Brackish', 'Salty'], // heavy solute load in standing liquid
+  sulfurous:   ['Sulfurous', 'Sulfuric', 'Sulfur-Caked'], // sulfur-dominated surface / volcanism
   // economic identity — a rare abundant resource PAIRING (not a single
   // deposit, which lives in the info card's resource row)
-  rich:        'Rich',           // two abundant deposits incl. a strategic (rare-earth / radioactive)
-  veined:      'Veined',         // an abundant exotic deposit paired with another
+  rich:        ['Rich', 'Ore-Rich', 'Lode-Rich', 'Mineral-Rich'], // two abundant deposits incl. a strategic (rare-earth / radioactive)
+  veined:      ['Veined', 'Lode-Veined', 'Seam-Laced', 'Vein-Threaded'], // an abundant exotic deposit paired with another
 } as const;
+
+// Core-noun synonym pools — only the evocative nouns we coined, so the biggest
+// bare-noun collision buckets ("Glacial Moon", "Frostbound Moon") break up too.
+// The astronomy-canonical nouns (Gas Giant, Sub-Neptune, Hot Jupiter, Ice
+// Giant, Super-Earth) stay fixed in `coreFor` — players recognize them. The
+// world/moon tail is appended at the call site, so these are the qualifier only.
+const NOUN = {
+  frostbound:      ['Frostbound', 'Frost-Sealed', 'Rime-Locked', 'Rimebound'],
+  glacial:         ['Glacial', 'Iceclad', 'Ice-Mantled', 'Frost-Plated'],
+  desert:          ['Desert', 'Barren', 'Arid', 'Bone-Dry'],
+  iron:            ['Iron', 'Ferrous', 'Iron-Cored', 'Metal'],
+  lava:            ['Lava', 'Molten'],
+  // Iconic two-word nouns — a frozen volatile world under an opaque envelope,
+  // and a liquid-water ocean buried beneath an ice shell. Both stand alone (the
+  // 3-token budget leaves no room for a state), so the pool varies the noun
+  // only. Kept disjoint from LEXICON.sealedOcean so the buried-ocean STATE
+  // ("Sealed-Ocean Smog Moon") never reads the same as a subglacial CORE.
+  veiledIce:       ['Veiled Ice', 'Shrouded Ice', 'Cloaked Ice', 'Veiled Frost', 'Shrouded Frost'],
+  subglacialOcean: ['Subglacial Ocean', 'Ice-Capped Ocean', 'Ice-Shell Ocean', 'Ice-Locked Ocean'],
+} as const;
+
+// Deterministic synonym selection: the same (body, concept) always resolves to
+// the same word. Keying on the concept namespaces the hash, so a body's heat
+// word and its dust word are drawn independently.
+function pick(b: Body, key: keyof typeof LEXICON): string {
+  const pool = LEXICON[key];
+  return pool[hash32(b.id + '§' + key) % pool.length];
+}
+function pickNoun(b: Body, key: keyof typeof NOUN): string {
+  const pool = NOUN[key];
+  return pool[hash32(b.id + '§' + key) % pool.length];
+}
 
 // ─── Presentation thresholds ────────────────────────────────────────────────
 // Surface-liquid cover below which an ammonia/nitrogen film reads as a state
@@ -127,6 +179,7 @@ interface Core {
   volcanic?: boolean;   // core already reads as molten/active — skip "Volcanic"
   temperate?: boolean;  // core is itself a temperate living world — skip "Temperate"/"Verdant"
   hazy?: boolean;       // core already implies organic smog — skip "Smog-Shrouded"
+  seaCore?: boolean;    // core already names a surface/subsurface sea or ocean — skip lake/sealed-ocean modifiers
   generic?: boolean;    // bare "Rocky" — drop the prefix when a modifier carries character
   uncharted?: boolean;  // no classifiable physics — emit the noun alone
   material?: Material;
@@ -170,7 +223,7 @@ function coreFor(b: Body): Core {
     // A cold, ice/water-rich sub-Neptune under an opaque H2 envelope — a
     // frozen mini-Neptune. cold + gaseous (no surface) → no temp/composition
     // modifier; the 3-token noun stands alone.
-    case 'veiled_ice':       return { noun: `Veiled Ice ${w}`, cold: true, material: 'gas' };
+    case 'veiled_ice':       return { noun: `${pickNoun(b, 'veiledIce')} ${w}`, cold: true, material: 'gas' };
     case 'helium':           return { noun: 'Helium Giant', material: 'gas' };
     // ─── iconic surface / subsurface liquid ───
     case 'gaian':            return { noun: `Gaian ${w}`, material: 'water', temperate: true };
@@ -181,27 +234,27 @@ function coreFor(b: Body): Core {
       // skip the redundant Frozen / Smog-Shrouded modifiers (the noun, never
       // "Frozen" — these surfaces are methane, not water ice).
       if ((b.surfaceLiquidFraction ?? 0) >= METHANE_SEA_COVER) {
-        return { noun: `Methane Sea ${w}`, cold: true, hazy: true, material: 'methane' };
+        return { noun: `Methane Sea ${w}`, cold: true, hazy: true, seaCore: true, material: 'methane' };
       }
       return { noun: `Smog ${w}`, cold: true, hazy: true, material: 'methane' };
     }
     case 'brimstone':        return { noun: `Brimstone ${w}`, hot: true, volcanic: true, material: 'sulfur' };
-    case 'ammonia_sea':      return { noun: `Ammonia Sea ${w}`, cold: true, material: 'ammonia' };
-    case 'glacial_sea':      return { noun: `Glacial Sea ${w}`, cold: true, material: 'nitrogen' };
-    case 'subglacial_ocean': return { noun: `Subglacial Ocean ${w}`, cold: true, material: 'ice' };
-    case 'ocean':            return { noun: `Ocean ${w}`, material: 'water' };
+    case 'ammonia_sea':      return { noun: `Ammonia Sea ${w}`, cold: true, seaCore: true, material: 'ammonia' };
+    case 'glacial_sea':      return { noun: `Glacial Sea ${w}`, cold: true, seaCore: true, material: 'nitrogen' };
+    case 'subglacial_ocean': return { noun: `${pickNoun(b, 'subglacialOcean')} ${w}`, cold: true, seaCore: true, material: 'ice' };
+    case 'ocean':            return { noun: `Ocean ${w}`, seaCore: true, material: 'water' };
     // ─── terrestrial base ───
-    case 'lava':             return { noun: `Lava ${w}`, hot: true, volcanic: true, material: 'rock' };
-    case 'magma_ocean':      return { noun: 'Magma Ocean', hot: true, volcanic: true, material: 'rock' };
+    case 'lava':             return { noun: `${pickNoun(b, 'lava')} ${w}`, hot: true, volcanic: true, material: 'rock' };
+    case 'magma_ocean':      return { noun: 'Magma Ocean', hot: true, volcanic: true, seaCore: true, material: 'rock' };
     case 'volcanic':         return { noun: `Volcanic ${w}`, volcanic: true, material: 'rock' };
     // A stripped giant core is hot AND molten — flag both so a redundant
     // "Volcanic"/"Scorched" never stacks onto "Chthonian Core".
     case 'chthonian':        return { noun: 'Chthonian Core', hot: true, volcanic: true, material: 'iron' };
-    case 'iron':             return { noun: `Iron ${w}`, material: 'iron' };
-    case 'frostbound':       return { noun: `Frostbound ${w}`, cold: true, material: 'methane' };
-    case 'glacial':          return { noun: `Glacial ${w}`, cold: true, material: 'ice' };
+    case 'iron':             return { noun: `${pickNoun(b, 'iron')} ${w}`, material: 'iron' };
+    case 'frostbound':       return { noun: `${pickNoun(b, 'frostbound')} ${w}`, cold: true, material: 'methane' };
+    case 'glacial':          return { noun: `${pickNoun(b, 'glacial')} ${w}`, cold: true, material: 'ice' };
     case 'super_earth':      return { noun: 'Super-Earth', material: 'rock' };
-    case 'desert':           return { noun: `Desert ${w}`, material: 'rock' };
+    case 'desert':           return { noun: `${pickNoun(b, 'desert')} ${w}`, material: 'rock' };
     case 'rocky':            return { noun: `Rocky ${w}`, material: 'rock', generic: true };
     case 'unknown':          return { noun: 'Uncharted World', uncharted: true };
   }
@@ -212,7 +265,8 @@ function coreFor(b: Body): Core {
 // for a strategic (rare-earth / radioactive) pairing. Bulk-only pairs
 // (metal / silicate / volatile) are the ubiquitous default and stay unnamed;
 // a single abundant deposit isn't a pairing — it lives in the resource row.
-function resourcePairWord(b: Body): string | null {
+// Returns the LEXICON concept key (the word is resolved by the caller's pick).
+function resourcePairKey(b: Body): 'veined' | 'rich' | null {
   let abundant = 0, exotic = false, strategic = false;
   if ((b.resExotics ?? 0)      >= ABUNDANT_DEPOSIT) { abundant++; exotic = true; }
   if ((b.resRareEarths ?? 0)   >= ABUNDANT_DEPOSIT) { abundant++; strategic = true; }
@@ -221,40 +275,45 @@ function resourcePairWord(b: Body): string | null {
   if ((b.resSilicates ?? 0)    >= ABUNDANT_DEPOSIT) abundant++;
   if ((b.resVolatiles ?? 0)    >= ABUNDANT_DEPOSIT) abundant++;
   if (abundant < 2) return null;
-  if (exotic) return LEXICON.veined;
-  if (strategic) return LEXICON.rich;
+  if (exotic) return 'veined';
+  if (strategic) return 'rich';
   return null;
 }
 
 // The single most salient state adjective, in descending salience. Returns
-// the first that fires; null when the body is unremarkable on every axis.
-function stateModifier(b: Body, core: Core): string | null {
+// `{ word, key }` for the first that fires — the resolved synonym plus its
+// concept key (so materialQualifier can skip on the concept, not the string);
+// null when the body is unremarkable on every axis.
+function stateModifier(b: Body, core: Core): { word: string; key: keyof typeof LEXICON } | null {
   const T = b.avgSurfaceTempK;
   const P = b.surfacePressureBar;
   const gas = core.material === 'gas';
   const liquid = b.surfaceLiquidFraction ?? 0;
+  // Resolve a concept to its deterministic synonym + key in one shot.
+  const fire = (key: keyof typeof LEXICON) => ({ word: pick(b, key), key });
 
   // 1. Life — only when it has reshaped the world's physical essence
   //    (Verdant). Microbial / non-transformative complex life stays in the
   //    info card's dedicated life row, not the headline chip.
-  if (b.biosphereComplexity === 'complex' && (b.biosphereSurfaceImpact ?? 0) >= 0.5 && !core.temperate) return LEXICON.verdant;
+  if (b.biosphereComplexity === 'complex' && (b.biosphereSurfaceImpact ?? 0) >= 0.5 && !core.temperate) return fire('verdant');
 
   // 2. Surface character. Methane lakes are the defining feature of a Smog
   //    world — shown above a low floor (Titan's are only ~3% cover); a drowned
   //    surface is already named a Methane Sea by the core noun. Then tidal
   //    resurfacing, then the other exotic-solvent films.
   if (b.surfaceLiquidSpecies === 'hydrocarbon'
-      && liquid >= METHANE_LAKE_FLOOR && liquid < METHANE_SEA_COVER) return LEXICON.methaneLake;
-  if (isMoon(b) && (b.surfaceAge ?? 0) >= TIDAL_AGE) return LEXICON.tidal;
+      && liquid >= METHANE_LAKE_FLOOR && liquid < METHANE_SEA_COVER) return fire('methaneLake');
+  if (isMoon(b) && (b.surfaceAge ?? 0) >= TIDAL_AGE) return fire('tidal');
   // Other exotic surface lakes the core noun didn't already name — ammonia /
   // nitrogen films on a cold base (Glacial / Frostbound) below their full-sea
-  // threshold. (Hydrocarbon is handled above; sulfur reaches Brimstone.)
-  if (liquid >= LAKE_COVER_FLOOR && !/Sea|Ocean|Brimstone/.test(core.noun)) {
+  // threshold. (Hydrocarbon is handled above; sulfur reaches Brimstone, the
+  // sole sulfur-material core.)
+  if (liquid >= LAKE_COVER_FLOOR && !core.seaCore && core.material !== 'sulfur') {
     switch (b.surfaceLiquidSpecies) {
       case 'ammonia_water':
-      case 'ammonia':  return LEXICON.ammoniaLake;
-      case 'nitrogen': return LEXICON.nitrogenLake;
-      case 'sulfur':   return LEXICON.sulfurPool;
+      case 'ammonia':  return fire('ammoniaLake');
+      case 'nitrogen': return fire('nitrogenLake');
+      case 'sulfur':   return fire('sulfurPool');
       default: break;
     }
   }
@@ -262,78 +321,79 @@ function stateModifier(b: Body, core: Core): string | null {
   // 3. Economic identity — a rare abundant resource pairing (Rich / Veined).
   //    A landmark that outranks the transient surface states below, but not a
   //    world's defining standing liquids (above) or transformative life.
-  const lode = resourcePairWord(b);
-  if (lode !== null) return lode;
+  const lode = resourcePairKey(b);
+  if (lode !== null) return fire(lode);
 
   // 4. Surface activity.
   // Cryovolcanism: a young icy/watery surface (planets, or moons the tidal
   // branch missed).
   if ((core.material === 'ice' || core.material === 'methane' || core.material === 'water')
-      && core.cold && (b.surfaceAge ?? 0) >= CRYOVOLCANIC_AGE) return LEXICON.cryovolcanic;
+      && core.cold && (b.surfaceAge ?? 0) >= CRYOVOLCANIC_AGE) return fire('cryovolcanic');
   // A buried ice-shell ocean on a body that doesn't already wear one (a
   // Smog moon over a hidden sea — Titan); skipped where the core is itself
   // a (sub)glacial ocean or surface sea.
   if (b.subsurfaceOceanSpecies != null && liquid < LAKE_COVER_FLOOR
-      && !/Sea|Ocean/.test(core.noun)) return LEXICON.sealedOcean;
+      && !core.seaCore) return fire('sealedOcean');
   // Silicate volcanism on a hot, active, dry body the core didn't already
   // mark molten.
   if (!core.volcanic && isDrySurface(b)
       && (b.tectonicActivity ?? 0) >= 0.55 && (b.surfaceAge ?? 0) >= 0.6
-      && T !== null && T >= 400) return LEXICON.volcanic;
+      && T !== null && T >= 400) return fire('volcanic');
 
   // 5. Runaway greenhouse — a thick, hot atmosphere over a dry surface (Venus).
   if (!core.hot && core.material === 'rock' && P !== null && P >= 5
-      && T !== null && T >= 340 && liquid < 0.05) return LEXICON.hothouse;
+      && T !== null && T >= 340 && liquid < 0.05) return fire('hothouse');
 
   // 6. Heat — domain-aware, so one temperature never wears one word. A hot
   //    ocean steams, a hot gaseous envelope sears, an extreme dry rock is
   //    scorched, a merely-hot dry rock blisters. Wet outranks dry-extreme so
   //    a high-pressure 600 K+ ocean reads "Steaming", not "Scorched".
   if (!core.hot && T !== null) {
-    if (T >= HOT_K && liquid >= 0.1) return LEXICON.steaming;
-    if (T >= HOT_EXTREME_K && !gas) return LEXICON.scorched;
-    if (T >= HOT_K && gas) return LEXICON.searing;
-    if (T >= HOT_K) return LEXICON.blistering;
+    if (T >= HOT_K && liquid >= 0.1) return fire('steaming');
+    if (T >= HOT_EXTREME_K && !gas) return fire('scorched');
+    if (T >= HOT_K && gas) return fire('searing');
+    if (T >= HOT_K) return fire('blistering');
   }
 
   // 7. Distinctive atmosphere texture — organic smog (Titan tholin) or a
   //    dust-choked sky. Skipped on cores that already imply smog.
-  if (!core.hazy && b.hazeAerosols && (b.hazeAerosols['THOLIN'] ?? 0) >= 0.3) return LEXICON.smog;
-  if ((b.dustStrength ?? 0) >= 0.5) return LEXICON.dust;
+  if (!core.hazy && b.hazeAerosols && (b.hazeAerosols['THOLIN'] ?? 0) >= 0.3) return fire('smog');
+  if ((b.dustStrength ?? 0) >= 0.5) return fire('dust');
 
   // 8. Milder temperature bands — skipped on the axis the core implies.
   if (T !== null) {
     // Temperate reads as notable only where there's surface liquid of any
     // species (or the core is a water world) — an airless 290 K rock isn't.
-    if (!core.temperate && T >= TEMPERATE_LO_K && T < HOT_K && (liquid > 0 || core.material === 'water')) return LEXICON.temperate;
-    if (!core.cold && !gas && T < DEEP_COLD_K) return LEXICON.frigid;
-    if (!core.cold && !gas && T < COLD_K) return LEXICON.frozen;
+    if (!core.temperate && T >= TEMPERATE_LO_K && T < HOT_K && (liquid > 0 || core.material === 'water')) return fire('temperate');
+    if (!core.cold && !gas && T < DEEP_COLD_K) return fire('frigid');
+    if (!core.cold && !gas && T < COLD_K) return fire('frozen');
   }
 
   // 9. Airless rocky body (Luna-class).
-  if (core.material === 'rock' && (P === null || P < 0.001)) return LEXICON.airless;
+  if (core.material === 'rock' && (P === null || P < 0.001)) return fire('airless');
 
   // 10. Ancient, heavily-cratered surface (Mercury, Callisto). Skipped on
   //    molten/volcanic cores — a repaved surface isn't cratered.
-  if (!core.hot && !core.volcanic && (b.surfaceAge ?? 1) <= ANCIENT_AGE) return LEXICON.cratered;
+  if (!core.hot && !core.volcanic && (b.surfaceAge ?? 1) <= ANCIENT_AGE) return fire('cratered');
 
   return null;
 }
 
 // A composition adjective adjacent to the noun, when distinctive and not
-// already carried by the core's material or the chosen state.
-function materialQualifier(b: Body, core: Core, state: string | null): string | null {
+// already carried by the core's material or the chosen state (compared by
+// concept key, since the state word is now drawn from a pool).
+function materialQualifier(b: Body, core: Core, stateKey: keyof typeof LEXICON | null): string | null {
   // A heavy solute load reads "Briny" — only where there's standing liquid.
-  if ((b.surfaceLiquidFraction ?? 0) > 0 && (b.salinity ?? 0) >= BRINY_SALINITY) return LEXICON.briny;
+  if ((b.surfaceLiquidFraction ?? 0) > 0 && (b.salinity ?? 0) >= BRINY_SALINITY) return pick(b, 'briny');
   // Sulfur-dominated surface or sulfur-cycle volcanism (not a gaseous body
   // nor a Brimstone core). Skipped if the state already names sulfur.
-  if (core.material !== 'gas' && core.material !== 'sulfur' && state !== LEXICON.sulfurPool
-      && (atmFrac(b, 'SO2') >= 0.3 || (b.bioticSulfur ?? 0) >= 0.3)) return LEXICON.sulfurous;
+  if (core.material !== 'gas' && core.material !== 'sulfur' && stateKey !== 'sulfurPool'
+      && (atmFrac(b, 'SO2') >= 0.3 || (b.bioticSulfur ?? 0) >= 0.3)) return pick(b, 'sulfurous');
   return null;
 }
 
 function tokenCount(parts: readonly string[]): number {
-  // Hyphenated compounds ("Tidally-Heated", "Subglacial Ocean") count by word;
+  // Hyphenated compounds ("Sealed-Ocean", "Subglacial Ocean") count by word;
   // a hyphen stays one token.
   return parts.reduce((n, p) => n + p.split(' ').length, 0);
 }
@@ -346,8 +406,9 @@ export function composeWorldLabel(b: Body): string {
   const core = coreFor(b);
   if (core.uncharted) return core.noun;
 
-  const state = stateModifier(b, core);
-  const material = materialQualifier(b, core, state);
+  const stateSel = stateModifier(b, core);
+  const state = stateSel?.word ?? null;
+  const material = materialQualifier(b, core, stateSel?.key ?? null);
 
   // A bare "Rocky" prefix reads worse than letting an adjective carry the
   // character — "Steaming World", not "Steaming Rocky World".
