@@ -28,8 +28,13 @@ import { paintToTexture } from '../widget';
 import { IconButton, type IconButtonStates } from '../icon-button';
 import { BodyInfoCard } from './body-info-card';
 
+// The back button box renders at twice the shared icon-box size; the
+// arrow glyph stays at its native 1× resolution (centered), so the button
+// is bigger without blowing the pixel art up into chunky blocks.
+const BACK_BTN_SIZE = sizes.iconBox * 2;
+
 function buildBackBtnTexture(hover: boolean): CanvasTexture {
-  const SIZE = sizes.iconBox;
+  const SIZE = BACK_BTN_SIZE;
   const c = document.createElement('canvas');
   c.width = SIZE; c.height = SIZE;
   const g = c.getContext('2d')!;
@@ -97,7 +102,7 @@ export class SystemHud {
       off:   buildBackBtnTexture(false),
       hover: buildBackBtnTexture(true),
     };
-    this.backBtn = new IconButton(sizes.iconBox, this.backBtnTextures, {
+    this.backBtn = new IconButton(BACK_BTN_SIZE, this.backBtnTextures, {
       renderOrder: 100,
       hitPad: sizes.iconHitPad,
     });
@@ -181,7 +186,7 @@ export class SystemHud {
     // Back button: top-left, edgePad on both axes.
     this.backBtn.placeAt(
       sizes.edgePad,
-      this.bufferH - sizes.edgePad - sizes.iconBox,
+      this.bufferH - sizes.edgePad - BACK_BTN_SIZE,
     );
 
     // System name: anchored to the top-right corner with the same

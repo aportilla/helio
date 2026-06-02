@@ -12,7 +12,8 @@ import { sizes } from '../../../ui/theme';
 import { makeStarHaloMaterial, makeStarMeshMaterial } from '../../materials';
 import {
   DISC_SCALE, MIN_STAR_GAP, RENDER_ORDER_STAR_HALO,
-  STAR_HALO_RADIUS_FACTOR, STAR_HORIZ_GAP_FACTOR, STAR_OFFSCREEN_FRAC,
+  STAR_HALO_RADIUS_FACTOR, STAR_HORIZ_GAP_FACTOR,
+  STAR_MIN_BOTTOM_DROP, STAR_MIN_CENTER_FROM_LEFT, STAR_OFFSCREEN_FRAC,
   SYSTEM_VIEW_SATURATION_LIFT_MAX, SYSTEM_VIEW_SATURATION_LIFT_RATE,
 } from '../layout/constants';
 import { sumOf } from '../layout/row';
@@ -181,11 +182,23 @@ export class StarsRowLayer {
     for (let slot = 0; slot < N; slot++) {
       const d = Math.max(1, Math.round(this.starSlotDiscPx[slot] * discScale));
       const r = d / 2;
-      const cxTarget = cursor + r;
-      // Star center sits above the buffer top by STAR_OFFSCREEN_FRAC × r,
-      // so the disc reads as "huge body, mostly hidden". Mesh path makes
-      // this safe; GL_POINTS would discard the off-edge vertex.
-      const cyTarget = bufferH + r * STAR_OFFSCREEN_FRAC;
+      // Horizontal: clamp the center off the left edge so a tiny disc
+      // doesn't tuck under the top-left back button. Only binds for small
+      // discs — a large disc's natural center (cursor + r) already clears
+      // STAR_MIN_CENTER_FROM_LEFT.
+      const cxTarget = Math.max(cursor + r, STAR_MIN_CENTER_FROM_LEFT);
+      // Vertical: star center sits above the buffer top by
+      // STAR_OFFSCREEN_FRAC × r, so the disc reads as "huge body, mostly
+      // hidden". Mesh path makes this safe; GL_POINTS would discard the
+      // off-edge vertex. For a tiny disc the frac rule leaves only a
+      // hairline below the top, so floor the drop: pull the center down
+      // until the bottom edge clears the top by STAR_MIN_BOTTOM_DROP. The
+      // min() keeps the frac rule for big discs (already well past the
+      // floor) and only deepens small ones.
+      const cyTarget = Math.min(
+        bufferH + r * STAR_OFFSCREEN_FRAC,
+        bufferH - STAR_MIN_BOTTOM_DROP + r,
+      );
 
       // Parity-aware snap for pixel-perfect rasterization: even diameter
       // → center on integer (pixel boundary), odd diameter → center on
@@ -221,7 +234,9 @@ export class StarsRowLayer {
       (disc.haloMaterial.uniforms.uCenter.value as Vector2).set(cx, cy);
       disc.halo.visible = true;
 
-      cursor += d + gap;
+      // Advance from the placed center (not the raw cursor) so the
+      // edge-to-edge gap survives a left-edge clamp on this slot.
+      cursor = cxTarget + r + gap;
     }
   }
 

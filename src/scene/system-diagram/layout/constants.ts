@@ -28,6 +28,29 @@ export const STAR_HORIZ_GAP_FACTOR = 0.3;
 // we start scaling disc sizes down.
 export const MIN_STAR_GAP = 2;
 
+// Minimum distance from the buffer's LEFT edge to a star's center. A
+// very small disc (BD, low-mass M dwarf) would otherwise center only a
+// few px in from the edge — directly under the top-left back button
+// (which spans edgePad + 2·iconBox + iconHitPad ≈ 44 px from the corner).
+// Clamping the center rightward keeps even a tiny disc clear of the
+// button. Only binds for small discs; a large disc's natural center
+// (edgePad + radius) already sits well past it.
+export const STAR_MIN_CENTER_FROM_LEFT = 65;
+
+// Minimum distance the visible BOTTOM edge of a star disc sits below the
+// buffer top — a hard floor on how high a disc may hang. The
+// STAR_OFFSCREEN_FRAC rule offsets the center above the top by FRAC·r, so
+// a disc's natural visible strip is r·(1−FRAC): proportional to radius,
+// meaning a small disc clings to the very top with only a thin sliver
+// showing. This floor decouples the smallest stars from that: it caps the
+// upward offset so the bottom edge always clears the top by at least this
+// much, pulling smaller discs DOWN (bringing the whole disc onto screen
+// when it's shorter than the floor). Binds whenever r·(1−FRAC) < this —
+// i.e. for radii under STAR_MIN_BOTTOM_DROP / (1 − STAR_OFFSCREEN_FRAC)
+// (≈ d < 86 px), which covers BDs (d = 60), WDs, and the smaller M / K
+// discs; larger stars keep the frac rule untouched and hang freely.
+export const STAR_MIN_BOTTOM_DROP = 40;
+
 // Outer radius of the star halo as a multiple of the disc radius. The
 // halo is a dithered additive cloud that bleeds a saturation-stepped
 // gradient (hot/warm/ember/dark, all in the star's own hue) into the
