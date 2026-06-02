@@ -7,7 +7,8 @@
 
 import { type WebGLRenderer } from 'three';
 import { SystemHud } from '../ui/system-hud';
-import { SystemDiagram } from './system-diagram';
+import { SystemDiagram, type DiagramPick } from './system-diagram';
+import { picksEqual } from './system-diagram/types';
 import { ViewportSizer } from './viewport-sizer';
 
 export class SystemScene {
@@ -28,6 +29,12 @@ export class SystemScene {
   private readonly _onResize       = () => this.resize();
 
   private readonly _hudPt = { x: 0, y: 0 };
+
+  // Touch/pen has no hover, so a tap pins the body card instead. While a
+  // pick is pinned the card persists — notably it survives the spurious
+  // pointerleave a finger-lift fires — until the next tap re-pins or
+  // clears it. Null on mouse, where the card is purely hover-driven.
+  private pinnedPick: DiagramPick | null = null;
 
   // Fired when the user requests to exit the system view (ESC or back
   // button click).
@@ -90,28 +97,50 @@ export class SystemScene {
   }
 
   private onPointerDown(e: PointerEvent): void {
-    // Only role of pointer-down here is routing clicks to the HUD (the
-    // back button). The diagram is static — no drag/orbit fallback.
+    // Route to the HUD first (the back button). The diagram is static —
+    // no drag/orbit fallback.
     this.viewport.clientToHud(e.clientX, e.clientY, this._hudPt);
-    this.hud.handleClick(this._hudPt.x, this._hudPt.y);
+    if (this.hud.handleClick(this._hudPt.x, this._hudPt.y)) return;
+
+    // Touch/pen has no hover, so a tap stands in for it: pick under the
+    // tap and pin the body card. A tap on empty space (or chrome) pins
+    // null, which dismisses it; re-tapping the pinned body toggles it
+    // back off. Mouse keeps its hover-driven card and never pins.
+    if (e.pointerType !== 'mouse') {
+      const hit = this.pickAt(this._hudPt.x, this._hudPt.y);
+      const pick = picksEqual(hit, this.pinnedPick) ? null : hit;
+      this.pinnedPick = pick;
+      this.diagram.setHovered(pick);
+      this.hud.setHoveredBody(pick, this._hudPt.x, this._hudPt.y);
+    }
   }
 
   private onPointerMove(e: PointerEvent): void {
+    // Touch/pen drives the card by tap (see onPointerDown), so a finger
+    // drag must not move/clear the pinned card — only mouse hovers.
+    if (e.pointerType !== 'mouse') return;
     this.viewport.clientToHud(e.clientX, e.clientY, this._hudPt);
     const onButton = this.hud.handlePointerMove(this._hudPt.x, this._hudPt.y);
     this.canvas.style.cursor = onButton ? 'pointer' : '';
-    // Body hover info card — skip the picker when the cursor is over
-    // any interactive HUD chrome (back button) so a tooltip can't
-    // appear under the chrome the user is aiming at.
-    const overChrome = this.hud.hitTest(this._hudPt.x, this._hudPt.y) !== 'transparent';
-    const pick = overChrome ? null : this.diagram.pickAt(this._hudPt.x, this._hudPt.y);
+    const pick = this.pickAt(this._hudPt.x, this._hudPt.y);
     this.diagram.setHovered(pick);
     this.hud.setHoveredBody(pick, this._hudPt.x, this._hudPt.y);
   }
 
+  // Pick the disc under a HUD-space point, skipping the picker when the
+  // point is over any interactive HUD chrome (back button) so a tooltip
+  // can't appear under the chrome the user is aiming at.
+  private pickAt(bufX: number, bufY: number): DiagramPick | null {
+    const overChrome = this.hud.hitTest(bufX, bufY) !== 'transparent';
+    return overChrome ? null : this.diagram.pickAt(bufX, bufY);
+  }
+
   private onPointerLeave(): void {
-    // Cursor left the canvas — clear the outline and hide the tooltip
-    // so they don't linger on stale state when the cursor comes back.
+    // A tap-pinned card (touch/pen) must survive the spurious
+    // pointerleave a finger-lift fires; only a mouse leaving the canvas
+    // clears the transient hover state so it doesn't linger on stale
+    // state when the cursor comes back.
+    if (this.pinnedPick) return;
     this.diagram.setHovered(null);
     this.hud.setHoveredBody(null, 0, 0);
   }
