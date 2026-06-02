@@ -132,7 +132,7 @@ import {
   biomePaintFor, cloudDeckPalette, dominantResources, lerpColor,
   rockArchetypeFor,
 } from '../color-science';
-import { classifyBody } from '../../../../scripts/lib/body-archetype.mjs';
+import { isGasGiant } from '../../../../scripts/lib/body-traits.mjs';
 import { hash32 } from '../geom/prng';
 import { bodyVisualTiltRad } from '../geom/ring';
 import { PROCEDURAL_TEXTURE_MIN_PX } from '../layout/constants';
@@ -395,8 +395,7 @@ const NO_ATM_FALLBACK_COLOR = new Color(0x808080);
 // Warm amber shift folded into a gas giant's cloud-column palette so it
 // reads ruddy-Jovian rather than pale-Saturnian — compensates for the
 // gas-mix model not representing condensed-phase chemistry (NH4SH, etc.).
-// Keyed off the archetype (gas_giant / hot_jupiter), the physics successor
-// to the old worldClass === 'gas_giant' tint.
+// Gated on the Jupiter-class gaseous predicate (isGasGiant).
 const GAS_GIANT_TINT = { color: new Color(0xc88848), amount: 0.25 };
 
 // Lerp `c` toward `tint.color` by `tint.amount`. Returns `c` unchanged
@@ -670,8 +669,7 @@ export function buildDiscPalette(
   // Per-class hue tint applies to surface palette entries only. Cloud
   // palettes already derive from physically-anchored gas species and
   // skip the tint so cloud colors stay aligned with their condensates.
-  const arch = classifyBody(body);
-  const tint = (arch === 'gas_giant' || arch === 'hot_jupiter') ? GAS_GIANT_TINT : undefined;
+  const tint = isGasGiant(body) ? GAS_GIANT_TINT : undefined;
   const t0 = applyTint(sC0, tint);
   const t1 = applyTint(sC1, tint);
   const t2 = applyTint(sC2, tint);

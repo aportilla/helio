@@ -21,7 +21,12 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { insolation } from './lib/astrophysics.mjs';
-import { classifyBody } from './lib/body-archetype.mjs';
+import {
+  isClassifiable, isGaseousBody, isVeiledIce, isHelium, isGasGiant, isHotGiant,
+  isIceGiant, isBrimstone, isTholin, isGaian, isAmmoniaSea, isSubglacialOcean,
+  isChthonian, isLava, isMagmaOcean, isVolcanic, isIron, isFrostbound, isGlacial,
+  isOcean, isSuperEarth, isDesert,
+} from './lib/body-traits.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CATALOG_PATH = resolve(REPO_ROOT, 'src/data/catalog.generated.json');
@@ -58,23 +63,46 @@ function insolationFor(body) {
   return insolation(star.mass, body.semiMajorAu);
 }
 
-// classifyBody's archetype enum is richer than the old worldClass set, so a
-// gate that meant "any gaseous envelope world" maps onto several archetypes.
-// Old {gas_giant, ice_giant, gas_dwarf, veiled_ice, helium} → these (gas_giant
-// splits into gas_giant/hot_jupiter; gas_dwarf became sub_neptune; the
-// cold ice-rich H2 dwarf is now veiled_ice).
+// The archetype enum the variety tables bucket by. There is no shared
+// classifier any more — this is the audit's OWN single-bucket rollup, composed
+// from the body-traits predicates in precedence order (the ordering lives here,
+// in the consumer, not in a shared type). It reproduces the buckets the tables
+// were calibrated against, so the distribution rows stay comparable.
+function arch(b) {
+  if (!isClassifiable(b)) return 'unknown';
+  if (isGaseousBody(b)) {
+    if (isVeiledIce(b)) return 'veiled_ice';
+    if (isHelium(b)) return 'helium';
+    if (isGasGiant(b)) return isHotGiant(b) ? 'hot_jupiter' : 'gas_giant';
+    if (isIceGiant(b)) return 'ice_giant';
+    return 'sub_neptune';
+  }
+  if (isBrimstone(b)) return 'brimstone';
+  if (isTholin(b)) return 'tholin';
+  if (isGaian(b)) return 'gaian';
+  if (isAmmoniaSea(b)) return 'ammonia_sea';
+  if (isSubglacialOcean(b)) return 'subglacial_ocean';
+  if (isChthonian(b)) return 'chthonian';
+  if (isLava(b)) return 'lava';
+  if (isMagmaOcean(b)) return 'magma_ocean';
+  if (isVolcanic(b)) return 'volcanic';
+  if (isIron(b)) return 'iron';
+  if (isFrostbound(b)) return 'frostbound';
+  if (isGlacial(b)) return 'glacial';
+  if (isOcean(b)) return 'ocean';
+  if (isSuperEarth(b)) return 'super_earth';
+  if (isDesert(b)) return 'desert';
+  return 'rocky';
+}
+
+// "Any gaseous envelope world" + "a host a moon system can hang off", as string
+// sets over arch() — kept as sets so the call sites read unchanged.
 const GASEOUS_ARCHETYPES = new Set([
   'gas_giant', 'hot_jupiter', 'ice_giant', 'sub_neptune', 'veiled_ice', 'helium',
 ]);
-// Hosts a moon system can hang off: the old {gas_giant, ice_giant, gas_dwarf,
-// solid_giant} → gaseous giants plus super_earth (the old solid_giant).
 const GIANT_HOST_ARCHETYPES = new Set([
   'gas_giant', 'hot_jupiter', 'ice_giant', 'sub_neptune', 'super_earth',
 ]);
-
-function arch(b) {
-  return classifyBody(b);
-}
 
 function hostStarOf(body) {
   if (body.hostStarIdx != null) return stars[body.hostStarIdx];
@@ -664,7 +692,7 @@ const totalClassed = Object.values(classCount).reduce((a, b) => a + b, 0);
 const dominant = Object.entries(classCount).sort((a, b) => b[1] - a[1])[0];
 if (dominant && dominant[1] / totalClassed > 0.40) {
   flags.push(`archetype distribution skewed — "${dominant[0]}" is ${(dominant[1]/totalClassed*100).toFixed(1)}% of all classed bodies.\n      ` +
-             `Cold-trap gate is firing too eagerly; check ICE_TEMP_GLOBAL_K / iceFraction gates and ARCHETYPE_THRESHOLDS.iceIceMin.`);
+             `Cold-trap gate is firing too eagerly; check ICE_TEMP_GLOBAL_K / iceFraction gates and BODY_THRESHOLDS.iceIceMin.`);
 }
 
 // Super-Earth + ring overlap.

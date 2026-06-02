@@ -1,6 +1,6 @@
 // Lava / molten-surface emission drives. Self-luminous incandescence emerges
 // from THREE physically distinct melt sources, each a continuous smoothstep —
-// never a `worldClass === 'lava'` gate. The shader composes them into one
+// never a discrete lava-type gate. The shader composes them into one
 // molten sub-pass; `lavaDrivesFor` folds them down to (moltenCoverage,
 // emissionTempNorm, lavaSulfurFrac):
 //   - INSOLATION (heatMelt): the whole surface liquefies as T crosses the
@@ -41,7 +41,7 @@ const LAVA_VENT_TECT_LOW  = 0.3;
 const LAVA_VENT_TECT_HIGH = 0.9;
 // MAGMA-OCEAN drive — a hot, tectonically active interior pushes partial
 // surface melt below the full insolation solidus. Two-axis gate (warm AND
-// active) mirrors the magma_ocean classifier's own definition, so a
+// active) mirrors the `isMagmaOcean` predicate's own definition, so a
 // hot-but-DEAD body (Venus: 737 K, tect 0.3) stays solid while an active
 // one (70 Oph A b: 804 K, tect 0.51) shows molten veins. The temperature
 // window opens below the solidus floor precisely because active interiors

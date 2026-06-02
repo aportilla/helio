@@ -145,10 +145,10 @@ import {
   RESOURCE_KEYS,
   OTEGI_MR,
 } from './procgen-priors.mjs';
-// The radius/temperature gaseous-bracket thresholds are owned by the shared
-// runtime classifier, so the physics passes here and the renderer-side reader
-// share one table and can't drift.
-import { ARCHETYPE_THRESHOLDS } from './body-archetype.mjs';
+// The radius/temperature gaseous-bracket thresholds and the gaseous predicate
+// are owned by the shared body-traits library, so the physics passes here and
+// the renderer-side readers share one table + one gate and can't drift.
+import { BODY_THRESHOLDS, isGaseousBody } from './body-traits.mjs';
 
 const VALID_ARCHETYPES = new Set(BIOSPHERE_ARCHETYPES);
 const VALID_COMPLEXITY = new Set(BIOSPHERE_COMPLEXITY);
@@ -376,7 +376,7 @@ function greenhouseKFromComposition(body) {
 function avgSurfaceTempFromAlbedo(radiusEarth, S, bondAlbedo, greenhouseK) {
   if (S == null) return null;
   const tEq = equilibriumTempK(S, bondAlbedo);
-  if (radiusEarth != null && radiusEarth >= ARCHETYPE_THRESHOLDS.gasDwarfRadius) {
+  if (radiusEarth != null && radiusEarth >= BODY_THRESHOLDS.gasDwarfRadius) {
     return Math.round(tEq);  // gaseous body — cloud-top equilibrium
   }
   return Math.round(tEq + (greenhouseK ?? 0));
@@ -948,15 +948,6 @@ function surfaceOpacityFor(body) {
 // the same loop. Which decks emerge falls out of the body's actual
 // T + atm + waterFraction + bulkWaterFraction. Coverage / wind / strength
 // tuning lives in CLOUD_DECK (procgen-priors).
-
-// The single "is this body gaseous" predicate. Radius-keyed so the physics
-// passes (pressure, age, atmosphere regime, magnetic, opacity) and the
-// biosphere passes all share one gate. The runtime archetype classifier
-// brackets every r ≥ gasDwarfRadius body as gaseous and nothing below it off
-// the same threshold, so the physics here and the displayed class can't drift.
-function isGaseousBody(body) {
-  return body.radiusEarth != null && body.radiusEarth >= ARCHETYPE_THRESHOLDS.gasDwarfRadius;
-}
 
 // Coverage derivation. Two modes blend smoothly:
 //   • Full-cover: bulk atm column carries no strong color signal in

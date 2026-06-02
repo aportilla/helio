@@ -90,9 +90,10 @@ export interface Star {
   readonly ageGyr: number;
 }
 
-// A body's type is no longer a stored category — it's derived on demand from
-// physics by `classifyBody` (scripts/lib/body-archetype.mjs), the single
-// source both the label and the variety audit read. Nothing persists it.
+// A body has no stored type — nothing collapses its physics to one category.
+// Each consumer reads the physical axes it needs straight off the fields below,
+// via the pure predicates in `scripts/lib/body-traits.mjs` (the label composes a
+// multi-axis chip; the audits bucket by those predicates). Nothing persists a type.
 // Biosphere is three orthogonal fields:
 //   - archetype: what kind of life (carbon/water, methane/cryogenic, etc.)
 //   - complexity: how structured the life is (prebiotic → microbial → complex)

@@ -30,7 +30,12 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { insolation, frostLineAU, hillRadiusAu } from './lib/astrophysics.mjs';
-import { classifyBody } from './lib/body-archetype.mjs';
+import {
+  isClassifiable, isGaseousBody, isVeiledIce, isHelium, isGasGiant, isHotGiant,
+  isIceGiant, isBrimstone, isTholin, isGaian, isAmmoniaSea, isSubglacialOcean,
+  isChthonian, isLava, isMagmaOcean, isVolcanic, isIron, isFrostbound, isGlacial,
+  isOcean, isSuperEarth, isDesert,
+} from './lib/body-traits.mjs';
 import {
   STELLAR_CLASSES,
   ACCRETION_EFFICIENCY,
@@ -96,10 +101,38 @@ function insolationFor(body) {
   return insolation(star.mass, body.semiMajorAu);
 }
 
-// The gaseous archetypes — everything the old worldClass set
-// {gas_giant, ice_giant, gas_dwarf, veiled_ice, helium} maps onto under the
-// richer enum (gas_giant splits into gas_giant/hot_jupiter; gas_dwarf is
-// now sub_neptune). Used wherever a check meant "skip the envelope worlds."
+// The audit's own single-bucket archetype rollup for the distribution tables —
+// composed from the body-traits predicates in precedence order (no shared
+// classifier exists any more; the ordering lives here in the consumer). It
+// reproduces the buckets the tables + R-series were calibrated against.
+function archOf(b) {
+  if (!isClassifiable(b)) return 'unknown';
+  if (isGaseousBody(b)) {
+    if (isVeiledIce(b)) return 'veiled_ice';
+    if (isHelium(b)) return 'helium';
+    if (isGasGiant(b)) return isHotGiant(b) ? 'hot_jupiter' : 'gas_giant';
+    if (isIceGiant(b)) return 'ice_giant';
+    return 'sub_neptune';
+  }
+  if (isBrimstone(b)) return 'brimstone';
+  if (isTholin(b)) return 'tholin';
+  if (isGaian(b)) return 'gaian';
+  if (isAmmoniaSea(b)) return 'ammonia_sea';
+  if (isSubglacialOcean(b)) return 'subglacial_ocean';
+  if (isChthonian(b)) return 'chthonian';
+  if (isLava(b)) return 'lava';
+  if (isMagmaOcean(b)) return 'magma_ocean';
+  if (isVolcanic(b)) return 'volcanic';
+  if (isIron(b)) return 'iron';
+  if (isFrostbound(b)) return 'frostbound';
+  if (isGlacial(b)) return 'glacial';
+  if (isOcean(b)) return 'ocean';
+  if (isSuperEarth(b)) return 'super_earth';
+  if (isDesert(b)) return 'desert';
+  return 'rocky';
+}
+
+// "Skip the envelope worlds" as a string set over archOf().
 const GASEOUS_ARCHETYPES = new Set([
   'gas_giant', 'hot_jupiter', 'ice_giant', 'sub_neptune', 'veiled_ice', 'helium',
 ]);
@@ -547,7 +580,7 @@ function auditScalar(field, priorTable, label) {
   for (const b of bodies) {
     if (b.kind !== 'planet' || b.source !== 'procgen') continue;
     if (b[field] == null) continue;
-    const arch = classifyBody(b);
+    const arch = archOf(b);
     if (!byClass[arch]) byClass[arch] = [];
     byClass[arch].push(b[field]);
   }
@@ -608,7 +641,7 @@ function auditSurfaceCover() {
   for (const b of bodies) {
     if (b.kind !== 'planet' && b.kind !== 'moon') continue;
     if (b.source !== 'procgen') continue;
-    if (GASEOUS_ARCHETYPES.has(classifyBody(b))) continue;
+    if (GASEOUS_ARCHETYPES.has(archOf(b))) continue;
     const w = b.waterFraction ?? 0;
     const i = b.iceFraction ?? 0;
     if (w > 0.05 && i < 0.5)     liquidGated += 1;
@@ -686,14 +719,14 @@ auditBulkComposition('bulkVolatileFraction', 'bulkVolatileFraction', BULK_VOLATI
 // is incompatible. Drop these reports for now; replace with derivation-
 // distribution reports if needed.
 
-// Archetype distribution (runtime classifier). After all physics settles,
-// classifyBody is the label dispatched to designer content. Report counts
-// so it's easy to spot if an archetype is over- or under-represented.
-console.log('  --- archetype distribution (procgen, classifier) ---');
+// Archetype distribution (audit rollup). After all physics settles, archOf
+// buckets each body by the body-traits predicates. Report counts so it's easy
+// to spot if an archetype is over- or under-represented.
+console.log('  --- archetype distribution (procgen, traits rollup) ---');
 const classCount = {};
 for (const b of bodies) {
   if ((b.kind !== 'planet' && b.kind !== 'moon') || b.source !== 'procgen') continue;
-  const arch = classifyBody(b);
+  const arch = archOf(b);
   classCount[arch] = (classCount[arch] ?? 0) + 1;
 }
 const totalDerived = Object.values(classCount).reduce((a, b) => a + b, 0);
@@ -709,7 +742,7 @@ const atmByClass = {};
 for (const b of bodies) {
   if (b.kind !== 'planet' || b.source !== 'procgen') continue;
   if (!b.atm1) continue;
-  const arch = classifyBody(b);
+  const arch = archOf(b);
   if (!atmByClass[arch]) atmByClass[arch] = { total: 0, gases: {} };
   atmByClass[arch].total += 1;
   atmByClass[arch].gases[b.atm1] = (atmByClass[arch].gases[b.atm1] || 0) + 1;
@@ -730,7 +763,7 @@ const RES = ['resMetals','resSilicates','resVolatiles','resRareEarths','resRadio
 const resByClass = {};
 for (const b of bodies) {
   if (b.kind !== 'planet' || b.source !== 'procgen') continue;
-  const arch = classifyBody(b);
+  const arch = archOf(b);
   if (!resByClass[arch]) {
     resByClass[arch] = { n: 0, sums: Object.fromEntries(RES.map(f => [f, 0])) };
   }
@@ -1381,9 +1414,9 @@ invariant('R5', 'motherlodes concentrate on hostile worlds (hostile rate > benig
 }
 
 // S5 — `worldClass` is fully eliminated: no body carries a stored category.
-// The body archetype is derived on demand from physics (classifyBody); a
-// stored `worldClass` key reappearing means someone re-introduced the field
-// in the data model or a procgen write. Asserts the catalog itself is clean.
+// A body's nature is derived on demand from physics (the body-traits
+// predicates); a stored `worldClass` key reappearing means someone re-introduced
+// the field in the data model or a procgen write. Asserts the catalog is clean.
 {
   const stored = bodies.filter(b => 'worldClass' in b).length;
   invariant('S5', 'no body carries a stored worldClass key (eliminated; archetype is runtime-derived)',
@@ -1397,7 +1430,7 @@ invariant('R5', 'motherlodes concentrate on hostile worlds (hostile rate > benig
 // (55 Cnc e class) anchor a stable floor — a regression to 0 means the
 // ordering or the gate broke again.
 {
-  const chth = bodies.filter(b => classifyBody(b) === 'chthonian').length;
+  const chth = bodies.filter(b => archOf(b) === 'chthonian').length;
   invariant('S7', 'chthonian worlds exist (stripped hot-Jupiter cores; rare but non-zero)',
     chth >= 1,
     `${chth} chthonian`);

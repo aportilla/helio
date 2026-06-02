@@ -5,9 +5,10 @@
 // in bulk rather than one hover-card at a time.
 //
 // This imports the REAL composeWorldLabel from the .ts source (Node strips
-// the types — body-label.ts's only runtime import is classifyBody.mjs), so
-// what's printed here is byte-identical to what the BodyInfoCard renders.
-// No reimplementation, no drift.
+// the types — body-label.ts's only runtime imports are the body-traits.mjs
+// predicates), so what's printed here is byte-identical to what the
+// BodyInfoCard renders. No reimplementation, no drift. It also imports
+// `coreNoun` so rows group by the label's own head, not a separate taxonomy.
 //
 // Labels are only meaningful for planets + moons — belts and rings get a
 // separate info-card path (subtitleFor returns null for them), so they're
@@ -15,7 +16,7 @@
 //
 // Usage:
 //   node scripts/dump-labels.mjs              analytical summary (default)
-//   node scripts/dump-labels.mjs --all        every body, grouped by archetype
+//   node scripts/dump-labels.mjs --all        every body, grouped by head noun
 //   node scripts/dump-labels.mjs --examples=N N example bodies per distinct label
 //   node scripts/dump-labels.mjs --csv        machine-readable: one row per body
 //
@@ -26,8 +27,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { classifyBody } from './lib/body-archetype.mjs';
-import { composeWorldLabel } from '../src/ui/system-hud/body-label.ts';
+import { composeWorldLabel, coreNoun } from '../src/ui/system-hud/body-label.ts';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CATALOG_PATH = resolve(REPO_ROOT, 'src/data/catalog.generated.json');
@@ -58,7 +58,7 @@ const EXAMPLES = valOf('examples') != null ? Math.max(1, parseInt(valOf('example
 
 const subjects = bodies.filter((b) => b.kind === 'planet' || b.kind === 'moon');
 
-// Decorate each with its label + archetype + a host-star class once.
+// Decorate each with its label + head noun + a host-star class once.
 function hostStarOf(b) {
   if (b.hostStarIdx != null) return stars[b.hostStarIdx];
   if (b.hostBodyIdx != null) {
@@ -75,7 +75,7 @@ const rows = subjects.map((b) => {
     id: b.id,
     kind: b.kind,
     label: composeWorldLabel(b),
-    arch: classifyBody(b),
+    head: coreNoun(b),
     starCls: star ? (star.cls || star.rawClass || '?') : '?',
   };
 });
@@ -118,7 +118,7 @@ function physics(b) {
 // ============================================================================
 
 if (MODE_CSV) {
-  const cols = ['id', 'kind', 'label', 'archetype', 'starClass', 'tempK', 'pressureBar',
+  const cols = ['id', 'kind', 'label', 'headNoun', 'starClass', 'tempK', 'pressureBar',
     'liquidFrac', 'liquidSpecies', 'iceFrac', 'subsurfaceOcean', 'biosphere', 'massEarth', 'radiusEarth'];
   const esc = (v) => {
     const s = v == null ? '' : String(v);
@@ -128,7 +128,7 @@ if (MODE_CSV) {
   for (const r of [...rows].sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id))) {
     const b = r.b;
     lines.push([
-      b.id, b.kind, r.label, r.arch, r.starCls,
+      b.id, b.kind, r.label, r.head, r.starCls,
       b.avgSurfaceTempK, b.surfacePressureBar, b.surfaceLiquidFraction, b.surfaceLiquidSpecies,
       b.iceFraction, b.subsurfaceOceanSpecies, b.biosphereComplexity, b.massEarth, b.radiusEarth,
     ].map(esc).join(','));
@@ -142,19 +142,19 @@ if (MODE_CSV) {
 // ============================================================================
 
 if (MODE_ALL) {
-  console.log('ALL COMPOSED LABELS — grouped by archetype, then label');
+  console.log('ALL COMPOSED LABELS — grouped by head noun, then label');
   console.log('catalog: ' + CATALOG_PATH);
   console.log(`subjects: ${rows.length} (${rows.filter(r => r.kind === 'planet').length} planets, ${rows.filter(r => r.kind === 'moon').length} moons)`);
 
-  const byArch = new Map();
+  const byHead = new Map();
   for (const r of rows) {
-    if (!byArch.has(r.arch)) byArch.set(r.arch, []);
-    byArch.get(r.arch).push(r);
+    if (!byHead.has(r.head)) byHead.set(r.head, []);
+    byHead.get(r.head).push(r);
   }
-  const archOrder = [...byArch.keys()].sort((a, b) => byArch.get(b).length - byArch.get(a).length);
+  const headOrder = [...byHead.keys()].sort((a, b) => byHead.get(b).length - byHead.get(a).length);
 
-  for (const a of archOrder) {
-    const group = byArch.get(a);
+  for (const a of headOrder) {
+    const group = byHead.get(a);
     console.log();
     console.log(`══ ${a}  (${group.length}) ` + '═'.repeat(Math.max(0, 56 - a.length - String(group.length).length)));
     const sorted = [...group].sort((x, y) => x.label.localeCompare(y.label) || x.id.localeCompare(y.id));
@@ -200,19 +200,22 @@ for (const [label, n] of ranked) {
   console.log(`  ${pad(n, 5, true)}   ${pct(n, rows.length)}   ${label}`);
 }
 
-// --- 3. Per-archetype label breakdown --------------------------------------
+// --- 3. Per-head-noun label breakdown --------------------------------------
+// The head is the structural / iconic family (Gas Giant, Garden World, Moon,
+// Heavyworld, …); the descriptor variety within each shows how much the
+// physical axes spread worlds that share a structural family.
 
 console.log();
-console.log('=== Label variety within each archetype ===');
-console.log('  archetype          | bodies | labels | label (count) …');
+console.log('=== Label variety within each head noun ===');
+console.log('  head noun          | bodies | labels | label (count) …');
 console.log('  -------------------+--------+--------+----------------');
-const byArch = new Map();
+const byHead = new Map();
 for (const r of rows) {
-  if (!byArch.has(r.arch)) byArch.set(r.arch, []);
-  byArch.get(r.arch).push(r);
+  if (!byHead.has(r.head)) byHead.set(r.head, []);
+  byHead.get(r.head).push(r);
 }
-const archRanked = [...byArch.entries()].sort((a, b) => b[1].length - a[1].length);
-for (const [a, group] of archRanked) {
+const headRanked = [...byHead.entries()].sort((a, b) => b[1].length - a[1].length);
+for (const [a, group] of headRanked) {
   const counts = new Map();
   for (const r of group) counts.set(r.label, (counts.get(r.label) ?? 0) + 1);
   const variants = [...counts.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))

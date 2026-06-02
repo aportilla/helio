@@ -14,7 +14,7 @@ import { BasePanel } from '../base-panel';
 import { paintSurface } from '../painter';
 import { colors, fonts, sizes } from '../theme';
 import { composeWorldLabel } from './body-label';
-import { classifyBody, GASEOUS_ARCHETYPES } from '../../../scripts/lib/body-archetype.mjs';
+import { isGaseousBody } from '../../../scripts/lib/body-traits.mjs';
 
 // Pretty labels for enum-valued fields. Defined here (rather than on the
 // data layer) because they're a presentation concern. The world-class
@@ -152,6 +152,15 @@ function liquidExtentWord(frac: number): string {
   return 'pools';
 }
 
+// Surface-radiation dose [0..1] → a qualitative band plus the normalized value.
+// Bands track the bimodal distribution (unshielded thin-atmosphere worlds
+// saturate near 1); 'severe' is the >=0.85 tail the label would once have
+// flagged "Irradiated".
+function radiationLabel(dose: number): string {
+  const band = dose < 0.15 ? 'low' : dose < 0.5 ? 'moderate' : dose < 0.85 ? 'high' : 'severe';
+  return `${band} · ${dose.toFixed(2)}`;
+}
+
 interface BodyRow { key: string; val: string }
 
 // Trailing-space padding pads short keys to align the value column.
@@ -184,6 +193,11 @@ function rowsForBody(bodyIdx: number): BodyRow[] {
   const rows: BodyRow[] = [];
   if (b.avgSurfaceTempK !== null) rows.push({ key: k('temp'), val: `${Math.round(b.avgSurfaceTempK)} K` });
   if (b.surfacePressureBar !== null) rows.push({ key: k('pressure'), val: `${b.surfacePressureBar.toFixed(2)} bar` });
+  // Incident surface-radiation dose [0..1] — the magnetosphere's ground face,
+  // decoupled from temperature (Venus scorching but shielded; Mars frozen but
+  // bombarded). The label deliberately never spends a chip token on it, so the
+  // card is where the colonist's dose reads. Null on no-surface bodies.
+  if (b.surfaceRadiation !== null) rows.push({ key: k('radiation'), val: radiationLabel(b.surfaceRadiation) });
   // Surface liquid — say there's standing liquid and name the solvent. The
   // subtitle names the world ("Ammonia Sea World"); this row spells out the
   // solvent + extent + coverage as data, matching the sea the disc renders.
@@ -241,7 +255,7 @@ function rowsForBody(bodyIdx: number): BodyRow[] {
 
 function hasInaccessibleSurface(b: Body): boolean {
   // Gaseous-bracket bodies have no accessible surface.
-  return GASEOUS_ARCHETYPES.has(classifyBody(b));
+  return isGaseousBody(b);
 }
 
 // Belt rows surface the band's extent, anchoring metadata, and the top

@@ -22,9 +22,19 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { classifyBody } from './lib/body-archetype.mjs';
+import * as traits from './lib/body-traits.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+// Every body-traits predicate that fires for this body — the multi-axis view
+// that replaced the single collapsed archetype string. A body can read as both
+// (say) iron and glacial; printing all of them is the point.
+function traitsOf(b) {
+  const fired = Object.entries(traits)
+    .filter(([name, fn]) => typeof fn === 'function' && name.startsWith('is') && name !== 'isClassifiable' && fn(b))
+    .map(([name]) => name.slice(2).replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase());
+  return fired.length ? fired.join(', ') : 'unclassifiable';
+}
 const CATALOG_PATH = resolve(REPO_ROOT, 'src/data/catalog.generated.json');
 
 const id = process.argv[2];
@@ -108,7 +118,7 @@ out.push(`  host: ${hostLine(body)}`);
 if (body.source) out.push(`  source: ${body.source}`);
 
 if (body.kind === 'planet' || body.kind === 'moon') {
-  if (body.kind === 'planet' || body.kind === 'moon') out.push(`  archetype: ${classifyBody(body)}`);
+  out.push(`  traits: ${traitsOf(body)}`);
   if (body.massEarth != null || body.radiusEarth != null) {
     out.push(`  mass: ${n(body.massEarth, 3)} M⊕    radius: ${n(body.radiusEarth, 3)} R⊕`);
   }
