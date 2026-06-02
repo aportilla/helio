@@ -25,6 +25,7 @@ import {
 import { makeRingMaterial } from '../../materials';
 import {
   RENDER_ORDER_BACK_RING, RENDER_ORDER_FRONT_RING,
+  RING_COLOR_SATURATION,
   RING_FLOOR_ALPHA_DUSTY, RING_FLOOR_ALPHA_ICY,
   RING_MINOR_OVER_MAJOR, RING_SEGMENTS,
   Z_BACK_RING, Z_FRONT_RING,
@@ -174,7 +175,13 @@ export class RingsLayer {
 function buildRing(ring: Body, hostPlanet: Body, ringBodyIdx: number, hostBodyIdx: number, hostDiscPx: number): Ring {
   const { innerR, outerR, tiltRad } = ringEllipseParams(ring, hostPlanet, hostDiscPx);
   const t = bodyIcyness(ring);
+  // beltRingColor allocates a fresh Color, so damping its saturation in
+  // place is safe (the shared palette endpoints stay read-only). Rings
+  // read better muted than the full-saturation belt tint.
   const color = beltRingColor(t);
+  const hsl = { h: 0, s: 0, l: 0 };
+  color.getHSL(hsl);
+  color.setHSL(hsl.h, hsl.s * RING_COLOR_SATURATION, hsl.l);
   // Icy↔dusty drives the floor opacity; dusty rings ride a faint floor so
   // the background reads through. The concentric lines modulate their
   // opacity around this floor — denser lines more solid, sparser fainter.

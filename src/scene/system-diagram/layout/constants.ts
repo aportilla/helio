@@ -246,6 +246,13 @@ export const RING_SEGMENTS = 24;
 export const RING_FLOOR_ALPHA_ICY   = 0.72;
 export const RING_FLOOR_ALPHA_DUSTY = 0.40;
 
+// Saturation multiplier applied to the ring's rocky↔icy palette color
+// (beltRingColor) before it reaches the material. Pulls the disc toward a
+// muted, dusty-pale read rather than a saturated tint — the resource hue
+// still tilts the gray, but quietly. Belts keep the full-saturation color;
+// only rings damp it (the wide thin annulus reads better desaturated).
+export const RING_COLOR_SATURATION = 0.45;
+
 // Fallback ring extent (in host-planet radii) when the body carries no
 // innerPlanetRadii / outerPlanetRadii — a generic Saturn-ish band so a
 // ring still renders rather than collapsing to zero width.

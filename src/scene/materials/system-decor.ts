@@ -237,9 +237,10 @@ export function makeRingMaterial(color: Color, floorAlpha: number, seed: number,
       // the far side so the FRONT arc darkens; flipping the sign moves the
       // shadow to the opposite arc.
       const float LIGHT_Z = 1.8;
-      // Brightness inside the shadow. Not 0 — a shadowed ring still reads
-      // faintly, so the silhouette doesn't look chunk-missing.
-      const float SHADOW_DARK = 0.30;
+      // Brightness inside the shadow. Kept high — the shadowed arc reads as
+      // a slightly dimmer version of the lit ring surface, a soft umbra
+      // rather than a dark cut-out.
+      const float SHADOW_DARK = 0.72;
 
       const float TAU = 6.2831853;
 
