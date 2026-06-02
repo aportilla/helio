@@ -86,9 +86,11 @@ export const GRID_FADE_FAR  = 60;
 // zoom-out — every star is far from a zoomed-out camera, including the
 // nearby ones we want bright.
 //
-// Bounds are tuned against DEFAULT_VIEW.distance = 30: full effect at and
-// below default zoom, smooth disappear from FULL_BELOW → OFF_ABOVE, no
-// effect beyond OFF_ABOVE (well inside the [4, 150] zoom range so the
-// "zoom-out reveals the galaxy uniformly" cue is unmistakable).
-export const STAR_DIM_FULL_BELOW = 40;
-export const STAR_DIM_OFF_ABOVE  = 100;
+// FULL_BELOW sits at DEFAULT_VIEW.distance = 30, so distant stars reach full
+// focus-dim at default zoom and lift back toward full brightness as the user
+// zooms out, clearing entirely at OFF_ABOVE. The band is kept moderate so the
+// bright→dim transition reads as a deliberate zoom cue rather than a snap;
+// OFF_ABOVE stays well inside the [4, 150] zoom range so "zoom-out reveals the
+// galaxy uniformly" holds.
+export const STAR_DIM_FULL_BELOW = 30;
+export const STAR_DIM_OFF_ABOVE  = 60;
