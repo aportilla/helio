@@ -698,6 +698,9 @@ function parseCsvBodies(text, label) {
       shepherdId,
       shepherdBodyIdx: null,
       biosphereSurfaceImpact: null,
+      // Always derived in the Filler (never CSV-authored), like
+      // biosphereSurfaceImpact — init here so the object shape carries it.
+      surfaceRadiation: null,
       moons: [],
       ring: null,
     };

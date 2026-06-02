@@ -301,7 +301,7 @@ function makeBody(props) {
     salinity: null, surfaceLiquidFraction: null,
     surfaceLiquidSpecies: null, subsurfaceOceanSpecies: null,
     magneticFieldGauss: null, tectonicActivity: null,
-    surfacePressureBar: null,
+    surfacePressureBar: null, surfaceRadiation: null,
     atm1: null, atm1Frac: null, atm2: null, atm2Frac: null, atm3: null, atm3Frac: null,
     cloudLayers: null, surfaceOpacity: null,
     hazeAerosols: null, dustStrength: null,

@@ -108,6 +108,7 @@ function physics(b) {
   if (b.subsurfaceOceanSpecies) parts.push(`subO=${b.subsurfaceOceanSpecies}`);
   if (b.biosphereComplexity && b.biosphereComplexity !== 'none') parts.push(`bio=${b.biosphereComplexity}`);
   if ((b.dustStrength ?? 0) >= 0.3) parts.push(`dust=${num(b.dustStrength, 2)}`);
+  if ((b.surfaceRadiation ?? 0) >= 0.3) parts.push(`rad=${num(b.surfaceRadiation, 2)}`);
   parts.push(`r=${num(b.radiusEarth, 2)}`);
   return parts.join(' ');
 }

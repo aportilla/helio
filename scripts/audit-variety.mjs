@@ -200,9 +200,6 @@ row('  └── temperate (T < 330K)', oceanTemperate,
 const ammoniaSeas = procgenPlanets.filter(b => arch(b) === 'ammonia_sea');
 row('Ammonia-sea worlds', ammoniaSeas,
     procgenPlanets.length, topExamples(ammoniaSeas, b => b.massEarth));
-const glacialSeas = procgenPlanets.filter(b => arch(b) === 'glacial_sea');
-row('Glacial-sea worlds (liquid N2, Triton-warm)', glacialSeas,
-    procgenPlanets.length, topExamples(glacialSeas, b => b.massEarth));
 const subglacial = [...procgenPlanets, ...procgenMoons].filter(b => arch(b) === 'subglacial_ocean');
 row('Subglacial-ocean worlds (Europa, frozen surface)', subglacial,
     procgenPlanets.length + procgenMoons.length, topExamples(subglacial, b => b.bulkWaterFraction));
@@ -271,9 +268,9 @@ row('Super-Earths (m≥3 M⊕, R<3 R⊕)', superEarths,
 
 // Mega-Earth — m≥5 and a rocky/ocean-ish solid archetype (Kepler-10c-class).
 // Old worldClass {rocky, ocean, desert, iron, solid_giant} expands across the
-// iconic ocean promotions (gaian/ammonia_sea/glacial_sea) + super_earth.
+// iconic ocean promotions (gaian/ammonia_sea) + super_earth.
 const MEGA_EARTH_ARCHETYPES = new Set([
-  'rocky', 'ocean', 'gaian', 'ammonia_sea', 'glacial_sea', 'desert', 'iron', 'super_earth',
+  'rocky', 'ocean', 'gaian', 'ammonia_sea', 'desert', 'iron', 'super_earth',
 ]);
 const megaEarths = procgenPlanets.filter(b =>
   (b.massEarth ?? 0) >= 5 && MEGA_EARTH_ARCHETYPES.has(arch(b)));

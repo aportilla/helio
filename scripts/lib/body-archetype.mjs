@@ -20,7 +20,6 @@
 //   tholin           hydrocarbon lakes / thick organic smog (Titan)
 //   brimstone        molten-sulfur seas (Io-class)
 //   ammonia_sea      full ammonia / ammonia-water ocean
-//   glacial_sea      full liquid-nitrogen ocean (Triton-warm)
 //   subglacial_ocean buried ice-shell ocean, frozen surface (Europa)
 //   hot_jupiter      close-in scorching gas giant
 //
@@ -96,7 +95,7 @@ export const ARCHETYPES = [
   // gaseous
   'hot_jupiter', 'gas_giant', 'ice_giant', 'sub_neptune', 'veiled_ice', 'helium',
   // iconic surface/subsurface liquid
-  'gaian', 'tholin', 'brimstone', 'ammonia_sea', 'glacial_sea', 'subglacial_ocean', 'ocean',
+  'gaian', 'tholin', 'brimstone', 'ammonia_sea', 'subglacial_ocean', 'ocean',
   // terrestrial base
   'lava', 'magma_ocean', 'volcanic', 'chthonian', 'iron', 'frostbound', 'glacial',
   'super_earth', 'desert', 'rocky',
@@ -165,7 +164,10 @@ export function classifyBody(body) {
     return 'gaian';
   }
   if ((sp === 'ammonia_water' || sp === 'ammonia') && liquid >= W.oceanWaterFloor) return 'ammonia_sea';
-  if (sp === 'nitrogen' && liquid >= W.oceanWaterFloor) return 'glacial_sea';
+  // Nitrogen is a trace solvent here — its cover never reaches oceanWaterFloor
+  // (bounded by SOLVENT_PHASE.nitrogen.minBudget), so there is no nitrogen sea
+  // core; a nitrogen film reads as a lake modifier on a glacial/frostbound base
+  // (the label's nitrogenLake), and the body falls through to that base below.
   // Buried ice-shell ocean with a frozen (liquid-free) surface — Europa.
   if (body.subsurfaceOceanSpecies != null && liquid < MIN_SURFACE_LIQUID_COVER) return 'subglacial_ocean';
 

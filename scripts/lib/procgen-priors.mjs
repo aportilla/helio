@@ -1612,6 +1612,60 @@ const MAGNETIC_FIELD_TUNE = {
 export const MAGNETIC_FIELD = mergeTunes(MAGNETIC_FIELD_REALISTIC, MAGNETIC_FIELD_TUNE);
 
 // ---------------------------------------------------------------------------
+// Surface radiation — incident high-energy dose at the ground (Phase 4)
+// ---------------------------------------------------------------------------
+//
+// A [0,1] proxy for how irradiated a solid surface is — the dose an explorer
+// (or a biosphere) would take standing on it. Deliberately independent of
+// temperature: a thick-atmosphere greenhouse (Venus) shields its surface to
+// near-nothing while staying scorching, and a thin-air cold world (Mars) bakes
+// in cosmic rays while freezing. The model sums three incident sources, then
+// attenuates by the two shields the body actually carries:
+//
+//   incident   = cosmicFloor + stellar + belt
+//   stellar    = insolation S × classHardness[hostClass] × stellarScale
+//                (XUV/particle flux scales with bolometric flux, hardened by
+//                 spectral type: M-dwarf flares + WD/hot-star UV punch far
+//                 above their bolometric share; cool BD barely at all)
+//   belt       = a moon deep inside a strongly-magnetized giant's trapped-
+//                particle belts (Io/Europa in Jupiter's belts) — fieldFactor
+//                × proximity falloff, planets/zero-field hosts contribute none
+//   atmTransmit = 1 / (1 + P / atmHalfBar)     // column mass shields, hyperbolic
+//   magTransmit = 1 − smoothstep(magLow, magHigh, B)  // own dynamo deflects
+//   dose        = 1 − exp(−incident × atmTransmit × magTransmit / doseScale)
+//
+// Null for any body with no solid surface (gaseous bodies, belts, rings) — the
+// "surface" the dose is measured at doesn't exist. classHardness is the XUV/
+// flare hardness RELATIVE to a Sun-like G star (=1.0); the absolute flux comes
+// from S, so a close-in M-dwarf world is both high-S and high-hardness.
+//
+// Sol-system anchors (relative, decoupled from temperature):
+//   Earth   ≈ 0.02  (1 bar column + 0.5 G dynamo — doubly shielded)
+//   Venus   ≈ 0.005 (90 bar column buries the surface despite proximity)
+//   Mars    ≈ 0.7   (thin air, no global field — a known surface hazard)
+//   Mercury ≈ 1.0   (airless, field-free, close to the Sun)
+//   Luna    ≈ 0.9   (airless, field-free, 1 AU)
+//   Europa  ≈ 0.9 / Io ≈ 1.0 / Callisto ≈ 0.5  (Jovian belts, distance-ranked)
+//   Titan   ≈ 0.06  (1.5 bar N₂ column shields, even within Saturn's belts)
+export const SURFACE_RADIATION = {
+  cosmicFloor:  0.5,   // baseline galactic-cosmic-ray incidence (unshielded)
+  stellarScale: 2.0,   // weight on the stellar XUV term (S × hardness)
+  // XUV / flare hardness per normalized spectral bucket, relative to G=1.0.
+  // M dwarfs and white dwarfs sit high (flares / hard UV out of proportion to
+  // bolometric output); brown dwarfs barely irradiate. Keyed off host star
+  // type, never galaxy position — see project resource-keying philosophy.
+  classHardness: { O: 3.0, B: 2.5, A: 1.8, F: 1.3, G: 1.0, K: 0.9, M: 2.6, WD: 3.0, BD: 0.5 },
+  atmHalfBar:   0.1,   // atmospheric pressure (bar) that halves the surface dose
+  magLow:       0.05,  // field (gauss) below which no magnetospheric shielding
+  magHigh:      0.6,   // field (gauss) above which the magnetosphere fully deflects
+  beltScale:    5.0,   // peak trapped-belt dose a strong-field host giant delivers
+  beltFieldRef: 8.0,   // host field (gauss) at which the belt term is half-saturated
+  beltRefAu:    0.003, // moon orbit (AU) inside which the belt dose saturates (Io-class)
+  beltFalloff:  2.0,   // belt dose falls as (beltRefAu / a)^beltFalloff farther out
+  doseScale:    1.0,   // saturating squash: dose = 1 − exp(−shielded / doseScale)
+};
+
+// ---------------------------------------------------------------------------
 // Atmosphere composition — top-3 gases per world class
 // ---------------------------------------------------------------------------
 

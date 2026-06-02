@@ -291,6 +291,14 @@ export interface Body {
   readonly surfaceAge: number | null;
   readonly magneticFieldGauss: number | null;
   readonly tectonicActivity: number | null;
+  // Incident high-energy dose at the surface, [0..1]. Stellar XUV (insolation
+  // × spectral hardness) + a galactic-cosmic-ray floor + a moon's share of a
+  // giant's trapped-particle belts, attenuated by the body's own atmospheric
+  // column and magnetosphere. Deliberately decoupled from temperature: Venus
+  // is scorching but shielded (~0.005), Mars is frozen but bombarded (~0.7).
+  // Null for bodies with no solid surface (gas/ice giants, gas dwarfs, belts,
+  // rings). Always procgen-derived; never CSV-authored.
+  readonly surfaceRadiation: number | null;
   // Atmosphere — top three gases by fraction. atm1 is the dominant species.
   readonly surfacePressureBar: number | null;
   readonly atm1: string | null;

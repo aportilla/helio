@@ -25,6 +25,11 @@
 //                               magneticFieldGauss (mass-cap × dynamo)
 //   6.  surfacePressureBar      outgassing × atm-retention ×
 //                               pressure-history mixture
+//   6b. surfaceRadiation        incident XUV (S × spectral hardness) +
+//                               cosmic floor + giant-belt dose for moons,
+//                               shielded by atmosphere + magnetosphere.
+//                               Temperature-independent; null on no-surface
+//                               bodies. Always derived, never CSV-authored.
 //   7.  T ↔ albedo ↔ cover      Two-pass iteration. Pass A uses the
 //                               pressure-proxy greenhouse, Pass B
 //                               refines with per-gas potency once atm
@@ -106,6 +111,7 @@ import {
   TIDAL_LOCK_RANGE,
   TEMP_SWING,
   MAGNETIC_FIELD,
+  SURFACE_RADIATION,
   ATMOSPHERE_GASES_BY_REGIME,
   ATMOSPHERE_REGIME_THRESHOLDS,
   ATMOSPHERE_MIN_PRESSURE_BAR,
@@ -731,6 +737,51 @@ function magneticFieldGaussFor(body) {
   const rot = body.rotationPeriodHours ?? 24;
   const dynamo = tect * Math.sqrt(24 / Math.max(rot, 4));
   return Number(Math.max(0, cap * dynamo * noise).toFixed(4));
+}
+
+// =============================================================================
+// Surface radiation — incident high-energy dose at the ground (Phase 4)
+// =============================================================================
+
+// A [0,1] surface-dose proxy: stellar XUV (insolation × spectral hardness) +
+// a galactic-cosmic-ray floor + a moon's share of a giant's trapped-particle
+// belts, attenuated by the body's own atmosphere (column mass) and
+// magnetosphere (dynamo deflection). Independent of temperature by design —
+// see the SURFACE_RADIATION prior for the model + Sol anchors. Null for any
+// body with no solid surface (gaseous bodies, belts, rings); `S` is the
+// already-computed insolation at the body (Earth = 1.0).
+//
+// The trapped-belt term reads the HOST giant's field via magneticFieldGaussFor
+// rather than hostBody.magneticFieldGauss: fillBodies maps over an unmutated
+// array, so a host's stored field is still null when its moon fills. The
+// recompute is deterministic from the host's architect-time mass/radius, so it
+// reproduces exactly the field the host lands on, independent of fill order.
+function surfaceRadiationFor(body, hostStar, hostBody, S) {
+  if (body.radiusEarth == null) return null;
+  if (isGaseousBody(body)) return null;
+  const R = SURFACE_RADIATION;
+
+  const hardness = R.classHardness[hostStar?.cls] ?? 1.0;
+  const stellar = (S ?? 0) * hardness * R.stellarScale;
+
+  // Trapped-particle belts: a moon deep inside a magnetized giant's
+  // magnetosphere. Planets and zero-field hosts contribute nothing.
+  let belt = 0;
+  if (body.kind === 'moon' && hostBody != null) {
+    const hostField = magneticFieldGaussFor(hostBody) ?? 0;
+    const fieldFactor = hostField / (hostField + R.beltFieldRef);
+    const a = body.semiMajorAu;
+    const prox = (a != null && a > R.beltRefAu) ? Math.pow(R.beltRefAu / a, R.beltFalloff) : 1;
+    belt = R.beltScale * fieldFactor * prox;
+  }
+
+  const incident = R.cosmicFloor + stellar + belt;
+  const P = body.surfacePressureBar ?? 0;
+  const B = body.magneticFieldGauss ?? 0;
+  const atmTransmit = 1 / (1 + P / R.atmHalfBar);
+  const magTransmit = 1 - smoothstep(R.magLow, R.magHigh, B);
+  const shielded = incident * atmTransmit * magTransmit;
+  return Number((1 - Math.exp(-shielded / R.doseScale)).toFixed(4));
 }
 
 // =============================================================================
@@ -1808,7 +1859,7 @@ function fillBody(b, allBodies, stars) {
     surfaceLiquidFraction, surfaceLiquidSpecies, subsurfaceOceanSpecies, salinity,
     avgSurfaceTempK, surfaceTempMinK, surfaceTempMaxK,
     tectonicActivity, rotationPeriodHours, magneticFieldGauss,
-    surfacePressureBar,
+    surfacePressureBar, surfaceRadiation,
     atm1, atm1Frac, atm2, atm2Frac, atm3, atm3Frac,
     cloudLayers, surfaceOpacity,
     hazeAerosols, dustStrength,
@@ -1929,6 +1980,13 @@ function fillBody(b, allBodies, stars) {
     if (p != null) surfacePressureBar = p;
   }
   working = { ...working, surfacePressureBar };
+
+  // Surface radiation — incident high-energy dose at the ground, attenuated
+  // by the now-settled atmosphere + magnetosphere. Always derived (never CSV-
+  // authored, like biosphereSurfaceImpact); null for no-surface bodies.
+  // Independent of temperature, so it slots in once pressure + field are set.
+  surfaceRadiation = surfaceRadiationFor(working, hostStar, hostBody, S);
+  working = { ...working, surfaceRadiation };
 
   // Salinity — solute load of the body's pooled liquid. Settles BEFORE
   // the temp/cover passes (acyclic: keyed off pre-temp inputs only) so the
@@ -2132,7 +2190,7 @@ function fillBody(b, allBodies, stars) {
     surfaceLiquidFraction, surfaceLiquidSpecies, subsurfaceOceanSpecies, salinity,
     avgSurfaceTempK, surfaceTempMinK, surfaceTempMaxK,
     tectonicActivity, rotationPeriodHours, magneticFieldGauss,
-    surfacePressureBar,
+    surfacePressureBar, surfaceRadiation,
     atm1, atm1Frac, atm2, atm2Frac, atm3, atm3Frac,
     cloudLayers, surfaceOpacity,
     hazeAerosols, dustStrength,

@@ -12,7 +12,7 @@ export type Archetype =
   // gaseous
   | 'hot_jupiter' | 'gas_giant' | 'ice_giant' | 'sub_neptune' | 'veiled_ice' | 'helium'
   // iconic surface / subsurface liquid
-  | 'gaian' | 'tholin' | 'brimstone' | 'ammonia_sea' | 'glacial_sea' | 'subglacial_ocean' | 'ocean'
+  | 'gaian' | 'tholin' | 'brimstone' | 'ammonia_sea' | 'subglacial_ocean' | 'ocean'
   // terrestrial base
   | 'lava' | 'magma_ocean' | 'volcanic' | 'chthonian' | 'iron' | 'frostbound' | 'glacial'
   | 'super_earth' | 'desert' | 'rocky'
