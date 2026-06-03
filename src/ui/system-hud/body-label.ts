@@ -148,7 +148,7 @@ const FAMILIES = {
     label: 'Frozen',
     terrain: { land: ['Plains', 'Barrens', 'Flats', 'Sheets', 'Fields', 'Wastes', 'Reaches', 'Steppes'],
                mat: ['Frost', 'Hoarfrost', 'Ice', 'Snow', 'Rime', 'Glacial'] },
-    lead: ['Fractured', 'Shattered', 'Wind-Carved', 'Wind-Scoured', 'Eternal', 'Stark', 'Cracked'],
+    lead: ['Fractured', 'Shattered', 'Wind-Carved', 'Wind-Scoured', 'Stark', 'Cracked'],
   },
   // volatile-frost substrate — the material word is forced from the body's real
   // surfaceFrostSpecies in deriveBiome (Nitrogen / Methane / Dry-Ice / Ammonia),
@@ -156,7 +156,7 @@ const FAMILIES = {
   frozenVol: {
     label: 'Frozen',
     terrain: { land: ['Snowfields', 'Barrens', 'Dunes', 'Flats', 'Ridges', 'Plains', 'Reaches', 'Wastes', 'Drifts', 'Glaciers', 'Sastrugi', 'Pans'] },
-    lead: ['Frozen', 'Rimebound', 'Shattered', 'Drifting', 'Wind-Carved', 'Wind-Scoured', 'Eternal', 'Stark'],
+    lead: ['Frozen', 'Rimebound', 'Shattered', 'Drifting', 'Wind-Carved', 'Wind-Scoured', 'Stark'],
   },
   // Material is a physical read (S6): neutral rock anchors the pool; oxidized
   // worlds add red ferric minerals; water-bedded sediments need a water history.
