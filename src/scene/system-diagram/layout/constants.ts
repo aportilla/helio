@@ -186,6 +186,11 @@ export const BELT_HEIGHT_FACTOR = 3.0;
 // rows (gas giants near PLANET_DISC_MAX) get trimmed; typical rows
 // stay fully proportional.
 export const BELT_HEIGHT_MAX_PX = 260;
+// Lean of a belt column off vertical, applied as a rigid rotation of the
+// sampled chunk-center scatter (the camera is y-up, so a clockwise turn
+// leans the band's top toward +x). The band keeps its thin-stretched
+// shape — it just runs on a diagonal rather than straight up the slot.
+export const BELT_TILT_RAD = 40 * Math.PI / 180;
 // Chunk count range per belt. Smallest masses bottom out at MIN; the
 // largest belts approach MAX. Log-based so a 100× mass range only
 // doubles chunk count. This is the mass-derived count *before* the

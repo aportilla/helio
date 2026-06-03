@@ -8,7 +8,7 @@ import { beltRingColor, bodyIcyness, dominantResources, resourceMineralColor } f
 import {
   BELT_CHUNKS_HARD_MAX, BELT_CHUNKS_MAX, BELT_CHUNKS_MIN, BELT_CHUNK_KM_MAX, BELT_CHUNK_KM_MIN,
   BELT_CHUNK_SCALE_MAX, BELT_CHUNK_SCALE_MIN, BELT_CHUNK_SIZES,
-  BELT_HEIGHT_FACTOR, BELT_HEIGHT_MAX_PX, BELT_SLOT_WIDTH, PLANET_DISC_MIN,
+  BELT_HEIGHT_FACTOR, BELT_HEIGHT_MAX_PX, BELT_SLOT_WIDTH, BELT_TILT_RAD, PLANET_DISC_MIN,
   RENDER_ORDER_BELT, Z_BELT,
 } from '../layout/constants';
 import type { RowSlot } from '../layout/row';
@@ -211,6 +211,20 @@ function buildBeltPool(
     const halfH = heightPx / 2;
     const shapes = shapesFor(icyness);
     const chunks = sampleBeltChunks(rng, N, halfW, halfH, sizes, shapes);
+
+    // Lean the whole band off vertical: a rigid rotation of each chunk's
+    // center about the slot anchor. Sampling stays axis-aligned (so the
+    // thin-stretch SDs and center-weighted size bias keep their simple
+    // form); rotating afterward preserves chunk spacing — the picker bbox
+    // and baked offsets below both read the tilted centers.
+    const tc = Math.cos(BELT_TILT_RAD);
+    const ts = Math.sin(BELT_TILT_RAD);
+    for (const chunk of chunks) {
+      const rx = chunk.cx * tc + chunk.cy * ts;
+      const ry = -chunk.cx * ts + chunk.cy * tc;
+      chunk.cx = rx;
+      chunk.cy = ry;
+    }
 
     // Per-chunk color: each chunk's PRIMARY hue is one of the belt's two
     // deposits, drawn weighted by abundance and painted in the muted
