@@ -11,14 +11,19 @@
 //
 // GENERATIVE, NOT PLUCKED. The label is built, not looked up: `[LEAD] [TERRAIN]`,
 // a single lead descriptor over a terrain noun — "Iron-Streaked Badlands",
-// "Smoldering Basalt Wastes", "Storm-Lashed Shallows". Each biome family owns two
+// "Smoldering Basalt Wastes", "Stormy Shallows". Each biome family owns two
 // small pools — a `terrain` pool (the head nouns: Badlands, Wastes, Dunes, …) and
-// a `lead` pool (its signature adjectives: Smoldering, Wind-Scoured, …) — and the
+// a `lead` pool (its signature adjectives: Smoldering, Scoured, …) — and the
 // label composes one of each. The combinatorics (leads × terrains) give the
-// variety; the tight two-slot shape keeps every label 2–3 words.
+// variety; the tight two-slot shape keeps every label 2–3 words. Leads stay
+// SINGLE words wherever a single word carries the sense — a `[cause]-[effect]`
+// compound (Wind-Scoured, Sun-Glittered) just names an off-screen agent the
+// effect word (Scoured, Glittering) already implies, so it's spent as one. A
+// hyphenated lead earns its second word only when neither half stands alone
+// (Storm-Wracked, Coral-Spired) or when it's a sub-generator (the metal lead).
 //
 // CONDITIONS REPLACE THE LEAD, THEY DON'T STACK. A notable physical condition —
-// an ancient cratered crust, a fire-and-ice day↔night swing, a briny sea, a
+// an ancient cratered crust, a thermal-shock day↔night swing, a briny sea, a
 // metal-streaked surface — supplies the lead INSTEAD of the family's signature
 // adjective, never in addition to it. Exactly one lead is ever emitted, so the
 // worst case is `[condition] [two-word terrain]` = three words, not the four-word
@@ -106,8 +111,9 @@ const hadWater: Guard = (b) => (b.bulkWaterFraction ?? 0) > 0.001;
 // ─── Biome families: a terrain (noun) pool + a lead (adjective) pool ─────────
 // `[lead] [terrain]` composes the label. Terrains are pure nouns (some carry a
 // material, e.g. "Basalt Wastes"); leads are the family's axis-NEUTRAL signature
-// textures — anything that asserts a measured axis (iron, cratered, dust, tide,
-// briny) lives in COND instead, so a lead never lies. Frozen splits water vs
+// textures or moods (a light / scale / stillness register) — anything that asserts
+// a measured axis (iron, cratered, dust, tide, briny) lives in COND instead, so a
+// lead never lies. Frozen splits water vs
 // volatile ice (see deriveBiome); the volatile pool carries the species in the
 // terrain so the lead stays free.
 // A terrain is a sub-generator: a `land` (landform noun) pool, optionally crossed
@@ -135,28 +141,43 @@ const FAMILIES = {
   volcanicSulfur: {
     label: 'Volcanic',
     terrain: { land: ['Wastes', 'Plains', 'Flats', 'Plume-Fields', 'Snows', 'Lakes', 'Floes', 'Paterae', 'Calderas'],
-               mat: ['Sulfur', 'Brimstone', 'Sulfur-Dioxide', 'Lava'] },
-    // leads carry the PROCESS (tidal / plume / eruption); the material carries the
-    // sulfur, so "sulfur" lands once — no "Sulfur-Glazed Sulfurous Snows".
-    lead: ['Plume-Wracked', 'Eruption-Scarred', 'Tidal-Wracked', 'Caustic', 'Resurfaced', 'Frostless', 'Cooling', 'Crusted', 'Yellow-Crusted', 'Smoking'],
+               mat: ['Sulfur', 'Brimstone', 'Lava'] },
+    // Leads name what you'd SEE underfoot — visible volcanism (eruptions / vents /
+    // fumes / glow) or the sulfur color (yellow / saffron). The material carries
+    // the sulfur, so it lands once — no "Sulfur-Glazed Sulfurous Snows". No tidal
+    // lead: the orbital squeezing that DRIVES the volcanism isn't an experience you
+    // have standing there — it names the cause, not the place (so we don't say it
+    // directly; the physics still selects the family, see deriveBiome).
+    lead: ['Erupting', 'Vent-Riddled', 'Smoking', 'Fuming', 'Glowing', 'Cooling', 'Caustic', 'Crusted', 'Yellowed', 'Saffron'],
   },
-  // water-ice substrate. The material (Frost / Ice / Rime / …) ALWAYS carries the
-  // "frozen" — so the lead is a pure TEXTURE / PROCESS, never another ice synonym
-  // (no "Frozen Frost" / "Rime-Locked Ice"). Every landform here takes a material
-  // (Steppes is kept off BARE_OK_LAND) so the ice substrate is never absent.
+  // water-ice substrate. The material (Frost / Ice / Rime / …) carries the
+  // "frozen", so the lead is free for a TEXTURE / PROCESS or a light / scale /
+  // stillness mood — never another ice synonym (no "Frozen Frost"). A cold world
+  // can be bleak (Shattered / Scoured) OR beautiful (Glittering / Gleaming) OR
+  // vast-and-silent, so ~half the galaxy's ice moons aren't all grey
+  // desolation. The shaped ice landforms (Seracs / Pinnacles / Cirques / Crevasse-
+  // Fields) are self-complete geomorphology — they sit in BARE_OK_LAND and can
+  // stand bare; the flat expanse nouns always take a material so the substrate
+  // never goes absent.
   frozen: {
     label: 'Frozen',
-    terrain: { land: ['Plains', 'Barrens', 'Flats', 'Sheets', 'Fields', 'Wastes', 'Reaches', 'Steppes'],
+    terrain: { land: ['Plains', 'Barrens', 'Flats', 'Sheets', 'Fields', 'Wastes', 'Reaches', 'Steppes',
+                       'Seracs', 'Pinnacles', 'Cirques', 'Crevasse-Fields'],
                mat: ['Frost', 'Hoarfrost', 'Ice', 'Snow', 'Rime', 'Glacial'] },
-    lead: ['Fractured', 'Shattered', 'Wind-Carved', 'Wind-Scoured', 'Stark', 'Cracked'],
+    lead: ['Fractured', 'Shattered', 'Carved', 'Scoured', 'Stark', 'Cracked',
+           'Glittering', 'Gleaming', 'Silent', 'Vast', 'Sweeping', 'Becalmed', 'Pale'],
   },
   // volatile-frost substrate — the material word is forced from the body's real
   // surfaceFrostSpecies in deriveBiome (Nitrogen / Methane / Dry-Ice / Ammonia),
   // so this family carries only landforms; the frost species supplies the rest.
   frozenVol: {
     label: 'Frozen',
-    terrain: { land: ['Snowfields', 'Barrens', 'Dunes', 'Flats', 'Ridges', 'Plains', 'Reaches', 'Wastes', 'Drifts', 'Glaciers', 'Sastrugi', 'Pans'] },
-    lead: ['Frozen', 'Rimebound', 'Shattered', 'Drifting', 'Wind-Carved', 'Wind-Scoured', 'Stark'],
+    terrain: { land: ['Snowfields', 'Barrens', 'Dunes', 'Flats', 'Ridges', 'Plains', 'Reaches', 'Wastes', 'Drifts', 'Glaciers', 'Sastrugi', 'Pans', 'Seracs', 'Pinnacles', 'Penitentes'] },
+    // No 'Frozen' lead: the forced frost species (Nitrogen / Methane / Dry-Ice /
+    // Ammonia) IS the frozen veneer, so "Frozen Nitrogen" only restates the
+    // material. The lead carries texture or a light / scale / stillness mood.
+    lead: ['Rimebound', 'Shattered', 'Drifting', 'Carved', 'Scoured', 'Stark',
+           'Glittering', 'Gleaming', 'Silent', 'Vast', 'Pale', 'Becalmed'],
   },
   // Material is a physical read (S6): neutral rock anchors the pool; oxidized
   // worlds add red ferric minerals; water-bedded sediments need a water history.
@@ -164,8 +185,8 @@ const FAMILIES = {
   arid: {
     label: 'Arid',
     terrain: { land: ['Dunes', 'Hardpan', 'Badlands', 'Flats', 'Mesas', 'Pans', 'Barrens', 'Drifts', 'Wind-Arches'],
-               mat: ['Silica', 'Basalt', 'Regolith', ['Ochre', oxidized], ['Rust-Red', oxidized], ['Hematite', oxidized], ['Clay', hadWater], ['Sandstone', hadWater], ['Caliche', hadWater]] },
-    lead: ['Wind-Scoured', ['Sun-Fractured', warm], 'Cracked', ['Heat-Shimmer', warm], 'Sandblasted', 'Parched', 'Desolate'],
+               mat: ['Silica', 'Basalt', 'Regolith', ['Ochre', oxidized], ['Rusty', oxidized], ['Hematite', oxidized], ['Clay', hadWater], ['Sandstone', hadWater], ['Caliche', hadWater]] },
+    lead: ['Scoured', ['Crazed', warm], 'Cracked', ['Shimmering', warm], 'Sandblasted', 'Parched', 'Desolate'],
   },
   // evaporite salt-flats — the revived Crystalline slot, now keyed on real
   // desiccation: a warm, dry, high-salinity surface wears a bedded mineral
@@ -175,22 +196,22 @@ const FAMILIES = {
     label: 'Salt Flats',
     terrain: { land: ['Pans', 'Flats', 'Basins', 'Playas', 'Hardpan', 'Beds', 'Crusts', 'Barrens'],
                mat: ['Halite', 'Gypsum', 'Selenite', 'Salt', 'Alkali', 'Natron', 'Borax', 'Soda-Ash'] },
-    lead: ['Salt-Crusted', 'Crystalline', 'Glittering', 'Bleached', ['Brine-Caked', tepid], 'Mineral-Crusted', ['Sun-Glazed', warm], 'Cracked'],
+    lead: ['Salt-Crusted', 'Crystalline', 'Glittering', 'Bleached', ['Briney', tepid], 'Mineral-Crusted', ['Glazed', warm], 'Cracked'],
   },
   oceanic: {
     label: 'Oceanic',
     terrain: { land: ['Shallows', 'Seas', 'Atolls', 'Archipelagos', 'Lagoons', 'Reefs', 'Waterworld', 'Tides'] },
-    lead: ['Storm-Lashed', ['Bioluminescent', hasLife], ['Kelp-Choked', hasLife], ['Coral-Spired', hasLife], 'Mist-Veiled', 'Wind-Driven', 'Endless', 'Restless'],
+    lead: ['Stormy', ['Bioluminescent', hasLife], ['Kelpy', hasLife], ['Reefed', hasLife], 'Misty', 'Surging', 'Turbulent', 'Serene', 'Tranquil', 'Restless'],
   },
   lush: {
     label: 'Lush',
-    terrain: { land: ['Canopy', 'Floodlands', 'Rainforest', 'Floodplains', 'Jungles', 'Wilds', 'Forests', 'Wetlands'] },
-    lead: ['Smothering', 'Fern-Choked', 'Emerald', 'Spore-Drifting', 'Vine-Tangled', 'Moss-Draped', 'Orchid-Laden', 'Verdant'],
+    terrain: { land: ['Canopies', 'Floodlands', 'Rainforest', 'Floodplains', 'Jungles', 'Wilds', 'Forests', 'Wetlands', 'Plains', 'Valleys', 'Mesas'] },
+    lead: ['Smothering', 'Ferny', 'Emerald', 'Spored', 'Viney', 'Mossy', 'Flowering', 'Verdant', 'Bursting'],
   },
   temperate: {
     label: 'Temperate',
-    terrain: { land: ['Prairies', ['Savanna', hasLife], ['Meadows', hasLife], ['Steppes', parched], ['Pasture', hasLife], ['Moors', wet], ['Riverlands', wet], ['Floodplains', wet], ['Wetlands', wet], ['Woodlands', hasLife]] },
-    lead: ['Wind-Rippled', ['Golden', hasLife], 'Rolling', 'Scattered', ['Seed-Strewn', hasLife], ['Heather-Clad', hasLife], 'Mild', 'Dappled', ['Rain-Fed', wet], ['Sun-Baked', parched]],
+    terrain: { land: [['Prairies', hasLife], ['Downs', hasLife], 'Highlands', ['Savanna', hasLife], ['Meadows', hasLife], ['Steppes', parched], ['Pasture', hasLife], ['Veldt', hasLife], ['Moors', wet], ['Riverlands', wet], ['Floodplains', wet], ['Wetlands', wet], ['Vales', wet], ['Woodlands', hasLife]] },
+    lead: ['Rippled', ['Golden', hasLife], 'Rolling', 'Scattered', ['Seedy', hasLife], ['Heathered', hasLife], 'Mild', 'Dappled', 'Sunlit', 'Halcyon', 'Breeze-Swept', ['Blossoming', hasLife], ['Greening', hasLife], ['Rainy', wet], ['Sunny', parched]],
   },
   // The lead is drawn per-chemistry at the cascade (TOXIC_SULFUR / _HOTHOUSE /
   // _ORGANIC) so an SO₂ world reads sulfuric, a CO₂ runaway corrosive, a tholin
@@ -200,8 +221,9 @@ const FAMILIES = {
   // Wet terrains carry a `damp` guard so a dry runaway world isn't a "Marsh".
   toxic: {
     label: 'Toxic',
-    terrain: { land: ['Fog Banks', 'Vapor Flats', 'Pall', 'Cloud-Cover', 'Wastes', ['Marshes', damp], ['Bogs', damp], ['Mineral Springs', damp]] },
-    lead: ['Corrosive', 'Sulfuric', 'Caustic', 'Smog-Drowned', 'Choking', 'Noxious'],
+    terrain: { land: ['Fog Banks', 'Vapor Flats', 'Cliffs', 'Caverns', 'Pall', 'Cloud-Cover', 'Wastes', 'Smog Banks', 'Haze Plains', 'Murk', 'Gloom', 'Hardpan',
+                       ['Scaldlands', warm], ['Cauldrons', warm], ['Marshes', damp], ['Bogs', damp], ['Mineral Springs', damp]] },
+    lead: ['Corrosive', 'Sulfuric', 'Caustic', 'Smog-Drowned', 'Choking', 'Noxious', 'Fuming', 'Acrid'],
   },
   // Titan-class hydrocarbon world — cryogenic methane / ethane lakes, tholin-stained
   // dune seas, an orange organic haze. Split from `toxic` the way volcanicSulfur
@@ -228,13 +250,13 @@ const FAMILIES = {
   barren: {
     label: 'Barren',
     terrain: { land: ['Plains', 'Flats', 'Fields', 'Mesas', 'Shields', 'Scree', 'Wastes', 'Barrens', 'Reaches', 'Regolith'],
-               mat: ['Basalt', 'Boulder', 'Rubble', 'Granite', 'Gravel', ['Ochre', oxidized], ['Rust-Stained', oxidized], ['Slate', hadWater], ['Shale', hadWater]] },
-    lead: ['Shattered', 'Wind-Polished', 'Silent', 'Cracked', 'Weathered', 'Bleak', 'Desolate', 'Stark'],
+               mat: ['Basalt', 'Boulder', 'Rubble', 'Granite', 'Gravel', ['Ochre', oxidized], ['Rusty', oxidized], ['Slate', hadWater], ['Shale', hadWater]] },
+    lead: ['Shattered', 'Polished', 'Silent', 'Cracked', 'Weathered', 'Bleak', 'Desolate', 'Stark'],
   },
   tundra: {
     label: 'Tundra',
-    terrain: { land: ['Barrens', ['Peat Bogs', wet], ['Scrubland', parched], 'Taiga', 'Moss Expanses', 'Heath', ['Mire', wet], ['Conifer Stands', hasLife]] },
-    lead: ['Lichen-Mottled', ['Boggy', wet], 'Frost-Heaved', ['Wind-Flattened', parched], 'Snow-Dusted', 'Thawing', 'Stunted', ['Sodden', wet]],
+    terrain: { land: ['Barrens', ['Peat Bogs', (b) => wet(b) && hasLife(b)], ['Scrubland', (b) => parched(b) && hasLife(b)], ['Taiga', hasLife], ['Moss Expanses', hasLife], ['Heath', hasLife], ['Mire', wet], ['Conifer Stands', hasLife]] },
+    lead: ['Lichen-Mottled', ['Boggy', wet], 'Hummocked', 'Windswept', 'Snowy', 'Thawing', 'Stunted', ['Sodden', wet]],
   },
   // Every subglacial-ocean world is cold (a buried sea needs an ice lid), so the
   // terrain is ice-cavern imagery — no hot karst / lava-tubes, which can't form
@@ -261,7 +283,7 @@ const FAMILIES = {
   exotic: {
     label: 'Exotic',
     terrain: { land: ['Lattice Forests', 'Crystal Spires', 'Silicate Reefs', 'Crystal Gardens', 'Lattice Reaches', 'Mineral Lattices'] },
-    lead: ['Silicon', 'Lattice-Grown', 'Glassy', 'Vitreous', 'Faceted', 'Prismatic'],
+    lead: ['Silicon', 'Lattice-Grown', 'Glassy', 'Vitreous', 'Faceted', 'Prismatic', 'Iridescent', 'Opaline'],
   },
   // ── gaseous skyscapes ── The TERRAIN's cloud-gas material is keyed off the
   // body's TOP cloud deck in deriveSky (Jupiter → Ammonia, Neptune → Methane), so
@@ -270,7 +292,7 @@ const FAMILIES = {
   hotGiant:  { label: 'Gas Giant',     terrain: { land: ['Cloud-Seas', 'Inferno', 'Cloud-Hell', 'Bands', 'Sky-Tempest'] },        lead: ['Incandescent', 'Searing', 'Glowing', 'Molten'] },
   gasGiant:  { label: 'Gas Giant',     terrain: { land: ['Cloud-Decks', 'Cloud-Tops', 'Cloud-Streams', 'Skies', 'Veils', 'Cloud-Belts'] }, lead: ['Banded', 'Churning', 'Roiling', 'Cyclonic', 'Marbled'] },
   helium:    { label: 'Helium Giant',  terrain: { land: ['Helium Veils', 'Stratified Murk', 'Helium Deeps', 'Helium Shroud'] },   lead: ['Pale', 'Wan', 'Shrouded'] },
-  iceGiant:  { label: 'Ice Giant',     terrain: { land: ['Skies', 'Cloud-Mantle', 'Hazes', 'Cirrus', 'Veils'] },                  lead: ['Frozen', 'Glacial', 'Cyan', 'Still'] },
+  iceGiant:  { label: 'Ice Giant',     terrain: { land: ['Skies', 'Cloud-Mantle', 'Hazes', 'Cirrus', 'Veils'] },                  lead: ['Sapphire', 'Glacial', 'Cyan', 'Still'] },
   veiledIce: { label: 'Veiled Ice',    terrain: { land: ['Ice Deeps', 'Frozen Mantle', 'Ice-Bound Murk', 'Glacial Abyss', 'Frozen Depths'] }, lead: ['Veiled', 'Shrouded', 'Opaque', 'Sunless', 'Lightless'] },
   gasDwarf:  { label: 'Gas Dwarf',     terrain: { land: ['Skies', 'Envelope', 'Cloud-Shroud', 'Depths', 'Veils', 'Gloom'] },     lead: ['Hazy', 'Murky', 'Smothered'] },
 } as const satisfies Record<string, Family>;
@@ -303,8 +325,8 @@ const ORE_TEXTURE = ['Streaked', 'Crusted', 'Strewn', 'Veined', 'Laced', 'Ribbon
 // (caustic, acid-rain), CO₂ runaway → corrosive/choking heat. (The organic tholin
 // case is its own `hydrocarbon` family now, not a toxic lead.) No halogen words
 // (HCl/Cl₂ aren't modeled).
-const TOXIC_SULFUR = ['Sulfuric', 'Caustic', 'Acid-Rain', 'Acid-Etched', 'Sulfur-Choked'];
-const TOXIC_HOTHOUSE = ['Corrosive', 'Choking', 'Smothering', 'Searing'];
+const TOXIC_SULFUR = ['Sulfuric', 'Caustic', 'Acid-Rain', 'Acid-Etched', 'Sulfur-Choked', 'Vitriolic', 'Acrid'];
+const TOXIC_HOTHOUSE = ['Corrosive', 'Choking', 'Smothering', 'Searing', 'Stifling', 'Blistering', 'Suffocating', 'Scorching'];
 // Frozen-over ocean — a standing sea capped by ice. Both slots DRAW (terrain via
 // its own cold-sea pool, not the warm oceanic landforms) so two ice-locked
 // oceans read distinctly; every word still says "frozen sea".
@@ -312,7 +334,7 @@ const FROZEN_OVER_LEAD = ['Frozen-Over', 'Ice-Capped', 'Frost-Locked', 'Ice-Shea
 const FROZEN_OVER_TERRAIN = ['Seas', 'Shallows', 'Floes', 'Tides', 'Pack-Ice', 'Narrows', 'Expanse'];
 // Molten-sulfur sea (Io-class brimstone) — terrain draws from the volcanic pool;
 // these leads name the sulfur so it lands once and varies across worlds.
-const BRIMSTONE_LEAD = ['Sulfur-Choked', 'Brimstone-Reeking', 'Sulfurous', 'Fume-Wreathed', 'Sulfur-Crusted', 'Sulfur-Veiled'];
+const BRIMSTONE_LEAD = ['Sulfur-Choked', 'Brimstoned', 'Sulfurous', 'Fumed', 'Sulfury', 'Yellowed'];
 // Stripped hot-Jupiter metal core (chthonian) — its own metal-vapor register
 // (the exotic family pool is silicon-life lattice vocab, wrong for a bare core).
 const CHTHONIAN_LEAD = ['Metallic', 'Iron-Vapor', 'Molten-Metal', 'Slag-Crusted', 'Smelted', 'Vapor-Wreathed'];
@@ -344,12 +366,12 @@ const COND: readonly Cond[] = [
   { key: 'briny', prio: 66, words: ['Briny', 'Saline'], conflicts: ['brine', 'saline', 'salt'],
     gate: (b) => (b.salinity ?? 0) >= BRINY_SALINITY && (b.surfaceLiquidFraction ?? 0) > 0, applies: (k, sky) => !sky && WET.has(k) },
   { key: 'sulfurous', prio: 64, words: ['Sulfurous', 'Sulfur-Caked'], conflicts: ['sulfur'],
-    gate: (b) => atmFrac(b, 'SO2') >= 0.3 || (b.bioticSulfur ?? 0) >= 0.3, applies: (k, sky) => !sky && k !== 'volcanic' && k !== 'volcanicSulfur' && k !== 'toxic' },
-  { key: 'riven', prio: 60, words: ['Riven', 'Fire-and-Ice'], conflicts: ['fire', 'riven'],
+    gate: (b) => atmFrac(b, 'SO2') >= 0.3 || (b.bioticSulfur ?? 0) >= 0.3, applies: (k, sky) => !sky && k !== 'volcanic' && k !== 'volcanicSulfur' && k !== 'toxic' && k !== 'exotic' },
+  { key: 'riven', prio: 60, words: ['Riven', 'Thermally-Shocked'], conflicts: ['riven', 'thermal', 'shock'],
     gate: (b) => softGE(b, 'riven', thermalSwingK(b), RIVEN_SWING_K, RIVEN_SWING_W), applies: (k, sky) => !sky && k !== 'volcanic' },
   // Terrestrial only: a gas giant's signature leads (Banded/Churning/Cyclonic) are
   // already the storm vocabulary, so a storming condition would just smother them.
-  { key: 'storming', prio: 50, words: ['Storm-Wracked', 'Tempest-Swept', 'Storm-Lashed'], conflicts: ['storm', 'tempest', 'gale', 'cyclonic'],
+  { key: 'storming', prio: 50, words: ['Storm-Wracked', 'Tempest-Swept', 'Stormy'], conflicts: ['storm', 'tempest', 'gale', 'cyclonic'],
     gate: (b) => maxCloudWindMs(b) >= STORM_WIND_MS, applies: (_k, sky) => !sky },
   { key: 'dusty', prio: 45, words: ['Dust-Veiled', 'Dust-Choked'], conflicts: ['dust'],
     gate: (b) => (b.dustStrength ?? 0) >= DUST_STRENGTH, applies: (k, sky) => !sky && !COVERED.has(k) },
@@ -367,7 +389,7 @@ const OCEAN_COVER = 0.5;
 const HOTHOUSE_PRESSURE_BAR = 5; // Venus-class runaway greenhouse
 const HOTHOUSE_TEMP_K = 340;
 const LUSH_IMPACT = 0.5;         // transformative-biosphere gate
-const RIVEN_SWING_K = 900;       // ~p95 day↔night spread — a true fire-and-ice landmark
+const RIVEN_SWING_K = 900;       // ~p95 day↔night spread — a true thermal-shock landmark
 const STORM_WIND_MS = 250;
 const BRINY_SALINITY = 0.6;
 const DUST_STRENGTH = 0.5;
@@ -375,7 +397,7 @@ const ANCIENT_AGE = 0.12;
 // Soft-edge half-widths (see softGE): the ± band over which an edge body coin-
 // flips rather than snapping. Kept small so only genuine boundary cases waver.
 const COLD_K_W = 6;        // frozen ↔ tundra temperature edge (K)
-const RIVEN_SWING_W = 60;  // fire-and-ice swing edge (K), ~proportional to its p95 gate
+const RIVEN_SWING_W = 60;  // thermal-shock swing edge (K), ~proportional to its p95 gate
 const EVAPORITE_SALINITY = 0.6; // salt concentrated well above the leach baseline → a crust, not a salty rock
 const EVAPORITE_WARM_K = 273;   // warm enough that a brine evaporated rather than froze out
 const WET_LIQUID = 0.2;         // standing-water cover that reads as wetland / river country
@@ -388,10 +410,22 @@ const PARCHED_LIQUID = 0.08;    // below this a clement world reads as dry stepp
 function tokensOf(s: string): string[] {
   return s.toLowerCase().split(/[ -]/);
 }
+// Crude morphological stem so the echo guard catches INFLECTED repeats —
+// "Drifting" beside "Drifts" share the stem "drift", which a raw-token compare
+// (two different strings) would miss, leaking "Drifting Nitrogen Drifts". Strips
+// one trailing ing/ed/es/s when ≥3 chars remain; enough to stop a lead rhyming
+// with its own terrain noun without needing a real stemmer.
+function stemOf(t: string): string {
+  for (const suf of ['ing', 'ed', 'es', 's']) {
+    if (t.length - suf.length >= 3 && t.endsWith(suf)) return t.slice(0, -suf.length);
+  }
+  return t;
+}
 function draw(b: Body, ns: string, pool: readonly Word[], avoid?: ReadonlySet<string>): string {
   let eligible = pool.filter((w) => typeof w === 'string' || w[1](b));
   if (avoid) {
-    const clear = eligible.filter((w) => !tokensOf(typeof w === 'string' ? w : w[0]).some((t) => avoid.has(t)));
+    const avoidStems = new Set([...avoid].map(stemOf));
+    const clear = eligible.filter((w) => !tokensOf(typeof w === 'string' ? w : w[0]).some((t) => avoidStems.has(stemOf(t))));
     if (clear.length) eligible = clear;
   }
   const w = eligible[hash32(b.id + '§' + ns) % eligible.length];
@@ -480,6 +514,7 @@ const BARE_OK_LAND = new Set<string>([
   'Terraces', 'Badlands', 'Calderas', 'Desolation', 'Plume-Fields', 'Paterae',
   'Snows', 'Floes', 'Dunes', 'Hardpan', 'Mesas', 'Drifts', 'Wind-Arches',
   'Playas', 'Shields', 'Scree', 'Regolith', 'Sastrugi',
+  'Seracs', 'Pinnacles', 'Cirques', 'Crevasse-Fields',
 ]);
 // Compose the terrain: draw a landform, then (for families with a material pool)
 // cross it with a material — "Basalt Wastes". Bare expanse nouns always take one;
@@ -508,7 +543,7 @@ function sense(b: Body, key: FamilyKey, opts: { terrain?: string; sky?: boolean;
 // becomes the prefix ("Ammonia Cloud-Decks"). Helium and Veiled-Ice are excluded
 // — they're defined by their bulk envelope (He / opaque ice), not a cloud deck.
 const CLOUD_GAS_WORD: Record<string, string> = {
-  NH3: 'Ammonia', CH4: 'Methane', H2O: 'Water-Cloud', N2: 'Nitrogen',
+  NH3: 'Ammonia', CH4: 'Methane', H2O: 'Water', N2: 'Nitrogen',
   NH4SH: 'Sulfide', H2SO4: 'Sulfuric', SALT: 'Alkali', SILICATE: 'Silicate',
 };
 const CLOUD_KEYED = new Set<FamilyKey>(['hotGiant', 'gasGiant', 'iceGiant', 'gasDwarf']);
