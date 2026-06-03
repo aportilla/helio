@@ -190,10 +190,24 @@ export function scatteringRimFor(body: Body): { color: readonly [number, number,
 //   Uranus  (s ≈ 0.85) → opacity ≈ 0.71
 const NO_SURFACE_HAZE_GAIN = 1.5;
 
+// Surface-world opacity half-weight: the contributor weight at which a SOLID
+// world's haze overlay reads 50% opaque under the rational map below. A thick
+// atmosphere's column weight runs huge (p90 ≈ 8, p95 ≈ 16 across the catalog),
+// and the Beer–Lambert soft cap (1 − exp(−w)) drives everything past w ≈ 3 to
+// ~1.0 — which on a high-column surface world erases the ground entirely and
+// piles a fifth of the catalog at opacity ≈ 1 instead of a usable spread. For
+// gameplay the ground must stay readable, so SOLID worlds map opacity =
+// w / (w + HALF): monotonic, asymptotic below 1 (the surface never fully vanishes
+// — even w = 16 lands ~0.85), spreading the thick-atmosphere tail into a smooth
+// histogram. GASEOUS bodies keep the exp soft cap (their "haze" IS the visible
+// disc, not a veil over a surface, and the cap holds the Jupiter/Saturn/Uranus anchors).
+const SURFACE_HAZE_HALF_WEIGHT = 3;
+
 // Unified haze color + opacity — weighted average across all
 // surfaceHazeContributors plus (for no-surface bodies) the atm column
-// itself as a stratospheric-haze contributor. Opacity is the soft cap
-// 1 - exp(-Σw) so many thin contributions saturate smoothly.
+// itself as a stratospheric-haze contributor. Opacity maps the summed weight
+// to [0,1): the exp soft cap for gaseous discs, a never-quite-opaque rational
+// curve for solid worlds so a thick atmosphere veils but never erases the ground.
 export function hazeBlendFor(body: Body): { color: Color; opacity: number } {
   const contribs = surfaceHazeContributors(body);
   // Stratospheric atm-column haze on gas / ice giants. Drives the
@@ -201,7 +215,8 @@ export function hazeBlendFor(body: Body): { color: Color; opacity: number } {
   // cream tint on Saturn) and supplies vHazeColor for the same.
   // Surface bodies stay on the contributor list alone — their column
   // absorption + Rayleigh already feed it via bulk-gas terms.
-  if (body.surfaceOpacity < 1) {
+  const gaseous = body.surfaceOpacity < 1;
+  if (gaseous) {
     const atmCol = atmColumnColor(body);
     if (atmCol) {
       const w = stratosphericHazeStrengthFor(body.avgSurfaceTempK) * NO_SURFACE_HAZE_GAIN;
@@ -212,7 +227,9 @@ export function hazeBlendFor(body: Body): { color: Color; opacity: number } {
   if (totalWeight <= 0) return { color: new Color(0, 0, 0), opacity: 0 };
   return {
     color: new Color(r, g, b),
-    opacity: 1 - Math.exp(-totalWeight),
+    opacity: gaseous
+      ? 1 - Math.exp(-totalWeight)
+      : totalWeight / (totalWeight + SURFACE_HAZE_HALF_WEIGHT),
   };
 }
 
