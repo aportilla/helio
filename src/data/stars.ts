@@ -437,6 +437,9 @@ export interface StarCluster {
 // AtmGas type so the cloud / haze gas fields don't need a separate
 // vocabulary.
 //   SILICATE    — refractive Mg-Si-O cloud particles (hot Jupiters)
+//   IRON        — metallic iron-droplet cloud deck (hot Jupiters, reflective)
+//   TIO         — Ti/V-oxide vapor absorber (ultra-hot Jupiters, dark dayside +
+//                 thermal inversion; stands for the TiO/VO metal-oxide pair)
 //   DUST        — suspended ferric-oxide aerosols (Mars-class surface lift)
 //   THOLIN      — CnHmN photolysis polymers (Titan tholin, needs N2+CH4+UV+cold)
 //   NH4SH       — ammonium hydrosulfide condensate (Jovian belt brown)
@@ -447,7 +450,7 @@ export type AtmGas =
   | 'N2' | 'O2' | 'CO2' | 'H2O' | 'CH4' | 'NH3'
   | 'SO2' | 'Ar' | 'CO'  | 'H2'  | 'He'
   | 'H2SO4'
-  | 'SILICATE' | 'DUST'
+  | 'SILICATE' | 'IRON' | 'TIO' | 'DUST'
   | 'THOLIN' | 'NH4SH'
   | 'CHROMOPHORE' | 'SALT' | 'SULFUR';
 

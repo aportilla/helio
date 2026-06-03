@@ -210,6 +210,8 @@ export const GAS_COLOR: Record<AtmGas, Color> = {
   // no chemistry magic).
   H2SO4:       new Color(0xd8c474),  // yellow-cream — Venus sulfuric acid deck
   SILICATE:    new Color(0x788098),  // refractive silicate-cloud grey-blue
+  IRON:        new Color(0xbcb0a0),  // reflective metallic warm-grey — iron-droplet deck
+  TIO:         new Color(0x2e241c),  // near-black warm — Ti/V-oxide dayside absorber
   DUST:        new Color(0xa86040),  // ferric oxide rust — Mars-class dust
   THOLIN:      new Color(0xc88040),  // orange — Titan tholin (CH4+N2+UV photolysis)
   NH4SH:       new Color(0xc88250),  // warm tan-orange — Jovian belt brown (NH4SH condensate)
@@ -231,6 +233,7 @@ export const CONDENSATE_COLOR: Partial<Record<AtmGas, Color>> = {
   NH3: new Color(0xf5f0e4),  // bright cream-white ammonia ice — Jovian zones
   N2:  new Color(0xe4e8eb),  // pale nitrogen frost (Triton)
   H2O: new Color(0xe4ecf0),  // water ice / cloud droplets
+  IRON: new Color(0xcabea8),  // brighter metallic deck — molten-iron droplets reflect grey-white
 };
 
 // Per-gas "visual potency" — how much each gas contributes to the disc's
@@ -317,6 +320,8 @@ export const SCATTERING_COLOR: Record<AtmGas, Color> = {
   // blend — they're handled exclusively by the haze layer.
   H2SO4:       new Color(0xc0c0c0),
   SILICATE:    new Color(0xa0a0a0),
+  IRON:        new Color(0xb0a890),
+  TIO:         new Color(0x2e241c),
   DUST:        new Color(0xa86040),
   THOLIN:      new Color(0xc88040),
   NH4SH:       new Color(0xc88250),
@@ -348,6 +353,8 @@ export const SCATTERING_POTENCY: Record<AtmGas, number> = {
   He:  0.3,
   H2SO4:       0,
   SILICATE:    0,
+  IRON:        0,
+  TIO:         0,
   DUST:        0,
   THOLIN:      0,
   NH4SH:       0,

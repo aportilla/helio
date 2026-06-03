@@ -1502,6 +1502,31 @@ export const GREENHOUSE = {
   exponent: 0.6,  // saturating power law
 };
 
+// Giant intrinsic heat — Kelvin-Helmholtz contraction temperature for
+// gaseous bodies, folded into avgSurfaceTempK in quadrature with the
+// irradiation equilibrium term (T_eff⁴ = T_eq⁴ + T_int⁴) so a young/massive
+// giant reads hot at the cloud tops even far from its star (the directly-
+// imaged-exoplanet case — HR 8799-class, ~1000K, detected by its own glow).
+//
+// Giant radii are ~constant (~1 R_J) across the mass range from electron
+// degeneracy, so the intrinsic effective temperature follows a contraction-
+// luminosity power law in Jupiter-mass and age:
+//   T_int = refK × M_Jup^massExp × ageGyr^−ageExp   (capped at capK)
+//
+// Calibration anchors:
+//   Jupiter         1 M_J, 4.5 Gyr → ~100K   (measured T_eff 124K, T_eq ~110K
+//                                             → T_int ≈ 100K)
+//   HR 8799 b-class 5 M_J, 0.03 Gyr → ~1000K (young, glow-dominated)
+// refK 150 reproduces both (Jupiter ≈ 100K, HR 8799 b ≈ 960K). capK caps the
+// deuterium-burning brown-dwarf regime (a different physics, out of scope) so
+// a young ~13 M_J object can't run away.
+export const GIANT_INTRINSIC_HEAT = {
+  refK:    150,   // T_int at 1 M_J, 1 Gyr
+  massExp: 0.5,   // T_int ∝ M_Jup^massExp
+  ageExp:  0.3,   // T_int ∝ ageGyr^−ageExp
+  capK:    2800,  // brown-dwarf-regime ceiling
+};
+
 // Per-gas greenhouse potency. Each contribution = `kMax × min(P_partial, pSat)^exp`
 // where P_partial = P_bar × gas_fraction. Sum across atm species gives
 // composition-aware greenhouse.
@@ -1955,6 +1980,40 @@ export const CONDENSABLES = [
     // altitude offset. Always available in gaseous bodies; terrestrials
     // never reach these temps without becoming molten surfaces.
     precursor: (_body, ctx) => ctx.isGaseous ? 1.0 : 0,
+  },
+  {
+    gas: 'IRON',
+    condenseTempK: [1400, 2400],
+    altitudeNorm: 0.78,
+    altitudeTempOffsetK: 0,
+    // Hot-Jupiter regime: metallic iron condenses into a reflective
+    // droplet deck alongside (and slightly below) the silicate deck —
+    // the convo's "reflective gray-white deck" pairing. Condenses a
+    // touch cooler than silicate, so it drops out above ~2400 K where
+    // iron stays vapor (the very hottest giants lose it, keeping only
+    // silicate). Gaseous-only — terrestrials this hot are molten rock.
+    precursor: (_body, ctx) => ctx.isGaseous ? 1.0 : 0,
+  },
+  {
+    gas: 'TIO',
+    condenseTempK: [1800, 4000],
+    altitudeNorm: 0.95,
+    altitudeTempOffsetK: 0,
+    // Ultra-hot-Jupiter regime: Ti/V-oxide vapor in the upper
+    // atmosphere absorbs strongly in the visible, darkening the dayside
+    // and driving the thermal inversion that powers the deep glow
+    // (Phase 4). Modeled as a high stratospheric dark deck ABOVE the
+    // reflective silicate/iron decks. Not a true condensate — the wide
+    // upper window keeps it present once hot enough rather than raining
+    // out — and the precursor ramps coverage in with extreme T so most
+    // ultra-hot giants wear dark mottling (reflective decks show through
+    // its rents) while only the very hottest go uniformly dark.
+    precursor: (body, ctx) => {
+      if (!ctx.isGaseous) return 0;
+      const T = body.avgSurfaceTempK;
+      if (T == null) return 0;
+      return ctx.smoothstep(1900, 3500, T);
+    },
   },
   {
     gas: 'H2SO4',

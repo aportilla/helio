@@ -69,6 +69,16 @@
 // the chemistry decks use, so gas giants read as gently banded rather
 // than a flat fill. The chemistry decks then composite above.
 //
+// Temperature shapes that base on hot giants (keyed on the combined
+// T_eff, which folds in intrinsic heat — see procgen): the column
+// collapses toward a dark absorber as it heats (hotGiantColumnDarkening,
+// the <10%-albedo hot-Jupiter look), and above the incandescence floor a
+// self-emission glow rides the emissionTempNorm channel into the shader
+// as a smooth global ember (giantEmissionNormFor) — reflectance-dark yet
+// self-luminous, the deep dull red-orange of a hot dayside, veiled by the
+// reflective IRON/SILICATE (or dark TIO) decks above and revealed through
+// their rents.
+//
 // ─── Haze contributor model ────────────────────────────────────────
 //
 // `hazeBlendFor` returns (color, opacity) from four weighted contributor
@@ -137,13 +147,13 @@ import { hash32 } from '../geom/prng';
 import { bodyVisualTiltRad } from '../geom/ring';
 import { PROCEDURAL_TEXTURE_MIN_PX } from '../layout/constants';
 import {
-  atmColumnColor, hazeBlendFor, rimWidthForNoSurfaceAtmosphere,
-  rimWidthForSurfaceAtmosphere, RIM_PRESENCE_FLOOR_PX, scatteringRimFor,
-  surfaceHazeContributors,
+  atmColumnColor, hazeBlendFor, hotGiantColumnDarkening,
+  rimWidthForNoSurfaceAtmosphere, rimWidthForSurfaceAtmosphere,
+  RIM_PRESENCE_FLOOR_PX, scatteringRimFor, surfaceHazeContributors,
 } from './atmosphere';
 import { lavaDrivesFor } from './lava';
 import { oceanColorFor, OCEAN_FALLBACK_COLOR } from './ocean';
-import { BLACK_COLOR, smoothstep01, weightedColorBlend, WHITE_COLOR } from './shared';
+import { BLACK_COLOR, clamp01, smoothstep01, weightedColorBlend, WHITE_COLOR } from './shared';
 
 // Phase 1.6 ice-geometry temperature thresholds. globalness lerps from
 // 0 (cap-latitude pattern) at ICE_TEMP_CAP_K down to 1 (global pattern)
@@ -203,6 +213,24 @@ const ABUNDANCE_VISUAL_FLOOR = 0.1;
 const BASE_DECK_LIGHTNESS_LIFT = 0.05;
 const BASE_DECK_COVERAGE = 0.95;
 const BASE_DECK_WIND_DEFAULT = 200;
+
+// Gas-giant self-emission window. A hot/ultra-hot giant glows from its own
+// heat — the deep dull red-orange of an incandescent atmosphere — keyed on the
+// combined effective temperature (avgSurfaceTempK, which folds intrinsic
+// Kelvin-Helmholtz heat into irradiation since Phase 1). Maps T → an
+// emissionTempNorm the shader feeds to emberRamp. The window floor is the
+// visible-glow onset; RAMP_CAP holds even the hottest giant at vivid orange
+// rather than the gold-white top of the ramp — the convo's "deep, dull
+// red-orange," reflectance-dark but self-luminous, NOT a lava surface.
+const GIANT_EMIT_T_MIN = 900;
+const GIANT_EMIT_T_MAX = 2500;
+const GIANT_EMIT_RAMP_CAP = 0.7;
+
+function giantEmissionNormFor(body: Body): number {
+  const T = body.avgSurfaceTempK;
+  if (T === null) return 0;
+  return clamp01((T - GIANT_EMIT_T_MIN) / (GIANT_EMIT_T_MAX - GIANT_EMIT_T_MIN)) * GIANT_EMIT_RAMP_CAP;
+}
 
 // Apply two per-body shifts to an archetype color: a deterministic
 // brightness offset (from the body's hash seed) and a temperature-driven
@@ -373,10 +401,14 @@ export interface DiscPalette {
   // surface, e.g. Io). `emissionTempNorm` [0..1] keys the shader's
   // blackbody emberRamp (0 ≈ Draper-point dull red, 1 ≈ white-hot) — the
   // heat path emits at the surface temperature, the vent path at intrinsic
-  // silicate-lava temperature regardless of a cold crust. Both 0 on
-  // suppressed surfaces and non-incandescent bodies, so the shader's
-  // molten sub-pass early-outs. See the LAVA_* constants above and the
-  // molten sub-pass in makePlanetMaterial.
+  // silicate-lava temperature regardless of a cold crust. On gaseous bodies
+  // `emissionTempNorm` is repurposed for giant self-emission — keyed on the
+  // combined T_eff (see giantEmissionNormFor), it drives a smooth GLOBAL glow
+  // under the cloud decks rather than the lava-lake geometry, and
+  // `moltenCoverage` stays 0 (unused on that path). Both 0 on suppressed
+  // surfaces and non-incandescent bodies, so the shader's molten sub-pass
+  // early-outs. See the LAVA_* constants above and the molten sub-pass in
+  // makePlanetMaterial.
   readonly moltenCoverage: number;
   readonly emissionTempNorm: number;
   // Composition hue nudge [0..1] — abiotic surface sulfur fraction (SO2 /
@@ -544,9 +576,17 @@ export function buildDiscPalette(
   // to (coverage, emission temp, sulfur hue). See lavaDrivesFor in ./lava.
   // Suppressed surfaces (no-surface / tiny disc) emit nothing, so the
   // shader's molten sub-pass early-outs.
-  const { moltenCoverage, emissionTempNorm, lavaSulfurFrac } = surfaceSuppressed
+  let { moltenCoverage, emissionTempNorm, lavaSulfurFrac } = surfaceSuppressed
     ? { moltenCoverage: 0, emissionTempNorm: 0, lavaSulfurFrac: 0 }
     : lavaDrivesFor(body, surfaceAge);
+  // Gaseous self-emission — hot/ultra-hot giants glow from their own heat.
+  // Reuses the emissionTempNorm channel + the shader's emberRamp, but the
+  // shader paints it as a smooth GLOBAL glow under the cloud decks (no
+  // lava-lake geometry). moltenCoverage stays 0 — unused on the no-surface
+  // path. tinyDisc still suppresses (the glow needs disc area to read).
+  if (!hasSurface && !tinyDisc) {
+    emissionTempNorm = giantEmissionNormFor(body);
+  }
 
   // Biome stipple — same suppression as terrain scalars.
   const biomePaint = surfaceSuppressed ? null : biomePaintFor(body);
@@ -669,7 +709,12 @@ export function buildDiscPalette(
   // Per-class hue tint applies to surface palette entries only. Cloud
   // palettes already derive from physically-anchored gas species and
   // skip the tint so cloud colors stay aligned with their condensates.
-  const tint = isGasGiant(body) ? GAS_GIANT_TINT : undefined;
+  // The warm amber is faded out by the hot-giant column collapse so it
+  // never re-brightens a column that atmColumnColor has already darkened —
+  // amber survives only on cold/warm Jupiters, gone by the hot-Jupiter band.
+  const tint = isGasGiant(body)
+    ? { color: GAS_GIANT_TINT.color, amount: GAS_GIANT_TINT.amount * (1 - hotGiantColumnDarkening(body)) }
+    : undefined;
   const t0 = applyTint(sC0, tint);
   const t1 = applyTint(sC1, tint);
   const t2 = applyTint(sC2, tint);

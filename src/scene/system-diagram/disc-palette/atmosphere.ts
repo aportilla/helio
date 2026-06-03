@@ -1,18 +1,19 @@
 // Atmosphere model for the disc palette: the haze contributor blend, the
 // unified haze color/opacity, the per-gas limb Rayleigh scatter, the deep
-// atm-column color, and the outward rim-width buckets. All of it reads the
-// body's atm1/2/3 + pressure/gravity + class and folds into the scalars the
-// shader's haze pass and outward halo consume.
+// atm-column color (collapsed toward a dark absorber on hot giants — see
+// hotGiantColumnDarkening), and the outward rim-width buckets. All of it reads
+// the body's atm1/2/3 + pressure/gravity + temperature/class and folds into
+// the scalars the shader's haze pass and outward halo consume.
 
 import { Color } from 'three';
 import { AtmGas, Body } from '../../../data/stars';
 import {
   CLEAR_GAS_OPACITY, deckGasesFor, GAS_COLOR, GAS_POTENCY,
   HAZE_AEROSOL_SCALE, HAZE_BULK_GAS_SCALE, HAZE_DUST_SCALE, HAZE_RAYLEIGH_SCALE,
-  RENDERER_SKIP_AEROSOLS, SCATTERING_COLOR, SCATTERING_POTENCY,
+  lerpColor, RENDERER_SKIP_AEROSOLS, SCATTERING_COLOR, SCATTERING_POTENCY,
   stratosphericHazeStrengthFor,
 } from '../color-science';
-import { atmGasPairs, dustColorFor, weightedColorBlend } from './shared';
+import { atmGasPairs, dustColorFor, smoothstep01, weightedColorBlend } from './shared';
 import { isGaseousBody, isHelium } from '../../../../scripts/lib/body-traits.mjs';
 
 // Outward rim width buckets for surface bodies — integer pixels of
@@ -233,15 +234,43 @@ export function hazeBlendFor(body: Body): { color: Color; opacity: number } {
   };
 }
 
+// Hot-giant column collapse. Real hot Jupiters reflect under ~10% of
+// incident light — among the darkest known bodies — and across the
+// warm-Neptune band the vivid methane/ammonia coloring washes out as those
+// species stay in vapor and high-altitude photochemical haze blankets the
+// column. Both read as a single temperature ramp that pulls the bulk column
+// toward a dark warm absorber: muting begins in the warm band and collapses
+// to a rock-dark deck by the hot-Jupiter band. The reflective silicate/iron
+// decks (procgen chemistry) and the thermal self-emission composite ON TOP of
+// this dark base — the convo's "reflective deck over a deep dull glow."
+// Gated to gaseous bodies; cold giants (Jupiter/Saturn/Uranus/Neptune) sit
+// below the onset and are untouched.
+const HOT_GIANT_DARKEN_TEMP_K = [400, 1300] as const;  // mute onset → full collapse
+const HOT_GIANT_DARKEN_MAX = 0.88;                     // never fully erase the chemistry beneath
+const HOT_GIANT_DARK_ABSORBER = new Color(0x241c17);   // dark warm rock-grey
+
+// 0..1 strength of the hot-giant column collapse for this body. Zero on
+// terrestrials and on cold / below-onset giants. Shared by atmColumnColor (to
+// darken the column itself) and the disc palette (to fade the warm gas-giant
+// amber tint out as the column goes dark, so amber never re-brightens a hot
+// deck).
+export function hotGiantColumnDarkening(body: Body): number {
+  if (!isGaseousBody(body)) return 0;
+  const T = body.avgSurfaceTempK;
+  if (T === null) return 0;
+  return smoothstep01(HOT_GIANT_DARKEN_TEMP_K[0], HOT_GIANT_DARKEN_TEMP_K[1], T) * HOT_GIANT_DARKEN_MAX;
+}
+
 // Atm-only column color — weighted blend across atm1/2/3 by
-// `frac × GAS_POTENCY`. No worldClass filter, no cloud-deck
+// `frac × GAS_POTENCY`, then collapsed toward a dark absorber on hot giants
+// (see hotGiantColumnDarkening). No worldClass filter, no cloud-deck
 // substitution: this is what the gas column looks like through any
 // cloud rents on a no-surface body. Jupiter is fully cloud-covered
 // at every altitude, so its atm column never renders in practice (no
 // rent for it to show through). Uranus / Neptune surface the visible
 // CH4 cyan through the same blend.
 //
-// GAS_COLOR entries are already chosen pale enough that the result
+// GAS_COLOR entries are already chosen pale enough that the cold result
 // reads as a natural "lighter at the limb" effect.
 export function atmColumnColor(body: Body): Color | null {
   // Potency fallback is `?? 1` here (not the haze path's `?? 0`): the column
@@ -255,7 +284,9 @@ export function atmColumnColor(body: Body): Color | null {
   }
   const { r, g, b, totalWeight } = weightedColorBlend(entries);
   if (totalWeight <= 0) return null;
-  return new Color(r, g, b);
+  const col = new Color(r, g, b);
+  const darken = hotGiantColumnDarkening(body);
+  return darken > 0 ? lerpColor(col, HOT_GIANT_DARK_ABSORBER, darken) : col;
 }
 
 // Earth-normalized atmospheric column-mass proxy for vertical viewing

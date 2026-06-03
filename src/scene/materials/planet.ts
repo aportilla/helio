@@ -1655,6 +1655,23 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           // directly (sampled from the per-body data texture); cloud
           // decks below composite on top via the loop.
           col = vAtmColumnColor;
+
+          // ── Giant self-emission ── a hot/ultra-hot giant glows from its
+          // own heat (vEmissionTempNorm keyed on the combined T_eff). Unlike
+          // the terrestrial lavaPass this is a smooth GLOBAL incandescence,
+          // no fissures/lakes: the deep glow tints the atm-column base so it
+          // bleeds through the cloud rents that composite over it in main(),
+          // and rides out as lavaEmissive so it survives the night-side
+          // crescent and blooms (added after lighting). Held at the dull
+          // red→orange band by the CPU-side ramp cap — reflectance-dark,
+          // self-luminous, not a molten surface.
+          if (vEmissionTempNorm > 0.0) {
+            const float GIANT_EMISSIVE_GAIN  = 0.4;
+            const float GIANT_EMISSIVE_FOCUS = 1.5;
+            vec3 glow = emberRamp(vEmissionTempNorm);
+            col = mix(col, glow, vEmissionTempNorm);
+            lavaEmissive = glow * GIANT_EMISSIVE_GAIN * pow(vEmissionTempNorm, GIANT_EMISSIVE_FOCUS);
+          }
         }
         return col;
       }

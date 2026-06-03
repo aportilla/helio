@@ -10,6 +10,10 @@ import { SNOW_LINE_TEMPERATURES } from './procgen-priors.mjs';
 // shared so the Architect, Filler, and these helpers all spell it once.
 export const EARTH_PER_SOLAR_MASS = 333000;
 
+// Earth masses per Jupiter mass — the Earth↔Jupiter ratio, single-sourced
+// for the giant intrinsic-heat model (mass in M_Jup drives the cooling track).
+export const EARTH_PER_JUPITER_MASS = 317.8;
+
 // Radiative-equilibrium constants, single-sourced here so the frost-line and
 // equilibrium-temperature relations (in the Filler) agree to the last digit.
 export const SIGMA_SB = 5.670374e-8;   // Stefan-Boltzmann constant (W/m²/K⁴)

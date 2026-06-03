@@ -33,7 +33,12 @@
 //   7.  T ↔ albedo ↔ cover      Two-pass iteration. Pass A uses the
 //                               pressure-proxy greenhouse, Pass B
 //                               refines with per-gas potency once atm
-//                               composition is known.
+//                               composition is known. Gaseous bodies take
+//                               no greenhouse; their cloud-top T_eff folds
+//                               intrinsic Kelvin-Helmholtz heat into the
+//                               irradiation term in quadrature (see
+//                               intrinsicGiantTempK / GIANT_INTRINSIC_HEAT),
+//                               so a young/massive giant reads hot far out.
 //                               Sub-steps inside each pass:
 //                                 dominantSurfaceLiquid (per-species phase
 //                                   gate over SurfaceLiquidSpecies; waterFraction
@@ -104,6 +109,7 @@ import {
   CLOUD_BY_GAS,
   GREENHOUSE,
   GREENHOUSE_POTENCY_BY_GAS,
+  GIANT_INTRINSIC_HEAT,
   TECTONIC_BASE,
   SURFACE_AGE_FROM_TECTONIC,
   SURFACE_AGE_TIDAL_LIFT,
@@ -154,7 +160,7 @@ import { BODY_THRESHOLDS, isGaseousBody } from './body-traits.mjs';
 
 const VALID_ARCHETYPES = new Set(BIOSPHERE_ARCHETYPES);
 const VALID_COMPLEXITY = new Set(BIOSPHERE_COMPLEXITY);
-import { insolation, jeansEscapeRatio, tidalLockProxy, meanMetallicityForClass, meanAgeForClass, frostLineTrio, keplerPeriodDays, deriveSemiMajorAu, EARTH_PER_SOLAR_MASS, SIGMA_SB, SOLAR_CONSTANT } from './astrophysics.mjs';
+import { insolation, jeansEscapeRatio, tidalLockProxy, meanMetallicityForClass, meanAgeForClass, frostLineTrio, keplerPeriodDays, deriveSemiMajorAu, EARTH_PER_SOLAR_MASS, EARTH_PER_JUPITER_MASS, SIGMA_SB, SOLAR_CONSTANT } from './astrophysics.mjs';
 
 function fieldPrng(body, field) {
   return mulberry32(hash32(`${body.id}:${field}:${PROCGEN_VERSION}`));
@@ -370,16 +376,36 @@ function greenhouseKFromComposition(body) {
   return K;
 }
 
+// Intrinsic (Kelvin-Helmholtz contraction) effective temperature for a
+// gaseous body, in K. Power law in Jupiter-mass and age (see
+// GIANT_INTRINSIC_HEAT), capped at the brown-dwarf regime. Returns 0 when
+// mass is unavailable so the quadrature combine degrades to bare
+// equilibrium; a missing/non-positive age falls back to a mid-life default.
+function intrinsicGiantTempK(massEarth, ageGyr) {
+  if (massEarth == null || massEarth <= 0) return 0;
+  const age = ageGyr != null && ageGyr > 0 ? ageGyr : 5.0;
+  const mJup = massEarth / EARTH_PER_JUPITER_MASS;
+  const tInt = GIANT_INTRINSIC_HEAT.refK *
+    Math.pow(mJup, GIANT_INTRINSIC_HEAT.massExp) *
+    Math.pow(age, -GIANT_INTRINSIC_HEAT.ageExp);
+  return Math.min(GIANT_INTRINSIC_HEAT.capK, tInt);
+}
+
 // Stefan-Boltzmann equilibrium temperature plus a pre-computed greenhouse
 // offset. Takes greenhouseK and Bond albedo as parameters so the outer
 // two-pass refinement (pressure-proxy → composition-aware) can swap one
 // for the other without recomputing T_eq. Gaseous bodies (radius >=
-// gasDwarfRadius) return bare T_eq — no surface, no greenhouse term.
-function avgSurfaceTempFromAlbedo(radiusEarth, S, bondAlbedo, greenhouseK) {
+// gasDwarfRadius) carry no surface and no greenhouse term — their cloud-top
+// effective temperature combines irradiation equilibrium with intrinsic
+// Kelvin-Helmholtz heat in quadrature (T_eff⁴ = T_eq⁴ + T_int⁴), so a
+// young/massive giant reads hot even far from its star. massEarth + ageGyr
+// drive T_int; they're optional so the terrestrial path is unaffected.
+function avgSurfaceTempFromAlbedo(radiusEarth, S, bondAlbedo, greenhouseK, massEarth, ageGyr) {
   if (S == null) return null;
   const tEq = equilibriumTempK(S, bondAlbedo);
   if (radiusEarth != null && radiusEarth >= BODY_THRESHOLDS.gasDwarfRadius) {
-    return Math.round(tEq);  // gaseous body — cloud-top equilibrium
+    const tInt = intrinsicGiantTempK(massEarth, ageGyr);
+    return Math.round(Math.pow(tEq ** 4 + tInt ** 4, 0.25));
   }
   return Math.round(tEq + (greenhouseK ?? 0));
 }
@@ -1837,7 +1863,7 @@ export function fillBodies(bodies, stars) {
 // Reads the body's settled physics off `ctx.working`; returns all-null
 // when T can't be resolved (missing radius or insolation).
 function runTempIcePass(ctx, prevWater, prevIce, prevLiquid, greenhouseK) {
-  const { working, S, surfacePressureBar, bulkWaterFraction, salinity, waterNoise, iceNoise } = ctx;
+  const { working, S, ageGyr, surfacePressureBar, bulkWaterFraction, salinity, waterNoise, iceNoise } = ctx;
   const stateForAlbedo = {
     ...working,
     waterFraction: prevWater,
@@ -1849,11 +1875,11 @@ function runTempIcePass(ctx, prevWater, prevIce, prevLiquid, greenhouseK) {
   };
   // First T-pass without cloud temperature gate
   let A = bondAlbedoFor(stateForAlbedo);
-  let T = avgSurfaceTempFromAlbedo(working.radiusEarth, S, A, greenhouseK);
+  let T = avgSurfaceTempFromAlbedo(working.radiusEarth, S, A, greenhouseK, working.massEarth, ageGyr);
   if (T == null) return { T: null, Tmin: null, Tmax: null, ice: null, water: null, liquidFraction: null, liquidSpecies: null };
   // Recompute albedo with T available so the cloud-temperate gate fires
   A = bondAlbedoFor({ ...stateForAlbedo, avgSurfaceTempK: T });
-  T = avgSurfaceTempFromAlbedo(working.radiusEarth, S, A, greenhouseK);
+  T = avgSurfaceTempFromAlbedo(working.radiusEarth, S, A, greenhouseK, working.massEarth, ageGyr);
   if (T == null) return { T: null, Tmin: null, Tmax: null, ice: null, water: null, liquidFraction: null, liquidSpecies: null };
   const { min: Tmin, max: Tmax } = surfaceTempRangeFor({
     ...working,
@@ -2074,7 +2100,7 @@ function fillBody(b, allBodies, stars) {
   // and `working`. Pass A (pressure proxy) and Pass B (composition-aware)
   // share this body so the five-field commit lives in one place.
   const applyTempPass = (greenhouseK) => {
-    const ctx = { working, S, surfacePressureBar, bulkWaterFraction, salinity, waterNoise, iceNoise };
+    const ctx = { working, S, ageGyr: hostStar?.ageGyr ?? 5.0, surfacePressureBar, bulkWaterFraction, salinity, waterNoise, iceNoise };
     const p1 = runTempIcePass(ctx, 0, 0, 0, greenhouseK);
     const p2 = runTempIcePass(ctx, p1.water ?? 0, p1.ice ?? 0, p1.liquidFraction ?? 0, greenhouseK);
     if (unknowns.has('avgSurfaceTempK') && p2.T != null) avgSurfaceTempK = p2.T;

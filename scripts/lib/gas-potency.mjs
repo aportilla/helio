@@ -44,6 +44,8 @@ export const GAS_POTENCY = {
   // when emitted.
   H2SO4:       3.0,
   SILICATE:    3.0,
+  IRON:        3.0,  // reflective metallic-iron cloud deck (hot Jupiters)
+  TIO:         3.0,  // dark Ti/V-oxide absorber deck (ultra-hot Jupiters)
   DUST:        3.0,
   THOLIN:      3.0,
   NH4SH:       3.0,
