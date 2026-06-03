@@ -644,16 +644,17 @@ function dominantSurfaceLiquid(body, T_mean, surfacePressureBar, salinity, noise
 }
 
 // The dominant surface FROST a cold, dry-surface body wears — the solid
-// volatile veneer you'd stand on, as distinct from any standing liquid. The
-// candidates run most→least volatile by frost point: the first species the
-// body sits BELOW (so it's frozen, not gaseous) and that is genuinely present
-// wins, because the most volatile frozen species blankets the rest (Triton's
-// N₂ frost over water-ice bedrock). Frost points reuse the solvent freeze
-// points; CO₂ has no liquid row so it uses SURFACE_FROST.co2FrostK. Non-water
-// species must clear SURFACE_FROST.minAtmFrac of the atmosphere (a frost is in
-// vapour-pressure equilibrium with its gas); water is the floor, gated on ice
-// or bulk water. Returns null for a warm body, a standing-liquid sea, or a
-// solid surface with nothing to frost (an airless dry rock).
+// volatile veneer you'd stand on, as distinct from any standing liquid. Each
+// exotic species (N₂/CH₄/CO₂/NH₃) is a candidate where the body sits BELOW its
+// frost point (so it's frozen, not gaseous) and it genuinely clears
+// SURFACE_FROST.minAtmFrac of the atmosphere (a frost is in vapour-pressure
+// equilibrium with its gas). The veneer is then DRAWN among the candidates
+// weighted by abundance × volatility (see SURFACE_FROST), since a real N₂+CH₄
+// world wears both and either can dominate (Triton N₂, Eris/Makemake methane).
+// Frost points reuse the solvent freeze points; CO₂ has no liquid row so it uses
+// SURFACE_FROST.co2FrostK. Water is the bedrock floor — gated on ice or bulk
+// water, taken only when no exotic veneer applies. Returns null for a warm body,
+// a standing-liquid sea, or a solid surface with nothing to frost (airless dry rock).
 const SURFACE_FROST_SPECIES = [
   { name: 'nitrogen',       frostK: SOLVENT_PHASE.nitrogen.freezeK,    gas: 'N2'  },
   { name: 'methane',        frostK: SOLVENT_PHASE.hydrocarbon.freezeK, gas: 'CH4' },
@@ -673,14 +674,27 @@ function surfaceFrostSpeciesFor(body) {
   // trace exosphere (Callisto's CO₂, Europa's O₂) does not, even when it's the
   // dominant gas. Water is exempt — solid ice persists without any atmosphere.
   const hasAtmosphere = (body.surfacePressureBar ?? 0) >= SURFACE_FROST.minPressureBar;
-  for (const f of SURFACE_FROST_SPECIES) {
-    if (T >= f.frostK) continue; // too warm for this volatile to deposit
-    if (f.water) {
-      if ((body.iceFraction ?? 0) > 0 || (body.bulkWaterFraction ?? 0) > 0) return f.name;
-      continue;
+  // Gather every exotic volatile that is cold enough to deposit AND genuinely
+  // present, then DRAW one weighted by abundance × volatility (SURFACE_FROST) —
+  // co-present N₂ + CH₄ no longer collapse to nitrogen every time.
+  const candidates = [];
+  if (hasAtmosphere) {
+    for (const f of SURFACE_FROST_SPECIES) {
+      if (f.water || T >= f.frostK) continue; // water is the bedrock floor; skip the too-warm
+      const frac = atmFracOf(body, f.gas);
+      if (frac < SURFACE_FROST.minAtmFrac) continue;
+      candidates.push({ name: f.name, w: Math.pow(frac, SURFACE_FROST.abundanceExp) * (SURFACE_FROST.volatilityBoost[f.name] ?? 1) });
     }
-    if (hasAtmosphere && atmFracOf(body, f.gas) >= SURFACE_FROST.minAtmFrac) return f.name;
   }
+  if (candidates.length) {
+    const total = candidates.reduce((s, c) => s + c.w, 0);
+    let r = fieldPrng(body, 'surfaceFrostSpecies')() * total;
+    for (const c of candidates) if ((r -= c.w) < 0) return c.name;
+    return candidates[candidates.length - 1].name;
+  }
+  // Water floor: a frozen water-ice surface with no exotic volatile to veneer it.
+  const water = SURFACE_FROST_SPECIES.find((f) => f.water);
+  if (T < water.frostK && ((body.iceFraction ?? 0) > 0 || (body.bulkWaterFraction ?? 0) > 0)) return water.name;
   return null;
 }
 

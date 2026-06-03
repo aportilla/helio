@@ -1332,6 +1332,19 @@ export const SURFACE_FROST = {
   minAtmFrac: 0.02,
   minPressureBar: 1e-6,
   co2FrostK: 150,
+  // When several volatiles are cold enough AND genuinely present, the visible
+  // surface veneer is DRAWN among them weighted by atmFrac^abundanceExp ×
+  // volatilityBoost — probabilistic, not handed outright to the most-volatile
+  // species. Real N₂+CH₄ worlds wear both, and which dominates the veneer varies:
+  // Triton reads N₂-dominant, but Eris and Makemake are methane-dominant despite
+  // N₂ being present — so handing it to the single most-volatile species would
+  // read as an all-nitrogen cold galaxy. volatilityBoost keeps the cold-trap bias
+  // (a more-volatile species preferentially caps the surface), so an N₂-rich world
+  // still usually reads nitrogen — the draw just lets methane through when methane
+  // is abundant. Water is never in this draw: it's the bedrock the volatile veneer
+  // blankets, and stays the floor (plain Frozen family) when no exotic frost applies.
+  volatilityBoost: { nitrogen: 1.3, methane: 1.0, carbon_dioxide: 1.0, ammonia: 1.0 },
+  abundanceExp: 1.0,
 };
 
 // ---------------------------------------------------------------------------
