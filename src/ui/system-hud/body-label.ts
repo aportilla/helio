@@ -228,8 +228,8 @@ const FAMILIES = {
   },
   // exotic surface chemistry — the only genuinely-alien SURFACE types the data
   // model carries: silicon-based life (lattice worlds, drawn from this pool) and
-  // the chthonian stripped-metal core (forced 'Metallic Vapor Wastes' in the
-  // cascade, bypassing the pool). No gemstone or carbon biome — there's no honest
+  // the chthonian stripped-metal core (which draws its own metal-vapor register,
+  // CHTHONIAN_LEAD/TERRAIN, not this lattice pool). No gemstone or carbon biome — there's no honest
   // signal for them, so they aren't faked.
   exotic: {
     label: 'Exotic',
@@ -278,6 +278,18 @@ const ORE_TEXTURE = ['Streaked', 'Crusted', 'Strewn', 'Veined', 'Laced', 'Ribbon
 const TOXIC_SULFUR = ['Sulfuric', 'Caustic', 'Acid-Rain', 'Acid-Etched', 'Sulfur-Choked'];
 const TOXIC_HOTHOUSE = ['Corrosive', 'Choking', 'Smothering', 'Searing'];
 const TOXIC_ORGANIC = ['Smog-Drowned', 'Hazy', 'Tar-Veiled', 'Murky', 'Soot-Choked'];
+// Frozen-over ocean — a standing sea capped by ice. Both slots DRAW (terrain via
+// its own cold-sea pool, not the warm oceanic landforms) so two ice-locked
+// oceans read distinctly; every word still says "frozen sea".
+const FROZEN_OVER_LEAD = ['Frozen-Over', 'Ice-Capped', 'Frost-Locked', 'Ice-Sheathed', 'Pack-Iced', 'Ice-Bound', 'Frost-Rimed'];
+const FROZEN_OVER_TERRAIN = ['Seas', 'Shallows', 'Floes', 'Ice-Floes', 'Tides', 'Pack-Ice', 'Ice Shelf'];
+// Molten-sulfur sea (Io-class brimstone) — terrain draws from the volcanic pool;
+// these leads name the sulfur so it lands once and varies across worlds.
+const BRIMSTONE_LEAD = ['Sulfur-Choked', 'Brimstone-Reeking', 'Sulfurous', 'Fume-Wreathed', 'Sulfur-Crusted', 'Sulfur-Veiled'];
+// Stripped hot-Jupiter metal core (chthonian) — its own metal-vapor register
+// (the exotic family pool is silicon-life lattice vocab, wrong for a bare core).
+const CHTHONIAN_LEAD = ['Metallic', 'Iron-Vapor', 'Molten-Metal', 'Slag-Crusted', 'Smelted', 'Vapor-Wreathed'];
+const CHTHONIAN_TERRAIN = ['Vapor Wastes', 'Metal Wastes', 'Slag Plains', 'Core Barrens', 'Iron Flats', 'Smelt-Fields'];
 function oreLead(b: Body): string {
   // 'Ferrous' is an adjective, not a metal noun — let it stand alone ("Ferrous
   // Badlands") rather than read "Ferrous-Veined".
@@ -507,10 +519,15 @@ function deriveBiome(b: Body): Sense {
   const T = b.avgSurfaceTempK ?? 0;
   const liquid = b.surfaceLiquidFraction ?? 0;
 
-  // ── Molten / volcanic extremes ──
-  if (isBrimstone(b)) return sense(b, 'volcanic', { leadForce: 'Sulfur-Choked' });
+  // ── Molten / volcanic extremes ── Chthonian leads: a stripped hot-Jupiter core
+  //    is hot enough to also read as lava, but the bare metal core is the rarer,
+  //    more-defining identity — so it claims the world ahead of generic melt.
+  if (isChthonian(b)) {
+    const terrain = draw(b, 'chthonian:terrain', CHTHONIAN_TERRAIN);
+    return sense(b, 'exotic', { leadForce: draw(b, 'chthonian:lead', CHTHONIAN_LEAD, new Set(tokensOf(terrain))), terrain });
+  }
+  if (isBrimstone(b)) return sense(b, 'volcanic', { leadForce: draw(b, 'brimstone:lead', BRIMSTONE_LEAD) });
   if (isLava(b) || isMagmaOcean(b)) return sense(b, 'volcanic');
-  if (isChthonian(b)) return sense(b, 'exotic', { leadForce: 'Metallic', terrain: 'Vapor Wastes' });
 
   // ── Exotic / sulfur biospheres — silicon-based life draws the lattice pool ──
   if (b.biosphereArchetype === 'silicate' && hasLife(b)) return sense(b, 'exotic');
@@ -541,23 +558,25 @@ function deriveBiome(b: Body): Sense {
   }
   if (atmFrac(b, 'SO2') >= 0.3) return sense(b, 'toxic', { leadForce: draw(b, 'tox:sulfur', TOXIC_SULFUR) });
 
-  // ── Oceanic ── (briny rides as a condition; a frozen-over sea forces its lead+terrain).
+  // ── Oceanic ── (briny rides as a condition; a frozen-over sea draws an ice-locked lead+terrain).
   //    Within-family fork: softening the freeze edge only swaps the lead/terrain, the
   //    family stays oceanic — so it's safe with its own 'oceanFreeze' axis.
   if (isOcean(b) || isAmmoniaSea(b) || liquid >= OCEAN_COVER) {
-    if (!softGE(b, 'oceanFreeze', T, COLD_K, COLD_K_W)) return sense(b, 'oceanic', { leadForce: 'Frozen-Over', terrain: 'Seas' });
+    if (!softGE(b, 'oceanFreeze', T, COLD_K, COLD_K_W)) {
+      const terrain = draw(b, 'oceanFrozen:terrain', FROZEN_OVER_TERRAIN);
+      return sense(b, 'oceanic', { leadForce: draw(b, 'oceanFrozen:lead', FROZEN_OVER_LEAD, new Set(tokensOf(terrain))), terrain });
+    }
     return sense(b, 'oceanic');
   }
 
   // ── Subterranean — a buried ice-shell ocean, BUT only when the surface is
   //    plain water ice. A world wearing a defining exotic frost (N₂/CH₄/CO₂/NH₃)
   //    reads by that surface instead (Triton is a nitrogen world, not a sea), so
-  //    it falls through to Frozen below. ──
-  if (isSubglacialOcean(b) && !hasExoticFrost(b)) {
-    if (hasLife(b)) return sense(b, 'subterranean', { leadForce: 'Fungal', terrain: 'Cavern Depths' });
-    if (b.subsurfaceOceanSpecies === 'water') return sense(b, 'subterranean', { leadForce: 'Sunless', terrain: 'Brine Seas' });
-    return sense(b, 'subterranean');
-  }
+  //    it falls through to Frozen below. Lead + terrain both DRAW from the family
+  //    pools like every other family — the life signal rides on the guarded
+  //    Fungal / Glowworm-Lit leads (so two ice moons read distinctly rather than
+  //    both forcing one fixed phrase), not a forced override. ──
+  if (isSubglacialOcean(b) && !hasExoticFrost(b)) return sense(b, 'subterranean');
 
   // ── Frozen — keyed by the REAL surface-frost species (S1): an exotic frost
   //    forces its substrate material (Nitrogen / Methane / Dry-Ice / Ammonia)
