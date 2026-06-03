@@ -755,6 +755,67 @@ for (const cls of Object.keys(atmByClass).sort()) {
 }
 console.log();
 
+// --- Surface frost species (S1 — drives the frozen-world label substrate) -
+// The dominant solid-volatile veneer a cold, dry surface wears. Reported as a
+// mix across procgen planets + moons (frost worlds are often moons, e.g.
+// Triton). A healthy distribution is plural — water ice the bulk, nitrogen a
+// real outer-system minority, methane smaller, with most warm/airless bodies
+// null (no frost). A near-total collapse to one species would mean the gate is
+// mis-keyed.
+console.log('=== Surface frost species (procgen planets + moons) ===');
+const frostMix = {};
+let frostTotal = 0;
+for (const b of bodies) {
+  if (b.kind !== 'planet' && b.kind !== 'moon') continue;
+  if (b.source !== 'procgen') continue;
+  frostTotal += 1;
+  const f = b.surfaceFrostSpecies ?? 'none';
+  frostMix[f] = (frostMix[f] || 0) + 1;
+}
+for (const [f, n] of Object.entries(frostMix).sort((a, b) => b[1] - a[1])) {
+  console.log('  ' + pad(f, 16) + ' | n=' + pad(n, 5, true) + '  ' + (n / frostTotal * 100).toFixed(1) + '%');
+}
+console.log();
+
+// --- Evaporite salt-flats eligibility (S2 — the revived Crystalline family) -
+// Label-side family: a warm, dry, high-salinity surface reads as a bedded salt
+// crust. No new field — salinity already carries the aridity concentration; this
+// watches the eligible population so a future salinity/temp change can't quietly
+// starve the family. Should be a non-trivial minority, not zero, not dominant.
+{
+  let evap = 0, dryWarm = 0;
+  for (const b of bodies) {
+    if (b.kind !== 'planet' && b.kind !== 'moon') continue;
+    if (b.source !== 'procgen') continue;
+    const T = b.avgSurfaceTempK ?? 0;
+    const dry = (b.waterFraction ?? 0) < 0.05 && (b.iceFraction ?? 0) < 0.3;
+    if (T >= 273 && dry && (b.surfacePressureBar ?? 0) >= 0.001) {
+      dryWarm += 1;
+      if ((b.salinity ?? 0) >= 0.6) evap += 1;
+    }
+  }
+  console.log('=== Evaporite salt-flats eligibility (procgen planets + moons) ===');
+  console.log('  warm+dry+air: ' + dryWarm + '   of those high-salinity (≥0.6, → Salt Flats): ' + evap);
+  console.log();
+}
+
+// --- Carbon worlds (S4 — C/O>1 disk, graphite/tar surface) ----------------
+// System-level flag seeded off the host star. A non-trivial minority of dry
+// rocky bodies (carbon-rich disks are ~CARBON_WORLD.diskFraction of systems).
+// Watches that the population isn't zero (signal dead) or runaway.
+{
+  let carbon = 0, terr = 0;
+  for (const b of bodies) {
+    if (b.kind !== 'planet' && b.kind !== 'moon') continue;
+    if (b.source !== 'procgen') continue;
+    terr += 1;
+    if (b.carbonWorld) carbon += 1;
+  }
+  console.log('=== Carbon worlds (procgen planets + moons) ===');
+  console.log('  carbonWorld: ' + carbon + ' / ' + terr + '  (' + (carbon / terr * 100).toFixed(1) + '%)');
+  console.log();
+}
+
 // --- 9. Resource means by archetype (label-only — physics-derived) -------
 
 console.log('=== Resource means, by archetype (procgen planets, 0-10 scale) ===');

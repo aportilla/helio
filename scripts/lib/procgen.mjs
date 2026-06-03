@@ -121,6 +121,8 @@ import {
   PRESSURE_HISTORY_MULTIPLIER,
   TRIPLE_POINT_BAR,
   SOLVENT_PHASE,
+  SURFACE_FROST,
+  CARBON_WORLD,
   MIN_SURFACE_LIQUID_COVER,
   SALINITY,
   SUBSURFACE_OCEAN,
@@ -639,6 +641,63 @@ function dominantSurfaceLiquid(body, T_mean, surfacePressureBar, salinity, noise
     liquidFraction: bestCover,
     liquidSpecies: bestCover > 0 ? bestSpecies : null,
   };
+}
+
+// The dominant surface FROST a cold, dry-surface body wears — the solid
+// volatile veneer you'd stand on, as distinct from any standing liquid. The
+// candidates run most→least volatile by frost point: the first species the
+// body sits BELOW (so it's frozen, not gaseous) and that is genuinely present
+// wins, because the most volatile frozen species blankets the rest (Triton's
+// N₂ frost over water-ice bedrock). Frost points reuse the solvent freeze
+// points; CO₂ has no liquid row so it uses SURFACE_FROST.co2FrostK. Non-water
+// species must clear SURFACE_FROST.minAtmFrac of the atmosphere (a frost is in
+// vapour-pressure equilibrium with its gas); water is the floor, gated on ice
+// or bulk water. Returns null for a warm body, a standing-liquid sea, or a
+// solid surface with nothing to frost (an airless dry rock).
+const SURFACE_FROST_SPECIES = [
+  { name: 'nitrogen',       frostK: SOLVENT_PHASE.nitrogen.freezeK,    gas: 'N2'  },
+  { name: 'methane',        frostK: SOLVENT_PHASE.hydrocarbon.freezeK, gas: 'CH4' },
+  { name: 'carbon_dioxide', frostK: SURFACE_FROST.co2FrostK,           gas: 'CO2' },
+  { name: 'ammonia',        frostK: SOLVENT_PHASE.ammonia.freezeK,     gas: 'NH3' },
+  { name: 'water',          frostK: SOLVENT_PHASE.water.freezeK,       water: true },
+];
+function surfaceFrostSpeciesFor(body) {
+  if (isGaseousBody(body)) return null;
+  if (body.radiusEarth == null) return null;
+  const T = body.avgSurfaceTempK;
+  if (T == null) return null;
+  // A frost read is for solid surfaces — a body with a standing sea is named
+  // by that liquid, not a frost.
+  if ((body.surfaceLiquidFraction ?? 0) >= MIN_SURFACE_LIQUID_COVER) return null;
+  // A real atmosphere holds an exotic frost in vapour-pressure equilibrium; a
+  // trace exosphere (Callisto's CO₂, Europa's O₂) does not, even when it's the
+  // dominant gas. Water is exempt — solid ice persists without any atmosphere.
+  const hasAtmosphere = (body.surfacePressureBar ?? 0) >= SURFACE_FROST.minPressureBar;
+  for (const f of SURFACE_FROST_SPECIES) {
+    if (T >= f.frostK) continue; // too warm for this volatile to deposit
+    if (f.water) {
+      if ((body.iceFraction ?? 0) > 0 || (body.bulkWaterFraction ?? 0) > 0) return f.name;
+      continue;
+    }
+    if (hasAtmosphere && atmFracOf(body, f.gas) >= SURFACE_FROST.minAtmFrac) return f.name;
+  }
+  return null;
+}
+
+// Whether a dry rocky body sits in a carbon-rich (C/O > 1) disk and so wears a
+// graphite / tar surface. C/O is a SYSTEM property, so the draw is seeded off
+// the host star — every body in a system shares one disk chemistry,
+// deterministic and reproducible. Most disks are oxygen-rich (false). Gaseous
+// bodies and ice/ocean worlds keep their own read; only a dry rocky surface
+// turns to carbon. Flags the surface-mineralogy consequence for the label; it
+// does NOT re-derive bulk composition.
+function isCarbonWorldFor(body, hostStar) {
+  if (body.radiusEarth == null) return false;
+  if (isGaseousBody(body)) return false;
+  if (hostStar == null) return false;
+  const disk = mulberry32(hash32(hostStar.id + ':carbonDisk:' + PROCGEN_VERSION))();
+  if (disk >= CARBON_WORLD.diskFraction) return false;
+  return (body.bulkWaterFraction ?? 0) < CARBON_WORLD.maxWater;
 }
 
 // =============================================================================
@@ -2129,6 +2188,20 @@ function fillBody(b, allBodies, stars) {
   }
   working = { ...working, subsurfaceOceanSpecies };
 
+  // Dominant surface frost — the solid-volatile veneer a cold world wears.
+  // Purely derived (no CSV column), so it's set unconditionally off the
+  // settled surface + atmosphere. Drives the frozen-world label's substrate
+  // (N₂ vs CH₄ vs CO₂ vs water ice) rather than guessing it from bulk
+  // composition, and lets a defining exotic frost out-rank a buried ocean.
+  const surfaceFrostSpecies = surfaceFrostSpeciesFor(working);
+  working = { ...working, surfaceFrostSpecies };
+
+  // Carbon-world surface — a dry rocky body in a carbon-rich (C/O>1) disk wears
+  // graphite/tar instead of silicate rock. System-level (seeded off the host
+  // star), purely derived, never read downstream — a label/render surface flag.
+  const carbonWorld = isCarbonWorldFor(working, hostStar);
+  working = { ...working, carbonWorld };
+
   // Post-atm biotic productivity — subsurface_aqueous / aerial /
   // cryogenic / silicate / sulfur. Reads atm composition + haze aerosols +
   // resource grid (radiogenic energy, silicate / sulfur substrate) and the
@@ -2179,6 +2252,7 @@ function fillBody(b, allBodies, stars) {
     radiusEarth, bulkWaterFraction, bulkMetalFraction, bulkVolatileFraction,
     waterFraction, iceFraction, surfaceAge,
     surfaceLiquidFraction, surfaceLiquidSpecies, subsurfaceOceanSpecies, salinity,
+    surfaceFrostSpecies, carbonWorld,
     avgSurfaceTempK, surfaceTempMinK, surfaceTempMaxK,
     tectonicActivity, rotationPeriodHours, magneticFieldGauss,
     surfacePressureBar, surfaceRadiation,

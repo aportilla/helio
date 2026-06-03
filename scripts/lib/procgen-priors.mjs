@@ -1311,6 +1311,47 @@ export const SOLVENT_PHASE = {
 export const MIN_SURFACE_LIQUID_COVER = 0.05;
 
 // ---------------------------------------------------------------------------
+// Surface frost — the dominant solid volatile a cold, dry-surface world wears
+// ---------------------------------------------------------------------------
+//
+// A frozen surface is veneered by whichever volatile is BOTH present and below
+// its frost point at the surface temperature. The most volatile such species
+// sits on top (Triton wears N₂ frost over a water-ice bedrock), so the frost
+// read is the lowest-frost-point species that still has the body below it. The
+// frost points reuse the solvent freeze points (SOLVENT_PHASE) where a row
+// exists; CO₂ has no surface-liquid row (it sublimes straight from solid at
+// low pressure), so its frost point is named here — the ~150 K low-pressure
+// deposition temperature (Mars's seasonal CO₂ caps). A volatile must clear
+// `minAtmFrac` of the atmosphere AND the body must hold a real atmosphere
+// (`minPressureBar`) for the frost to sit in vapour-pressure equilibrium — that
+// gate tells Triton's genuine thin N₂ atmosphere (~1e-5 bar) apart from the
+// trace CO₂/O₂ exospheres of Callisto and Enceladus, whose surfaces are plain
+// water ice. Water is the floor: a solid ice sheet persists with no atmosphere,
+// so it's gated on ice/bulk-water, not pressure.
+export const SURFACE_FROST = {
+  minAtmFrac: 0.02,
+  minPressureBar: 1e-6,
+  co2FrostK: 150,
+};
+
+// ---------------------------------------------------------------------------
+// Carbon worlds — a C/O > 1 protoplanetary disk
+// ---------------------------------------------------------------------------
+//
+// The disk carbon-to-oxygen ratio is a SYSTEM property: most disks are
+// oxygen-rich (silicate rock), a minority are carbon-rich (C/O > 1) and
+// condense graphite / carbides instead — so a dry rocky body there wears a
+// graphite / tar surface. `diskFraction` is the share of systems that are
+// carbon-rich; the carbon SURFACE read only applies to dry rocky bodies
+// (`maxWater`), since an ice/ocean world still reads by its volatiles. This is
+// a surface-mineralogy consequence flagged for the label — it deliberately
+// does NOT re-derive bulk composition (that would ripple through accretion).
+export const CARBON_WORLD = {
+  diskFraction: 0.08,
+  maxWater: 0.01,
+};
+
+// ---------------------------------------------------------------------------
 // Salinity — dissolved-solute scalar (D2: single scalar in [0,1])
 // ---------------------------------------------------------------------------
 //

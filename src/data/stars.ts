@@ -140,6 +140,17 @@ export type SurfaceLiquidSpecies =
   | 'nitrogen'
   | 'sulfur';
 
+// The dominant solid-volatile frost a cold, dry-surface world wears — the
+// veneer you'd stand on (Triton's nitrogen frost), distinct from any standing
+// liquid. null when the surface is too warm to frost, carries a standing sea,
+// or is bare rock with nothing to deposit.
+export type SurfaceFrostSpecies =
+  | 'nitrogen'
+  | 'methane'
+  | 'carbon_dioxide'
+  | 'ammonia'
+  | 'water';
+
 // One cloud deck on a body. Up to 3 per body, stratified by
 // altitudeNorm — the deepest deck composites first, the top deck last.
 // `windSpeedMS` drives both the patchy ↔ banded interpolant (low wind →
@@ -281,6 +292,14 @@ export interface Body {
   // anything on the surface; null means no buried ocean, which is why it
   // can be set on a body whose surface is frozen solid.
   readonly subsurfaceOceanSpecies: SurfaceLiquidSpecies | null;
+  // The dominant solid-volatile frost on a cold, dry surface — what you'd
+  // stand on. Drives the frozen-world label substrate and lets a defining
+  // exotic frost (N₂/CH₄/CO₂) out-rank a buried ocean in the biome cascade.
+  readonly surfaceFrostSpecies: SurfaceFrostSpecies | null;
+  // A dry rocky body in a carbon-rich (C/O>1) disk: a graphite / tar surface
+  // instead of silicate rock. System-level (shared by a star's bodies). A
+  // surface-mineralogy flag — bulk composition is unchanged.
+  readonly carbonWorld: boolean;
   // Solute load of the surface liquid as a single scalar — drives how the
   // disc tints and how reflective a sea reads — left untagged by solute
   // type; null on bodies with no surface liquid to carry solutes.

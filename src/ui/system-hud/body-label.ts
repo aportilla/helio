@@ -1,607 +1,638 @@
-// Composed, descriptive world labels for the body info card — the
-// "explorer's-log" voice: a glanceable field-note chip that reads like a
-// surveyor's first impression of a world.
+// Composed world labels for the body info card — a generative BIOME NAME for the
+// place, printed as the card's subtitle beneath the body's name.
 //
-// PARAMETER-DRIVEN, NOT CLASS-DRIVEN. There is no single body "type". The label
-// is assembled from INDEPENDENT physical axes read straight off the body's
-// settled state (`scripts/lib/body-traits.mjs` predicates + raw fields), each
-// contributing at most one word, ranked by salience, then printed over a
-// structural noun. Two worlds that share a composition but differ physically
-// read distinctly because their OTHER axes differ — a venting young icy moon and
-// a cratered ancient icy moon both end in "Glacial Moon" but lead with the axis
-// that actually separates them. Nothing collapses the multi-axis physics to one
-// bucket first; the bucket the renderer also refuses to store (see Body's
-// biotic-productivity note) stays decomposed here too.
+// WHAT THIS IS NOT: a body taxonomy. The hover card already states the structural
+// facts — moon vs planet vs giant, spectral class, temperature, pressure,
+// radiation, standing liquid. Re-printing "Moon" / "Gas Giant" here would spend
+// the label on the lowest-information word on screen. So the label does the one
+// thing the data rows can't: it names what it's like to STAND on the surface.
 //
-// Structure — `[descriptors…] HEAD`, within a hard TOKEN_BUDGET. The head is the
-// body's STRUCTURAL noun: the gaseous-envelope class (Gas Giant / Ice Giant /
-// Gas Dwarf / Helium Giant / Veiled Ice), an iconic named world the surface-
-// liquid data unlocks (Garden / Smog / Methane Sea / Ammonia Sea / Subglacial
-// Ocean / Ocean / Brimstone / Magma Ocean / Chthonian Core / Lava), or a plain
-// kind+scale tail (Moonlet → Moon → Major Moon, Planetoid → World → Heavyworld).
-// Everything else — including the common terrestrial bulk identity (glacial,
-// frostbound, iron, arid) — is a DESCRIPTOR competing for the remaining budget by
-// salience, so a world's most-distinguishing conditions win the slots rather
-// than its compositional name eating them. The card auto-sizes to the label, so
-// the budget is a legibility choice, not a layout limit.
+// VOICE: evocative, a landscape field-name — not a dry instrument readout.
 //
-// HEAT IS DOMAIN-AWARE: one temperature never wears one word. A hot dry rock
-// reads "Baking", a hot ocean "Steaming", a hot gaseous envelope "Searing" — so
-// the same 480 K doesn't flatten three very different worlds into one chip.
+// GENERATIVE, NOT PLUCKED. The label is built, not looked up: `[LEAD] [TERRAIN]`,
+// a single lead descriptor over a terrain noun — "Iron-Streaked Badlands",
+// "Smoldering Basalt Wastes", "Storm-Lashed Shallows". Each biome family owns two
+// small pools — a `terrain` pool (the head nouns: Badlands, Wastes, Dunes, …) and
+// a `lead` pool (its signature adjectives: Smoldering, Wind-Scoured, …) — and the
+// label composes one of each. The combinatorics (leads × terrains) give the
+// variety; the tight two-slot shape keeps every label 2–3 words.
 //
-// Three principles govern the vocabulary — the voice is a surveyor's field note,
-// dry and clinical, not an orbital postcard:
-//   1. GROUND-TRUTH, NOT SPECTACLE. Every word answers "what is it like on the
-//      surface / what would the instruments read", never "what does it look
-//      like from orbit". Conditions a colonist would feel — temperature,
-//      pressure, radiation dose, dust, toxicity — outrank the view from the
-//      cruiser. Surface-radiation dose is a clear ground-truth read, but it goes
-//      to the detail card, not the chip — the magnetosphere's orbital aurora is
-//      off-register, and its ground face is a meter reading the card reports
-//      rather than a scarce label token.
-//   2. VARIETY FROM AXES, NOT SYNONYMS. Worlds read distinctly because they
-//      DIFFER (temp, pressure, radiation, dust, chemistry), not because one axis
-//      owns a dozen near-synonyms. Each pool is kept tight (≈2 plain words); the
-//      spread comes from naming the actually-distinguishing condition.
-//   3. PLAIN OVER ORNATE. Where two words mean the same, keep the one a field
-//      geologist would write ("Frozen", not "Rime-Sealed"); one vivid word per
-//      family is reserved for genuine extremes.
+// CONDITIONS REPLACE THE LEAD, THEY DON'T STACK. A notable physical condition —
+// an ancient cratered crust, a fire-and-ice day↔night swing, a briny sea, a
+// metal-streaked surface — supplies the lead INSTEAD of the family's signature
+// adjective, never in addition to it. Exactly one lead is ever emitted, so the
+// worst case is `[condition] [two-word terrain]` = three words, not the four-word
+// pile-ups a front-stacked modifier layer produced. When more than one condition
+// fires, the most place-defining one wins the slot (see COND). Conditions are
+// kept genuinely RARE (tail-of-distribution thresholds) so they read as standouts
+// and don't smother a family's signature vocabulary — a near-universal axis (like
+// tide-lock, ~half of planets) is no axis at all, so it earns no lead.
 //
-// Two registers stay deliberately UNwired — "engineered / megastructural" and
-// "eldritch / otherworldly" — they only fit artificial or genuinely anomalous
-// bodies the data model doesn't carry yet; add them when those kinds exist
-// rather than faking the physics to reach the words.
+// The metal-rich lead is itself a SUB-GENERATOR: `[metal]-[texture]` composes
+// "Nickel-Crusted", "Cobalt-Streaked", "Titanium-Veined" so an iron world isn't
+// one fixed phrase. Same composing-not-plucking principle, one level down.
 //
-// Each concept is a SYNONYM POOL, not a single word: "hot dry rock" draws from
-// {Blistering, Baking, Torrid, …}, "cold" from {Frozen, Icebound, …}. The pick
-// is deterministic per (body, concept) — `pick`/`pickNoun` index the pool by
-// `hash32(body.id + concept)` — so a world always wears the same words across
-// reloads, two concepts on one body draw independently, and no word lives in
-// two pools (a thermal + composition pair can never read "Frozen Frozen"). A
-// pool word can carry a GUARD on a secondary axis the firing concept doesn't
-// itself check — "Glaciated" needs ice, "Wind-Scoured" needs air — and drops out
-// of the draw when that axis fails, so a cold airless rock reads "Frozen", never
-// "Wind-Scoured". The pools just multiply phrasings; they never change which
-// CONCEPT fires (that's the physics-keyed logic below). The coinage core nouns we
-// own (Frostbound, Glacial, Desert, Iron, Lava, Veiled Ice, Subglacial Ocean)
-// are pooled too; the generic astronomy nouns (Gas Giant, Gas Dwarf, Ice Giant,
-// Helium Giant) stay fixed, players know them. We keep the chip free of
-// Earth/Sol-keyed anchors: there is deliberately no "Super-Earth" (→ scale tail
-// "Heavyworld"), no "Hot Jupiter" (→ heat state "Searing Gas Giant"), no "Sub-
-// Neptune" (→ "Gas Dwarf"), and no "Gaian" (→ "Garden World").
+// STILL PARAMETER-DRIVEN, NO CLASSIFIER. The family is chosen by a precedence
+// cascade over the INDEPENDENT, non-exclusive physics predicates in
+// `scripts/lib/body-traits.mjs` (`isLava`, `isGlacial`, `isOcean`, …) plus raw
+// settled fields. Nothing collapses the multi-axis physics to a stored type; the
+// cascade just decides which axis dominates a world's SENSE OF PLACE.
 //
-// Bodies wear their SCALE in the head tail (see worldNoun): a moon spans Moonlet
-// → Moon → Major Moon, a planet Planetoid → World → Heavyworld. The gaseous
-// giants instead take a dry scale DESCRIPTOR ("Massive Gas Giant"), since their
-// head is a fixed archetype noun, not "World".
+// THREE REGISTERS, by domain:
+//   • SURFACE worlds (terrestrial bracket) wear a LANDSCAPE — the families
+//     below (Volcanic, Frozen, Salt-Flats, Arid, Oceanic, Lush, Temperate,
+//     Toxic, Barren, Tundra, Subterranean, Carbon, Exotic). Salt-Flats is the
+//     revived Crystalline slot, keyed on real desiccation (warm + dry + high
+//     salinity); Carbon is a dry rocky body in a C/O>1 disk (graphite / tar).
+//   • GASEOUS worlds (no ground) wear a SKYSCAPE — a cloudscape register keyed off
+//     the gaseous predicates (deriveSky), composed the same `[lead] [terrain]` way.
+//   • BELTS / RINGS get no label — the card's subtitleFor returns null for them.
+//
+// One remapping worth flagging: SUBTERRANEAN keys off `isSubglacialOcean` — a
+// buried-ocean world's habitable zone genuinely IS underground — but only when
+// the surface is plain water ice. A world wearing a defining exotic frost
+// (N₂/CH₄/CO₂/NH₃) reads by that surface instead, so Triton is a nitrogen world,
+// not a sea it happens to hide.
+//
+// HONESTY. Pools and conditions carry GUARDS on secondary axes they assert (a
+// kelp lead needs life; an oxidized "Rust-Red" needs weathering; heat phrasings
+// need real heat). A condition word is also skipped when the chosen terrain
+// already says it (substring conflict), so "Briny Brine Seas" can't happen. The
+// frozen family splits on the REAL surface-frost species (procgen's
+// surfaceFrostSpecies) so a water-ice world never reads "Methane" and a methane
+// world never reads "Glacier". Each pick is deterministic per (body, slot) via
+// `hash32(b.id)`, so a world always wears the same name.
+//
+// Two rules carried over: LIFE earns the family only when it has TRANSFORMED the
+// world (complex + high surface impact → Lush); lesser life only biases phrasing
+// through guards. And surface RADIATION never touches the label — it's a
+// detail-card meter, not a family selector or a lead.
 //
 // Pure runtime function — no catalog rebuild, no stored label. Thresholds are
-// presentation choices (when a world "reads as" scorched / temperate / briny),
-// intentionally coarser than the physics; tune them in LEXICON + the threshold
-// consts here freely. `scripts/dump-labels.mjs` dumps the whole galaxy's labels
-// (it imports THIS function, so no drift) — run it after a vocabulary edit to
-// see the new distribution.
+// presentation choices; tune the pools + consts freely. `scripts/dump-labels.mjs`
+// dumps the whole galaxy's labels (it imports THIS module, so no drift).
 
-import type { AtmGas, Body } from '../../data/stars';
+import type { Body } from '../../data/stars';
 import {
-  isClassifiable, isGaseousBody, isVeiledIce, isHelium, isGasGiant, isIceGiant,
-  isGaian, isTholin, isBrimstone, isAmmoniaSea, isSubglacialOcean, isOcean,
-  isChthonian, isMagmaOcean, isLava, isVolcanic, isIron, isFrostbound, isGlacial, isDesert,
+  isClassifiable, isGaseousBody, isVeiledIce, isHelium, isGasGiant, isHotGiant,
+  isIceGiant, isBrimstone, isTholin, isAmmoniaSea, isSubglacialOcean, isOcean,
+  isChthonian, isMagmaOcean, isLava, isVolcanic, isIron, isFrostbound, isGlacial,
+  isDesert,
 } from '../../../scripts/lib/body-traits.mjs';
 import { hash32 } from '../../../scripts/lib/prng.mjs';
 
 // ─── Secondary-axis guards ──────────────────────────────────────────────────
-// Some vocabulary words name the concept that fired them AND quietly assert a
-// SECOND physical axis: "Glaciated"/"Icebound" need ice actually on the ground;
-// "Wind-Scoured"/"Hoarfrosted" need an atmosphere to move or deposit it. The
-// firing concept (cold) is necessary but not sufficient — without its secondary
-// axis the word lies about a world it never measured. So a pool word may be a
-// bare string OR a `[word, guard]` pair; `pick` draws only from words whose
-// guard passes (bare words always pass), keeping the chip honest for THIS body.
-// Every pool keeps at least one unguarded word, so the eligible subset is never
-// empty. The guards mirror floors used elsewhere (the ice floor matches
-// isDrySurface; the air floor sits an order of magnitude above the airless gate)
-// so "honest" means the same thing across the module.
+// A pool word may quietly assert a SECOND axis beyond the one that selected its
+// family. So a word can be a bare string OR a `[word, guard]` pair; `draw` keeps
+// only words whose guard passes. Every pool keeps ≥1 unguarded word.
 type Guard = (b: Body) => boolean;
 type Word = string | readonly [string, Guard];
-const hasIce: Guard = (b) => (b.iceFraction ?? 0) >= 0.3;          // H2O ice on the surface
-const hasAir: Guard = (b) => (b.surfacePressureBar ?? 0) >= 0.01;  // an atmosphere to carry wind / deposit frost
-const glowHot: Guard = (b) => (b.avgSurfaceTempK ?? 0) >= 900;     // hot enough to emit visible light ("Incandescent" / "Blazing")
-const oxidized: Guard = (b) => (b.dustStrength ?? 0) > 0;          // ferric-oxide weathering → a genuine rust hue, not bare grey metal
-const tectonic: Guard = (b) => (b.tectonicActivity ?? 0) >= 0.3;   // faulted crust, not just impact-gardened ("Fissured")
-const thinAir: Guard = (b) => (b.surfacePressureBar ?? 1) < 1;     // sun reaches the ground, not a hazed-over greenhouse ("Sun-Scoured")
-const hasLand: Guard = (b) => (b.surfaceLiquidFraction ?? 0) < 0.9; // exposed ground for vegetation to cover ("Overgrown")
+const hasLife: Guard = (b) => b.biosphereComplexity != null && b.biosphereComplexity !== 'none';
+const oxidized: Guard = (b) => (b.dustStrength ?? 0) > 0;            // ferric weathering → a genuine rust hue
+const warm: Guard = (b) => (b.avgSurfaceTempK ?? 0) >= 250;          // heat phrasings need real heat (≥ TEMPERATE_LO_K)
+const tepid: Guard = (b) => (b.avgSurfaceTempK ?? 0) < 500;          // "brine" implies recent liquid — not a scorching crust
+// Wetness axis (S3): surfaceLiquidFraction is the real moisture measure, so
+// wetland / river vocabulary needs genuine standing water and steppe / scrub
+// vocabulary needs its absence — instead of the two being hash-drawn regardless.
+const wet: Guard = (b) => (b.surfaceLiquidFraction ?? 0) >= WET_LIQUID;
+const parched: Guard = (b) => (b.surfaceLiquidFraction ?? 0) < PARCHED_LIQUID;
+const damp: Guard = (b) => (b.surfaceLiquidFraction ?? 0) > 0;       // marsh/bog terrain needs some standing liquid
+// Surface mineralogy (S6): the desert/barren MATERIAL is a physical read, not
+// free flavor. Oxidized (ferric) worlds wear red minerals; water-formed
+// sediments (sandstone/clay/shale) need a water history to have ever bedded.
+const hadWater: Guard = (b) => (b.bulkWaterFraction ?? 0) > 0.001;
 
-// ─── Tunable vocabulary ─────────────────────────────────────────────────────
-// The swappable words, hoisted so a tone pass is one edit. Each concept is a
-// SYNONYM POOL — `pick` draws one deterministically per (body, concept), so the
-// same world always wears the same word. Each is grounded in a physical read
-// (see the call sites); these are the words, not the gates. No word appears in
-// two pools, so a thermal + composition pair can never read "Frozen Frozen". A
-// word may be a bare string or a `[word, guard]` pair gated on a secondary
-// physical axis (see the secondary-axis guards above) — guarded words drop out
-// when that axis fails, so a cold airless world never reads "Wind-Scoured".
-// Editing a pool's length reflows that concept's galaxy-wide distribution
-// (selection is hash % eligible-len) — harmless, since labels are pure presentation.
-const LEXICON = {
-  // life — only when it has reshaped the world's physical essence (Verdant).
-  // Lesser biospheres live in the info card's dedicated life row, not the chip.
-  verdant:     ['Verdant', 'Living', ['Overgrown', hasLand]], // complex biosphere, high surface impact ("Overgrown" needs exposed land)
-  // activity
-  cryovolcanic:['Cryovolcanic', 'Venting'], // young icy/watery surface — geyser resurfacing (no Ice-/Frost- stem: pairs with cold cores)
-  volcanic:    ['Volcanic', 'Eruptive'],     // silicate volcanism on a hot dry body
-  sealedOcean: ['Buried-Ocean', 'Sealed-Ocean'], // a subsurface ice-shell ocean — names a feature, so the compound stays
-  // scale — the visually-largest gaseous envelopes wear one dry scale word
-  // (keys off radiusEarth, gaseous cores only) so a super-jovian reads distinctly.
-  colossal:    ['Massive'],
-  // heat (domain-aware — see descriptors)
-  scorched:    ['Scorched', 'Charred'],       // extreme dry-rock heat (T ≥ HOT_EXTREME_K); "Charred" is the reserved vivid word
-  // hot gaseous envelope — "Incandescent" asserts a visible glow, so it needs
-  // true incandescence (T ≥ ~900 K); a merely-330 K giant stays "Searing".
-  searing:     ['Searing', ['Incandescent', glowHot]],
-  steaming:    ['Steaming', 'Scalding'],      // hot world with standing liquid
-  blistering:  ['Baking', ['Sun-Scoured', thinAir]], // hot dry rock; "Sun-Scoured" needs a thin sky
-  hothouse:    ['Hothouse', 'Greenhouse'],    // runaway-greenhouse rock (thick hot atm, dry)
-  temperate:   ['Temperate', 'Clement'],      // clement, liquid-bearing band
-  // cold (T < COLD_K) — the plain word is unguarded; the ice word needs standing
-  // ice, the wind word an atmosphere to move it (see the secondary-axis guards).
-  frozen:      ['Frozen', ['Icebound', hasIce], ['Wind-Scoured', hasAir]],
-  // deep cold (T < DEEP_COLD_K)
-  frigid:      ['Frigid', 'Cryogenic'],
-  // sky / surface
-  smog:        ['Hazy', 'Smoggy'],            // thick organic (tholin) haze
-  dust:        ['Dusty', ['Sandblasted', hasAir]], // planet-wide dust load; the wind word needs an atmosphere
-  airless:     ['Airless', 'Bare'],           // no meaningful atmosphere over rock
-  // ancient, heavily-cratered surface — "Fissured" reads faulting, not impacts.
-  cratered:    ['Cratered', 'Pitted', ['Fissured', tectonic]],
-  // dynamics & orbital geometry — axes the heat/sky logic ignores, demoted below
-  // the surface conditions (see descriptors): Neptune-class cloud-top jets, an
-  // axis tipped past upright, a tide-locked spin, a day↔night swing wide enough
-  // to read as two climates. The magnetosphere is NOT named here at all — the
-  // surface-radiation dose is a detail-card reading, not a chip token (it may
-  // later tint another token as a secondary influence, but it never claims a
-  // slot of its own); the orbital aurora is a view-from-orbit spectacle, off
-  // this register entirely.
-  storming:    ['Banded', 'Cyclonic'],        // fast cloud-top zonal jets
-  riven:       ['Riven'],                      // fire-and-ice: extreme day↔night temperature spread
-  toppled:     ['Toppled'],                    // obliquity tipped far past upright (Uranus ≈ 98°)
-  twilit:      ['Tide-Locked', 'Twilit'],      // rotation synced to orbit — a fixed day/night face
-  // exotic standing liquid (a film the head didn't already name). The pools vary
-  // the vessel word only — the solvent name stays, so the chip never lies about
-  // WHICH liquid it is.
-  methaneLake: ['Methane-Lake', 'Methane-Pooled'], // hydrocarbon lakes — the defining Smog-world feature
-  ammoniaLake: ['Ammonia-Lake', 'Ammonia-Pooled'],
-  nitrogenLake:['Nitrogen-Lake', 'Nitrogen-Pooled'],
-  // composition
-  briny:       ['Saline', 'Briny'],            // heavy solute load in standing liquid
-  sulfurous:   ['Sulfurous', 'Sulfur-Caked'],  // sulfur-dominated surface / volcanism
-  // economic identity — a rare abundant resource PAIRING (not a single deposit,
-  // which lives in the info card's resource row)
-  rich:        ['Ore-Rich', 'Mineral-Rich'],   // two abundant deposits incl. a strategic (rare-earth / radioactive)
-  veined:      ['Vein-Threaded', 'Lode-Veined'], // an abundant exotic deposit paired with another
-} as const;
+// ─── Biome families: a terrain (noun) pool + a lead (adjective) pool ─────────
+// `[lead] [terrain]` composes the label. Terrains are pure nouns (some carry a
+// material, e.g. "Basalt Wastes"); leads are the family's axis-NEUTRAL signature
+// textures — anything that asserts a measured axis (iron, cratered, dust, tide,
+// briny) lives in COND instead, so a lead never lies. Frozen splits water vs
+// volatile ice (see deriveBiome); the volatile pool carries the species in the
+// terrain so the lead stays free.
+// A terrain is a sub-generator: a `land` (landform noun) pool, optionally crossed
+// with a `mat` (material qualifier) pool to compose `[material] [landform]` —
+// "Basalt Wastes", "Amethyst Spires" — the same composing-not-plucking idea as
+// the metal lead, one slot down. A hash gate leaves a share of terrains bare
+// ("Calderas") so labels keep their 2-word / 3-word mix. Families whose terrains
+// are self-complete (oceanic, lush, …) carry no `mat`.
+interface Terrain { land: readonly Word[]; mat?: readonly Word[]; }
+interface Family { label: string; terrain: Terrain; lead: readonly Word[]; }
+const FAMILIES = {
+  // hot silicate volcanism (lava / magma / warm-melt rock)
+  volcanic: {
+    label: 'Volcanic',
+    terrain: { land: ['Wastes', 'Terraces', 'Plains', 'Fields', 'Seas', 'Flats', 'Badlands', 'Calderas', 'Desolation'],
+               mat: ['Basalt', 'Lava', 'Ash', 'Obsidian', 'Magma', 'Cinder', 'Pumice', 'Scoria'] },
+    lead: ['Smoldering', 'Fissured', 'Cinder-Strewn', 'Glassblown', 'Cooling', 'Molten', 'Charred', 'Seething'],
+  },
+  // cold SULFUR / TIDAL volcanism (Io-class) — a frozen surface perpetually
+  // resurfaced by tidal heating, under an SO2 sky. A physically distinct world
+  // from the hot silicate case, so it gets its own sulfur/plume vocabulary.
+  volcanicSulfur: {
+    label: 'Volcanic',
+    terrain: { land: ['Wastes', 'Plains', 'Flats', 'Plume-Fields', 'Snows', 'Lakes', 'Floes', 'Paterae', 'Calderas'],
+               mat: ['Sulfur', 'Brimstone', 'Sulfur-Dioxide', 'Lava'] },
+    // leads carry the PROCESS (tidal / plume / eruption); the material carries the
+    // sulfur, so "sulfur" lands once — no "Sulfur-Glazed Sulfurous Snows".
+    lead: ['Plume-Wracked', 'Eruption-Scarred', 'Tidal-Wracked', 'Caustic', 'Resurfaced', 'Frostless', 'Cooling', 'Crusted', 'Yellow-Crusted', 'Smoking'],
+  },
+  // water-ice substrate
+  frozen: {
+    label: 'Frozen',
+    terrain: { land: ['Plains', 'Barrens', 'Flats', 'Sheets', 'Fields', 'Wastes', 'Reaches', 'Steppes'],
+               mat: ['Frost', 'Hoarfrost', 'Ice', 'Snow', 'Rime', 'Glacial'] },
+    lead: ['Fractured', 'Shattered', 'Rime-Locked', 'Wind-Carved', 'Frozen', 'Eternal'],
+  },
+  // volatile-frost substrate — the material word is forced from the body's real
+  // surfaceFrostSpecies in deriveBiome (Nitrogen / Methane / Dry-Ice / Ammonia),
+  // so this family carries only landforms; the frost species supplies the rest.
+  frozenVol: {
+    label: 'Frozen',
+    terrain: { land: ['Snowfields', 'Barrens', 'Dunes', 'Flats', 'Ridges', 'Plains', 'Reaches', 'Wastes', 'Drifts', 'Glaciers', 'Sastrugi', 'Pans'] },
+    lead: ['Frozen', 'Rimebound', 'Shattered', 'Drifting', 'Wind-Carved', 'Wind-Scoured', 'Eternal', 'Stark'],
+  },
+  // Material is a physical read (S6): neutral rock anchors the pool; oxidized
+  // worlds add red ferric minerals; water-bedded sediments need a water history.
+  // Salt / gypsum moved to the Salt-Flats family (they ARE the evaporite read).
+  arid: {
+    label: 'Arid',
+    terrain: { land: ['Dunes', 'Hardpan', 'Badlands', 'Flats', 'Mesas', 'Pans', 'Barrens', 'Drifts', 'Wind-Arches'],
+               mat: ['Silica', 'Basalt', 'Regolith', ['Ochre', oxidized], ['Rust-Red', oxidized], ['Hematite', oxidized], ['Clay', hadWater], ['Sandstone', hadWater], ['Caliche', hadWater]] },
+    lead: ['Wind-Scoured', ['Sun-Fractured', warm], 'Cracked', ['Heat-Shimmer', warm], 'Sandblasted', 'Parched', 'Desolate'],
+  },
+  // evaporite salt-flats — the revived Crystalline slot, now keyed on real
+  // desiccation: a warm, dry, high-salinity surface wears a bedded mineral
+  // crust (halite / gypsum / selenite), the salts a shrinking brine left
+  // behind. Distinct from a plain dust desert — it reads its glittering crust.
+  evaporite: {
+    label: 'Salt Flats',
+    terrain: { land: ['Pans', 'Flats', 'Basins', 'Playas', 'Hardpan', 'Beds', 'Crusts', 'Barrens'],
+               mat: ['Halite', 'Gypsum', 'Selenite', 'Salt', 'Alkali', 'Natron', 'Borax', 'Soda-Ash'] },
+    lead: ['Salt-Crusted', 'Crystalline', 'Glittering', 'Bleached', ['Brine-Caked', tepid], 'Mineral-Crusted', ['Sun-Glazed', warm], 'Cracked'],
+  },
+  oceanic: {
+    label: 'Oceanic',
+    terrain: { land: ['Shallows', 'Seas', 'Atolls', 'Archipelagos', 'Lagoons', 'Reefs', 'Waterworld', 'Tides'] },
+    lead: ['Storm-Lashed', ['Bioluminescent', hasLife], ['Kelp-Choked', hasLife], ['Coral-Spired', hasLife], 'Mist-Veiled', 'Wind-Driven', 'Endless', 'Restless'],
+  },
+  lush: {
+    label: 'Lush',
+    terrain: { land: ['Canopy', 'Floodlands', 'Rainforest', 'Floodplains', 'Jungles', 'Wilds', 'Forests', 'Wetlands'] },
+    lead: ['Smothering', 'Fern-Choked', 'Emerald', 'Spore-Drifting', 'Vine-Tangled', 'Moss-Draped', 'Orchid-Laden', 'Verdant'],
+  },
+  temperate: {
+    label: 'Temperate',
+    terrain: { land: ['Prairies', ['Savanna', hasLife], ['Meadows', hasLife], ['Steppes', parched], ['Pasture', hasLife], ['Moors', wet], ['Riverlands', wet], ['Floodplains', wet], ['Wetlands', wet], ['Woodlands', hasLife]] },
+    lead: ['Wind-Rippled', ['Golden', hasLife], 'Rolling', 'Scattered', ['Seed-Strewn', hasLife], ['Heather-Clad', hasLife], 'Mild', 'Dappled', ['Rain-Fed', wet], ['Sun-Baked', parched]],
+  },
+  // The lead is drawn per-chemistry at the cascade (TOXIC_SULFUR / _HOTHOUSE /
+  // _ORGANIC) so an SO₂ world reads sulfuric, a CO₂ runaway corrosive, a tholin
+  // world smoggy — honest to what's modeled. No halogen vocab: the atmosphere
+  // model tracks only the top-3 gases by abundance, and a halogen (HCl/Cl₂) is
+  // always a trace, so it can't be a top-3 signal — "Chlorine" would be a lie.
+  // Wet terrains carry a `damp` guard so a dry runaway world isn't a "Marsh".
+  toxic: {
+    label: 'Toxic',
+    terrain: { land: ['Fog Banks', 'Vapor Flats', 'Haze', 'Cloud-Cover', 'Wastes', ['Marshes', damp], ['Bogs', damp], ['Mineral Springs', damp]] },
+    lead: ['Corrosive', 'Sulfuric', 'Caustic', 'Smog-Drowned', 'Choking', 'Noxious'],
+  },
+  // Material keys on physics (S6): neutral igneous/clastic rock anchors; oxidized
+  // worlds wear red ferric rock; slate/shale are water-bedded → need a water past.
+  barren: {
+    label: 'Barren',
+    terrain: { land: ['Plains', 'Flats', 'Fields', 'Mesas', 'Shields', 'Scree', 'Wastes', 'Barrens', 'Reaches', 'Regolith'],
+               mat: ['Basalt', 'Boulder', 'Rubble', 'Granite', 'Gravel', ['Ochre', oxidized], ['Rust-Stained', oxidized], ['Slate', hadWater], ['Shale', hadWater]] },
+    lead: ['Shattered', 'Wind-Polished', 'Silent', 'Cracked', 'Weathered', 'Bleak', 'Desolate', 'Stark'],
+  },
+  tundra: {
+    label: 'Tundra',
+    terrain: { land: ['Barrens', ['Peat Bogs', wet], ['Scrubland', parched], 'Taiga', 'Moss Expanses', 'Heath', ['Mire', wet], ['Conifer Stands', hasLife]] },
+    lead: ['Lichen-Mottled', ['Boggy', wet], 'Frost-Heaved', ['Wind-Flattened', parched], 'Snow-Dusted', 'Thawing', 'Stunted', ['Sodden', wet]],
+  },
+  // Every subglacial-ocean world is cold (a buried sea needs an ice lid), so the
+  // terrain is ice-cavern imagery — no hot karst / lava-tubes, which can't form
+  // under a frozen shell.
+  subterranean: {
+    label: 'Subterranean',
+    terrain: { land: ['Caverns', 'Crystal Grottos', 'Cavern Depths', 'Ice Caverns', 'Brine Seas', 'Hollows', 'Glacial Vaults', 'Deep Warrens'] },
+    lead: ['Honeycombed', 'Echoing', ['Fungal', hasLife], 'Stalactite-Hung', 'Sunless', 'Ice-Bound', ['Glowworm-Lit', hasLife], 'Lightless'],
+  },
+  // carbon worlds — a C/O>1 disk condenses graphite / carbides instead of
+  // silicate rock, so a dry rocky body wears a soot-black graphite / tar
+  // surface. "Tar" phrasings need warmth (solid bitumen reads dark, not slick).
+  carbon: {
+    label: 'Carbon',
+    terrain: { land: ['Plains', 'Wastes', 'Flats', 'Fields', 'Reaches', 'Barrens', 'Dunes', 'Drifts'],
+               mat: ['Graphite', 'Soot', ['Tar', warm], 'Carbide', 'Diamond', 'Coke', 'Anthracite'] },
+    lead: ['Soot-Black', 'Graphite-Grey', ['Tar-Slicked', warm], 'Glassy', 'Diamond-Dusted', 'Carbonized', 'Pitch-Dark', 'Sintered'],
+  },
+  // exotic surface chemistry — the only genuinely-alien SURFACE types the data
+  // model carries: silicon-based life (lattice worlds, drawn from this pool) and
+  // the chthonian stripped-metal core (forced 'Metallic Vapor Wastes' in the
+  // cascade, bypassing the pool). No gemstone or carbon biome — there's no honest
+  // signal for them, so they aren't faked.
+  exotic: {
+    label: 'Exotic',
+    terrain: { land: ['Lattice Forests', 'Crystal Spires', 'Silicate Reefs', 'Glass Gardens', 'Lattice Reaches', 'Mineral Lattices'] },
+    lead: ['Silicon', 'Lattice-Grown', 'Glassy', 'Vitreous', 'Faceted', 'Prismatic'],
+  },
+  // ── gaseous skyscapes ── The TERRAIN's cloud-gas material is keyed off the
+  // body's TOP cloud deck in deriveSky (Jupiter → Ammonia, Neptune → Methane), so
+  // these landform pools are pure cloud STRUCTURE. helium + veiledIce instead keep
+  // their envelope identity (He / opaque ice) and take no cloud-gas prefix.
+  hotGiant:  { label: 'Gas Giant',     terrain: { land: ['Cloud-Seas', 'Inferno', 'Cloud-Hell', 'Bands', 'Sky-Tempest'] },        lead: ['Incandescent', 'Searing', 'Glowing', 'Molten'] },
+  gasGiant:  { label: 'Gas Giant',     terrain: { land: ['Cloud-Decks', 'Cloud-Tops', 'Cloud-Streams', 'Skies', 'Veils', 'Cloud-Belts'] }, lead: ['Banded', 'Churning', 'Roiling', 'Cyclonic', 'Marbled'] },
+  helium:    { label: 'Helium Giant',  terrain: { land: ['Helium Veils', 'Stratified Murk', 'Helium Deeps', 'Helium Shroud'] },   lead: ['Pale', 'Wan', 'Shrouded'] },
+  iceGiant:  { label: 'Ice Giant',     terrain: { land: ['Skies', 'Cloud-Mantle', 'Hazes', 'Frost-Clouds', 'Veils'] },            lead: ['Frozen', 'Glacial', 'Cyan', 'Still'] },
+  veiledIce: { label: 'Veiled Ice',    terrain: { land: ['Ice Deeps', 'Frozen Mantle', 'Ice-Bound Murk'] },                       lead: ['Veiled', 'Shrouded', 'Opaque'] },
+  gasDwarf:  { label: 'Gas Dwarf',     terrain: { land: ['Skies', 'Envelope', 'Cloud-Shroud', 'Murk', 'Veils', 'Haze'] },         lead: ['Hazy', 'Murky', 'Smothered'] },
+} as const satisfies Record<string, Family>;
+type FamilyKey = keyof typeof FAMILIES;
 
-// Core-noun synonym pools — only the evocative nouns we coined, so the biggest
-// bare-noun collision buckets break up too. The generic astronomy nouns (Gas
-// Giant, Gas Dwarf, Ice Giant, Helium Giant) stay fixed in `deriveCore` —
-// players recognize them. The label vocabulary stays free of Earth/Sol-keyed
-// anchors, so there is no Super-Earth / Hot Jupiter / Sub-Neptune / Gaian. The
-// world/moon tail is appended at the call site, so these are the qualifier only.
-const NOUN = {
-  frostbound:      ['Frostbound', 'Frost-Sealed'],
-  glacial:         ['Glacial', 'Ice-Mantled'],
-  desert:          ['Arid', 'Desert'],
-  iron:            ['Iron', 'Ferrous', ['Rust-Red', oxidized]], // Rust-Red needs oxidative weathering; Iron/Ferrous are the reduced-grey default
-  // Size tails — the head's kind+scale word. Most bodies read the plain tail
-  // ("Moon" / "World"); only the size extremes wear a distinct one (see
-  // MOON_*_R / PLANET_*_R). Kept single-token where possible so the scale never
-  // crowds a physical descriptor out of the budget. Kept disjoint from every
-  // other pool — a tail is the head, never a descriptor word. Planets carry
-  // their scale here too (a large terrestrial reads "Heavyworld", which is also
-  // where the old Earth-keyed "Super-Earth" went).
-  moonSmall:       ['Moonlet'],                 // a small attendant moon
-  moonLarge:       ['Major Moon'],              // Mars-plus — a world in its own right (planetary-science "major moon")
-  planetSmall:     ['Planetoid', 'Dwarf-Planet'], // a small sub-Mars world
-  planetLarge:     ['Heavyworld'],              // a massive high-gravity world (absorbs the old Earth-keyed "Super-Earth")
-  lava:            ['Lava', 'Molten'],
-  // Iconic two-word nouns — a frozen volatile world under an opaque envelope,
-  // and a liquid-water ocean buried beneath an ice shell. Kept disjoint from
-  // LEXICON.sealedOcean so the buried-ocean DESCRIPTOR ("Sealed-Ocean Smog
-  // Moon") never reads the same as a subglacial HEAD.
-  veiledIce:       ['Veiled Ice', 'Shrouded Ice'],
-  subglacialOcean: ['Subglacial Ocean', 'Ice-Shell Ocean'],
-} as const;
+// ─── Cross-cutting condition leads ──────────────────────────────────────────
+// A notable measured axis supplies the lead INSTEAD of the family signature. At
+// most one fires (highest prio whose family applies + whose word doesn't echo the
+// terrain). Composition reads (iron, briny, sulfurous) outrank dynamics (riven,
+// storm) outrank age/dust, because they define the place more.
+// The bare-rock families where a metal-streaked lead reads true. Exotic
+// (silicon-life) is excluded — its surface has its own mineralogy, not iron.
+const ROCKY = new Set<FamilyKey>(['volcanic', 'arid', 'barren']);
+const WET = new Set<FamilyKey>(['oceanic', 'temperate']);
+// Liquid- or vegetation-covered surfaces where dust load and impact craters don't
+// read as the place — so the dusty / cratered conditions skip them.
+const COVERED = new Set<FamilyKey>(['oceanic', 'lush', 'temperate']);
 
-// Deterministic synonym selection: the same (body, concept) always resolves to
-// the same word. Keying on the concept namespaces the hash, so a body's heat
-// word and its dust word are drawn independently. Guarded words ([word, guard]
-// pairs) are kept only when their secondary axis passes, so the draw runs over
-// the words honest for THIS body — still `hash % len`, just over the survivors.
-function draw(b: Body, ns: string, pool: readonly Word[]): string {
-  const eligible = pool.filter((w) => typeof w === 'string' || w[1](b));
+// Metal-rich lead sub-generator: `[metal]-[texture]`. The metals are the
+// abundant siderophiles a differentiated rock actually concentrates (no precious
+// jackpots — those are a resource-row read, not a whole landscape); the texture
+// is how the lode reads underfoot. Composed, not plucked, so a metal world wears
+// "Iron-Streaked" / "Cobalt-Crusted" / "Titanium-Veined" by the same hash draw.
+const ORE_METAL = ['Iron', 'Nickel', 'Cobalt', 'Chromium', 'Titanium', 'Manganese', 'Vanadium', 'Ferrous'];
+const ORE_TEXTURE = ['Streaked', 'Crusted', 'Strewn', 'Veined', 'Laced', 'Ribboned'];
+
+// Toxic chemistry lead pools — the cascade draws one per the world's hostile
+// chemistry so a sulfuric world, a CO₂ runaway and a tholin smog read distinctly
+// (instead of one forced lead). Every word is honest to a MODELED gas: SO₂ →
+// sulfuric acid (caustic, acid-rain), CO₂ runaway → corrosive/choking heat,
+// tholin haze → organic smog. No halogen words (HCl/Cl₂ aren't modeled).
+const TOXIC_SULFUR = ['Sulfuric', 'Caustic', 'Acid-Rain', 'Acid-Etched', 'Sulfur-Choked'];
+const TOXIC_HOTHOUSE = ['Corrosive', 'Choking', 'Smothering', 'Searing'];
+const TOXIC_ORGANIC = ['Smog-Drowned', 'Hazy', 'Tar-Veiled', 'Murky', 'Soot-Choked'];
+function oreLead(b: Body): string {
+  // 'Ferrous' is an adjective, not a metal noun — let it stand alone ("Ferrous
+  // Badlands") rather than read "Ferrous-Veined".
+  const metal = draw(b, 'ore:metal', ORE_METAL);
+  if (metal === 'Ferrous') return metal;
+  const ox = oxidized(b) ? 'Rust' : metal;   // an oxidized iron world rusts red
+  return `${ox}-${draw(b, 'ore:tex', ORE_TEXTURE)}`;
+}
+
+interface Cond {
+  key: string;
+  prio: number;
+  conflicts: readonly string[];
+  gate: (b: Body) => boolean;
+  applies: (key: FamilyKey, sky: boolean) => boolean;
+  words?: readonly Word[];     // a fixed pool …
+  gen?: (b: Body) => string;   // … or a sub-generator (one wins)
+}
+// Conditions in priority order; thresholds sit at the tail of each distribution
+// so the lead reads as a genuine standout, not the family norm. (Tide-lock is
+// deliberately absent: ~half of planets are locked, so it distinguishes nothing.)
+const COND: readonly Cond[] = [
+  { key: 'iron', prio: 70, gen: oreLead, conflicts: ['iron', 'ferrous', 'rust', 'metal'],
+    gate: (b) => isIron(b), applies: (k, sky) => !sky && ROCKY.has(k) },
+  { key: 'briny', prio: 66, words: ['Briny', 'Saline'], conflicts: ['brine', 'saline', 'salt'],
+    gate: (b) => (b.salinity ?? 0) >= BRINY_SALINITY && (b.surfaceLiquidFraction ?? 0) > 0, applies: (k, sky) => !sky && WET.has(k) },
+  { key: 'sulfurous', prio: 64, words: ['Sulfurous', 'Sulfur-Caked'], conflicts: ['sulfur'],
+    gate: (b) => atmFrac(b, 'SO2') >= 0.3 || (b.bioticSulfur ?? 0) >= 0.3, applies: (k, sky) => !sky && k !== 'volcanic' && k !== 'volcanicSulfur' && k !== 'toxic' },
+  { key: 'riven', prio: 60, words: ['Riven', 'Fire-and-Ice'], conflicts: ['fire', 'riven'],
+    gate: (b) => softGE(b, 'riven', thermalSwingK(b), RIVEN_SWING_K, RIVEN_SWING_W), applies: (k, sky) => !sky && k !== 'volcanic' },
+  // Terrestrial only: a gas giant's signature leads (Banded/Churning/Cyclonic) are
+  // already the storm vocabulary, so a storming condition would just smother them.
+  { key: 'storming', prio: 50, words: ['Storm-Wracked', 'Tempest-Swept', 'Storm-Lashed'], conflicts: ['storm', 'tempest', 'gale', 'cyclonic'],
+    gate: (b) => maxCloudWindMs(b) >= STORM_WIND_MS, applies: (_k, sky) => !sky },
+  { key: 'dusty', prio: 45, words: ['Dust-Veiled', 'Dust-Choked'], conflicts: ['dust'],
+    gate: (b) => (b.dustStrength ?? 0) >= DUST_STRENGTH, applies: (k, sky) => !sky && !COVERED.has(k) },
+  { key: 'cratered', prio: 40, words: ['Cratered', 'Pitted', 'Battered'], conflicts: ['crater', 'meteor', 'pocked', 'regolith'],
+    gate: (b) => (b.surfaceAge ?? 1) <= ANCIENT_AGE, applies: (k, sky) => !sky && k !== 'volcanic' && !COVERED.has(k) },
+];
+
+// ─── Presentation thresholds ────────────────────────────────────────────────
+const HOT_K = 330;
+const TEMPERATE_LO_K = 250;
+const COLD_K = 220;
+const DRY_LIQUID = 0.1;
+const DRY_ICE = 0.3;
+const OCEAN_COVER = 0.5;
+const HOTHOUSE_PRESSURE_BAR = 5; // Venus-class runaway greenhouse
+const HOTHOUSE_TEMP_K = 340;
+const LUSH_IMPACT = 0.5;         // transformative-biosphere gate
+const RIVEN_SWING_K = 900;       // ~p95 day↔night spread — a true fire-and-ice landmark
+const STORM_WIND_MS = 250;
+const BRINY_SALINITY = 0.6;
+const DUST_STRENGTH = 0.5;
+const ANCIENT_AGE = 0.12;
+// Soft-edge half-widths (see softGE): the ± band over which an edge body coin-
+// flips rather than snapping. Kept small so only genuine boundary cases waver.
+const COLD_K_W = 6;        // frozen ↔ tundra temperature edge (K)
+const RIVEN_SWING_W = 60;  // fire-and-ice swing edge (K), ~proportional to its p95 gate
+const EVAPORITE_SALINITY = 0.6; // salt concentrated well above the leach baseline → a crust, not a salty rock
+const EVAPORITE_WARM_K = 273;   // warm enough that a brine evaporated rather than froze out
+const WET_LIQUID = 0.2;         // standing-water cover that reads as wetland / river country
+const PARCHED_LIQUID = 0.08;    // below this a clement world reads as dry steppe / scrub
+
+// ─── Deterministic pool draw ────────────────────────────────────────────────
+// Keeps only guard-passing words, then (if `avoid` is given) drops words that
+// share a token with the terrain so a lead never echoes its noun ("Salt-Crusted
+// Salt Flats"); falls back to the unfiltered set if that would empty the pool.
+function tokensOf(s: string): string[] {
+  return s.toLowerCase().split(/[ -]/);
+}
+function draw(b: Body, ns: string, pool: readonly Word[], avoid?: ReadonlySet<string>): string {
+  let eligible = pool.filter((w) => typeof w === 'string' || w[1](b));
+  if (avoid) {
+    const clear = eligible.filter((w) => !tokensOf(typeof w === 'string' ? w : w[0]).some((t) => avoid.has(t)));
+    if (clear.length) eligible = clear;
+  }
   const w = eligible[hash32(b.id + '§' + ns) % eligible.length];
   return typeof w === 'string' ? w : w[0];
 }
-function pick(b: Body, key: keyof typeof LEXICON): string {
-  return draw(b, key, LEXICON[key]);
-}
-function pickNoun(b: Body, key: keyof typeof NOUN): string {
-  return draw(b, key, NOUN[key]);
-}
 
-// ─── Presentation thresholds ────────────────────────────────────────────────
-// Total token budget for the whole chip including the head. Four keeps the chip
-// glanceable while leaving room for a structural head plus the two or three
-// physical axes that actually distinguish similar worlds; the info card auto-
-// sizes its width to the label, so this is a legibility choice, not a layout cap.
-const TOKEN_BUDGET = 4;
-// Surface-liquid cover below which an ammonia/nitrogen film reads as a descriptor
-// ("Ammonia-Lake") rather than the world's defining sea. Mirrors the head's own
-// floor so the Brimstone head and the lake descriptor never both describe the
-// same liquid. (Hydrocarbon has its own lower floor below.)
-const LAKE_COVER_FLOOR = 0.05;
-// Solute load at which a standing liquid reads "Briny". Rare by design — a
-// genuine landmark, not wallpaper (the salinity distribution cliffs above 0.6).
-const BRINY_SALINITY = 0.6;
-// Methane (hydrocarbon) lakes define a Smog world; show them at the floor procgen
-// assigns the hydrocarbon species at (MIN_SURFACE_LIQUID_COVER — a trace film
-// below it never gets a species, so a lower floor here is dead) and promote a
-// drowned surface (≥ METHANE_SEA_COVER) to a methane-sea head.
-const METHANE_LAKE_FLOOR = 0.05;
-const METHANE_SEA_COVER = 0.5;
-// A deposit at/above this grade (of 10) reads "abundant" — well past the typical
-// strong deposit (~5), approaching motherlode. A PAIRING of two abundant
-// deposits where at least one is strategic / exotic is a rare economic landmark
-// (~1% of worlds); a single deposit or a bulk-only pair stays in the resource row.
-const ABUNDANT_DEPOSIT = 7;
-// Radius (Earth radii) at/above which a gaseous envelope reads as a landmark of
-// scale ("Massive Gas Giant"). Set past Jupiter (~11.2 R⊕) so the scale word is
-// earned by genuine super-jovians, not every gas giant — the disc physics
-// saturates near 1 Jupiter radius, so this keys off the visually largest discs
-// in the galaxy.
-const COLOSSAL_RADIUS = 12;
-// Moon-size bins (Earth radii). Most moons stay a plain "Moon"; the tails peel
-// off only the genuine extremes — a small moonlet below MOON_SMALL_R and a
-// Mars-plus near-planet at/above MOON_LARGE_R (our procgen moons skew large, so
-// this earns its grandeur near the top of the size distribution).
-const MOON_SMALL_R = 0.18;
-const MOON_LARGE_R = 0.80;
-// Planet-size bins (Earth radii), the terrestrial analogue. A sub-Mars world
-// reads "Planetoid" and a massive high-gravity world (≥ PLANET_LARGE_R, the old
-// Super-Earth band) reads "Heavyworld"; Mars (~0.53) and Earth-mass worlds stay
-// a plain "World". Gaseous planets never take a terrestrial tail (their head is
-// a fixed gaseous noun; veiled-ice uses plainTail).
-const PLANET_SMALL_R = 0.50;
-const PLANET_LARGE_R = 1.25;
-// Heat bands. One temperature wears different words by domain (see above).
-const HOT_K = 330;          // standing-liquid steams / dry rock blisters
-const HOT_EXTREME_K = 600;  // dry rock reads "Scorched"
-const TEMPERATE_LO_K = 250; // clement band floor
-const COLD_K = 220;         // reads "Frozen"
-const DEEP_COLD_K = 90;     // reads "Frigid"
-// Cryovolcanism / cratering surface-age gates (0..1, 1 = freshly resurfaced).
-// Cryovolcanism reads on the youngest ~30% of icy surfaces — a notable
-// resurfacing signal that also keeps the dominant cold-moon buckets from
-// collapsing to one bare chip.
-const CRYOVOLCANIC_AGE = 0.7;
-const ANCIENT_AGE = 0.12;
-// Silicate-volcanism state gate — a hot, active, dry surface the head didn't
-// already mark molten (the molten heads set core.volcanic). Above the predicate's
-// own tidal/warm gates so the WORD reads as visible eruptive resurfacing.
-const VOLCANIC_STATE_TECT = 0.55;
-const VOLCANIC_STATE_AGE = 0.6;
-const VOLCANIC_STATE_TEMP_K = 400;
-// Dynamics / orbital-geometry gates — the axes the heat/sky logic ignores. Each
-// is set near the top of its galaxy-wide distribution so the word stays a
-// landmark, not wallpaper.
-const STORM_WIND_MS = 250;    // Neptune-class cloud-top jet → visibly storm-banded
-const RIVEN_SWING_K = 500;    // day↔night surface-temp spread that reads as fire-and-ice
-const TOPPLED_TILT_DEG = 60;  // axis tipped far past upright (Uranus ≈ 98°)
-const TIDELOCK_TOL = 0.05;    // rotation within ±5% of the orbital period → tide-locked
-// Runaway-greenhouse gate (Venus) — a thick, hot, dry atmosphere over rock.
-const HOTHOUSE_PRESSURE_BAR = 5;
-const HOTHOUSE_TEMP_K = 340;
-
-// Axes the head already conveys, so a descriptor on the same axis is redundant
-// and gets skipped. 'methane' covers a hydrocarbon surface; each sea head solvent
-// maps to a material so the redundant-axis skip stays meaningful across the
-// non-water sea heads.
-type Material = 'gas' | 'rock' | 'iron' | 'ice' | 'water' | 'methane' | 'ammonia' | 'sulfur';
-interface Core {
-  head: string;          // the structural / iconic noun phrase the descriptors print before
-  hot?: boolean;         // head already reads as hot — skip hot temp descriptors
-  cold?: boolean;        // head/composition already reads as cold — skip cold temp descriptors
-  volcanic?: boolean;    // head already reads as molten/active — skip "Volcanic"
-  temperate?: boolean;   // head is itself a temperate living world — skip "Temperate"/"Verdant"
-  hazy?: boolean;        // head already implies organic smog — skip "Smog"
-  seaCore?: boolean;     // head already names a surface/subsurface sea — skip lake/sealed-ocean descriptors
-  uncharted?: boolean;   // no classifiable physics — emit the head alone
-  material: Material;
-  composition?: string;  // the demoted bulk identity word (Glacial / Iron / Arid / …), a descriptor
+// ─── Soft classification edges ──────────────────────────────────────────────
+// A hard threshold (`T >= COLD_K`) puts a cliff in the galaxy-wide distribution
+// at the boundary: every 219 K world frozen, every 221 K world not. Instead, near
+// a threshold treat the decision as a COIN FLIP weighted by distance — a body
+// sitting on the edge is ~50/50, ramping to certainty by ±`w`. The coin is
+// `hash01(id + axis)`, so it's deterministic per (body, axis) and a world always
+// resolves the same way; `w` is the per-edge half-width.
+//
+// SAFETY: in a first-match cascade with per-family secondary gates, a careless
+// soft edge can flip a body into an ill-fitting family (a dry tundra world tipped
+// past the temperate edge would fall through to Barren). So softening is applied
+// ONLY where a flip is safe: (a) CONDITION gates, which change the lead but never
+// the family; (b) cross-family temp edges where BOTH sides accept the edge
+// population (frozen↔tundra — both want ice), softened with the SAME axis on each
+// side so exactly one claims an edge body; (c) within-family forks (oceanic
+// frozen-over). Family bands with divergent secondary gates stay hard.
+function hash01(s: string): number {
+  return hash32(s) / 4294967296; // 2^32 — map the 32-bit hash into [0, 1)
+}
+function smoothstep(lo: number, hi: number, x: number): number {
+  if (x <= lo) return 0;
+  if (x >= hi) return 1;
+  const t = (x - lo) / (hi - lo);
+  return t * t * (3 - 2 * t);
+}
+// Probabilistic `x >= T`: certain below `T - w`, certain above `T + w`, ~50/50 at
+// `T`. Negate with the SAME (b, axis) for the complementary `x < T` so two sides
+// of one boundary stay mutually exclusive.
+function softGE(b: Body, axis: string, x: number, T: number, w: number): boolean {
+  return hash01(b.id + '§soft:' + axis) < smoothstep(T - w, T + w, x);
 }
 
-// A single ranked descriptor: a resolved word, the grammatical SLOT it prints in
-// (lower = further left, away from the noun), and a keep PRIORITY (higher wins a
-// scarce budget slot). Slot and priority are independent: radiation prints far
-// left ("Irradiated …") but outranks composition for the budget.
-interface Descriptor { readonly slot: number; readonly prio: number; readonly word: string; }
-// Print slots, left → right (the head sits to the right of them all).
-const SLOT = {
-  LEAD: 0,     // life, defining lakes, economic identity, buried ocean
-  SKY: 1,      // smog, dust, airless
-  AGE: 2,      // cratered
-  DYN: 3,      // riven, twilit, toppled, storming, colossal scale
-  THERMAL: 4,  // heat / cold band
-  ACTIVITY: 5, // volcanic, cryovolcanic, briny, sulfurous
-  COMP: 6,     // the bulk composition word, adjacent to the head
-} as const;
-
-function atmFrac(b: Body, gas: AtmGas): number {
+// ─── Field helpers ──────────────────────────────────────────────────────────
+function isDry(b: Body): boolean {
+  return (b.surfaceLiquidFraction ?? 0) < DRY_LIQUID && (b.iceFraction ?? 0) < DRY_ICE;
+}
+function atmFrac(b: Body, gas: string): number {
   if (b.atm1 === gas) return b.atm1Frac ?? 0;
   if (b.atm2 === gas) return b.atm2Frac ?? 0;
   if (b.atm3 === gas) return b.atm3Frac ?? 0;
   return 0;
 }
-
-function isMoon(b: Body): boolean {
-  return b.kind === 'moon';
-}
-
-// The tail noun: a size-keyed word for the body's kind. Most bodies read the
-// plain tail ("Moon" / "World"); only the size extremes wear a distinct one (see
-// MOON_*_R / PLANET_*_R). The pick is the same deterministic per-(body) draw as
-// every other pool. Gaseous planets do NOT route through here for a terrestrial
-// tail — deriveCore's gaseous cases carry their own fixed noun (the lone
-// exception, veiled-ice, uses plainTail).
-function worldNoun(b: Body): string {
-  const r = b.radiusEarth ?? 0;
-  if (isMoon(b)) {
-    if (r < MOON_SMALL_R) return pickNoun(b, 'moonSmall');
-    if (r >= MOON_LARGE_R) return pickNoun(b, 'moonLarge');
-    return 'Moon';
-  }
-  if (r < PLANET_SMALL_R) return pickNoun(b, 'planetSmall');
-  if (r >= PLANET_LARGE_R) return pickNoun(b, 'planetLarge');
-  return 'World';
-}
-
-// The plain, size-agnostic tail — used where a size word would mislead (the
-// gaseous veiled-ice head, whose "World"/"Moon" must not read as a terrestrial
-// "Heavyworld").
-function plainTail(b: Body): string {
-  return isMoon(b) ? 'Moon' : 'World';
-}
-
-// Surface free of standing liquid (any species) + ice — gates the silicate-
-// volcanism descriptor so a wet/icy/hydrocarbon-lake body's activity reads as
-// cryovolcanic (or nothing), not "Volcanic". iceFraction stays H2O ice;
-// surfaceLiquidFraction generalizes "wet" past water alone.
-function isDrySurface(b: Body): boolean {
-  return (b.surfaceLiquidFraction ?? 0) < 0.1 && (b.iceFraction ?? 0) < 0.3;
-}
-
-// Peak cloud-top zonal wind across a body's stratified decks (0 if cloudless) —
-// the storm register's axis.
 function maxCloudWindMs(b: Body): number {
   let m = 0;
   for (const c of b.cloudLayers) if (c.windSpeedMS > m) m = c.windSpeedMS;
   return m;
 }
-
-// Day↔night (or seasonal) surface-temperature spread; 0 when either bound is
-// unknown (gaseous bodies, belts) so the fire-and-ice register can't fire on them.
 function thermalSwingK(b: Body): number {
   if (b.surfaceTempMaxK == null || b.surfaceTempMinK == null) return 0;
   return b.surfaceTempMaxK - b.surfaceTempMinK;
 }
-
-// Rotation synchronized to the orbit — one face holds toward the primary, the
-// permanent-day/night world the twilit register names.
-function isTideLocked(b: Body): boolean {
-  if (b.rotationPeriodHours == null || b.periodDays == null || b.periodDays <= 0) return false;
-  return Math.abs(b.rotationPeriodHours - b.periodDays * 24) / (b.periodDays * 24) <= TIDELOCK_TOL;
+function isLushLife(b: Body): boolean {
+  return b.biosphereComplexity === 'complex'
+    && (b.biosphereSurfaceImpact ?? 0) >= LUSH_IMPACT
+    && b.biosphereArchetype === 'carbon_aqueous';
 }
 
-// The structural / iconic head + the axes it already implies (redundancy flags
-// the descriptor layer reads) + the demoted composition word, all read straight
-// off physics predicates — no stored or collapsed type. Order is a head-naming
-// priority only: the gaseous bracket, then the iconic named worlds the surface-
-// liquid data unlocks, then a plain kind+scale tail carrying the common bulk
-// identity as a `composition` descriptor rather than as the head itself.
-function deriveCore(b: Body): Core {
-  if (!isClassifiable(b)) return { head: `Uncharted ${plainTail(b)}`, material: 'rock', uncharted: true };
-  const tail = worldNoun(b);
-
-  // ─── gaseous bracket — the head IS the structural envelope class ───
-  if (isGaseousBody(b)) {
-    if (isVeiledIce(b)) return { head: `${pickNoun(b, 'veiledIce')} ${plainTail(b)}`, cold: true, material: 'gas' };
-    if (isHelium(b))    return { head: 'Helium Giant', material: 'gas' };
-    if (isGasGiant(b))  return { head: 'Gas Giant', material: 'gas' };
-    if (isIceGiant(b))  return { head: 'Ice Giant', cold: true, material: 'gas' };
-    return { head: 'Gas Dwarf', material: 'gas' };
+// ─── Biome selection ────────────────────────────────────────────────────────
+// The resolved place: which family pool (for the signature lead + grouping), the
+// drawn terrain noun, whether it's a gaseous skyscape, and an optional forced
+// lead (an iconic, honesty-required adjective the conditions/signature mustn't
+// override). `uncharted` short-circuits to a bare head.
+interface Sense {
+  key: FamilyKey;
+  terrain: string;
+  sky: boolean;
+  leadForce?: string;
+  uncharted?: boolean;
+}
+// Compose the terrain: draw a landform, and (for families with a material pool)
+// cross ~2/3 of them with a material — "Basalt Wastes" — leaving the rest bare so
+// the 2-word / 3-word label mix survives. Guards against a material echoing its
+// landform.
+function terrainOf(b: Body, key: FamilyKey): string {
+  const t: Terrain = FAMILIES[key].terrain;
+  const land = draw(b, 'land:' + key, t.land);
+  if (t.mat && hash32(b.id + '§matgate:' + key) % 3 !== 0) {
+    const m = draw(b, 'mat:' + key, t.mat);
+    if (!tokensOf(land).includes(m.toLowerCase())) return `${m} ${land}`;
   }
+  return land;
+}
+function sense(b: Body, key: FamilyKey, opts: { terrain?: string; sky?: boolean; leadForce?: string } = {}): Sense {
+  return {
+    key,
+    terrain: opts.terrain ?? terrainOf(b, key),
+    sky: opts.sky ?? false,
+    leadForce: opts.leadForce,
+  };
+}
 
-  // ─── iconic named worlds — surface/subsurface liquid + molten extremes ───
-  if (isBrimstone(b)) return { head: `Brimstone ${tail}`, hot: true, volcanic: true, material: 'sulfur' };
-  if (isTholin(b)) {
-    if ((b.surfaceLiquidFraction ?? 0) >= METHANE_SEA_COVER) {
-      return { head: `Methane Sea ${tail}`, cold: true, hazy: true, seaCore: true, material: 'methane' };
-    }
-    return { head: `Smog ${tail}`, cold: true, hazy: true, material: 'methane' };
+// Cloud chemistry → the terrain MATERIAL: the visible top cloud deck's gas
+// becomes the prefix ("Ammonia Cloud-Decks"). Helium and Veiled-Ice are excluded
+// — they're defined by their bulk envelope (He / opaque ice), not a cloud deck.
+const CLOUD_GAS_WORD: Record<string, string> = {
+  NH3: 'Ammonia', CH4: 'Methane', H2O: 'Water-Cloud', N2: 'Nitrogen',
+  NH4SH: 'Sulfide', H2SO4: 'Sulfuric', SALT: 'Alkali', SILICATE: 'Silicate',
+};
+const CLOUD_KEYED = new Set<FamilyKey>(['hotGiant', 'gasGiant', 'iceGiant', 'gasDwarf']);
+// The gas of the highest cloud deck — the visible top of a gaseous envelope.
+function topCloudGas(b: Body): string | null {
+  let gas: string | null = null, maxAlt = -1;
+  for (const c of b.cloudLayers) if (c.altitudeNorm > maxAlt) { maxAlt = c.altitudeNorm; gas = c.gas; }
+  return gas;
+}
+
+// Gaseous bodies wear a cloudscape: structural class (size/temp) picks the family
+// + its lead character, while the top cloud deck's gas supplies the terrain
+// material — so two same-size giants read distinctly by their real chemistry.
+function deriveSky(b: Body): Sense {
+  let key: FamilyKey;
+  if (isVeiledIce(b)) key = 'veiledIce';
+  else if (isHelium(b)) key = 'helium';
+  else if (isGasGiant(b)) key = isHotGiant(b) ? 'hotGiant' : 'gasGiant';
+  else if (isIceGiant(b)) key = 'iceGiant';
+  else key = 'gasDwarf';
+  const land = draw(b, 'land:' + key, FAMILIES[key].terrain.land);
+  let terrain = land;
+  if (CLOUD_KEYED.has(key)) {
+    const gas = topCloudGas(b);
+    const word = gas ? CLOUD_GAS_WORD[gas] : undefined;
+    if (word && !tokensOf(land).includes(word.toLowerCase())) terrain = `${word} ${land}`;
   }
-  if (isGaian(b))           return { head: `Garden ${tail}`, material: 'water', temperate: true, seaCore: true };
-  if (isAmmoniaSea(b))      return { head: `Ammonia Sea ${tail}`, cold: true, seaCore: true, material: 'ammonia' };
-  if (isSubglacialOcean(b)) return { head: `${pickNoun(b, 'subglacialOcean')} ${tail}`, cold: true, seaCore: true, material: 'ice' };
-  if (isChthonian(b))       return { head: 'Chthonian Core', hot: true, volcanic: true, material: 'iron' };
-  if (isMagmaOcean(b))      return { head: 'Magma Ocean', hot: true, volcanic: true, seaCore: true, material: 'rock' };
-  if (isLava(b))            return { head: `${pickNoun(b, 'lava')} ${tail}`, hot: true, volcanic: true, material: 'rock' };
-  if (isOcean(b))           return { head: `Ocean ${tail}`, seaCore: true, material: 'water' };
-
-  // ─── common terrestrial bulk — a plain head, the identity rides as a
-  //     composition descriptor so the budget goes to what distinguishes worlds ───
-  if (isIron(b))       return { head: tail, composition: pickNoun(b, 'iron'), material: 'iron' };
-  if (isFrostbound(b)) return { head: tail, composition: pickNoun(b, 'frostbound'), cold: true, material: 'methane' };
-  if (isGlacial(b))    return { head: tail, composition: pickNoun(b, 'glacial'), cold: true, material: 'ice' };
-  if (isDesert(b))     return { head: tail, composition: pickNoun(b, 'desert'), material: 'rock' };
-  return { head: tail, material: 'rock' };   // generic rock — the descriptor stack carries all its character
+  return sense(b, key, { sky: true, terrain });
 }
 
-// The head noun phrase alone — exposed for dump-labels.mjs so it can group the
-// galaxy by head without re-deriving (it imports THIS module, so no drift).
-export function coreNoun(b: Body): string {
-  return deriveCore(b).head;
+// Surface-frost substrate (S1): the real solid-volatile veneer (procgen's
+// surfaceFrostSpecies) drives the frozen-world label instead of guessing it
+// from bulk composition. A defining EXOTIC frost — N₂/CH₄/CO₂/NH₃, anything but
+// plain water ice — also OUT-RANKS a buried ocean: a nitrogen-frost world reads
+// by the surface it wears, not the sea it hides. The material word is forced
+// from the species; water carries no word (it's the plain Frozen family).
+const FROST_WORD: Partial<Record<NonNullable<Body['surfaceFrostSpecies']>, string>> = {
+  nitrogen: 'Nitrogen', methane: 'Methane', carbon_dioxide: 'Dry-Ice', ammonia: 'Ammonia',
+};
+function hasExoticFrost(b: Body): boolean {
+  const f = b.surfaceFrostSpecies;
+  return f != null && f !== 'water';
 }
 
-// A rare abundant resource PAIRING that defines a world's economic identity:
-// "Veined" when an exotic deposit is in the mix (the jackpot), else "Rich" for a
-// strategic (rare-earth / radioactive) pairing. Bulk-only pairs (metal /
-// silicate / volatile) are the ubiquitous default and stay unnamed; a single
-// abundant deposit isn't a pairing — it lives in the resource row. Returns the
-// LEXICON concept key (the word is resolved by the caller's pick).
-function resourcePairKey(b: Body): 'veined' | 'rich' | null {
-  let abundant = 0, exotic = false, strategic = false;
-  if ((b.resExotics ?? 0)      >= ABUNDANT_DEPOSIT) { abundant++; exotic = true; }
-  if ((b.resRareEarths ?? 0)   >= ABUNDANT_DEPOSIT) { abundant++; strategic = true; }
-  if ((b.resRadioactives ?? 0) >= ABUNDANT_DEPOSIT) { abundant++; strategic = true; }
-  if ((b.resMetals ?? 0)       >= ABUNDANT_DEPOSIT) abundant++;
-  if ((b.resSilicates ?? 0)    >= ABUNDANT_DEPOSIT) abundant++;
-  if ((b.resVolatiles ?? 0)    >= ABUNDANT_DEPOSIT) abundant++;
-  if (abundant < 2) return null;
-  if (exotic) return 'veined';
-  if (strategic) return 'rich';
-  return null;
-}
+// The precedence cascade — most-defining sense-of-place first.
+function deriveBiome(b: Body): Sense {
+  if (!isClassifiable(b)) return { key: 'barren', terrain: 'Uncharted', sky: false, uncharted: true };
+  if (isGaseousBody(b)) return deriveSky(b);
 
-// Every physical axis that reads as notable on THIS body, each resolved to a
-// word with a print slot + keep priority. The budget then keeps the highest-
-// priority axes that fit and prints them in slot order. No first-match collapse:
-// a world surfaces as many distinguishing axes as the budget holds.
-function descriptors(b: Body, core: Core): Descriptor[] {
-  const out: Descriptor[] = [];
-  const push = (slot: number, prio: number, word: string) => out.push({ slot, prio, word });
-  const fire = (key: keyof typeof LEXICON, slot: number, prio: number) => push(slot, prio, pick(b, key));
-
-  const T = b.avgSurfaceTempK;
-  const P = b.surfacePressureBar;
-  const gas = core.material === 'gas';
+  const T = b.avgSurfaceTempK ?? 0;
   const liquid = b.surfaceLiquidFraction ?? 0;
-  const sp = b.surfaceLiquidSpecies;
 
-  // ── LEAD: the identity-defining reads that outrank surface conditions ──
-  // Life — only when it has reshaped the world's physical essence (Verdant).
-  // Microbial / non-transformative complex life stays in the info card's life row.
-  if (b.biosphereComplexity === 'complex' && (b.biosphereSurfaceImpact ?? 0) >= 0.5 && !core.temperate) {
-    fire('verdant', SLOT.LEAD, 95);
-  }
-  // Defining surface lakes the head didn't already name. Methane lakes are the
-  // signature of a Smog world (Titan's are only ~3% cover); a drowned surface is
-  // already a Methane Sea head. Then the other exotic-solvent films on a cold base.
-  if (sp === 'hydrocarbon' && liquid >= METHANE_LAKE_FLOOR && liquid < METHANE_SEA_COVER) {
-    fire('methaneLake', SLOT.LEAD, 72);
-  } else if (liquid >= LAKE_COVER_FLOOR && !core.seaCore) {
-    if (sp === 'ammonia_water' || sp === 'ammonia') fire('ammoniaLake', SLOT.LEAD, 72);
-    else if (sp === 'nitrogen') fire('nitrogenLake', SLOT.LEAD, 72);
-  }
-  // A buried ice-shell ocean on a body that doesn't already wear one (a dry,
-  // haze-shrouded Smog world over a hidden sea).
-  if (b.subsurfaceOceanSpecies != null && liquid < LAKE_COVER_FLOOR && !core.seaCore) {
-    fire('sealedOcean', SLOT.LEAD, 68);
-  }
-  // Economic identity — a rare abundant resource pairing.
-  const lode = resourcePairKey(b);
-  if (lode !== null) fire(lode, SLOT.LEAD, 60);
+  // ── Molten / volcanic extremes ──
+  if (isBrimstone(b)) return sense(b, 'volcanic', { leadForce: 'Sulfur-Choked' });
+  if (isLava(b) || isMagmaOcean(b)) return sense(b, 'volcanic');
+  if (isChthonian(b)) return sense(b, 'exotic', { leadForce: 'Metallic', terrain: 'Vapor Wastes' });
 
-  // ── COMP: the demoted bulk identity, adjacent to the head ──
-  if (core.composition) push(SLOT.COMP, 90, core.composition);
+  // ── Exotic / sulfur biospheres — silicon-based life draws the lattice pool ──
+  if (b.biosphereArchetype === 'silicate' && hasLife(b)) return sense(b, 'exotic');
+  if (b.biosphereArchetype === 'sulfur' && hasLife(b)) return sense(b, 'volcanicSulfur');
 
-  // ── ACTIVITY ──
-  // Cryovolcanism: a young icy/watery surface on a cold core.
-  if ((core.material === 'ice' || core.material === 'methane' || core.material === 'water')
-      && core.cold && (b.surfaceAge ?? 0) >= CRYOVOLCANIC_AGE) {
-    fire('cryovolcanic', SLOT.ACTIVITY, 66);
-  }
-  // Silicate volcanism on a hot/young/active, dry body the head didn't already
-  // mark molten — covers the warm-melt and tidal-volcanic predicate cases.
-  if (!core.volcanic && isVolcanic(b) && isDrySurface(b)
-      && ((b.tectonicActivity ?? 0) >= VOLCANIC_STATE_TECT
-          && (b.surfaceAge ?? 0) >= VOLCANIC_STATE_AGE
-          && T !== null && T >= VOLCANIC_STATE_TEMP_K
-          || (T !== null && T < VOLCANIC_STATE_TEMP_K))) {
-    fire('volcanic', SLOT.ACTIVITY, 64);
+  // ── Carbon worlds — a dry rocky body in a C/O>1 disk wears a graphite / tar
+  //    surface. A formation read (not temperature), so it out-ranks the
+  //    landscape families below; a molten carbon world already read as lava. ──
+  if (b.carbonWorld) return sense(b, 'carbon');
+
+  // ── Volcanism — split hot silicate vs cold sulfur/tidal (Io reads its sulfur
+  //    volcanism + tidal resurfacing, not generic basalt or its SO2 sky). The
+  //    cold-yet-active body is tidal; SO2 / biotic sulfur mark the sulfur case. ──
+  if (isVolcanic(b) && isDry(b)) {
+    const sulfur = atmFrac(b, 'SO2') >= 0.3 || (b.bioticSulfur ?? 0) >= 0.2 || T < 500;
+    return sense(b, sulfur ? 'volcanicSulfur' : 'volcanic');
   }
 
-  // ── THERMAL (domain-aware) — at most one fires ──
-  let thermal = false;
-  // Runaway greenhouse — a thick, hot atmosphere over a dry surface (Venus).
-  if (!core.hot && core.material === 'rock' && P !== null && P >= HOTHOUSE_PRESSURE_BAR
-      && T !== null && T >= HOTHOUSE_TEMP_K && liquid < 0.05) {
-    fire('hothouse', SLOT.THERMAL, 76); thermal = true;
+  // ── Transformative life ──
+  if (isLushLife(b)) return sense(b, 'lush');
+
+  // ── Toxic / hostile atmospheres — keyed by chemistry; lead + terrain both
+  //    DRAW (so a hostile world isn't one fixed phrase), the lead from the pool
+  //    that matches its poison. ──
+  if (isTholin(b)) return sense(b, 'toxic', { leadForce: draw(b, 'tox:organic', TOXIC_ORGANIC) });
+  if ((b.surfacePressureBar ?? 0) >= HOTHOUSE_PRESSURE_BAR && T >= HOTHOUSE_TEMP_K && isDry(b)) {
+    return sense(b, 'toxic', { leadForce: draw(b, 'tox:hothouse', TOXIC_HOTHOUSE) });
   }
-  if (!thermal && !core.hot && T !== null) {
-    if (T >= HOT_K && liquid >= 0.1) { fire('steaming', SLOT.THERMAL, 75); thermal = true; }
-    else if (T >= HOT_EXTREME_K && !gas) { fire('scorched', SLOT.THERMAL, 75); thermal = true; }
-    else if (T >= HOT_K && gas) { fire('searing', SLOT.THERMAL, 75); thermal = true; }
-    else if (T >= HOT_K) { fire('blistering', SLOT.THERMAL, 75); thermal = true; }
-  }
-  if (!thermal && T !== null) {
-    const tideLocked = !gas && isTideLocked(b);
-    if (tideLocked && T >= TEMPERATE_LO_K && T < HOT_K) { fire('twilit', SLOT.DYN, 50); }
-    else if (!core.temperate && T >= TEMPERATE_LO_K && T < HOT_K && (liquid > 0 || core.material === 'water')) {
-      fire('temperate', SLOT.THERMAL, 73); thermal = true;
-    }
-    if (!core.cold && !gas && T < DEEP_COLD_K) { fire('frigid', SLOT.THERMAL, 74); thermal = true; }
-    else if (!core.cold && !gas && T < COLD_K) { fire('frozen', SLOT.THERMAL, 74); thermal = true; }
+  if (atmFrac(b, 'SO2') >= 0.3) return sense(b, 'toxic', { leadForce: draw(b, 'tox:sulfur', TOXIC_SULFUR) });
+
+  // ── Oceanic ── (briny rides as a condition; a frozen-over sea forces its lead+terrain).
+  //    Within-family fork: softening the freeze edge only swaps the lead/terrain, the
+  //    family stays oceanic — so it's safe with its own 'oceanFreeze' axis.
+  if (isOcean(b) || isAmmoniaSea(b) || liquid >= OCEAN_COVER) {
+    if (!softGE(b, 'oceanFreeze', T, COLD_K, COLD_K_W)) return sense(b, 'oceanic', { leadForce: 'Frozen-Over', terrain: 'Seas' });
+    return sense(b, 'oceanic');
   }
 
-  // ── SKY: atmosphere texture ──
-  if (!core.hazy && b.hazeAerosols && (b.hazeAerosols['THOLIN'] ?? 0) >= 0.3) fire('smog', SLOT.SKY, 44);
-  if ((b.dustStrength ?? 0) >= 0.5) fire('dust', SLOT.SKY, 46);
-  if (core.material === 'rock' && (P === null || P < 0.001)) fire('airless', SLOT.SKY, 38);
-
-  // ── AGE: ancient, heavily-cratered surface (skipped on molten/volcanic heads) ──
-  if (!core.hot && !core.volcanic && (b.surfaceAge ?? 1) <= ANCIENT_AGE) fire('cratered', SLOT.AGE, 36);
-
-  // ── DYN: orbital geometry & dynamics — the gas giant's primary differentiators ──
-  if (!gas && !core.hot && !core.seaCore && thermalSwingK(b) >= RIVEN_SWING_K) fire('riven', SLOT.DYN, 48);
-  if ((b.axialTiltDeg ?? 0) >= TOPPLED_TILT_DEG) fire('toppled', SLOT.DYN, 32);
-  if (maxCloudWindMs(b) >= STORM_WIND_MS) fire('storming', SLOT.DYN, 34);
-  if (gas && !core.hot && (b.radiusEarth ?? 0) >= COLOSSAL_RADIUS) fire('colossal', SLOT.DYN, 33);
-
-  // ── ACTIVITY (chemistry): briny / sulfurous, adjacent to composition ──
-  if ((sp === 'water' || sp === 'ammonia_water') && (b.salinity ?? 0) >= BRINY_SALINITY) {
-    fire('briny', SLOT.ACTIVITY, 56);
-  }
-  if (core.material !== 'gas' && core.material !== 'sulfur'
-      && (atmFrac(b, 'SO2') >= 0.3 || (b.bioticSulfur ?? 0) >= 0.3)) {
-    fire('sulfurous', SLOT.ACTIVITY, 56);
+  // ── Subterranean — a buried ice-shell ocean, BUT only when the surface is
+  //    plain water ice. A world wearing a defining exotic frost (N₂/CH₄/CO₂/NH₃)
+  //    reads by that surface instead (Triton is a nitrogen world, not a sea), so
+  //    it falls through to Frozen below. ──
+  if (isSubglacialOcean(b) && !hasExoticFrost(b)) {
+    if (hasLife(b)) return sense(b, 'subterranean', { leadForce: 'Fungal', terrain: 'Cavern Depths' });
+    if (b.subsurfaceOceanSpecies === 'water') return sense(b, 'subterranean', { leadForce: 'Sunless', terrain: 'Brine Seas' });
+    return sense(b, 'subterranean');
   }
 
-  return out;
+  // ── Frozen — keyed by the REAL surface-frost species (S1): an exotic frost
+  //    forces its substrate material (Nitrogen / Methane / Dry-Ice / Ammonia)
+  //    over a drawn landform, water ice is the plain Frozen family. The
+  //    icy-but-not-glacial cold case shares its COLD_K edge with Tundra below
+  //    (same 'coldK' axis), so an edge body coin-flips between the two — both
+  //    want ice, so neither flip drops it into an ill-fitting family. ──
+  if (isFrostbound(b) || isGlacial(b) || hasExoticFrost(b) || ((b.iceFraction ?? 0) >= DRY_ICE && !softGE(b, 'coldK', T, COLD_K, COLD_K_W))) {
+    const fw = b.surfaceFrostSpecies ? FROST_WORD[b.surfaceFrostSpecies] : undefined;
+    if (fw) return sense(b, 'frozenVol', { terrain: `${fw} ${draw(b, 'land:frozenVol', FAMILIES.frozenVol.terrain.land)}` });
+    return sense(b, 'frozen'); // water-ice substrate
+  }
+
+  // ── Tundra — cold-but-not-frozen marginal band with moisture or life. Its lower
+  //    COLD_K edge is soft and shares the 'coldK' axis with Frozen above, so the
+  //    two stay mutually exclusive across the boundary. The TEMPERATE_LO_K upper
+  //    edge stays HARD: Temperate's secondary gate (liquid/life) differs, so a soft
+  //    flip there could strand a dry icy world in Barren. ──
+  if (softGE(b, 'coldK', T, COLD_K, COLD_K_W) && T < TEMPERATE_LO_K && (liquid > 0 || (b.iceFraction ?? 0) > 0.05 || hasLife(b))) {
+    return sense(b, 'tundra');
+  }
+
+  // Resources (the buried economy grid) deliberately do NOT select a biome — a
+  // rare-earth lode is not a surface. Biome keys off surface physics only; the
+  // grid stays in the info-card resource row. (No Crystalline/evaporite or carbon
+  // biome: the procgen produces no distinct population for them — high bulk
+  // water/volatile + warm + dry reads as a hot Volcanic/Toxic world, which is what
+  // it is. Adding those biomes honestly would need a new procgen surface signal.)
+
+  // ── Evaporite salt-flats — a dried, salt-concentrated basin: high salinity
+  //    (the aridity-concentration proxy, well above the leach baseline), warm so
+  //    a brine evaporated rather than froze, dry so the mineral crust lies bare.
+  //    Reads its glittering crust, distinct from a plain dust desert. ──
+  if (isDesert(b) && (b.surfacePressureBar ?? 0) >= 0.001
+      && T >= EVAPORITE_WARM_K && (b.salinity ?? 0) >= EVAPORITE_SALINITY) {
+    return sense(b, 'evaporite');
+  }
+
+  // ── Arid — a dry rock with a sky to weather it (any temperature; airless dry
+  //    rock falls through to Barren, where wind-less regolith phrasing is honest) ──
+  if (isDesert(b) && (b.surfacePressureBar ?? 0) >= 0.001) return sense(b, 'arid');
+
+  // ── Temperate — a clement band with standing liquid or life ──
+  if (T >= TEMPERATE_LO_K && T < HOT_K && (liquid > 0 || hasLife(b))) return sense(b, 'temperate');
+
+  // ── Barren — the dead-rock default (iron rides as a condition) ──
+  return sense(b, 'barren');
 }
 
-function tokenCount(s: string): number {
-  // Hyphenated compounds ("Sealed-Ocean", "Subglacial Ocean") count by word; a
-  // hyphen stays one token.
-  return s.split(' ').length;
+// The biome FAMILY name — exposed for dump-labels.mjs so it can group the galaxy
+// by family without re-deriving (it imports THIS module, so no drift).
+export function coreNoun(b: Body): string {
+  const s = deriveBiome(b);
+  return s.uncharted ? 'Uncharted' : FAMILIES[s.key].label;
 }
 
-// Compose the full label: `[descriptors…] HEAD`, within TOKEN_BUDGET. The head is
-// mandatory and claims first; the remaining budget goes to the highest-priority
-// physical axes that fit, printed in grammatical slot order — so a world reads
-// with as many of its distinguishing axes as the chip holds, not one collapsed
-// identity.
+// The single lead: a forced iconic adjective if the cascade set one, else the
+// top firing cross-cutting condition (whose family applies and whose word doesn't
+// echo the terrain), else the family's signature texture. Always exactly one.
+function leadFor(b: Body, s: Sense): string {
+  if (s.leadForce) return s.leadForce;
+  const terrainLower = s.terrain.toLowerCase();
+  for (const c of COND) { // COND is authored in priority order
+    if (!c.applies(s.key, s.sky) || !c.gate(b)) continue;
+    if (c.conflicts.some((x) => terrainLower.includes(x))) continue;
+    return c.gen ? c.gen(b) : draw(b, 'cond:' + c.key, c.words!);
+  }
+  return draw(b, 'lead:' + s.key, FAMILIES[s.key].lead, new Set(tokensOf(s.terrain)));
+}
+
+// Compose the label: `[lead] [terrain]` — one lead descriptor over a terrain
+// noun, 2–3 words. No stacking: a salient condition replaces the signature lead
+// rather than piling in front of it.
 export function composeWorldLabel(b: Body): string {
-  const core = deriveCore(b);
-  if (core.uncharted) return core.head;
-
-  let budget = TOKEN_BUDGET - tokenCount(core.head);
-  const kept: Descriptor[] = [];
-  // Keep by priority (most distinguishing first), bounded by the token budget.
-  for (const d of [...descriptors(b, core)].sort((a, z) => z.prio - a.prio)) {
-    const tc = tokenCount(d.word);
-    if (tc <= budget) { kept.push(d); budget -= tc; }
-  }
-  // Print in slot order (left → right), head last.
-  kept.sort((a, z) => a.slot - z.slot || z.prio - a.prio);
-  return [...kept.map((d) => d.word), core.head].join(' ');
+  const s = deriveBiome(b);
+  if (s.uncharted) return s.terrain;
+  return `${leadFor(b, s)} ${s.terrain}`;
 }
