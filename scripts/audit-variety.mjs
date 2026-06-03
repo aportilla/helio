@@ -664,7 +664,7 @@ if (ringedHabitables.length < 5) {
 // Endor-class.
 if (habitableMoonsOfGiants.length < 5) {
   flags.push(`Habitable moons of gas giants (Endor-class): ${habitableMoonsOfGiants.length}.\n      ` +
-             `Tune: MOON_MASS_LOG_EARTH upper tail + atm-retention shielding from host magnetosphere (currently uncoupled).`);
+             `Tune: MOON_MASS_ANCHOR_HI upper tail + atm-retention shielding from host magnetosphere (currently uncoupled).`);
 }
 
 // Bio-archetype coverage.

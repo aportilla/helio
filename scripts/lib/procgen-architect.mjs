@@ -61,9 +61,11 @@
 // Binomial is naturally bounded at MOON_COUNT_MAX with a smooth 0..MAX
 // shape — no Poisson-clip pile-up at the cap. Migration-strip emerges
 // from physics: a hot Jupiter's shrunk Hill sphere maps to p ≈ 0 and
-// binomial rolls 0 moons. Mass from MOON_MASS_LOG_EARTH (median
-// Ganymede-class, right tail to super-Earth) clipped to
-// host × MOON_MAX_HOST_MASS_RATIO for orbital stability.
+// binomial rolls 0 moons. Mass is a host-coupled log-normal (μ and sd
+// lerp with log host-mass between the MOON_MASS_ANCHOR_LO/HI anchors) so
+// small hosts get small, low-ratio moons and giants keep their wide
+// spread; the lone hard edge is the MOON_BINARY_RATIO_LIMIT binary
+// boundary, far out in the tail.
 // bulkWaterFraction carries a MOON_CPD_WATER_FLOOR baseline modeling
 // circumplanetary-disk pebble-drift water delivery — moons of in-situ
 // HZ giants can still be water-rich even when their host's local
@@ -133,10 +135,16 @@ import {
   RADIUS_SCATTER_LOG,
   MOON_PROBABILITY_PER_HILL,
   MOON_PROBABILITY_CAP,
+  MOON_PRESENCE_FLOOR,
+  MOON_PRESENCE_FLOOR_MASS_HALF,
   MOON_COUNT_MAX,
   MOON_CPD_WATER_FLOOR,
-  MOON_MASS_LOG_EARTH,
-  MOON_MAX_HOST_MASS_RATIO,
+  MOON_MASS_ANCHOR_LO,
+  MOON_MASS_ANCHOR_HI,
+  MOON_MASS_SD_FLOOR,
+  MOON_MASS_LOG_MIN,
+  MOON_MASS_LOG_ABS_CEILING,
+  MOON_BINARY_RATIO_LIMIT,
   BELT_OCCURRENCE_BY_CLASS,
   BELT_PLACEMENT,
   BELT_RESOURCE_OCCURRENCE,
@@ -359,8 +367,15 @@ export function generateMoons(planet, star, hostFormationAu = null, frostLinesAu
   // near zero moons and pushes the wide-Hill gas giants toward the cap,
   // so the gas-giant-vs-rocky moon contrast emerges from physics rather
   // than a class switch — see the same anchors documented at
-  // MOON_PROBABILITY_PER_HILL in procgen-priors.mjs.
-  const p = Math.min(MOON_PROBABILITY_CAP, hillAu * MOON_PROBABILITY_PER_HILL);
+  // MOON_PROBABILITY_PER_HILL in procgen-priors.mjs. On top of the Hill
+  // term, a mass-tapered captured-moonlet floor lifts the per-trial
+  // probability for small worlds (whose Hill spheres are otherwise too
+  // tiny to ever hold a moon), tapering to ~0 by Neptune so it leaves
+  // mid/giant planets — and the migration-stripped hot Jupiters — alone.
+  // See MOON_PRESENCE_FLOOR in procgen-priors.mjs.
+  const presenceFloor = MOON_PRESENCE_FLOOR
+    / (1 + (planet.massEarth / MOON_PRESENCE_FLOOR_MASS_HALF) ** 2);
+  const p = Math.min(MOON_PROBABILITY_CAP, presenceFloor + hillAu * MOON_PROBABILITY_PER_HILL);
   const N = sampleBinomial(countPrng, MOON_COUNT_MAX, p);
   if (N === 0) return [];
 
@@ -377,18 +392,25 @@ export function generateMoons(planet, star, hostFormationAu = null, frostLinesAu
     const bulkMetalPrng = moonPrng(planet.id, mIdx, 'bulk_metal');
     const bulkVolatilePrng = moonPrng(planet.id, mIdx, 'bulk_volatile');
 
-    // Mass: truncated log-normal centered on Europa-class with a tail
-    // extending to Earth-mass+. Each moon's upper bound is further capped
-    // by the host's Hill-sphere-style stability ratio so an Earth-mass
-    // moon can only form around a Saturn+ host. See MOON_MASS_LOG_EARTH
-    // and MOON_MAX_HOST_MASS_RATIO in procgen-priors.mjs for the
-    // distribution shape and the cap rationale.
-    const hostCapLog = Math.log10(Math.max(planet.massEarth * MOON_MAX_HOST_MASS_RATIO, 1e-5));
+    // Mass: host-coupled truncated log-normal. Both the log-mean and
+    // log-sd lerp with log10(host mass) between the LO (Earth-class) and
+    // HI (Jovian, ≡ legacy giant draw) anchors, so moon size tracks the
+    // host and the moon/host RATIO falls as the host grows — small hosts
+    // get a low-centred, tight distribution (no pile-up at a hard ratio
+    // cap), giants keep their wide spread. The only hard edge is the
+    // binary boundary, which sits far out in the tail. See the
+    // MOON_MASS_ANCHOR_* block in procgen-priors.mjs for the calibration.
+    const hostLog = Math.log10(Math.max(planet.massEarth, 1e-6));
+    const t = (hostLog - MOON_MASS_ANCHOR_LO.hostLog)
+      / (MOON_MASS_ANCHOR_HI.hostLog - MOON_MASS_ANCHOR_LO.hostLog);
     const massSpec = {
-      mean: MOON_MASS_LOG_EARTH.mean,
-      sd:   MOON_MASS_LOG_EARTH.sd,
-      min:  MOON_MASS_LOG_EARTH.min,
-      max:  Math.min(MOON_MASS_LOG_EARTH.max, hostCapLog),
+      mean: MOON_MASS_ANCHOR_LO.mu + (MOON_MASS_ANCHOR_HI.mu - MOON_MASS_ANCHOR_LO.mu) * t,
+      sd:   Math.max(
+        MOON_MASS_SD_FLOOR,
+        MOON_MASS_ANCHOR_LO.sd + (MOON_MASS_ANCHOR_HI.sd - MOON_MASS_ANCHOR_LO.sd) * t,
+      ),
+      min:  MOON_MASS_LOG_MIN,
+      max:  Math.min(MOON_MASS_LOG_ABS_CEILING, Math.log10(planet.massEarth * MOON_BINARY_RATIO_LIMIT)),
     };
     const massEarth = Math.pow(10, sampleTruncated(massPrng, massSpec));
     const radiusEarth = moonRadiusFromMass(massEarth);

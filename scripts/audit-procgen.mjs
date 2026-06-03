@@ -44,6 +44,8 @@ import {
   RING_DISRUPTION_RATE,
   MOON_PROBABILITY_PER_HILL,
   MOON_PROBABILITY_CAP,
+  MOON_PRESENCE_FLOOR,
+  MOON_PRESENCE_FLOOR_MASS_HALF,
   MOON_COUNT_MAX,
   BELT_OCCURRENCE_BY_CLASS,
   BELT_RESOURCE_OCCURRENCE,
@@ -493,7 +495,9 @@ for (const p of procgenPlanets) {
   const bucket = moonsByBucket.find(b => hill >= b.lo && hill < b.hi);
   if (bucket) {
     bucket.counts.push(p.moons.length);
-    const prob = Math.min(MOON_PROBABILITY_CAP, hill * MOON_PROBABILITY_PER_HILL);
+    const presenceFloor = MOON_PRESENCE_FLOOR
+      / (1 + (p.massEarth / MOON_PRESENCE_FLOOR_MASS_HALF) ** 2);
+    const prob = Math.min(MOON_PROBABILITY_CAP, presenceFloor + hill * MOON_PROBABILITY_PER_HILL);
     bucket.lambdas.push(MOON_COUNT_MAX * prob);
     bucket.probs = bucket.probs || [];
     bucket.probs.push(prob);
@@ -518,6 +522,112 @@ for (const b of moonsByBucket) {
     '   ' + pct(withMoons, arr.length) +
     '    ' + pct(atCap, arr.length),
   );
+}
+console.log();
+
+// --- 5b. Moon mass + moon/host ratio by host-mass bucket --------------------
+
+// Moon mass is a host-coupled log-normal (see MOON_MASS_ANCHOR_LO/HI in
+// procgen-priors.mjs): both the log-mean and the log-sd slide with host
+// mass, anchored so the giant end reproduces the legacy distribution
+// while small hosts are pulled lower and tighter. This section validates
+// that shape — median moon mass should track host mass, and the
+// moon/host RATIO should fall as the host grows. The load-bearing
+// regression signal is `%ratio≥5%`: the old hard 5% cap piled every
+// small-host moon at exactly that ratio, so a healthy small-host bucket
+// reads a LOW %ratio≥5% with the high ratios pushed to a thin tail
+// (p90/max), not a wall. `%moon≥0.25M⊕` tracks the habitable-capable
+// tail that should stay populated on the giant buckets.
+const planetByIdForMoons = new Map(
+  procgenPlanets.filter(p => p.massEarth != null).map(p => [p.id, p]),
+);
+const HOST_MASS_BUCKETS = [
+  { label: 'tiny   (<0.5 M⊕)',  lo: 0,    hi: 0.5      },
+  { label: 'sub-Earth (0.5-1)', lo: 0.5,  hi: 1        },
+  { label: 'Earth-SE (1-2)',    lo: 1,    hi: 2        },
+  { label: 'SE-Nep (2-17)',     lo: 2,    hi: 17       },
+  { label: 'Nep-Sat (17-95)',   lo: 17,   hi: 95       },
+  { label: 'Jovian (>=95)',     lo: 95,   hi: Infinity },
+];
+const massByBucket = HOST_MASS_BUCKETS.map(b => ({ ...b, masses: [], ratios: [] }));
+for (const b of bodies) {
+  if (b.kind !== 'moon' || b.source !== 'procgen' || b.massEarth == null) continue;
+  const host = planetByIdForMoons.get(b.hostId);
+  if (!host) continue;
+  const bucket = massByBucket.find(x => host.massEarth >= x.lo && host.massEarth < x.hi);
+  if (!bucket) continue;
+  bucket.masses.push(b.massEarth);
+  bucket.ratios.push(b.massEarth / host.massEarth);
+}
+console.log('=== Moon mass + moon/host ratio, by host-mass bucket ===');
+console.log('  bucket              | moons | med.mass  | med.ratio  p90.ratio  max.ratio | %ratio>=5%  %moon>=0.25M');
+console.log('  --------------------+-------+-----------+----------  ---------  --------- +----------  -----------');
+for (const b of massByBucket) {
+  const masses = b.masses.slice().sort((x, y) => x - y);
+  const ratios = b.ratios.slice().sort((x, y) => x - y);
+  const n = masses.length;
+  const medMass = pctile(masses, 0.5);
+  const ge5 = ratios.filter(r => r >= 0.05).length;
+  const geHab = masses.filter(m => m >= 0.25).length;
+  console.log(
+    '  ' + pad(b.label, 19) +
+    ' |' + pad(n, 6, true) +
+    ' |' + pad(n ? medMass.toExponential(2) : '—', 10, true) +
+    ' |' + pad(n ? pctile(ratios, 0.5).toExponential(2) : '—', 11, true) +
+    pad(n ? pctile(ratios, 0.9).toExponential(2) : '—', 11, true) +
+    pad(n ? pctile(ratios, 1).toExponential(2) : '—', 10, true) +
+    ' |' + pct(ge5, n) +
+    '  ' + pct(geHab, n),
+  );
+}
+console.log();
+
+// Small-planet moon load — the user-facing symptom this section guards:
+// small planets that come out carrying lots of large moons. Reports the
+// per-planet total moon mass as a fraction of the planet, for non-curated
+// planets under 2 M⊕ that ended up with at least one moon.
+const smallLoads = [];
+for (const p of procgenPlanets) {
+  if (p.massEarth == null || p.massEarth >= 2 || !Array.isArray(p.moons) || !p.moons.length) continue;
+  let moonSum = 0, maxRatio = 0;
+  for (const mi of p.moons) {
+    const m = bodies[mi];
+    if (!m || m.massEarth == null) continue;
+    moonSum += m.massEarth;
+    maxRatio = Math.max(maxRatio, m.massEarth / p.massEarth);
+  }
+  smallLoads.push({ n: p.moons.length, totRatio: moonSum / p.massEarth, maxRatio });
+}
+// Moon-presence rate by host radius — the lever the captured-moonlet
+// floor targets. Sub-Earth worlds should host moons ~20% of the time
+// (was ~4% on Hill capacity alone); larger worlds are unaffected.
+const moonHostIds = new Set(bodies.filter(b => b.kind === 'moon').map(b => b.hostId));
+console.log('=== Moon presence by host radius (procgen planets) ===');
+for (const band of [
+  { label: 'R <= 1 (Earth & smaller)', lo: 0, hi: 1 },
+  { label: '1 < R <= 2',              lo: 1, hi: 2 },
+  { label: 'R > 2',                   lo: 2, hi: Infinity },
+]) {
+  const pl = procgenPlanets.filter(p => p.radiusEarth != null && p.radiusEarth > band.lo && p.radiusEarth <= band.hi);
+  const hosts = pl.filter(p => moonHostIds.has(p.id)).length;
+  console.log('  ' + pad(band.label, 26) + ' ' + pct(hosts, pl.length) + '   (' + hosts + ' / ' + pl.length + ')');
+}
+console.log();
+
+console.log('=== Small-planet (<2 M⊕) moon load ===');
+console.log('  small planets with >=1 moon:', smallLoads.length);
+if (smallLoads.length) {
+  const totSorted = smallLoads.map(r => r.totRatio).sort((a, b) => a - b);
+  const maxSorted = smallLoads.map(r => r.maxRatio).sort((a, b) => a - b);
+  const counts = smallLoads.map(r => r.n);
+  console.log('  total moon-mass / planet : med ' + pctile(totSorted, 0.5).toExponential(2) +
+    '  p90 ' + pctile(totSorted, 0.9).toExponential(2) +
+    '  max ' + pctile(totSorted, 1).toExponential(2));
+  console.log('  largest moon / planet    : med ' + pctile(maxSorted, 0.5).toExponential(2) +
+    '  p90 ' + pctile(maxSorted, 0.9).toExponential(2) +
+    '  max ' + pctile(maxSorted, 1).toExponential(2));
+  console.log('  moon count               : ' +
+    [1, 2, 3, 4, 5].map(k => `>=${k}:${counts.filter(c => c >= k).length}`).join('  '));
 }
 console.log();
 

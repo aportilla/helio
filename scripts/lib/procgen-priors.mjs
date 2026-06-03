@@ -265,17 +265,22 @@ export const OTEGI_MR = {
 // that pile-up is what an unbounded-λ Poisson + clamp produces and what
 // these constants are calibrated to avoid.
 //
-// p = min(MOON_PROBABILITY_CAP, hillAu × MOON_PROBABILITY_PER_HILL)
+// p = min(MOON_PROBABILITY_CAP,
+//         massFloor(M_host) + hillAu × MOON_PROBABILITY_PER_HILL)
 //
-// Sol-anchored means at PER_HILL=3.0, CAP=0.45 (mean = MAX × p):
-//   Mercury (R_H ≈ 0.0015 AU): p ≈ 0.005 → mean 0.02 (Mercury: 0)
-//   Earth   (R_H ≈ 0.010  AU): p ≈ 0.030 → mean 0.15 (Earth: 1)
-//   Mars    (R_H ≈ 0.007  AU): p ≈ 0.021 → mean 0.11 (Mars: 2 small)
-//   Jupiter (R_H ≈ 0.354  AU): p ≈ 0.45  → mean 2.25 (Jupiter: 4 Galileans, on the high end here)
+// where massFloor is the captured-moonlet baseline below — see its block.
+//
+// Sol-anchored means at PER_HILL=3.0, CAP=0.45 (mean = MAX × p), now with
+// the small-host presence floor folded in (the floor dominates p for the
+// tiny-Hill terrestrials, the Hill term for everything Neptune-and-up):
+//   Mercury (R_H ≈ 0.0015 AU): p ≈ 0.045 → mean 0.22 (floor-lifted)
+//   Earth   (R_H ≈ 0.010  AU): p ≈ 0.064 → mean 0.32 (floor + Hill)
+//   Mars    (R_H ≈ 0.007  AU): p ≈ 0.058 → mean 0.29 (floor-lifted)
+//   Jupiter (R_H ≈ 0.354  AU): p ≈ 0.45  → mean 2.25 (floor ≈ 0, Hill-capped)
 //   Saturn  (R_H ≈ 0.434  AU): p ≈ 0.45  → mean 2.25
 //   Uranus  (R_H ≈ 0.469  AU): p ≈ 0.45  → mean 2.25 (now curated to top 3)
 //   Neptune (R_H ≈ 0.771  AU): p ≈ 0.45  → mean 2.25
-//   Hot Jupiter at 0.05 AU (R_H ≈ 0.003): p ≈ 0.009 → mean 0.04 (stripped)
+//   Hot Jupiter at 0.05 AU (R_H ≈ 0.003): p ≈ 0.009 → mean 0.04 (stripped — floor ≈ 0)
 //   Warm Jupiter at 1 AU   (R_H ≈ 0.032): p ≈ 0.096 → mean 0.48 (rare moons)
 //
 // CAP=0.45 → binomial(5, 0.45) shape is P(0)=5%, P(1)=21%, P(2)=34%,
@@ -283,10 +288,34 @@ export const OTEGI_MR = {
 // 2% at the cap, so 5-moon gas giants read as a rare landmark rather
 // than routine. The PER_HILL slope keeps the migration-strip behavior
 // emergent from physics — a hot Jupiter's shrunk Hill sphere maps to
-// p≈0.009, and binomial(5, 0.009) rolls 0 moons 96% of the time. No
-// separate migration-strip pass needed.
+// p≈0.009, and the mass-tapered floor adds ~nothing to it (it's massive),
+// so binomial(5, 0.009) still rolls 0 moons 96% of the time. No separate
+// migration-strip pass needed.
 export const MOON_PROBABILITY_PER_HILL = 3.0;
 export const MOON_PROBABILITY_CAP      = 0.45;
+
+// Captured-moonlet presence floor — a small mass-gated baseline added to
+// the per-trial probability so that sub-Earth worlds carry the occasional
+// (small, usually solitary) moon instead of almost never. Hill capacity
+// alone leaves terrestrials near-bare: their Hill spheres are tiny
+// (median ~8e-4 AU), so hillAu × PER_HILL ≈ 0 and only ~4% host a moon.
+// Boosting the Hill slope can't fix this without saturating Neptune-class
+// planets; a constant floor lifts exactly the tiny-Hill tail and nothing
+// else. At MOON_PRESENCE_FLOOR=0.04 the sub-Earth host rate rises to ~22%
+// (88% of those carry exactly one moon — small, per the host-coupled mass
+// model). Moon SIZE is unaffected (MOON_MASS_ANCHOR_* keeps small-host
+// moons small), so this changes how OFTEN small worlds have a moon, not
+// how big it is.
+//
+// The floor is tapered by host mass — floor(M) = FLOOR / (1 + (M/HALF)²) —
+// so it fades out well below Neptune (halved at MOON_PRESENCE_FLOOR_MASS_HALF
+// M⊕) and adds ~nothing to massive planets. That's what keeps the
+// migration-stripped hot Jupiters stripped: they have tiny Hill spheres
+// too, but they're heavy, so the taper zeroes their floor and their
+// near-bare moon count is preserved. A flat floor would have re-mooned
+// them; the mass gate scopes the lift to the small worlds the tune targets.
+export const MOON_PRESENCE_FLOOR           = 0.04;
+export const MOON_PRESENCE_FLOOR_MASS_HALF = 2.5;
 
 // Per-planet hard upper bound on moon count — the `n` in the
 // Binomial(n, p) sampler above. Setting it to 5 caps Saturn-class arcs
@@ -302,42 +331,55 @@ const MOON_COUNT_MAX_TUNE = 5;
 
 export const MOON_COUNT_MAX = MOON_COUNT_MAX_TUNE;
 
-// Moon mass distribution — truncated log-normal in M⊕, sampled per moon.
-// Centered on Europa-class (10⁻³ M⊕) so the bulk matches Sol; sd=1.5 in
-// log space gives a tail extending to Earth-mass and beyond, capped by
-// host dynamics. Lower clamp at 10⁻⁵ M⊕ (sub-Enceladus). Upper clamp at
-// log10(2 M⊕) = 0.3 so super-Earths can never be moons (they'd be binary
-// planets, not moons).
+// Moon mass — a host-coupled truncated log-normal in M⊕, sampled per
+// moon. Both the log-mean μ and the log-sd slide with host mass, linearly
+// interpolated (and extrapolated) in log10(M_host) between two anchors:
 //
-// Tail distribution under N(-3, 1.5, [-5, 0.3]):
-//   ~50% below Europa (1e-3 M⊕)
-//   ~14% above Ganymede (2.5e-2)
-//   ~2.5% above Mars (1e-1)
-//   ~0.3% above Earth (1)
-// On top of this, each moon's upper bound is further capped by its
-// host's mass × MOON_MAX_HOST_MASS_RATIO so a giant moon can only form
-// around a giant host (Earth-mass moons need a Saturn-plus host).
-// Realistic baseline: log-mean = -3 (Europa-class median), max =
-// log10(2) = 0.3 (2 M⊕ ceiling so super-Earth-mass binaries don't
-// emerge as moons). Sol's moons cluster around 10^-3 to 10^-2.
-const MOON_MASS_LOG_EARTH_REALISTIC = { mean: -3, sd: 1.5, min: -5, max: 0.3 };
-
-// Gameplay tune: shift log-mean to -1.8 AND widen sd to 2.0. Median
-// ≈ 0.016 M⊕ (between Ganymede and Mars). The sd widening is the more
-// load-bearing change — it fattens the right tail so ~25% of moons
-// land above 0.1 M⊕ (Mars-class) and a meaningful minority (~10%)
-// reach 0.3+ M⊕ where atm retention works. Without the tail width,
-// the chain Warm-host migrator → big moon → T+P+water Endor produces
-// a hard zero; with it, a scattering of Pandora-class moons emerges
-// across the galaxy as a game-discoverable rarity. Heller & Pudritz
-// 2015 argue exomoon habitability needs ≥0.25 M⊕, well inside the new
-// right tail.
-const MOON_MASS_LOG_EARTH_TUNE = { mean: -1.5, sd: 2.0 };
-
-export const MOON_MASS_LOG_EARTH = mergeTunes(
-  MOON_MASS_LOG_EARTH_REALISTIC,
-  MOON_MASS_LOG_EARTH_TUNE,
-);
+//   t  = (log10(M_host) − LO.hostLog) / (HI.hostLog − LO.hostLog)
+//   μ  = lerp(LO.mu, HI.mu, t)
+//   sd = max(MOON_MASS_SD_FLOOR, lerp(LO.sd, HI.sd, t))
+//   logM_moon ~ N(μ, sd) truncated to
+//      [MOON_MASS_LOG_MIN, min(MOON_MASS_LOG_ABS_CEILING,
+//                              log10(M_host × MOON_BINARY_RATIO_LIMIT))]
+//
+// Why host-coupled instead of a fixed distribution + a hard host-ratio
+// cap: the old model drew a host-independent N(-1.5, 2.0) and then hard-
+// clamped the upper bound at 5% of host mass. Because the mean sat above
+// that clamp for any small host, the truncation PILED every small-planet
+// moon right at the 5% wall — small worlds came out ringed with moons
+// each ~5% of the planet (audit section 5b: median ratio pinned at 5%,
+// %ratio≥5% at 30–37%). Sliding μ down for small hosts moves the bulk to
+// a small fraction of the planet and pushes the high-ratio cases (the
+// Earth–Moon giant-impact anomaly) out to a thin, reachable tail — no
+// hard wall, just odds. The only surviving truncation is the genuine
+// binary edge (MOON_BINARY_RATIO_LIMIT), which sits 3–4σ out and shapes
+// nothing.
+//
+// HI is anchored at the Jovian end to REPRODUCE the legacy giant
+// distribution (μ=-1.5, sd=2.0) so the gas-giant moon spread — which is
+// already where we want it — is untouched. LO is the new Earth-class
+// anchor: a lower centre and a tighter spread. Behaviour at the anchors
+// and a few interpolated hosts (median moon mass / median moon-host ratio):
+//   0.1 M⊕ : μ≈-3.04 sd≈0.50(floor) → ~9e-4 M⊕ / ~0.9%   (tiny moonlets)
+//   Earth  : μ=-2.6  sd=0.9          → ~2.5e-3 M⊕ / ~0.25% (Luna 1.2% ≈ +0.8σ tail)
+//   Saturn : μ≈-1.73 sd≈1.77         → ~1.9e-2 M⊕ / ~2e-4  (≈ Titan)
+//   Jupiter: μ=-1.5  sd=2.0          → ~3.2e-2 M⊕ / ~1e-4  (≡ legacy giant draw)
+// Heller & Pudritz 2015 put exomoon habitability at ≥0.25 M⊕ — still
+// reachable on the giant buckets via the HI-anchor right tail (audit
+// `%moon≥0.25M` column).
+export const MOON_MASS_ANCHOR_LO = { hostLog: 0.0, mu: -2.6, sd: 0.9 }; // M_host = 1 M⊕ (Earth)
+export const MOON_MASS_ANCHOR_HI = { hostLog: 2.5, mu: -1.5, sd: 2.0 }; // M_host ≈ Jupiter (318 M⊕)
+export const MOON_MASS_SD_FLOOR        = 0.5;  // keep tiny-host draws from collapsing
+export const MOON_MASS_LOG_MIN         = -5;   // sub-Enceladus floor
+export const MOON_MASS_LOG_ABS_CEILING = 0.3;  // 2 M⊕ — super-Earths are planets, not moons
+// Physical binary boundary, the lone hard edge. A moon can't out-mass a
+// quarter of its host without the pair reading as a binary planet
+// (Pluto/Charon = 0.12; Earth/Moon = 0.012). Far out in the tail of every
+// bucket above, so it guards against impossible bodies without shaping
+// the distribution. Replaces the old 5% MOON_MAX_HOST_MASS_RATIO gameplay
+// cap, whose job (keeping small-host moons small) the μ-slide now does
+// probabilistically.
+export const MOON_BINARY_RATIO_LIMIT = 0.25;
 
 // Circumplanetary-disk delivered water floor for moons. Real moons of
 // giants form in their host's CPD, which accretes water-rich pebbles
@@ -360,19 +402,6 @@ export const MOON_MASS_LOG_EARTH = mergeTunes(
 // moons (Luna, Europa, etc.) bypass entirely — their bulkWater comes
 // from CSV.
 export const MOON_CPD_WATER_FLOOR = 0.01;
-
-// Maximum moon-to-host mass ratio for stable orbital dynamics.
-// Realistic ratio: Earth/Moon 1.2%; Pluto/Charon 12% (binary, not
-// moon). The realistic 3% cap is conservative — comfortably below
-// binary-planet territory but binding on warm-host moons (a gas
-// dwarf at 11 M⊕ caps moon mass at 0.33 M⊕, just at the Endor
-// retention threshold). Lifting to 5% lets HZ-giant hosts spawn
-// 0.5-Earth-mass moons without crossing into binary dynamics
-// (Heller-Pudritz exomoon stability bounds allow up to 8-10%
-// before tidal disruption becomes the dominant outcome).
-const MOON_MAX_HOST_MASS_RATIO_REALISTIC = 0.03;
-const MOON_MAX_HOST_MASS_RATIO_TUNE = 0.05;
-export const MOON_MAX_HOST_MASS_RATIO = MOON_MAX_HOST_MASS_RATIO_TUNE;
 
 // ---------------------------------------------------------------------------
 // Disk physics — protoplanetary-disk parameters for the continuous mass
