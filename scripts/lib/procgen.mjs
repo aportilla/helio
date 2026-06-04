@@ -111,6 +111,7 @@ import {
   GREENHOUSE_POTENCY_BY_GAS,
   GIANT_INTRINSIC_HEAT,
   TECTONIC_BASE,
+  TECTONIC_AGE_DECAY,
   SURFACE_AGE_FROM_TECTONIC,
   SURFACE_AGE_TIDAL_LIFT,
   ROTATION_INIT_HOURS,
@@ -755,6 +756,16 @@ function surfaceAgeFor(body, hostBody) {
   if (body.tectonicActivity == null) return null;
   const noise = sampleTruncated(fieldPrng(body, 'surfaceAge'), SURFACE_AGE_FROM_TECTONIC.noise);
   let age = Math.pow(body.tectonicActivity, SURFACE_AGE_FROM_TECTONIC.exponent) * noise;
+  // Radiogenic resurfacing soft-cap — radiogenic (non-tidal) tectonics renews
+  // crust but never to Io's globally-zero age; only the tidal lift below reaches
+  // the perpetual-resurfacing regime the vent render keys on. Soft-knee the
+  // radiogenic age: identity below `knee`, asymptoting to `ceil` (below the
+  // tidal/vent window) above it, so the bulk is untouched and only the over-high
+  // tail (a cold high-tect planet that otherwise reads as Io) is pulled down.
+  const { radiogenicKnee: knee, radiogenicCeil: ceil } = SURFACE_AGE_FROM_TECTONIC;
+  if (age > knee) {
+    age = knee + (ceil - knee) * (1 - Math.exp(-(age - knee) / (ceil - knee)));
+  }
   // Tidal-heating lift for eccentric moons of gaseous hosts. Host
   // gaseousness is read from the radius-derived test (isGaseousBody) — a
   // physical property, not a stored body type.
@@ -771,17 +782,24 @@ function surfaceAgeFor(body, hostBody) {
 }
 
 // =============================================================================
-// Tectonic activity — mass-driven (Phase 4, class-free)
+// Tectonic activity — mass + age driven (Phase 4, class-free)
 // =============================================================================
 
-// tect = baseSample × sqrt(mass). Bigger bodies retain radiogenic heat
-// longer and sustain longer-lived dynamos / surface renewal. Mass is the
-// dominant physical input; no class lookup.
-function tectonicActivityFor(body) {
+// tect = baseSample × sqrt(mass) × ageFactor. Mass is the dominant physical
+// input (bigger bodies retain radiogenic heat longer); the age factor is a
+// second-order temper for the radiogenic SUPPLY winding down over Gyr, so a
+// cold old system's body is quieter than a same-mass young one (see
+// TECTONIC_AGE_DECAY). No class lookup. ageGyr is the host star's age (the
+// shared system age); falls back to the decay reference age for hostless bodies
+// so the factor is a no-op (1.0) there.
+function tectonicActivityFor(body, ageGyr) {
   if (body.massEarth == null) return null;
   const base = sampleTruncated(fieldPrng(body, 'tectonicActivity'), TECTONIC_BASE);
   const massScale = Math.sqrt(Math.max(body.massEarth, 0.05));
-  return Number(Math.max(0, Math.min(1, base * massScale)).toFixed(3));
+  const { refGyr, tauGyr, floor, boostCap } = TECTONIC_AGE_DECAY;
+  const age = ageGyr ?? refGyr;
+  const ageFactor = Math.max(floor, Math.min(boostCap, Math.exp(-(age - refGyr) / tauGyr)));
+  return Number(Math.max(0, Math.min(1, base * massScale * ageFactor)).toFixed(3));
 }
 
 // =============================================================================
@@ -2049,7 +2067,7 @@ function fillBody(b, allBodies, stars) {
   // Class-free physical scalar chain: tectonics → rotation → magnetic.
   // Each reads from physics (mass, period, lock proxy) not from class.
   if (unknowns.has('tectonicActivity')) {
-    tectonicActivity = tectonicActivityFor(working);
+    tectonicActivity = tectonicActivityFor(working, hostStar?.ageGyr);
   }
   working = { ...working, tectonicActivity };
 

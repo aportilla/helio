@@ -1614,6 +1614,24 @@ const TECTONIC_BASE_REALISTIC = { mean: 0.4,  sd: 0.25, min: 0, max: 1.0 };
 const TECTONIC_BASE_TUNE      = { mean: 0.55, sd: 0.35 };
 export const TECTONIC_BASE = mergeTunes(TECTONIC_BASE_REALISTIC, TECTONIC_BASE_TUNE);
 
+// Radiogenic age decay. The base × √mass draw above captures heat RETENTION
+// (bigger bodies stay hot longer) but not heat SUPPLY: a rocky interior is
+// warmed by long-lived radionuclides (²³⁸U / ²³²Th / ⁴⁰K) that decay over Gyr,
+// so an old system's body has wound down even at equal mass. Fold in an age
+// gradient as a second-order temper (mass stays dominant) referenced to the
+// catalog's typical host age so the POPULATION mean is roughly preserved — the
+// deliberate diversity tune above stays intact while YOUNG systems run hotter
+// and OLD ones cool toward a floor. factor = exp(-(age-ref)/tau): 1.0 at ref,
+// boosted (capped) when young, floored when old. Without this a cold OLD planet
+// kept a high mass-only tect, which cascaded through surfaceAge into false
+// Io-style vent volcanism on the render.
+export const TECTONIC_AGE_DECAY = {
+  refGyr:   6.0,   // ≈ catalog median host age → factor 1.0 (mean-preserving)
+  tauGyr:   7.0,   // e-folding; gentle, ≈ the mixed U/Th/K heat-production decay
+  floor:    0.5,   // oldest interiors keep ~half their radiogenic vigor
+  boostCap: 1.25,  // youngest systems run hotter, clamped so they don't all peg
+};
+
 // Tidal-heating lift for moons of giants. Real tidal heating scales as
 // M_host² · e² / a⁵; for our catalog the host-mass term doesn't change
 // ordering (gas giants all dominate), so eccentricity-only is the simplest
@@ -1629,13 +1647,26 @@ export const SURFACE_AGE_TIDAL_LIFT = {
 // Surface age — tectonic-driven (Phase 4)
 // ---------------------------------------------------------------------------
 //
-// age = tect^exponent × noise + tidal_lift. High-tect bodies renew their
-// surface frequently (young surface fraction high); low-tect bodies
+// age = softCap(tect^exponent × noise) + tidal_lift. High-tect bodies renew
+// their surface frequently (young surface fraction high); low-tect bodies
 // accumulate impact gardening (old). The exponent < 1 pulls modest tect
 // values upward so Earth (tect ≈ 0.4) lands at age ≈ 0.6 rather than 0.4.
+//
+// Radiogenic resurfacing soft-cap (radiogenicKnee / radiogenicCeil). Tectonics
+// renews crust, but radiogenic (non-tidal) activity never resurfaces a WHOLE
+// globe to Io's near-zero crustal age — that perpetual-resurfacing regime
+// (surfaceAge → 1.0, what the vent-volcanism render keys on) is reached ONLY by
+// the tidal lift below. Without a cap a high-tect draw alone pushed surfaceAge
+// to ~1.0, so cold non-tidal planets read as Io (false vent volcanism). Soft-
+// knee the radiogenic age: identity below `knee`, asymptoting to `ceil` (which
+// sits below the tidal/vent window) above it — the bulk distribution is
+// untouched and only the over-high tail is pulled down. The tidal lift then
+// adds on top, so a genuinely tidally-heated moon still crosses into the regime.
 export const SURFACE_AGE_FROM_TECTONIC = {
   exponent: 0.7,
   noise:    { mean: 1.2, sd: 0.3, min: 0.7, max: 1.5 },
+  radiogenicKnee: 0.65,
+  radiogenicCeil: 0.85,
 };
 
 // ---------------------------------------------------------------------------
