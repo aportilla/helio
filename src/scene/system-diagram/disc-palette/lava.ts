@@ -22,6 +22,7 @@
 // deliberate — CPU resolves coverage/temp, GPU resolves where on the disc.
 
 import { Body } from '../../../data/stars';
+import { dominantResources, rockArchetypeFor, RESOURCE_EMBER_TINT, RESOURCE_EMBER_POTENCY } from '../color-science';
 import { atmFracOf, clamp01, smoothstep01 } from './shared';
 
 // Silicate-solidus melt ramp for INSOLATION-driven heat. Below ~700 K
@@ -92,6 +93,22 @@ const LAVA_INTERNAL_EMIT_SAT = 0.15;
 // temperature self-protects against false positives with no special case.
 const LAVA_EMIT_T_MIN = 800;
 const LAVA_EMIT_T_MAX = 2400;
+// Cooled-lava crust base — the warm dusky basalt a molten surface freezes
+// into. Data-driven now: the shader's Tier-1 crust backdrop reads this
+// (blended toward the body's rock mineralogy) per-body rather than from a
+// single global shader constant, so co-orbiting lava worlds keep distinct
+// crust hues between molten features.
+const LAVA_CRUST_BASE: readonly [number, number, number] = [0.34, 0.20, 0.21];
+// How far the cooled crust leans from neutral basalt toward the body's
+// dominant rock-archetype hue. Moderate — this is COOLED rock, not the
+// saturated gameplay resource color, so the native palette reads through
+// the dusk without overpowering the molten features painted over it.
+const LAVA_CRUST_ARCHETYPE_LERP = 0.62;
+
+// Neutral ember target for a body with no resource signal — the warm
+// blackbody ember hue itself, so the shader's luminance-preserving rotation
+// is a near-identity (a white target would desaturate the glow).
+const EMBER_NEUTRAL_TARGET: readonly [number, number, number] = [1.0, 0.55, 0.22];
 
 export interface LavaDrives {
   // [0..1] how much of the disc is molten — max of an insolation-driven
@@ -105,6 +122,18 @@ export interface LavaDrives {
   // [0..1] abiotic surface sulfur fraction — the shader lifts the ember's
   // green channel by this so sulfurous volcanism (Io) reads yellower.
   readonly lavaSulfurFrac: number;
+  // Per-body cooled-crust RGB (each channel [0..1]) — neutral basalt base
+  // leaned toward the body's dominant rock mineralogy. The shader's Tier-1
+  // crust backdrop tints toward this, so molten worlds keep distinct
+  // between-feature crust hues instead of one shared global brown.
+  readonly lavaCrustColor: readonly [number, number, number];
+  // Per-body ember chromophore TARGET hue (RGB, each [0..1]) — the potency-
+  // weighted dominant-resource blend of RESOURCE_EMBER_TINT. The shader
+  // renormalizes this to the molten ember's own luminance and lerps toward it,
+  // so the glow takes on a compositional cast at full brightness (a
+  // radioactives world reads vivid green, a metals world warm gold). The warm
+  // blackbody ember hue itself when the body has no resource signal (no shift).
+  readonly emberTint: readonly [number, number, number];
 }
 
 // Two continuous drives, no gate. heatMelt: the surface approaches melt as
@@ -174,5 +203,54 @@ export function lavaDrivesFor(body: Body, surfaceAge: number): LavaDrives {
   // (those exist only as cloud/haze aerosol products), so reading them
   // here would always return 0 — the live sulfur signal is SO2 alone.
   const lavaSulfurFrac = clamp01(atmFracOf(body, 'SO2'));
-  return { moltenCoverage, emissionTempNorm, lavaSulfurFrac };
+  // Cooled-crust hue — neutral basalt leaned toward the body's dominant rock
+  // archetype (the SAME desaturated mineralogy the rocky-surface path paints,
+  // not the saturated gameplay RESOURCE_COLOR). With no resource signal the
+  // crust stays at the neutral base. Resolved here on the CPU; the shader
+  // only paints where (CPU resolves colour, GPU resolves geometry).
+  let lavaCrustColor = LAVA_CRUST_BASE;
+  const res = dominantResources(body, 2);
+  if (res.length > 0) {
+    const k0 = res[0].key;
+    const k1 = res[1]?.key ?? null;
+    const a0 = res[0].abundance;
+    const a1 = res[1]?.abundance ?? 0;
+    // a0 + a1 > 0: dominantResources filters to value > 0, so res[0] is
+    // strictly positive whenever res.length > 0 — the ratio can't divide by 0.
+    const arch = rockArchetypeFor(k0, k1, a0 / (a0 + a1));
+    const f = LAVA_CRUST_ARCHETYPE_LERP;
+    lavaCrustColor = [
+      LAVA_CRUST_BASE[0] + (arch.r - LAVA_CRUST_BASE[0]) * f,
+      LAVA_CRUST_BASE[1] + (arch.g - LAVA_CRUST_BASE[1]) * f,
+      LAVA_CRUST_BASE[2] + (arch.b - LAVA_CRUST_BASE[2]) * f,
+    ];
+  }
+  // Ember chromophore target — the emission hue the shader rotates the molten
+  // ember toward (luminance-preserving lerp, so it bends hue without dimming).
+  // Blend the dominant resources' RESOURCE_EMBER_TINT targets weighted by
+  // abundance × RESOURCE_EMBER_POTENCY, so a scarce/strategic resource
+  // (radioactives) drives the cast over co-present bulk metals rather than
+  // averaging to a muddy half-green. Fallback is the warm blackbody ember
+  // itself (not white — a white target would desaturate the glow under the
+  // luminance-preserving lerp), so a no-resource body is left unshifted.
+  let emberTint: readonly [number, number, number] = EMBER_NEUTRAL_TARGET;
+  if (res.length > 0) {
+    const t0 = RESOURCE_EMBER_TINT[res[0].key];
+    const t1 = res[1] ? RESOURCE_EMBER_TINT[res[1].key] : t0;
+    const w0 = res[0].abundance * RESOURCE_EMBER_POTENCY[res[0].key];
+    const w1 = res[1]
+      ? res[1].abundance * RESOURCE_EMBER_POTENCY[res[1].key]
+      : 0;
+    // w0 strictly positive (dominantResources filters abundance > 0 and every
+    // potency > 0), so the normalization never divides by zero; one-resource
+    // bodies collapse n0 to 1.
+    const n0 = w0 / (w0 + w1);
+    const n1 = 1 - n0;
+    emberTint = [
+      t0.r * n0 + t1.r * n1,
+      t0.g * n0 + t1.g * n1,
+      t0.b * n0 + t1.b * n1,
+    ];
+  }
+  return { moltenCoverage, emissionTempNorm, lavaSulfurFrac, lavaCrustColor, emberTint };
 }

@@ -390,6 +390,39 @@ const RESOURCE_KEYS: readonly ResourceKey[] = [
   'resRareEarths', 'resRadioactives', 'resExotics',
 ];
 
+// Per-resource TARGET emission hue the molten ember rotates toward (NOT a
+// multiplicative filter — the shader renormalizes this to the ember's own
+// luminance then lerps, so a green/rose/violet cast reads at full brightness;
+// a multiply could only darken channels, never lift one, so it can't turn an
+// orange ember (~(1.0, 0.5, 0.15)) green). Bulk resources (metals/silicates)
+// sit near the blackbody ember so they barely shift; the strategic/exotic
+// resources carry the vivid casts that read as a gameplay tell. Applied as a
+// soft mix AFTER the sulfur green-lift, so the two compose. Hues echo each
+// resource's RESOURCE_COLOR identity so the surface palette and the glow agree.
+export const RESOURCE_EMBER_TINT: Record<ResourceKey, Color> = {
+  resMetals:       new Color(1.0, 0.80, 0.42),  // molten iron — gold-white (≈ blackbody, near no-op)
+  resSilicates:    new Color(1.0, 0.88, 0.40),  // silicate melt — yellow (reinforces sulfur)
+  resVolatiles:    new Color(0.75, 0.92, 1.0),  // rarely molten — cool steam-blue
+  resRareEarths:   new Color(1.0, 0.42, 0.66),  // rare-earth phosphor — rose
+  resRadioactives: new Color(0.45, 1.0, 0.32),  // radioluminescence — vivid green tell
+  resExotics:      new Color(0.70, 0.40, 1.0),  // exotic-matter anomaly — violet
+};
+
+// Ember-cast characterfulness — how strongly a resource pulls the ember hue
+// in the per-body blend. Bulk bread-and-butter resources are low so they don't
+// wash out a dramatic resource's cast; the scarce/strategic/exotic tiers
+// dominate, so a metals+radioactives world glows green (the radioactives
+// signature) rather than averaging to a muddy half-green. Mirrors the label
+// philosophy: a notable condition replaces the signature rather than blending.
+export const RESOURCE_EMBER_POTENCY: Record<ResourceKey, number> = {
+  resMetals:       0.4,
+  resSilicates:    0.4,
+  resVolatiles:    0.5,
+  resRareEarths:   1.0,
+  resRadioactives: 1.0,
+  resExotics:      1.0,
+};
+
 // Desaturated single-resource colors for the rocky-surface palette path.
 // These are what a region paints when only one resource dominates it (no
 // pair lookup fires). Pulled toward neutral / earth tones AND toward the

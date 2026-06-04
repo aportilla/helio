@@ -416,6 +416,21 @@ export interface DiscPalette {
   // green channel by this so sulfurous volcanism (Io) reads yellower than
   // pure silicate lava. 0 leaves the blackbody ember untouched.
   readonly lavaSulfurFrac: number;
+  // Per-body cooled-crust RGB (each channel [0..1]) — neutral basalt base
+  // leaned toward the body's dominant rock mineralogy (see lavaDrivesFor).
+  // The shader's Tier-1 molten crust backdrop tints toward this, so
+  // co-orbiting lava worlds keep distinct between-feature crust hues rather
+  // than one shared global brown. Neutral base on bodies with no molten
+  // surface (the channel is unread there). NOT run through the per-class
+  // applyTint/WORLD_CLASS_TINT — this is cooled rock, not surface palette.
+  readonly lavaCrustColor: readonly [number, number, number];
+  // Per-body ember chromophore filter RGB (each ~[0.55..1]) — the dominant-
+  // resource blend of RESOURCE_EMBER_TINT (see lavaDrivesFor). The shader
+  // multiplies the molten ember by this so the glow signals composition (a
+  // radioactives world reads sickly green, a metals world whiter-orange).
+  // Neutral white (1,1,1) on bodies with no molten surface or no resource
+  // signal — the channel is a no-op tint there.
+  readonly emberTint: readonly [number, number, number];
 }
 
 // Neutral fill for the degenerate no-surface body that also has no atm
@@ -423,6 +438,15 @@ export interface DiscPalette {
 // which no real gas/ice giant hits. Grey reads as "TBD" rather than
 // slotting into an arbitrary palette.
 const NO_ATM_FALLBACK_COLOR = new Color(0x808080);
+
+// Neutral cooled-basalt crust for bodies with no molten surface (the
+// shader never reads the crust channel there, but the field is always
+// present so the texel pack stays uniform). Matches lava.ts's LAVA_CRUST_BASE.
+const LAVA_CRUST_FALLBACK: readonly [number, number, number] = [0.34, 0.20, 0.21];
+
+// Neutral (no-op) ember chromophore filter for bodies with no molten surface.
+// A multiplicative white leaves the shader's blackbody ember untouched.
+const EMBER_TINT_NEUTRAL: readonly [number, number, number] = [1, 1, 1];
 
 // Warm amber shift folded into a gas giant's cloud-column palette so it
 // reads ruddy-Jovian rather than pale-Saturnian — compensates for the
@@ -576,8 +600,8 @@ export function buildDiscPalette(
   // to (coverage, emission temp, sulfur hue). See lavaDrivesFor in ./lava.
   // Suppressed surfaces (no-surface / tiny disc) emit nothing, so the
   // shader's molten sub-pass early-outs.
-  let { moltenCoverage, emissionTempNorm, lavaSulfurFrac } = surfaceSuppressed
-    ? { moltenCoverage: 0, emissionTempNorm: 0, lavaSulfurFrac: 0 }
+  let { moltenCoverage, emissionTempNorm, lavaSulfurFrac, lavaCrustColor, emberTint } = surfaceSuppressed
+    ? { moltenCoverage: 0, emissionTempNorm: 0, lavaSulfurFrac: 0, lavaCrustColor: LAVA_CRUST_FALLBACK, emberTint: EMBER_TINT_NEUTRAL }
     : lavaDrivesFor(body, surfaceAge);
   // Gaseous self-emission — hot/ultra-hot giants glow from their own heat.
   // Reuses the emissionTempNorm channel + the shader's emberRamp, but the
@@ -747,5 +771,7 @@ export function buildDiscPalette(
     moltenCoverage,
     emissionTempNorm,
     lavaSulfurFrac,
+    lavaCrustColor,
+    emberTint,
   };
 }

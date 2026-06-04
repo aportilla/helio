@@ -14,7 +14,7 @@ import {
 import { BODIES } from '../../../data/stars';
 import {
   ATM_COLUMN_TEXEL_OFFSET, BODY_TEXTURE_WIDTH, DECK_COLOR_BASE_OFFSET,
-  LAVA_TINT_TEXEL_OFFSET, MAX_CLOUD_LAYERS,
+  EMBER_TINT_TEXEL_OFFSET, LAVA_TINT_TEXEL_OFFSET, MAX_CLOUD_LAYERS,
   OCEAN_COLOR_TEXEL_OFFSET, SCATTER_COLOR_TEXEL_OFFSET,
 } from '../../materials';
 import { buildDiscPalette } from '../disc-palette';
@@ -141,9 +141,20 @@ export function buildBodyDiscGeometry(entries: readonly BodyDiscEntry[]): BodyDi
     cloudLayerData[scatOff + 0] = disc.scatterColor[0];
     cloudLayerData[scatOff + 1] = disc.scatterColor[1];
     cloudLayerData[scatOff + 2] = disc.scatterColor[2];
-    // Lava composition signal — sulfur fraction in .r (gba reserved).
+    // Lava composition signal — sulfur fraction in .r, per-body cooled-crust
+    // RGB in .gba (the shader's Tier-1 molten backdrop tints toward it).
     const lavaOff = rowBase + LAVA_TINT_TEXEL_OFFSET * 4;
     cloudLayerData[lavaOff + 0] = disc.lavaSulfurFrac;
+    cloudLayerData[lavaOff + 1] = disc.lavaCrustColor[0];
+    cloudLayerData[lavaOff + 2] = disc.lavaCrustColor[1];
+    cloudLayerData[lavaOff + 3] = disc.lavaCrustColor[2];
+    // Ember chromophore filter — per-body RGB multiplicative tint the molten
+    // sub-pass bends the ember by (radioactives → green, metals → whiter
+    // orange). .a unused. See emberTint in disc-palette/lava.ts.
+    const emberOff = rowBase + EMBER_TINT_TEXEL_OFFSET * 4;
+    cloudLayerData[emberOff + 0] = disc.emberTint[0];
+    cloudLayerData[emberOff + 1] = disc.emberTint[1];
+    cloudLayerData[emberOff + 2] = disc.emberTint[2];
     surfaceScalars[i * 4 + 0] = disc.waterFrac;
     surfaceScalars[i * 4 + 1] = disc.iceFrac;
     surfaceScalars[i * 4 + 2] = disc.surfaceAge;
