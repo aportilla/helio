@@ -338,9 +338,9 @@ export const MOON_COUNT_MAX = MOON_COUNT_MAX_TUNE;
 //   t  = (log10(M_host) − LO.hostLog) / (HI.hostLog − LO.hostLog)
 //   μ  = lerp(LO.mu, HI.mu, t)
 //   sd = max(MOON_MASS_SD_FLOOR, lerp(LO.sd, HI.sd, t))
-//   logM_moon ~ N(μ, sd) truncated to
-//      [MOON_MASS_LOG_MIN, min(MOON_MASS_LOG_ABS_CEILING,
-//                              log10(M_host × MOON_BINARY_RATIO_LIMIT))]
+//   logM_moon ~ N(μ, sd) truncated below at MOON_MASS_LOG_MIN and at the
+//   binary edge log10(M_host × MOON_BINARY_RATIO_LIMIT), then soft-tapered
+//   toward MOON_MASS_LOG_ABS_CEILING (a soft-min knee, not a clamp).
 //
 // Why host-coupled instead of a fixed distribution + a hard host-ratio
 // cap: the old model drew a host-independent N(-1.5, 2.0) and then hard-
@@ -351,9 +351,17 @@ export const MOON_COUNT_MAX = MOON_COUNT_MAX_TUNE;
 // %ratio≥5% at 30–37%). Sliding μ down for small hosts moves the bulk to
 // a small fraction of the planet and pushes the high-ratio cases (the
 // Earth–Moon giant-impact anomaly) out to a thin, reachable tail — no
-// hard wall, just odds. The only surviving truncation is the genuine
-// binary edge (MOON_BINARY_RATIO_LIMIT), which sits 3–4σ out and shapes
-// nothing.
+// hard wall, just odds.
+//
+// The μ-slide fixed the small-host ratio wall, but the absolute mass
+// ceiling stayed a hard clamp, and for Jovian hosts (μ=-1.5, sd=2.0) it
+// sits only ~0.9σ out — so ~19% of giant-host moons drew above 2 M⊕ and
+// piled on that exact value (≈8% of all moons at one radius). The ceiling
+// is now a soft-min taper (MOON_MASS_CEILING_KNEE): draws approaching
+// 2 M⊕ compress smoothly so the upper tail decays to a thin shoulder
+// rather than a spike, while the asymptote still holds moons below the
+// super-Earth line. The lone remaining hard edge is the binary boundary
+// (MOON_BINARY_RATIO_LIMIT), far out in every bucket's tail.
 //
 // HI is anchored at the Jovian end to REPRODUCE the legacy giant
 // distribution (μ=-1.5, sd=2.0) so the gas-giant moon spread — which is
@@ -372,6 +380,12 @@ export const MOON_MASS_ANCHOR_HI = { hostLog: 2.5, mu: -1.5, sd: 2.0 }; // M_hos
 export const MOON_MASS_SD_FLOOR        = 0.5;  // keep tiny-host draws from collapsing
 export const MOON_MASS_LOG_MIN         = -5;   // sub-Enceladus floor
 export const MOON_MASS_LOG_ABS_CEILING = 0.3;  // 2 M⊕ — super-Earths are planets, not moons
+// Soft-min knee (log10-mass units) for the approach to the ceiling. Wide
+// enough to spread the giant-host upper tail into a decaying shoulder
+// instead of a spike, narrow enough to leave the habitable-capable
+// (≥0.25 M⊕) tail populated. The soft-min asymptotes below the ceiling, so
+// no moon crosses the super-Earth line. See the ceiling note above.
+export const MOON_MASS_CEILING_KNEE    = 0.7;
 // Physical binary boundary, the lone hard edge. A moon can't out-mass a
 // quarter of its host without the pair reading as a binary planet
 // (Pluto/Charon = 0.12; Earth/Moon = 0.012). Far out in the tail of every

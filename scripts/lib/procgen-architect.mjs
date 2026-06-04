@@ -144,6 +144,7 @@ import {
   MOON_MASS_SD_FLOOR,
   MOON_MASS_LOG_MIN,
   MOON_MASS_LOG_ABS_CEILING,
+  MOON_MASS_CEILING_KNEE,
   MOON_BINARY_RATIO_LIMIT,
   BELT_OCCURRENCE_BY_CLASS,
   BELT_PLACEMENT,
@@ -193,6 +194,13 @@ function slotPrng(starId, slotIdx, salt) {
 function moonPrng(planetId, mIdx, salt) {
   return mulberry32(hash32(`${planetId}:moon${mIdx}:${salt}:${PROCGEN_VERSION}`));
 }
+
+// Smooth ceiling via a log-sum-exp soft-min: x passes through well below
+// `ceil`, then bends to asymptote toward it (never crossing) over a band ~
+// `knee` wide. Stable softplus building block (≈ z for large z). Used to
+// taper the moon-mass ceiling so the upper tail decays instead of clamping.
+const softplus = (z) => (z > 30 ? z : Math.log(1 + Math.exp(z)));
+const softCeil = (x, ceil, knee) => ceil - knee * softplus((ceil - x) / knee);
 
 // Per-(planet, salt) PRNG for partial-anchor backfill — synthesizing
 // mass / radius for catalog rows that arrived with a host star + period
@@ -410,9 +418,15 @@ export function generateMoons(planet, star, hostFormationAu = null, frostLinesAu
         MOON_MASS_ANCHOR_LO.sd + (MOON_MASS_ANCHOR_HI.sd - MOON_MASS_ANCHOR_LO.sd) * t,
       ),
       min:  MOON_MASS_LOG_MIN,
-      max:  Math.min(MOON_MASS_LOG_ABS_CEILING, Math.log10(planet.massEarth * MOON_BINARY_RATIO_LIMIT)),
+      // Hard truncation only at the physical binary edge; the absolute
+      // mass ceiling is applied as a soft taper below, not a clamp, so the
+      // giant-host upper tail decays into a shoulder instead of piling.
+      max:  Math.log10(planet.massEarth * MOON_BINARY_RATIO_LIMIT),
     };
-    const massEarth = Math.pow(10, sampleTruncated(massPrng, massSpec));
+    const logMass = softCeil(
+      sampleTruncated(massPrng, massSpec), MOON_MASS_LOG_ABS_CEILING, MOON_MASS_CEILING_KNEE,
+    );
+    const massEarth = Math.pow(10, logMass);
     const radiusEarth = moonRadiusFromMass(massEarth);
 
     // Orbital distance: starts inside Roche-ish, spreads out with each slot
