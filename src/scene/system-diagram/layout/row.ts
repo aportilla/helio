@@ -31,18 +31,22 @@ export interface RowSlot {
   rowIdx: number;
 }
 
-// Disc diameter (px) from a body's radiusEarth, cube-root-compressed and
-// hard-clamped. Moon-only: moon radii are all sub-Earth, so the simple
-// compression never needs the giant-band handling the planet curve has.
-// The caller supplies base / clamp / null-fallback (the moon cap exceeds
-// the planet floor on purpose — see MOON_DISC_* in constants.ts).
+// Disc diameter (px) from a body's radiusEarth: cube-root compression eased
+// by a soft-min top asymptote + soft-max floor (the same log-sum-exp knees
+// planetDiscPx uses), so radii approach the bounds instead of clipping onto
+// them. A hard cap collapsed the whole large-moon tail onto one value; the
+// soft asymptote spreads it. Moon-only — moon radii are all sub-Earth, so it
+// skips the giant-band blend the planet curve carries. Caller supplies
+// base / bounds / knees / null-fallback; see MOON_DISC_* in constants.ts.
 export function discPxFromRadius(
   radiusEarth: number | null,
-  opts: { base: number; min: number; max: number; fallback: number },
+  opts: { base: number; min: number; max: number; topKnee: number; floorKnee: number; fallback: number },
 ): number {
   const r = radiusEarth ?? opts.fallback;
-  const px = Math.cbrt(Math.max(r, 0.0001)) * opts.base;
-  return Math.max(opts.min, Math.min(opts.max, Math.round(px)));
+  let px = Math.cbrt(Math.max(r, 0.0001)) * opts.base;
+  px = softMin(px, opts.max, opts.topKnee);
+  px = softMax(px, opts.min, opts.floorKnee);
+  return Math.round(px);
 }
 
 // Smooth ceiling/floor: log-sum-exp soft-min / soft-max so px approaches the

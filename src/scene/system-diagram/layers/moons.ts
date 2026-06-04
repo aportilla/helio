@@ -14,7 +14,8 @@ import { makePlanetMaterial } from '../../materials';
 import { buildBodyDiscGeometry, setBodyDiscHovered } from './body-disc';
 import { disposePool } from './dispose';
 import {
-  MOON_DISC_BASE, MOON_DISC_MAX, MOON_DISC_MIN, MOON_EDGE_BIAS,
+  MOON_DISC_BASE, MOON_DISC_FLOOR_KNEE, MOON_DISC_MAX, MOON_DISC_MIN,
+  MOON_DISC_TOP_KNEE, MOON_EDGE_BIAS,
   RENDER_ORDER_BACK_MOON, RENDER_ORDER_FRONT_MOON,
   Z_BACK_MOON, Z_FRONT_MOON,
 } from '../layout/constants';
@@ -167,7 +168,8 @@ function writePoolPositions(pool: MoonPool | null, centers: PlanetCenterIndex, l
 
 function moonDiscPx(radiusEarth: number | null): number {
   return discPxFromRadius(radiusEarth, {
-    base: MOON_DISC_BASE, min: MOON_DISC_MIN, max: MOON_DISC_MAX, fallback: 0.3,
+    base: MOON_DISC_BASE, min: MOON_DISC_MIN, max: MOON_DISC_MAX,
+    topKnee: MOON_DISC_TOP_KNEE, floorKnee: MOON_DISC_FLOOR_KNEE, fallback: 0.3,
   });
 }
 

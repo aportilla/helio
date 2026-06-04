@@ -139,21 +139,29 @@ export const PLANET_DISC_BLEND_HI = 9;
 export const PLANET_DISC_TOP_KNEE = 7;
 export const PLANET_DISC_FLOOR_KNEE = 4;
 
-// Moon discs use a plain cbrt curve with hard clamps (discPxFromRadius in
-// row.ts) — moon radii are all sub-Earth, so they never reach the giant
-// band that the planet curve exists to spread, and a simple compression
-// reads fine. The 30 px cap exceeds the planet floor on purpose: moons
-// read against their parent, not against the smallest planet in the
-// system, and big moons cluster around big planets (Ganymede / Titan orbit
-// gas giants), so a 30 px moon always sits next to a 100+ px parent in
-// practice. Floor at 6 keeps tiny inner moons visible against a Jupiter.
-// All three knobs are the physically-anchored values scaled to 60% — a
-// render-interpretation choice to read moons smaller, not a procgen change.
+// Moon discs: cube-root compression with soft-knee bounds (discPxFromRadius
+// in row.ts), the small-body analogue of planetDiscPx. Moon radii are all
+// sub-Earth, so there's no giant band to spread — but the radius range
+// (~0.03–1.5 R⊕) still spans ~20× and must map across the px range without
+// piling at either end. A flat cap collapsed roughly a third of all moons
+// onto one value (every radius past the cap threshold rendered identical);
+// BASE is now anchored so the largest moons (the procgen mass ceiling near
+// 1.5 R⊕) approach the 30 px asymptote and the smooth right-skewed radius
+// distribution spreads naturally below it — the median moon (~0.21 R⊕) lands
+// ~15 px, the smallest (~0.03 R⊕) ease onto ~8 px. The soft asymptote (no
+// hard clip) is what avoids the pile-up: radii past the knee compress gently
+// instead of stacking. The 30 px ceiling still exceeds the planet floor on
+// purpose — moons read against their parent, and big moons orbit big planets
+// (Ganymede / Titan around gas giants), so a top-end moon always sits next
+// to a 100+ px parent. TOP_KNEE sets how wide the upper bend; FLOOR_KNEE
+// eases the smallest onto MOON_DISC_MIN.
 export const MOON_DISC_MIN = 6;
 export const MOON_DISC_MAX = 30;
-// Multiplier on cbrt(radiusEarth). 40 lands Ganymede / Titan (~0.4 R⊕)
-// at the 30 px cap and Luna (~0.27 R⊕) at ~26 px.
-export const MOON_DISC_BASE = 40;
+export const MOON_DISC_TOP_KNEE = 2.5;
+export const MOON_DISC_FLOOR_KNEE = 1;
+// Multiplier on cbrt(radiusEarth) before the knees. 26 puts the ~1.5 R⊕
+// ceiling moons at the 30 px asymptote (see MOON_DISC_* above).
+export const MOON_DISC_BASE = 26;
 
 // Moon-center distance from parent center, expressed as an offset
 // relative to parent's rim. 0 = moon centered exactly on the parent's
@@ -164,8 +172,10 @@ export const MOON_EDGE_BIAS = 0;
 // Disc-diameter floor (env-px) below which a body forces flat fill
 // rather than running the procedural surface/banded texture. At smaller
 // sizes the per-pixel palette pick reads as screen-door noise instead
-// of texture, and bands collapse to barber-pole stripes. The smallest
-// moons (6 px) land below this and render as one solid palette entry.
+// of texture, and bands collapse to barber-pole stripes. With the
+// re-anchored moon curve most moons land below this and render as one
+// solid palette entry — intended at moon scale, where procedural detail
+// would read as noise rather than surface.
 export const PROCEDURAL_TEXTURE_MIN_PX = 16;
 
 // --- Belts ---
