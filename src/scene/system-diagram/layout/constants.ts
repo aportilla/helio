@@ -148,17 +148,20 @@ export const PLANET_DISC_FLOOR_KNEE = 4;
 // BASE is anchored so the largest moons (the procgen mass ceiling near
 // 1.5 R⊕) approach the 42 px asymptote and the smooth right-skewed radius
 // distribution spreads naturally below it — the median moon (~0.21 R⊕) lands
-// ~21 px, the smallest (~0.03 R⊕) ease onto ~11 px. The soft asymptote (no
+// ~21 px, the smallest (~0.03 R⊕) ease onto ~12 px. The soft asymptote (no
 // hard clip) is what avoids the pile-up: radii past the knee compress gently
 // instead of stacking. The 42 px ceiling still exceeds the planet floor on
 // purpose — moons read against their parent, and big moons orbit big planets
 // (Ganymede / Titan around gas giants), so a top-end moon always sits next
 // to a 100+ px parent. TOP_KNEE sets how wide the upper bend; FLOOR_KNEE
 // eases the smallest onto MOON_DISC_MIN.
-export const MOON_DISC_MIN = 8;
+export const MOON_DISC_MIN = 10;
 export const MOON_DISC_MAX = 42;
 export const MOON_DISC_TOP_KNEE = 3.5;
-export const MOON_DISC_FLOOR_KNEE = 1.4;
+// Floor knee wide enough that the soft-max actually engages: the smallest
+// moons' raw cbrt value already sits just above MIN, so a narrow knee would
+// leave them untouched — 2.5 lifts the smallest from ~11 px onto ~12 px.
+export const MOON_DISC_FLOOR_KNEE = 2.5;
 // Multiplier on cbrt(radiusEarth) before the knees. 36 puts the ~1.5 R⊕
 // ceiling moons near the 42 px asymptote (see MOON_DISC_* above).
 export const MOON_DISC_BASE = 36;
