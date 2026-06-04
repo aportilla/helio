@@ -69,7 +69,7 @@ export function buildBodyDiscGeometry(entries: readonly BodyDiscEntry[]): BodyDi
   // Surface palette weights (xyz, sum-to-1). The .w slot carries the
   // per-body limb Rayleigh scatter strength for the rim hue shift.
   const weights   = new Float32Array(P * 4);
-  // Surface scalars: [waterFrac, iceFrac, surfaceAge, globalness].
+  // Surface scalars: [waterFrac, iceFrac, surfaceAge, iceCoverage].
   const surfaceScalars = new Float32Array(P * 4);
   // Atmospheric scalars: [hazeOpacity, rimWidthPx, moltenCoverage,
   // emissionTempNorm]. Cloud coverage / windSpeedMS / altitude live
@@ -158,7 +158,7 @@ export function buildBodyDiscGeometry(entries: readonly BodyDiscEntry[]): BodyDi
     surfaceScalars[i * 4 + 0] = disc.waterFrac;
     surfaceScalars[i * 4 + 1] = disc.iceFrac;
     surfaceScalars[i * 4 + 2] = disc.surfaceAge;
-    surfaceScalars[i * 4 + 3] = disc.globalness;
+    surfaceScalars[i * 4 + 3] = disc.iceCoverage;
     atmoScalars[i * 4 + 0] = disc.hazeOpacity;
     atmoScalars[i * 4 + 1] = disc.rimWidthPx;
     atmoScalars[i * 4 + 2] = disc.moltenCoverage;

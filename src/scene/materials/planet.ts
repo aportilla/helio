@@ -197,7 +197,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       attribute vec4  aWeights;
       // Surface scalars: x = surfaceLiquidFrac (dominant solvent cover,
       // any species — water, hydrocarbon, ammonia, nitrogen, sulfur),
-      // y = iceFrac, z = surfaceAge, w = globalness.
+      // y = iceFrac, z = surfaceAge, w = iceCoverage.
       attribute vec4  aSurfaceScalars;
       // Atmosphere scalars: x = hazeOpacity [0..1] uniform overlay
       // alpha, y = rimWidthPx (integer 0..N halo width), z = moltenCoverage
@@ -229,7 +229,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       varying float vLiquidFrac;
       varying float vIceFrac;
       varying float vSurfaceAge;
-      varying float vGlobalness;
+      varying float vIceCoverage;
       varying vec3  vBiomeColor;
       varying float vBiomeCoverage;
       varying float vHazeOpacity;
@@ -255,7 +255,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         vLiquidFrac = aSurfaceScalars.x;
         vIceFrac    = aSurfaceScalars.y;
         vSurfaceAge = aSurfaceScalars.z;
-        vGlobalness = aSurfaceScalars.w;
+        vIceCoverage = aSurfaceScalars.w;
         vHazeOpacity = aAtmoScalars.x;
         vRimWidthPx  = aAtmoScalars.y;
         vMoltenCoverage   = aAtmoScalars.z;
@@ -301,7 +301,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       varying float vLiquidFrac;
       varying float vIceFrac;
       varying float vSurfaceAge;
-      varying float vGlobalness;
+      varying float vIceCoverage;
       varying vec3  vBiomeColor;
       varying float vBiomeCoverage;
       varying float vHazeOpacity;
@@ -421,17 +421,6 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // still reads as "frozen surface" rather than "missing pixels"
       // against a dark scene background.
       const vec3 ICE_COLOR = vec3(0.93, 0.97, 1.0);
-
-      // Globalness threshold separating the cap regime (warm /
-      // transitional bodies → surface-deposit caps at high latitude,
-      // pure ICE_COLOR) from the global regime (cold bodies → bulk
-      // cryosphere, scattered cells with surfaceAge controlling
-      // regolith burial). Pinned to the lower edge of frozenBoost's
-      // smoothstep so a body either stays fully in the cap regime
-      // (frozenBoost = 0) or transitions into the global regime
-      // (frozenBoost > 0) — no overlap. Mars at globalness ≈ 0.74 sits
-      // in cap; Europa / Triton at globalness = 1.0 sit in global.
-      const float CAP_GLOBALNESS_MAX = 0.8;
 
       // Biome stipple latitude window. Past BIOME_LAT_MAX (|sin lat| ≈
       // sin(58°)) life thins to zero; BIOME_LAT_RAMP feathers the edge
@@ -993,7 +982,6 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       const vec2 SALT_COAST_DITHER     = vec2(257.0, 379.0);
       const vec2 SALT_BIOME_STIPPLE    = vec2(197.0, 311.0);
       const vec2 SALT_CAP_JITTER       = vec2(233.0, 239.0);
-      const vec2 SALT_ICE_PRIORITY     = vec2(701.0, 719.0);
       const vec2 SALT_REGION_PRIMARY   = vec2(401.0, 419.0);
       const vec2 SALT_REGION_SECONDARY = vec2(431.0, 433.0);
       const vec2 SALT_RESOURCE_PICK    = vec2(1009.0, 2017.0);
@@ -1023,6 +1011,17 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       const vec2 LAYER_SALT_CLOUD_VORTEX = vec2(37.0, 41.0);
       const float SALT_BAND_LIGHTNESS  = 67.0;
       const float LAYER_SALT_BAND      = 13.0;
+      // Resource stain stipple on icy fragments — fresh prime pair, no
+      // overlap with the cloud/lava/crater salt budget above.
+      const vec2 SALT_ICE_STAIN        = vec2(1051.0, 1061.0);
+      // Snow-line margin lobe octaves (the fine octave reuses
+      // SALT_CAP_JITTER). Fresh prime pairs, distinct from the budget above.
+      const vec2 SALT_SNOW_MED         = vec2(1063.0, 1069.0);
+      const vec2 SALT_SNOW_COARSE      = vec2(1087.0, 1091.0);
+      // Stain-boundary lobe octaves — decorrelated from the snow line so the
+      // exposed-rock blotches don't track the ice edge. Fresh prime pairs.
+      const vec2 SALT_STAIN_LOBE_MED    = vec2(1093.0, 1097.0);
+      const vec2 SALT_STAIN_LOBE_COARSE = vec2(1103.0, 1109.0);
 
       ${HASH_GLSL}
 
@@ -1377,52 +1376,87 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         return col;
       }
 
-      // Ice election: which fragments are icy, and by which geometry.
-      // Two physically distinct ice geometries, partitioned by
-      // vGlobalness:
-      //   Cap pattern (warm / transitional bodies, globalness <
-      //     CAP_GLOBALNESS_MAX) — surface deposit at high latitude.
-      //     Earth's water-ice caps, Mars's seasonal CO2 + water
-      //     polar caps. Independent of bulk surface composition;
-      //     paints pure ICE_COLOR (bypasses the surfaceAge blend
-      //     used by the global path below).
-      //   Global pattern (cold bodies, globalness ≥ CAP_GLOBALNESS_MAX)
-      //     — bulk cryosphere. Europa, Triton, Callisto. Random
-      //     scattered cells with effectiveIceFrac ramping to 1.0 at
-      //     extreme cold; surfaceAge controls how much ice sits on
-      //     top vs buried under regolith.
+      // Ice election: which fragments are icy. One continuous latitude
+      // model — the snow line sits at asin(1 − vIceCoverage), so caps
+      // grow organically from the poles toward the equator as coverage
+      // rises, all the way to a wholly frozen disc. vIceCoverage is a
+      // pure function of iceFraction (no temperature double-count). The
+      // resource-stain decoration on top is graded by latitude and
+      // freshness at the paint site, not here.
       //
-      // The partition lines up with frozenBoost's smoothstep, so a
-      // body is either fully in the cap regime (frozenBoost=0) or
-      // moving into the global regime (frozenBoost > 0). Salts
-      // SALT_ICE_PRIORITY.
-      void iceComposite(vec2 winnerCell, float latSinDisc,
-                        out bool capIcyHere, out bool globalIcyHere, out bool icyHere) {
-        bool  capActive      = vGlobalness < CAP_GLOBALNESS_MAX;
-        // Per-cell threshold jitter so the cap boundary follows the
-        // worley grid's jittered shapes instead of reading as a clean
-        // foreshortened ellipse. Cells near the boundary go in or out
-        // by hash; cells well inside / outside are unaffected. Amplitude
-        // scales with iceFrac so Mars's tiny cap (iceFrac 0.02) gets a
-        // ~±0.01 wobble while Earth's larger cap (iceFrac 0.10) gets
-        // ~±0.05 — clamped to keep very-small caps visible and very-
-        // large caps from dissolving into noise. Salts SALT_CAP_JITTER.
-        float capJitterH    = hash21(winnerCell + vSeed * SALT_CAP_JITTER);
-        float capJitterAmp  = clamp(vIceFrac * 0.6, 0.01, 0.08);
-        float capJitter     = (capJitterH - 0.5) * 2.0 * capJitterAmp;
-        capIcyHere = capActive && (abs(latSinDisc) + capJitter) > (1.0 - vIceFrac);
-        float cellHashIce    = hash21(winnerCell + vSeed * SALT_ICE_PRIORITY);
-        // Cold bodies push iceFrac toward 1.0 (Europa-class: cold AND
-        // water-bearing → full shell rather than polar caps). Gated on
-        // vIceFrac > 0 so the boost doesn't fabricate ice on a cold
-        // body that has none in its composition — Io (lava class,
-        // 110 K, iceFraction=0) would otherwise render as a solid
-        // ICE_COLOR disc because the cold-→global rule overrode its
-        // actual zero ice content.
-        float frozenBoost    = smoothstep(CAP_GLOBALNESS_MAX, 1.0, vGlobalness) * step(0.01, vIceFrac);
-        float effectiveIceFrac = mix(vIceFrac, 1.0, frozenBoost);
-        globalIcyHere = !capActive && cellHashIce > (1.0 - effectiveIceFrac);
-        icyHere = capIcyHere || globalIcyHere;
+      // The snow line is perturbed by three octaves of blocky value
+      // noise in the same sphere-projected worley-cell frame as the
+      // surface, so caps read as ragged ice fingers + bays rather than a
+      // clean foreshortened ellipse: a per-cell FINE wobble (always on),
+      // a MED lobe, and a COARSE lobe (the big marginal scallops). Two
+      // gates keep it honest:
+      //   - Disc size (SNOW_LOBE_*_PX, on vRadius): the lobe octaves fade
+      //     out on small moons — a tiny disc keeps a simple edge instead
+      //     of dissolving into per-pixel salt, only the fine wobble
+      //     survives. Mirrors RAY_MIN_DISC_RADIUS.
+      //   - Coverage (SNOW_COARSE_COV_*): the coarsest lobes only engage
+      //     once there's a real ice sheet, so a pinprick polar cap stays
+      //     tight while a near-global sheet gets big scalloped margins.
+      // Asymmetric clamp: a POSITIVE margin extends ice toward the equator
+      // (a finger); a NEGATIVE margin carves a bare bay. The negative half
+      // is scaled by (1 − vIceCoverage) so it vanishes as coverage → 1 — a
+      // wholly frozen world can't grow a bare equatorial seam (the failure
+      // mode a symmetric jitter produced). Salts SALT_CAP_JITTER (fine) +
+      // SALT_SNOW_MED / SALT_SNOW_COARSE.
+      const float SNOW_FINE_AMP      = 0.06;
+      const float SNOW_MED_AMP       = 0.09;
+      const float SNOW_COARSE_AMP    = 0.11;
+      const float SNOW_MED_DIV       = 3.0;  // worley cells per MED lobe block
+      const float SNOW_COARSE_DIV    = 7.0;  // …per COARSE lobe block
+      const float SNOW_LOBE_MIN_PX   = 12.0; // vRadius below which lobes are off (fine only)
+      const float SNOW_LOBE_FULL_PX  = 22.0; // …and at/above which they're full strength
+      const float SNOW_COARSE_COV_LO = 0.1;  // coverage below which coarse lobes are off
+      const float SNOW_COARSE_COV_HI = 0.6;  // …and at/above which fully engaged
+      // Dithered frost margin. The noise lobes above shape the macro snow
+      // line; this feathers the final pixel edge so ice doesn't meet bare
+      // ground at a hard cartoon step — the same Bayer-stipple soft-edge
+      // idiom the cloud fringe uses. The stipple band is CENTERED on the snow
+      // line (its 50%-density point sits at the intended boundary), so a wide
+      // feather softens the edge WITHOUT enlarging the perceived cap: half the
+      // band eats inward, half feathers outward, leaving the visual centroid
+      // where coverage put it. (A purely outward feather would shift the
+      // perceived edge down-latitude by half the band width and balloon a
+      // small cap — visible on Mars at wide widths.) As coverage → 1 the band
+      // slides back outward (edgeCenter → 1.0) so a wholly frozen world keeps
+      // no dithered equatorial seam (the failure mode the bay-clamp guards).
+      // The ordered Bayer threshold is broken by a per-pixel hash
+      // (ICE_EDGE_HASH_MIX) so the fringe doesn't read as a regular crosshatch.
+      // Band width scales with cap size (≈ vIceCoverage, the cap's sin-lat
+      // extent): a broad sheet gets a wide soft fringe, a pinprick polar cap a
+      // tight one, so the dither never dwarfs the cap it feathers. Because the
+      // band stays centered, the de-tune (½-width inward pull) scales with it
+      // automatically — the perceived edge holds on the snow line at any width.
+      const float ICE_EDGE_DITHER_MIN = 0.03; // band width at a vanishing cap
+      const float ICE_EDGE_DITHER_MAX = 0.3;  // …and at full coverage (|sin lat|)
+      const float ICE_EDGE_HASH_MIX   = 0.35;
+      const float ICE_EDGE_CENTER_COV = 0.9;  // above this coverage the band slides outward to protect full ice
+      void iceComposite(vec2 winnerCell, float latSinDisc, out bool icyHere) {
+        float fine   = hash21(winnerCell + vSeed * SALT_CAP_JITTER) - 0.5;
+        float med    = hash21(floor(winnerCell / SNOW_MED_DIV)    + vSeed * SALT_SNOW_MED)    - 0.5;
+        float coarse = hash21(floor(winnerCell / SNOW_COARSE_DIV) + vSeed * SALT_SNOW_COARSE) - 0.5;
+        float lobeAtten = smoothstep(SNOW_LOBE_MIN_PX, SNOW_LOBE_FULL_PX, vRadius);
+        float coarseCov = smoothstep(SNOW_COARSE_COV_LO, SNOW_COARSE_COV_HI, vIceCoverage);
+        float margin = fine   * SNOW_FINE_AMP
+                     + med    * SNOW_MED_AMP    * lobeAtten
+                     + coarse * SNOW_COARSE_AMP * lobeAtten * coarseCov;
+        // Bays (negative) fade out toward full coverage; fingers (positive) stay.
+        float snowMargin = max(margin, 0.0) + min(margin, 0.0) * (1.0 - vIceCoverage);
+        // Signed distance to the snow line (>0 inside ice). edgeCenter places
+        // the stipple band: 0.5 centers it on the boundary (perceived edge =
+        // snow line), ramping to 1.0 (outward-only) near full coverage so the
+        // equator of a wholly frozen world isn't carved by the inward half.
+        float iceSigned = abs(latSinDisc) + snowMargin - (1.0 - vIceCoverage);
+        float edgeCenter = mix(0.5, 1.0, smoothstep(ICE_EDGE_CENTER_COV, 1.0, vIceCoverage));
+        float edgeDither = mix(ICE_EDGE_DITHER_MIN, ICE_EDGE_DITHER_MAX, vIceCoverage);
+        float t = clamp(iceSigned / edgeDither + edgeCenter, 0.0, 1.0);
+        float dither = mix(bayer4(gl_FragCoord.xy + vec2(23.0, 47.0)),
+                           hash21(floor(gl_FragCoord.xy)), ICE_EDGE_HASH_MIX);
+        icyHere = t > dither;
       }
 
       // Phase 1.5c — discrete crater features + ejecta rays.
@@ -1604,8 +1638,8 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       }
 
       // Surface (or atm-column) base color for one fragment. Composes the
-      // full terrestrial surface stack — worley patches, ice/cap regime,
-      // ocean + coastal fringe, region palette election, biome stipple,
+      // full terrestrial surface stack — worley patches, ice cover + frost
+      // stain, ocean + coastal fringe, region palette election, biome stipple,
       // craters + ejecta rays, linea, and molten lava — for surface bodies
       // (vSurfaceOpacity > 0.5), or paints the gas/ice-giant atm column for
       // the rest. lavaEmissive returns the self-luminous lava contribution
@@ -1661,21 +1695,23 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           // the body's bulk surface, not its own latitude-band override.
           // Three things drive the per-fragment composition:
           //   icyHere           — does ice cover this fragment? Decided
-          //     by mixing a cap-latitude priority and a per-cell hash
-          //     priority via vGlobalness (warm → cap pattern; cold →
-          //     global random pattern; in between → hybrid).
+          //     by one continuous latitude model: ice above the snow
+          //     line asin(1 − vIceCoverage), caps growing from the poles
+          //     toward the equator as coverage rises.
           //   resourceSurface   — the body's bulk character at this
           //     fragment: ocean (surface-liquid cell) or 1.5b region-masked
           //     resource pick (+ biome stipple).
           //   resourceSubsurface — the 1.5c complement-masked resource
-          //     pick, used by the crater branch as "what's underneath."
-          // Layer order is keyed off vSurfaceAge:
-          //   young (high age) → ice on top, resource below.
-          //   old   (low age)  → resource on top (regolith), ice below.
-          // Continuous lerp so a mid-age body mixes both reads.
+          //     pick: the body's exposed-rock color (the ice stain below,
+          //     and what a crater excavates).
+          // An icy fragment is pure ICE_COLOR, broken by a stippled resource
+          // stain (resourceSubsurface) that thickens toward the equator and on
+          // older (low-vSurfaceAge, regolith-laden) surfaces — see the stain
+          // block below. The vSurfaceAge young/old layer order (ice-on-top vs
+          // regolith-on-top) lives in the crater reveal, not the base ice paint.
 
-          bool capIcyHere, globalIcyHere, icyHere;
-          iceComposite(winnerCell, latSinDisc, capIcyHere, globalIcyHere, icyHere);
+          bool icyHere;
+          iceComposite(winnerCell, latSinDisc, icyHere);
 
           // CONTINENT_GROUP-sized blocks of worley cells share one
           // ocean/land coin flip. Salt offset from the resource-pick
@@ -1784,18 +1820,43 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           // Collapses to primary on 1-slot bodies (flat fill).
           vec3 resourceSubsurface = slotColor(slots.z, vPalette0, vPalette1, vPalette2);
 
-          // Default fragment color. Three branches:
-          //   capIcyHere   → pure ICE_COLOR (surface cap deposit; the
-          //     bulk surface age is irrelevant — Mars's caps are
-          //     seasonal surface ice, not regolith-buried cryosphere).
-          //   globalIcyHere → surfaceAge-blended ice/resource (young
-          //     icy body shows ice on top; old icy body shows resource
-          //     regolith on top with ice buried underneath).
-          //   else          → bulk resource surface.
-          if (capIcyHere) {
-            col = ICE_COLOR;
-          } else if (globalIcyHere) {
-            col = mix(resourceSurface, ICE_COLOR, vSurfaceAge);
+          // Default fragment color. Ice is pure ICE_COLOR with a
+          // stippled resource stain showing through — denser toward the
+          // equator (debris-laden ablation margins) and on older
+          // regolith-laden surfaces, thinning to clean polar ice. The
+          // stain is a hard per-cell hash pick (stippled, no alpha
+          // blend); equatorBias only shapes the pick PROBABILITY.
+          //   STAIN_BASE   — full stain reachable on old equatorial ice
+          //     so a heavily-cratered icy world (Callisto) reads dark.
+          //   STAIN_FLOOR  — small everywhere-floor so a fully-covered
+          //     fresh world (Europa, Enceladus) isn't a flat-white disc
+          //     at the poles.
+          //   STAIN_LAT_LO/HI — the |sin lat| window over which the
+          //     stain thins toward the pole.
+          const float STAIN_BASE   = 1.0;
+          const float STAIN_FLOOR  = 0.05;
+          const float STAIN_LAT_LO = 0.2;
+          const float STAIN_LAT_HI = 0.9;
+          // Coarse value-noise lobes perturb the latitude driving the
+          // equator→pole stain falloff, so exposed rock reads as irregular
+          // blotches (continents of rock) amid the ice rather than a clean
+          // latitude band — the "clinical" zonal look. Bigger lobes than the
+          // snow line (rock provinces, not a fringe); disc-size-gated by the
+          // same SNOW_LOBE_*_PX so small moons keep a simple edge.
+          const float STAIN_LOBE_MED_DIV    = 3.0;
+          const float STAIN_LOBE_COARSE_DIV = 8.0;
+          const float STAIN_LOBE_MED_AMP    = 0.14;
+          const float STAIN_LOBE_COARSE_AMP = 0.22;
+          if (icyHere) {
+            float stainMed    = hash21(floor(winnerCell / STAIN_LOBE_MED_DIV)    + vSeed * SALT_STAIN_LOBE_MED)    - 0.5;
+            float stainCoarse = hash21(floor(winnerCell / STAIN_LOBE_COARSE_DIV) + vSeed * SALT_STAIN_LOBE_COARSE) - 0.5;
+            float stainLat    = abs(latSinDisc)
+                              + (stainMed * STAIN_LOBE_MED_AMP + stainCoarse * STAIN_LOBE_COARSE_AMP)
+                                * smoothstep(SNOW_LOBE_MIN_PX, SNOW_LOBE_FULL_PX, vRadius);
+            float equatorBias = 1.0 - smoothstep(STAIN_LAT_LO, STAIN_LAT_HI, stainLat);
+            float stainProb = clamp(STAIN_BASE * (1.0 - vSurfaceAge) * equatorBias + STAIN_FLOOR, 0.0, 1.0);
+            float stainH = hash21(winnerCell + vSeed * SALT_ICE_STAIN);
+            col = (stainH < stainProb) ? resourceSubsurface : ICE_COLOR;
           } else {
             col = resourceSurface;
           }
@@ -1806,11 +1867,15 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           // whose rays reach this fragment throws the same material
           // along its ejecta — layer-ordered against ice by vSurfaceAge.
           // Craters pit solid, ancient surfaces — bare rock/regolith and old
-          // ice crust (Callisto). They do NOT pock an open liquid sea, nor a
-          // fresh surface cap deposit (a polar cap reads smooth, like Mars's),
-          // so skip both. Old global ice crust still craters.
-          bool openLiquid = liquidOceanHere && !icyHere;
-          if (!openLiquid && !capIcyHere) {
+          // ice crust (Callisto, Ganymede). They do NOT pock an open liquid
+          // sea, nor smooth fresh frost (young seasonal ice reads smooth, like
+          // Europa/Enceladus and Mars's seasonal caps), so skip both. Gate on
+          // FRESH_FROST_AGE so old icy crust still craters while fresh frost
+          // stays smooth.
+          const float FRESH_FROST_AGE = 0.6;
+          bool openLiquid  = liquidOceanHere && !icyHere;
+          bool smoothFrost = icyHere && vSurfaceAge > FRESH_FROST_AGE;
+          if (!openLiquid && !smoothFrost) {
             col = craterRayPass(col, cellPos, icyHere);
           }
 

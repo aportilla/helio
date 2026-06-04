@@ -22,7 +22,7 @@ export function clamp01(x: number): number {
 
 // GLSL-style smoothstep clamped to [0, 1] — 0 at/below e0, 1 at/above e1,
 // Hermite ease between. Mirrors the shader's built-in so CPU-derived ramps
-// match the curve the disc sub-passes (lava melt gates, ice globalness)
+// match the curve the disc sub-passes (lava melt gates, ice coverage)
 // expect. Degenerate e0 === e1 acts as a hard step at e0.
 export function smoothstep01(e0: number, e1: number, x: number): number {
   if (e0 === e1) return x < e0 ? 0 : 1;

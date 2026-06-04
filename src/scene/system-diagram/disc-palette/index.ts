@@ -153,21 +153,7 @@ import {
 } from './atmosphere';
 import { lavaDrivesFor } from './lava';
 import { oceanColorFor, OCEAN_FALLBACK_COLOR } from './ocean';
-import { BLACK_COLOR, clamp01, smoothstep01, weightedColorBlend, WHITE_COLOR } from './shared';
-
-// Phase 1.6 ice-geometry temperature thresholds. globalness lerps from
-// 0 (cap-latitude pattern) at ICE_TEMP_CAP_K down to 1 (global pattern)
-// at ICE_TEMP_GLOBAL_K. Smoothstep curve between the two. Anchors:
-// Earth (288 K) lands at 0; Mars (210 K) at ~0.74 (mostly global but
-// iceFrac so small the visual is still cap-like); Europa (102 K)
-// saturates at 1; an ice-age Earth at ~240 K transitions through the
-// midpoint smoothly. The cap-vs-global signal comes from temperature
-// rather than insolation because the temperature is the actual driver
-// of where ice can exist on a body — insolation determines temperature
-// but greenhouse, albedo, and tidal heating all confound the direct
-// mapping.
-const ICE_TEMP_GLOBAL_K = 180;
-const ICE_TEMP_CAP_K    = 270;
+import { BLACK_COLOR, clamp01, weightedColorBlend, WHITE_COLOR } from './shared';
 
 // Per-body brightness shift — deterministic ±RANGE in [0..1] applied
 // uniformly across both archetype palette slots so the body's internal
@@ -265,16 +251,33 @@ function applyPerBodyTints(c: Color, body: Body, seed: number): Color {
   return shifted;
 }
 
-// Compute globalness from avgSurfaceTempK via a smoothstep curve.
-// Null temperature falls back to 0 (cap pattern — safest default for
-// a body with missing thermal data; the iceFrac value still gates
-// whether any ice renders at all).
-function globalnessForTemp(avgT: number | null): number {
-  if (avgT == null) return 0;
-  // Inverted ramp — full global ice at/below the cold threshold, none at/above
-  // the cap. ICE_TEMP_GLOBAL_K < ICE_TEMP_CAP_K, so smoothstep01 climbs 0→1 with
-  // temperature and the 1 − … flip turns it into the ice-melts-as-it-warms curve.
-  return 1 - smoothstep01(ICE_TEMP_GLOBAL_K, ICE_TEMP_CAP_K, avgT);
+// Map iceFraction → iceCoverage ∈ [0,1], a pure function of how much ice
+// procgen put on the surface (temperature, cold-trap and the water budget
+// were already folded into iceFraction by surfaceIceCover — re-reading
+// temperature here would double-count). Coverage drives one continuous
+// latitude model in the shader: the snow line sits at asin(1 − iceCoverage),
+// so caps grow organically from the poles toward the equator as ice rises.
+//
+// Shape: a gamma lift (ICE_COVERAGE_GAMMA > 1, mildly convex so small
+// fractions stay small caps rather than spreading toward the equator)
+// normalized so coverage saturates to full at ICE_COVERAGE_SATURATE.
+// Anchors, by body (snow-line latitude = asin(1 − coverage)): Io (0) bare;
+// Mars (0.02) tiny caps above ~80°; Earth (0.10) modest caps above ~65°;
+// Ganymede (0.60) mostly covered (caps to ~13°); Callisto (0.70) nearly
+// full; Europa/Triton (0.85) and Enceladus (0.95) wholly frozen disc with
+// no bare equatorial strip.
+const ICE_COVERAGE_GAMMA = 1.2;
+// Inputs at/above this fraction saturate to full coverage — the ice-shell
+// worlds (Europa/Triton ≈ 0.85, Enceladus ≈ 0.95) should read as a wholly
+// frozen disc, not a capped one.
+const ICE_COVERAGE_SATURATE = 0.75;
+function iceCoverageForFraction(iceFraction: number): number {
+  const f = clamp01(iceFraction);
+  if (f <= 0) return 0;
+  const lifted = Math.pow(f, ICE_COVERAGE_GAMMA);
+  // Renormalize so iceFraction === ICE_COVERAGE_SATURATE maps to 1.0; clamp
+  // pins anything above to full so the top end fills without a bare strip.
+  return clamp01(lifted / Math.pow(ICE_COVERAGE_SATURATE, ICE_COVERAGE_GAMMA));
 }
 
 export interface DiscPalette {
@@ -319,13 +322,13 @@ export interface DiscPalette {
   // reach it for the actual color; the waterFrac scalar is only the
   // surface-liquid cover (dominant species, any solvent) that gates
   // which cells are liquid. See `oceanColorFor` above for the full stack. Painted only
-  // where the shader's existing `liquidOceanHere` predicate fires; cold
-  // bodies (globalness > 0.5) still fall back to ice/resource paths.
+  // where the shader's existing `liquidOceanHere` predicate fires;
+  // fragments above the snow line fall back to ice/resource paths.
   readonly oceanColor: readonly [number, number, number];
-  // Surface ice cover [0..1]. Drives cap-latitude paint on warm bodies
-  // (Earth's poles) and bulk cryosphere on cold ones (Europa). Same
-  // suppression gates as the surface-liquid cover (dominant species,
-  // any solvent) above.
+  // Surface ice cover [0..1]. Feeds iceCoverage (the latitude model's
+  // snow line) and the per-fragment ice/linea gates. Same suppression
+  // gates as the surface-liquid cover (dominant species, any solvent)
+  // above.
   readonly iceFrac: number;
   // Biome stipple — pigment color (archetype × stellar shift; see
   // biomePaintFor in color-science.ts) packed as [r,g,b], and coverage density
@@ -390,10 +393,12 @@ export interface DiscPalette {
   // Forced to 0.5 on no-surface bodies and tiny discs (the surface
   // block is unreachable there) so the attribute schema stays uniform.
   readonly surfaceAge: number;
-  // Phase 1.6 globalness [0..1]. Smoothstep on avgSurfaceTempK between
-  // ICE_TEMP_GLOBAL_K and ICE_TEMP_CAP_K. Selects between the cap-
-  // latitude ice pattern (warm) and the global-scatter pattern (cold).
-  readonly globalness: number;
+  // Ice coverage [0..1] — a pure function of iceFraction (no temperature;
+  // procgen already folded thermal state into iceFraction). Drives the
+  // shader's single continuous latitude model: the snow line sits at
+  // asin(1 − iceCoverage), so caps grow from the poles toward the equator
+  // as coverage rises, up to a wholly frozen disc.
+  readonly iceCoverage: number;
   // Lava / molten-surface emission. `moltenCoverage` [0..1] = how much of
   // the disc is molten — the max of an insolation-driven global-melt ramp
   // (avgSurfaceTempK across the silicate solidus) and a capped tidal/
@@ -575,14 +580,12 @@ export function buildDiscPalette(
   const liquidFrac = surfaceSuppressed ? 0   : (body.surfaceLiquidFraction ?? 0);
   const iceFrac    = surfaceSuppressed ? 0   : (body.iceFraction   ?? 0);
   const surfaceAge = surfaceSuppressed ? 0.5 : (body.surfaceAge ?? 0.5);
-  // `globalnessForTemp` is calibrated to water ice (frozen below ~180 K), but
-  // an open liquid sea means the surface ISN'T globally frozen however cold it
-  // is by water standards — procgen already decided liquidity per the actual
-  // solvent's freeze point (ammonia stays liquid to ~176 K, methane to ~90 K,
-  // pushed lower by salinity). So a body wearing a non-water sea is pulled
-  // toward the cap regime by its liquid extent; a dry/frozen body (liquidFrac
-  // 0) is unaffected, and a warm water world already sits at globalness ≈ 0.
-  const globalness = surfaceSuppressed ? 0   : globalnessForTemp(body.avgSurfaceTempK) * (1 - liquidFrac);
+  // Coverage is a pure function of iceFraction. No (1 − liquidFrac) factor:
+  // procgen's surfaceIceCover already split the surface into separate liquid
+  // and ice budgets per the solvent's actual freeze point, so suppressing
+  // coverage by liquid extent here would double-count what iceFraction
+  // already excludes.
+  const iceCoverage = surfaceSuppressed ? 0 : iceCoverageForFraction(iceFrac);
 
   // Unified haze blend — one color + one opacity per body, derived
   // from the atmospheric contributor list (bulk gases × pressure ×
@@ -769,7 +772,7 @@ export function buildDiscPalette(
     scatterColor: scatter.color,
     scatterStrength: scatter.strength,
     surfaceAge,
-    globalness,
+    iceCoverage,
     moltenCoverage,
     emissionTempNorm,
     lavaSulfurFrac,

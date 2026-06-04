@@ -692,7 +692,7 @@ const totalClassed = Object.values(classCount).reduce((a, b) => a + b, 0);
 const dominant = Object.entries(classCount).sort((a, b) => b[1] - a[1])[0];
 if (dominant && dominant[1] / totalClassed > 0.40) {
   flags.push(`archetype distribution skewed — "${dominant[0]}" is ${(dominant[1]/totalClassed*100).toFixed(1)}% of all classed bodies.\n      ` +
-             `Cold-trap gate is firing too eagerly; check ICE_TEMP_GLOBAL_K / iceFraction gates and BODY_THRESHOLDS.iceIceMin.`);
+             `Cold-trap gate is firing too eagerly; check COLD_TRAP freeze thresholds / iceFraction gates and BODY_THRESHOLDS.iceIceMin.`);
 }
 
 // Super-Earth + ring overlap.
