@@ -22,7 +22,7 @@ import { disposePool } from './dispose';
 import type { DiagramHit, DiagramPick, StarLightSource } from '../types';
 
 // One belt's footprint inside the shared chunk pool — vertex range +
-// the vertical extent used by the picker's bounding-box test.
+// the oriented half-extents used by the picker's rotated-box test.
 interface BeltSlot {
   bodyIdx: number;
   // rowSlots index — threaded into the chunk vertex z so this belt's
@@ -39,15 +39,20 @@ interface BeltSlot {
   // writes them into aChunkCenter for the sphere-lighting pass.
   chunkCenterOffsets: ReadonlyArray<{ dx: number; dy: number }>;
   // Slot center in buffer-pixel coords, written by layout() from the
-  // row item's cx/cy. Lets the picker bbox-test against the slot
-  // without re-walking rowSlots (matches the moon/planet picker shape).
+  // row item's cx/cy. The picker rotates the query into the slot's local
+  // frame and tests against it without re-walking rowSlots (matches the
+  // moon/planet picker shape).
   cx: number;
   cy: number;
-  // Bounding box half-extents used by the picker. Both are sized to the
-  // baked chunk-cluster extent rather than the raw slot box: halfW widens
-  // past the slot to cover chunks whose polygons spill beyond their
-  // edge-clamped centers, and halfH clamps down to the scatter so the
-  // hit-box drops the empty sky above and below a tall row.
+  // Oriented hit-box half-extents, measured in the belt's UN-TILTED local
+  // frame (before the band leans BELT_TILT_RAD off vertical). The picker
+  // rotates the query point into this frame and AABB-tests, so the hit
+  // region is a rotated rectangle tracking the leaned band rather than the
+  // fatter axis-aligned box enclosing it (which spilled over the planets
+  // behind). Both are sized to the baked chunk scatter, not the raw slot
+  // box: halfW widens past the slot to cover chunks whose polygons spill
+  // beyond their edge-clamped centers, and halfH clamps down to the scatter
+  // so the hit-box drops the empty sky above and below a tall row.
   halfW: number;
   halfH: number;
 }
@@ -116,14 +121,23 @@ export class BeltsLayer {
     writeLightUniforms(this.pool.material, lights);
   }
 
-  // Bbox test against each belt slot's laid-out center (written by
+  // Oriented-box test against each belt slot's laid-out center (written by
   // layout()), so the picker needs no rowSlots — same shape as the
-  // moon/planet pickers.
+  // moon/planet pickers. The query point is rotated into the belt's
+  // un-tilted local frame (inverse of the chunk-center lean applied in
+  // buildBeltPool) before the AABB test, so the hit region is the leaned
+  // band's true footprint, not the wider axis-aligned box around it.
   pickAt(x: number, y: number): DiagramHit | null {
     if (!this.pool) return null;
+    const tc = Math.cos(BELT_TILT_RAD);
+    const ts = Math.sin(BELT_TILT_RAD);
     let best: DiagramHit | null = null;
     for (const slot of this.pool.slots) {
-      if (Math.abs(x - slot.cx) <= slot.halfW && Math.abs(y - slot.cy) <= slot.halfH) {
+      const dx = x - slot.cx;
+      const dy = y - slot.cy;
+      const lx = dx * tc - dy * ts;
+      const ly = dx * ts + dy * tc;
+      if (Math.abs(lx) <= slot.halfW && Math.abs(ly) <= slot.halfH) {
         // Same band z the chunk vertices carry (slot.rowIdx · Z_STRIDE).
         const z = bandZ(slot.rowIdx, Z_BELT);
         if (best === null || z > best.z) best = { pick: { kind: 'belt', bodyIdx: slot.bodyIdx }, z };
@@ -212,6 +226,27 @@ function buildBeltPool(
     const shapes = shapesFor(icyness);
     const chunks = sampleBeltChunks(rng, N, halfW, halfH, sizes, shapes);
 
+    // Picker half-extents, measured in the UN-TILTED local frame (before
+    // the lean below). Each shape is inscribed in the unit circle, so a
+    // chunk reaches at most |c| + size from center; padding both axes by
+    // `size` is rotation-invariant, so these extents stay correct once the
+    // band tilts. Horizontally, chunk cx is clamped to ±halfW but the
+    // polygon still extends `size` beyond, so the box widens PAST the slot —
+    // otherwise the left/right-most chunks of a wide belt don't pick.
+    // Vertically, chunks cluster near center (Gaussian SD = halfH·CHUNK_CY_SD_FRAC)
+    // inside a slot sized off the largest planet on the row, so halfH
+    // additionally clamps DOWN to the scatter to drop the empty sky above
+    // and below the band. Measured pre-tilt so the leaned band's width
+    // never inflates its height (the bug the oriented picker fixes).
+    let chunkHalfW = 0;
+    let chunkHalfH = 0;
+    for (const chunk of chunks) {
+      chunkHalfW = Math.max(chunkHalfW, Math.abs(chunk.cx) + chunk.size);
+      chunkHalfH = Math.max(chunkHalfH, Math.abs(chunk.cy) + chunk.size);
+    }
+    const pickHalfW = chunkHalfW + BELT_PICK_PAD_PX;
+    const pickHalfH = Math.min(halfH, chunkHalfH + BELT_PICK_PAD_PX);
+
     // Lean the whole band off vertical: a rigid rotation of each chunk's
     // center about the slot anchor. Sampling stays axis-aligned (so the
     // thin-stretch SDs and center-weighted size bias keep their simple
@@ -267,24 +302,6 @@ function buildBeltPool(
       const ang = rng() * Math.PI * 2;
       chunkBlendDir.push({ x: Math.cos(ang), y: Math.sin(ang) });
     }
-
-    // Picker box tracks the real chunk scatter on BOTH axes, not the full
-    // slot box. Each shape is inscribed in the unit circle, so a chunk
-    // reaches at most |c| + size from center. Horizontally, chunk cx is
-    // clamped to ±halfW but the polygon still extends `size` beyond, so the
-    // box must widen PAST the slot — otherwise the left/right-most chunks of
-    // a wide belt don't pick. Vertically, chunks cluster near center
-    // (Gaussian SD = halfH·CHUNK_CY_SD_FRAC) inside a slot sized off the
-    // largest planet on the row, so halfH additionally clamps DOWN to the
-    // scatter to drop the empty sky above and below the band.
-    let chunkHalfW = 0;
-    let chunkHalfH = 0;
-    for (const chunk of chunks) {
-      chunkHalfW = Math.max(chunkHalfW, Math.abs(chunk.cx) + chunk.size);
-      chunkHalfH = Math.max(chunkHalfH, Math.abs(chunk.cy) + chunk.size);
-    }
-    const pickHalfW = chunkHalfW + BELT_PICK_PAD_PX;
-    const pickHalfH = Math.min(halfH, chunkHalfH + BELT_PICK_PAD_PX);
 
     const slotStart = cursor;
     const offsets:        { dx: number; dy: number }[] = [];
