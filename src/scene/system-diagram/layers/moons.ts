@@ -157,7 +157,7 @@ function writePoolPositions(pool: MoonPool | null, centers: PlanetCenterIndex, l
   pool.slots.forEach((slot, i) => {
     const parent = centers.get(slot.parentBodyIdx);
     if (!parent) return;
-    const D = slot.parentR + MOON_EDGE_BIAS;
+    const D = slot.parentR + MOON_EDGE_BIAS + moonRimOffset(slot.discPx);
     out[i * 3 + 0] = snapPx(parent.cx + Math.cos(slot.angle) * D);
     out[i * 3 + 1] = snapPx(parent.cy + Math.sin(slot.angle) * D);
     out[i * 3 + 2] = bandZ(parent.rowIdx, layerZ);
@@ -169,6 +169,18 @@ function moonDiscPx(radiusEarth: number | null): number {
   return discPxFromRadius(radiusEarth, {
     base: MOON_DISC_BASE, min: MOON_DISC_MIN, max: MOON_DISC_MAX, fallback: 0.3,
   });
+}
+
+// Outward shift of a moon's orbit ring beyond the parent rim, scaled by
+// the moon's rendered disc size. The largest moons (discPx = MOON_DISC_MAX)
+// sit with their centroid exactly on the rim (half the disc inside the
+// parent); the smallest (discPx = MOON_DISC_MIN) push out a full moon-radius
+// so they rest tangent to the rim, just touching the parent rather than
+// biting into it. Linear in disc size between those endpoints. discPx is
+// clamped to [MIN, MAX] upstream, so t stays in [0, 1].
+function moonRimOffset(discPx: number): number {
+  const t = (discPx - MOON_DISC_MIN) / (MOON_DISC_MAX - MOON_DISC_MIN);
+  return (discPx / 2) * (1 - t);
 }
 
 // Procedural moon angle distribution: largest-gap-fill with geometric
@@ -195,6 +207,10 @@ function distributeMoonAngles(
   const N = moonRadii.length;
   if (N === 0) return [];
   const rng = mulberry32(hash32(seed));
+  // Margins are computed on the rim ring (the innermost possible orbit).
+  // moonRimOffset pushes smaller moons onto larger rings at draw time, which
+  // only widens the angular gaps — so spacing computed here stays collision-
+  // free without threading the per-moon offset through the distribution.
   const D = parentR + MOON_EDGE_BIAS;
 
   interface Placed { angle: number; radius: number; sourceIdx: number }

@@ -142,16 +142,18 @@ export const PLANET_DISC_FLOOR_KNEE = 4;
 // Moon discs use a plain cbrt curve with hard clamps (discPxFromRadius in
 // row.ts) — moon radii are all sub-Earth, so they never reach the giant
 // band that the planet curve exists to spread, and a simple compression
-// reads fine. The 50 px cap exceeds the planet floor on purpose: moons
+// reads fine. The 30 px cap exceeds the planet floor on purpose: moons
 // read against their parent, not against the smallest planet in the
 // system, and big moons cluster around big planets (Ganymede / Titan orbit
-// gas giants), so a 50 px moon always sits next to a 100+ px parent in
-// practice. Floor at 10 keeps tiny inner moons visible against a Jupiter.
-export const MOON_DISC_MIN = 10;
-export const MOON_DISC_MAX = 50;
-// Multiplier on cbrt(radiusEarth). 67 lands Ganymede / Titan (~0.4 R⊕)
-// at the 50 px cap and Luna (~0.27 R⊕) at ~43 px.
-export const MOON_DISC_BASE = 67;
+// gas giants), so a 30 px moon always sits next to a 100+ px parent in
+// practice. Floor at 6 keeps tiny inner moons visible against a Jupiter.
+// All three knobs are the physically-anchored values scaled to 60% — a
+// render-interpretation choice to read moons smaller, not a procgen change.
+export const MOON_DISC_MIN = 6;
+export const MOON_DISC_MAX = 30;
+// Multiplier on cbrt(radiusEarth). 40 lands Ganymede / Titan (~0.4 R⊕)
+// at the 30 px cap and Luna (~0.27 R⊕) at ~26 px.
+export const MOON_DISC_BASE = 40;
 
 // Moon-center distance from parent center, expressed as an offset
 // relative to parent's rim. 0 = moon centered exactly on the parent's
@@ -163,7 +165,7 @@ export const MOON_EDGE_BIAS = 0;
 // rather than running the procedural surface/banded texture. At smaller
 // sizes the per-pixel palette pick reads as screen-door noise instead
 // of texture, and bands collapse to barber-pole stripes. The smallest
-// moons (10 px) land below this and render as one solid palette entry.
+// moons (6 px) land below this and render as one solid palette entry.
 export const PROCEDURAL_TEXTURE_MIN_PX = 16;
 
 // --- Belts ---
