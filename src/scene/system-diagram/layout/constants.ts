@@ -145,23 +145,23 @@ export const PLANET_DISC_FLOOR_KNEE = 4;
 // (~0.03–1.5 R⊕) still spans ~20× and must map across the px range without
 // piling at either end. A flat cap collapsed roughly a third of all moons
 // onto one value (every radius past the cap threshold rendered identical);
-// BASE is now anchored so the largest moons (the procgen mass ceiling near
-// 1.5 R⊕) approach the 30 px asymptote and the smooth right-skewed radius
+// BASE is anchored so the largest moons (the procgen mass ceiling near
+// 1.5 R⊕) approach the 42 px asymptote and the smooth right-skewed radius
 // distribution spreads naturally below it — the median moon (~0.21 R⊕) lands
-// ~15 px, the smallest (~0.03 R⊕) ease onto ~8 px. The soft asymptote (no
+// ~21 px, the smallest (~0.03 R⊕) ease onto ~11 px. The soft asymptote (no
 // hard clip) is what avoids the pile-up: radii past the knee compress gently
-// instead of stacking. The 30 px ceiling still exceeds the planet floor on
+// instead of stacking. The 42 px ceiling still exceeds the planet floor on
 // purpose — moons read against their parent, and big moons orbit big planets
 // (Ganymede / Titan around gas giants), so a top-end moon always sits next
 // to a 100+ px parent. TOP_KNEE sets how wide the upper bend; FLOOR_KNEE
 // eases the smallest onto MOON_DISC_MIN.
-export const MOON_DISC_MIN = 6;
-export const MOON_DISC_MAX = 30;
-export const MOON_DISC_TOP_KNEE = 2.5;
-export const MOON_DISC_FLOOR_KNEE = 1;
-// Multiplier on cbrt(radiusEarth) before the knees. 26 puts the ~1.5 R⊕
-// ceiling moons at the 30 px asymptote (see MOON_DISC_* above).
-export const MOON_DISC_BASE = 26;
+export const MOON_DISC_MIN = 8;
+export const MOON_DISC_MAX = 42;
+export const MOON_DISC_TOP_KNEE = 3.5;
+export const MOON_DISC_FLOOR_KNEE = 1.4;
+// Multiplier on cbrt(radiusEarth) before the knees. 36 puts the ~1.5 R⊕
+// ceiling moons near the 42 px asymptote (see MOON_DISC_* above).
+export const MOON_DISC_BASE = 36;
 
 // Moon-center distance from parent center, expressed as an offset
 // relative to parent's rim. 0 = moon centered exactly on the parent's
@@ -172,10 +172,9 @@ export const MOON_EDGE_BIAS = 0;
 // Disc-diameter floor (env-px) below which a body forces flat fill
 // rather than running the procedural surface/banded texture. At smaller
 // sizes the per-pixel palette pick reads as screen-door noise instead
-// of texture, and bands collapse to barber-pole stripes. With the
-// re-anchored moon curve most moons land below this and render as one
-// solid palette entry — intended at moon scale, where procedural detail
-// would read as noise rather than surface.
+// of texture, and bands collapse to barber-pole stripes. The smaller
+// moons fall below this and render as one solid palette entry — intended
+// at that scale, where procedural detail reads as noise, not surface.
 export const PROCEDURAL_TEXTURE_MIN_PX = 16;
 
 // --- Belts ---
