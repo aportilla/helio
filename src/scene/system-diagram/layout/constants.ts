@@ -172,13 +172,15 @@ export const MOON_DISC_BASE = 36;
 // pushes moons outward; negative pulls them inward.
 export const MOON_EDGE_BIAS = 0;
 
-// Disc-diameter floor (env-px) below which a body forces flat fill
-// rather than running the procedural surface/banded texture. At smaller
-// sizes the per-pixel palette pick reads as screen-door noise instead
-// of texture, and bands collapse to barber-pole stripes. The smaller
-// moons fall below this and render as one solid palette entry — intended
-// at that scale, where procedural detail reads as noise, not surface.
-export const PROCEDURAL_TEXTURE_MIN_PX = 16;
+// Disc-diameter floor (env-px) below which a body forces flat fill and
+// skips the whole procedural suite (surface texture + clouds + haze +
+// biome stipple + limb scatter). Set just under the moon disc floor
+// (MOON_DISC_MIN; smallest moon ~12 px) so every rendered body runs the
+// full procedural path — small moons read as chunky pixel surfaces, not
+// flat discs. Kept as a safety floor only: nothing currently renders
+// below it (planets floor at PLANET_DISC_MIN = 36), but a future tinier
+// body would flat-fill rather than dissolve into per-pixel noise.
+export const PROCEDURAL_TEXTURE_MIN_PX = 10;
 
 // --- Belts ---
 

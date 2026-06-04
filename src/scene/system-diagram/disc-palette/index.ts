@@ -561,8 +561,10 @@ export function buildDiscPalette(
     ? [atmColC.r, atmColC.g, atmColC.b]
     : [0, 0, 0];
 
-  // Force flat fill on very small discs — the per-pixel hash texture
-  // and the band strips both degrade to noise below ~16 px.
+  // Force flat fill on very small discs — the per-pixel hash texture and
+  // the band strips degrade to noise below PROCEDURAL_TEXTURE_MIN_PX. That
+  // floor now sits under the moon disc range, so in practice no body trips
+  // this; it stays as a guard for anything that renders tinier later.
   if (tinyDisc) {
     sW0 = 1; sW1 = 0; sW2 = 0;
   }
