@@ -38,27 +38,34 @@
 // stack such that the upper NH3 hides everything below it, while
 // Jupiter's lower NH3 coverage rents zonally to reveal NH4SH bands.
 //
-// ─── Surface palette: three resource-archetype slots ───────────────
+// ─── Surface palette: four zones from one primary colour ───────────
 //
-// `buildDiscPalette` derives the surface palette from each body's
-// dominant resources via `dominantResources(body, 2)`:
-//   slot 0  — single-archetype color for the top resource (ROCK_ARCHETYPE_SINGLE)
-//   slot 1  — pair archetype for top-1+top-2 (ROCK_ARCHETYPE_PAIR —
-//             basalt for metals+silicates, iron oxide for metals+
-//             rare-earths, sulfur deposits for silicates+radioactives,
-//             permafrost for silicates+volatiles, etc.)
-//   slot 2  — body-tinted barren regolith via `barrenTintFor(k0, k1)`
-//             — ordered lookup (different colors per ordering so
-//             dominance shows in the regolith) with formula fallback
-//             that mixes BARREN_ROCK_COLOR + RESOURCE_COLOR[k0/k1]
+// `buildDiscPalette` derives ONE primary surface colour per body from its
+// dominant resources via `dominantResources(body, 2)`, and the shader builds
+// the visible surface as a fixed, abundance-driven TOPOLOGY of four zones:
 //
-// Each archetype slot lerps toward BARREN_ROCK_COLOR by `1 − abundance`
-// (with ABUNDANCE_VISUAL_FLOOR so trace-resource slots still hint at
-// their archetype), and picks up a deterministic brightness offset +
-// temperature tint per body. The barren slot is NOT abundance-lerped —
-// it always paints at full strength as the body's regolith. World-
-// class color appears only as a flat-fill fallback when a body has no
-// resource signal at all.
+//   Uplands  (the resource patch, disc area ≈ primary abundance a0)
+//     ├─ Outer  — coastal band hugging the Uplands/Lowlands shoreline
+//     └─ Inner  — the patch core beyond the inset depth
+//   Lowlands (the regolith remainder, area 1 − a0)
+//     ├─ Outer  — coastal band
+//     └─ Inner  — the core
+//
+// The split is a jittered worley tessellation (Uplands vs Lowlands by an
+// abundance-weighted hash), then a per-area Outer/Inner inset cut by distance
+// to the shoreline — all in the shader. Each zone paints a SHADE of the one
+// primary colour (the first colour-assignment heuristic): a mirrored value ramp
+// — Uplands Inner lightest, then Uplands Outer, Lowlands Outer, Lowlands Inner
+// darkest — so the geometry is fixed and the colour is what we tune.
+//
+// The primary colour (slot 0): the PRIMARY resource's archetype hue, diluted
+// toward regolith by the regolith share (1 − a0) — pure primary-over-regolith,
+// so a rich world keeps its resource hue and a poor one washes toward barren
+// regolith. The SECONDARY resource (slot 1) enters ONLY through the shader's
+// Lowlands blend (vWeights.y = a1 scales it, heaviest in Lowlands Inner): it
+// stains the low ground and never touches the Uplands or claims an area.
+// vWeights.x = a0 drives the Uplands/Lowlands split. World-class colour appears
+// only as a flat-fill fallback when a body has no resource signal at all.
 //
 // Gas / ice giants skip the surface entirely and paint `atmColumnColor`
 // — a frac × GAS_POTENCY weighted blend of the body's atm slots that
@@ -138,7 +145,7 @@ import { Color } from 'three';
 import { Body } from '../../../data/stars';
 import { MAX_CLOUD_LAYERS } from '../../materials';
 import {
-  BARREN_ROCK_COLOR, barrenTintFor,
+  BARREN_ROCK_COLOR,
   biomePaintFor, cloudDeckPalette, dominantResources, lerpColor,
   rockArchetypeFor,
 } from '../color-science';
@@ -178,17 +185,32 @@ const TEMP_NEUTRAL_K = 280;
 const TEMP_COLD_K    = 100;
 const TEMP_HOT_K     = 700;
 
-// Two consumers share BARREN_ROCK_COLOR (imported from data/stars). The
-// archetype slots lerp toward it by (1 − abundance) so a trace-silicates
-// region collapses ~90% to neutral regolith. The third slot — the body-
-// tinted barren paint — uses it as the base for a (k0, k1)-flavored
-// mineralogy hint via `barrenTintFor`, so the disc's regolith varies
-// per body instead of every world wearing the same grey.
-// ABUNDANCE_VISUAL_FLOOR keeps any present-but-trace resource from
-// collapsing all the way to grey (~10% archetype always survives, so
-// the disc still hints at the underlying mineralogy rather than reading
-// as pure noise).
-const ABUNDANCE_VISUAL_FLOOR = 0.1;
+// BARREN_ROCK_COLOR (imported from data/stars) backstops the no-resource
+// flat-fill fallback (a body whose entire resource grid is empty).
+
+// Surface AREA model — primary abundance (a0) splits the disc into Uplands (the
+// resource patch, area a0) and Lowlands (regolith, 1 − a0); the shader carves an
+// Outer/Inner inset into each for the four zones. AREA carries abundance: a
+// trace deposit reads as sparse small Uplands patches on a mostly-regolith disc,
+// a motherlode fills it. The secondary resource is ignored for AREA — it only
+// tints the primary COLOR (see the blend in buildDiscPalette).
+
+// Regolith base — the barren-rock colour the primary surface colour dilutes
+// toward by the regolith share (1 − a0), so a resource-poor world reads as mostly
+// regolith and a rich one mostly its resource hue. A neutral, faintly-warm mid
+// grey (per-body tinted for sibling variety): it is now the colour the WHOLE
+// disc blends toward on poor worlds — the master "barren darkness" lever — so it
+// sits at mid lightness rather than the near-black the old stained-substrate
+// model used (that model needed the base darker than the patches; there are no
+// separate patches now).
+const REGOLITH_BASE_COLOR = new Color(0x4a4742);
+
+// Minimum disc fraction each big area (Uplands / Lowlands) always keeps, so
+// neither fully vanishes at the abundance extremes — a pure motherlode still
+// shows some regolith and a barren world still shows some resource, both
+// keeping a shoreline (and thus the four-zone structure). Only a0 < FLOOR or
+// a0 > 1 − FLOOR is affected; the mid-range area stays exactly abundance.
+const ZONE_AREA_FLOOR = 0.15;
 
 // Synthetic base deck params for no-surface bodies. The deck color is
 // the atm column lifted slightly toward white so deck cells fire at a
@@ -480,32 +502,23 @@ export function buildDiscPalette(
   const hasSurface = surfaceOpacity > 0;
   const tinyDisc = discPx < PROCEDURAL_TEXTURE_MIN_PX;
 
-  // ── SURFACE PALETTE — three paint slots for terrestrials, bulk-atm
-  // column tint for gas/ice giants. World-class color re-enters as a
-  // flat-fill fallback when a body carries no resource signal at all.
+  // ── SURFACE PALETTE — one primary colour (shaded into four zones by the
+  // shader) for terrestrials, bulk-atm column tint for gas/ice giants. World-
+  // class colour re-enters as a flat-fill fallback when a body carries no
+  // resource signal at all.
   //
   // Slot mapping (terrestrials with N>=1 nonzero resources):
-  //   slot 0 = top-1 single archetype           (Mercury → iron grey)
-  //   slot 1 = (top-1 + top-2) pair archetype   (M+S    → basalt)
-  //   slot 2 = body-tinted barren regolith      (M+S    → rust-stained
-  //                                              iron-grey dust)
+  //   slot 0 = the primary surface colour — the PRIMARY resource hue diluted
+  //            toward regolith by (1 − a0) and tinted toward the SECONDARY by a1.
+  //            The shader derives the four zone shades from it.
+  //   slot 1 = the raw SECONDARY resource hue, which the shader pools into the
+  //            Lowlands zones (blend amount = vWeights.y = a1).
+  //   slot 2 = schema filler (equal to slot 0; the shader reads slot 0).
   //
-  // With N=1 → slot 1 = slot 0. The shader's per-region subset hash
-  // picks one of 7 non-empty subsets of {p0, p1, p2} so a region paints
-  // as pure-archetype-A, pure-archetype-B, body-tinted barren regolith,
-  // or any mix — coherent mineralogy rather than a blend of raw
-  // saturated resource colors.
-  //
-  // The two archetype slots are lerped toward BARREN_ROCK_COLOR by
-  // (1 − abundance) so resource-poor worlds fade toward neutral; the
-  // barren slot is independent of abundance — it's always the body's
-  // own tinted regolith and provides the visual variety that
-  // distinguishes a metal-rich world's barren patches from a volatile-
-  // rich one's. Net visual: a resource-poor moon and a resource-rich
-  // planet read visually distinct (the rich planet shows vibrant
-  // archetype regions next to body-tinted barren; the poor moon shows
-  // muted archetype regions next to body-tinted barren) instead of
-  // both saturating the same archetype palette.
+  // vWeights.x = a0 splits the disc into Uplands (resource patch, area a0) and
+  // Lowlands (regolith, 1 − a0); the shader insets each into Outer/Inner.
+  // vWeights.y = a1 is NOT an area — it scales the Lowlands secondary stain. So
+  // the secondary still claims no patch; it only colours.
   let sC0: Color, sC1: Color, sC2: Color;
   let sW0: number, sW1: number, sW2: number;
   if (!hasSurface) {
@@ -527,33 +540,32 @@ export function buildDiscPalette(
       const k1 = res[1]?.key ?? null;
       const a0 = res[0].abundance;
       const a1 = res[1]?.abundance ?? 0;
-      const arch0 = applyPerBodyTints(rockArchetypeFor(k0, null, 1), body, seed);
-      // a0 / (a0 + a1) needs no zero guard: dominantResources filters to
-      // value > 0, so res[0] (and thus a0) is always strictly positive when
-      // res.length > 0 — the denominator can't vanish.
-      const arch1 = applyPerBodyTints(
-        k1 !== null ? rockArchetypeFor(k0, k1, a0 / (a0 + a1)) : arch0,
-        body, seed,
-      );
-      // Per-slot grey lerp keyed off absolute abundance. Floor keeps a
-      // present-but-trace resource from collapsing fully to grey so the
-      // disc still hints at composition.
-      const t0 = Math.max(ABUNDANCE_VISUAL_FLOOR, a0);
-      const t1 = Math.max(ABUNDANCE_VISUAL_FLOOR, a1);
-      sC0 = lerpColor(BARREN_ROCK_COLOR, arch0, t0);
-      sC1 = lerpColor(BARREN_ROCK_COLOR, arch1, t1);
-      // Slot 2: body-tinted barren regolith. Ordered (k0, k1) so a
-      // metals-dominant world's barren differs from a silicates-
-      // dominant one's. Runs through applyPerBodyTints for the same
-      // sibling-distinguishing brightness/temp shifts the archetype
-      // slots use. NOT abundance-lerped — the barren patches are the
-      // body's actual regolith, present at full strength regardless of
-      // how rich the rest is.
-      sC2 = applyPerBodyTints(barrenTintFor(k0, k1), body, seed);
-      // Equal weights across all three slots so the region hash gets
-      // an even shot at each. Abundance shows through the per-slot
-      // color lerp above, not as area share.
-      sW0 = 1; sW1 = 1; sW2 = 1;
+      // Slot 0 — the PRIMARY surface colour the shader shades into the four
+      // zones: the primary resource's hue diluted toward regolith by the
+      // REGOLITH SHARE (1 − a0), so a rich world keeps its resource hue and a
+      // poor one washes toward barren grey. PURE primary-over-regolith — the
+      // secondary is deliberately NOT tinted in here.
+      // Slot 1 — the raw SECONDARY hue. The secondary enters ONLY through the
+      // shader's Lowlands blend (weight.y carries a1 as the blend amount): it
+      // stains the low ground and leaves the Uplands pure primary. It still
+      // claims no AREA. Slot 2 is schema filler (the shader reads slot 0).
+      const resHue = applyPerBodyTints(rockArchetypeFor(k0, null, 1), body, seed);
+      const secHue = k1 !== null
+        ? applyPerBodyTints(rockArchetypeFor(k1, null, 1), body, seed)
+        : resHue;
+      const regolith = applyPerBodyTints(REGOLITH_BASE_COLOR, body, seed);
+      const primary = lerpColor(resHue, regolith, clamp01(1 - a0));
+      sC0 = primary; sC1 = secHue; sC2 = primary;
+      // AREA — the resource (Uplands) covers the primary abundance, regolith
+      // (Lowlands) the rest. vWeights.x = a0 drives the shader's zone split.
+      // Clamped away from 0/1 by ZONE_AREA_FLOOR: a pure motherlode (a0 = 1)
+      // would otherwise leave no Lowlands — no shoreline, no inset — and the
+      // disc would collapse to one flat zone. Only the extreme tails move; the
+      // "area = abundance" mapping is exact through the middle of the range.
+      const upArea = Math.min(1 - ZONE_AREA_FLOOR, Math.max(ZONE_AREA_FLOOR, clamp01(a0)));
+      sW0 = upArea;
+      sW1 = clamp01(a1);  // → vWeights.y: the secondary's Lowlands blend amount, NOT an area
+      sW2 = 1 - upArea;
     }
   }
 

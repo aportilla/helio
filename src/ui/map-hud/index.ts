@@ -29,6 +29,7 @@ import { getSettings, setSetting, type ResolutionPreference } from '../../settin
 import { effectiveScale, type RenderScale } from '../../scene/render-scale';
 import {
   paintCloseX,
+  paintGrid,
   paintHamburger,
   paintSurface,
 } from '../painter';
@@ -83,6 +84,25 @@ function buildSettingsIconTexture(state: SettingsIconState): CanvasTexture {
   return paintToTexture(c);
 }
 
+// 2-state factory for the planet-test trigger (top-left). Momentary
+// trigger, not a toggle — only off/hover, mirroring the close-X pool.
+// Hover swaps both the border and glyph to the accent/bright pair.
+function buildTestIconTexture(state: 'off' | 'hover'): CanvasTexture {
+  const SIZE = sizes.iconBox;
+  const c = document.createElement('canvas');
+  c.width = SIZE; c.height = SIZE;
+  const g = c.getContext('2d')!;
+
+  const isHover = state === 'hover';
+  paintSurface(g, 0, 0, SIZE, SIZE, {
+    bg: colors.surface,
+    border: isHover ? colors.borderAccent : colors.borderDim,
+  });
+  paintGrid(g, 0, 0, SIZE, isHover ? colors.glyphHover : colors.glyphOff);
+
+  return paintToTexture(c);
+}
+
 export class MapHud {
   readonly scene = new Scene();
   readonly camera = new OrthographicCamera(0, 1, 1, 0, -1, 1);
@@ -104,6 +124,8 @@ export class MapHud {
   private readonly settingsIcon: IconButton;
   private readonly settingsPanel: Panel;
   private readonly panelClose: IconButton;
+  // Planet-test trigger (top-left). Always visible in galaxy view.
+  private readonly testIcon: IconButton;
 
   // Mirror of the currently-selected cluster so handleClick can route
   // the View System button press without round-tripping through scene.
@@ -112,6 +134,7 @@ export class MapHud {
   // Shared texture pools — disposed in dispose() (single owner).
   private readonly closeXTextures: IconButtonStates;
   private readonly settingsIconTextures: IconButtonStates;
+  private readonly testIconTextures: IconButtonStates;
 
   private settingsPanelOpen = false;
   private hoveredRowId: string | null = null;
@@ -133,6 +156,8 @@ export class MapHud {
   onAction: (id: ActionId) => void = () => {};
   onDeselect: () => void = () => {};
   onViewSystem: (clusterIdx: number) => void = () => {};
+  // Opens the planet test view; the scene wires it to AppController.enterTest.
+  onViewTest: () => void = () => {};
   onFocus: (clusterIdx: number) => void = () => {};
   // Fires when a setting changes via the modal — scene reads getSettings()
   // each gesture so this is informational, but having a hook lets the
@@ -162,6 +187,10 @@ export class MapHud {
       hover:   buildSettingsIconTexture('offHover'),
       on:      buildSettingsIconTexture('on'),
       onHover: buildSettingsIconTexture('onHover'),
+    };
+    this.testIconTextures = {
+      off:   buildTestIconTexture('off'),
+      hover: buildTestIconTexture('hover'),
     };
 
     // ---- close-X on info card -------------------------------------------
@@ -196,6 +225,13 @@ export class MapHud {
       hitPad: sizes.iconHitPad,
     });
     this.settingsIcon.addTo(this.scene);
+
+    // ---- planet-test trigger (top-left) ---------------------------------
+    this.testIcon = new IconButton(sizes.iconBox, this.testIconTextures, {
+      renderOrder: 100,
+      hitPad: sizes.iconHitPad,
+    });
+    this.testIcon.addTo(this.scene);
 
     // ---- settings panel (modal) -----------------------------------------
     this.settingsPanel = new Panel(100);
@@ -284,6 +320,10 @@ export class MapHud {
       }
       return true;
     }
+    if (this.testIcon.bounds.contains(bufX, bufY)) {
+      this.onViewTest();
+      return true;
+    }
     if (this.settingsIcon.bounds.contains(bufX, bufY)) {
       // Click trigger when panel is already open → close. Common popover
       // toggle pattern.
@@ -350,6 +390,7 @@ export class MapHud {
       return this.focusBtn.isDisabled ? 'opaque' : 'interactive';
     }
     if (this.settingsIcon.bounds.contains(bufX, bufY)) return 'interactive';
+    if (this.testIcon.bounds.contains(bufX, bufY)) return 'interactive';
     if (this.infoCard.visible && this.infoCard.visibleBounds.contains(bufX, bufY)) return 'opaque';
     return 'transparent';
   }
@@ -371,6 +412,9 @@ export class MapHud {
 
     const onSettingsIcon = this.settingsIcon.bounds.contains(bufX, bufY);
     this.settingsIcon.setHover(onSettingsIcon);
+
+    const onTestIcon = this.testIcon.bounds.contains(bufX, bufY);
+    this.testIcon.setHover(onTestIcon);
 
     let onPanelClose = false;
     let hoveredRow: PanelHit | null = null;
@@ -406,7 +450,7 @@ export class MapHud {
         this.settingsPanel.setHoveredRow(newRowId);
       }
     }
-    return onCloseX || onViewBtn || onFocusBtn || onSettingsIcon || onPanelClose
+    return onCloseX || onViewBtn || onFocusBtn || onSettingsIcon || onTestIcon || onPanelClose
       || hoveredRow !== null || hoveredTab !== null || onRadioPill;
   }
 
@@ -589,6 +633,7 @@ export class MapHud {
   private layoutAll(): void {
     this.layoutInfoCard();
     this.settingsIcon.anchorTo('tr', this.bufferW, this.bufferH, sizes.edgePad, sizes.edgePad);
+    this.testIcon.anchorTo('tl', this.bufferW, this.bufferH, sizes.edgePad, sizes.edgePad);
     if (this.settingsPanelOpen) this.layoutSettingsPanel();
   }
 
@@ -652,11 +697,15 @@ export class MapHud {
     for (const k of Object.keys(this.settingsIconTextures) as Array<keyof IconButtonStates>) {
       this.settingsIconTextures[k]?.dispose();
     }
+    for (const k of Object.keys(this.testIconTextures) as Array<keyof IconButtonStates>) {
+      this.testIconTextures[k]?.dispose();
+    }
     this.infoCard.dispose();
     this.cardClose.dispose();
     this.viewSystemBtn.dispose();
     this.focusBtn.dispose();
     this.settingsIcon.dispose();
+    this.testIcon.dispose();
     this.settingsPanel.dispose();
     this.panelClose.dispose();
   }

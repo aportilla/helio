@@ -159,6 +159,33 @@ export function paintHamburger(
   g.fillRect(lineX, y + 11, lineW, 1);
 }
 
+// A 2×2 arrangement of equal filled squares with a 1-px gap between them,
+// centered in a `size`×`size` box — a "grid of planets" glyph for the
+// planet-test view trigger. Cell size derives from the gap so the four
+// squares stay square and the block centers on an exact pixel boundary.
+export function paintGrid(
+  g: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  size: number,
+  color: string,
+): void {
+  const GAP = 1;
+  const CELL = 5;                       // 2×5 + 1 gap = 11-px block
+  const block = CELL * 2 + GAP;
+  const off = Math.floor((size - block) / 2);
+  g.fillStyle = color;
+  for (let row = 0; row < 2; row++) {
+    for (let col = 0; col < 2; col++) {
+      g.fillRect(
+        x + off + col * (CELL + GAP),
+        y + off + row * (CELL + GAP),
+        CELL, CELL,
+      );
+    }
+  }
+}
+
 export interface SegmentedPillOpts {
   selected: boolean;
   hover: boolean;

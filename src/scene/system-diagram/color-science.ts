@@ -369,21 +369,34 @@ export const SCATTERING_POTENCY: Record<AtmGas, number> = {
 // Record<AtmGas, number> via gas-potency.d.mts.
 export { GAS_POTENCY } from '../../../scripts/lib/gas-potency.mjs';
 
-// Archetypal hue per resource — saturated brand colors used wherever the
-// renderer needs a direct gameplay signal (atmospheric dust takes its
-// color from the body's mineralogy via `dustColorFor`, future mining-
-// yield UI panels, etc.). NOT used directly for the rocky disc surface
-// — the surface path passes the body's top resources through the rock-
-// archetype LUT below so realistic mineralogies (basalt, iron oxide,
-// permafrost) emerge from pairs rather than blending saturated hues.
-export const RESOURCE_COLOR: Record<ResourceKey, Color> = {
-  resMetals:       new Color(0x6c6c70),  // iron-grey
-  resSilicates:    new Color(0x9c7c5c),  // rust-tan
-  resVolatiles:    new Color(0xc8e0e8),  // pale ice
-  resRareEarths:   new Color(0xb46c8c),  // rose
-  resRadioactives: new Color(0xa8c460),  // yellow-green
-  resExotics:      new Color(0xa468c8),  // magenta
+// Canonical resource palette — the SINGLE SOURCE OF TRUTH for the six resource
+// hues. Both the gameplay-signal palette (RESOURCE_COLOR — belt chunks,
+// info-card ratings, atmospheric dust via dustColorFor) and the disc-surface
+// mineralogy palette (ROCK_ARCHETYPE_SINGLE) derive from this, so a palette
+// retune lands in exactly one place and the belt/panel signal can't drift out
+// of sync with the planet surface.
+export const RESOURCE_HEX: Record<ResourceKey, number> = {
+  resMetals:       0x626262,  // neutral mid grey (cold metallic / iron)
+  resSilicates:    0xb5a841,  // gold-khaki (rocky regolith, dust)
+  resVolatiles:    0x888773,  // pale sage grey (ices / frost)
+  resRareEarths:   0x773c4d,  // mauve-wine (monazite / REE ore)
+  resRadioactives: 0x7a5b19,  // umber-gold (uraninite ore — leans toward the green ember)
+  resExotics:      0xbc4c2e,  // burnt orange (exotic anomaly)
 };
+
+// Fresh Color per resource from the canonical hex — separate instances so a
+// consumer that treats its palette as read-only can't leak a mutation into
+// another's.
+function resourceColors(): Record<ResourceKey, Color> {
+  const out = {} as Record<ResourceKey, Color>;
+  for (const k of Object.keys(RESOURCE_HEX) as ResourceKey[]) out[k] = new Color(RESOURCE_HEX[k]);
+  return out;
+}
+
+// Direct gameplay-signal hue per resource (belt chunks, info-card resource
+// ratings, atmospheric dust via dustColorFor). Synced with the disc surface —
+// both derive from RESOURCE_HEX above.
+export const RESOURCE_COLOR: Record<ResourceKey, Color> = resourceColors();
 
 const RESOURCE_KEYS: readonly ResourceKey[] = [
   'resMetals', 'resSilicates', 'resVolatiles',
@@ -423,20 +436,14 @@ export const RESOURCE_EMBER_POTENCY: Record<ResourceKey, number> = {
   resExotics:      1.0,
 };
 
-// Desaturated single-resource colors for the rocky-surface palette path.
-// These are what a region paints when only one resource dominates it (no
-// pair lookup fires). Pulled toward neutral / earth tones AND toward the
-// upper-middle of the lightness range so the disc reads as bright pixel-
-// art pastel rather than dark realism. The pair LUT below handles the
-// common mineralogical combinations.
-const ROCK_ARCHETYPE_SINGLE: Record<ResourceKey, Color> = {
-  resMetals:       new Color(0x9899a0),  // light cold grey (Mercury, iron asteroids)
-  resSilicates:    new Color(0xbca884),  // warm light tan (Luna highlands, dust)
-  resVolatiles:    new Color(0xdceaf0),  // pale ice-cyan (Europa, polar caps)
-  resRareEarths:   new Color(0xb89498),  // light dusty rose (trace stain)
-  resRadioactives: new Color(0xb8b080),  // light olive-ochre (uraninite-ore)
-  resExotics:      new Color(0x7e7484),  // lifted obsidian (lavender-grey anomaly)
-};
+// Single-resource colors for the rocky-surface palette path — what a region
+// paints when only one resource dominates it. Derived from the same canonical
+// RESOURCE_HEX as RESOURCE_COLOR, so the planet surface and the belt/panel
+// gameplay signal stay in lockstep. Pair/blend behaviour lives elsewhere: the
+// curated LUT below (for belts / lava via rockArchetypeFor) and the disc-
+// palette's primary-over-regolith dilution + Lowlands secondary stain (for the
+// planet disc surface).
+const ROCK_ARCHETYPE_SINGLE: Record<ResourceKey, Color> = resourceColors();
 
 // Rock-archetype pair LUT — when a region's resource subset contains two
 // resources both above threshold, look up the named mineralogy here

@@ -269,7 +269,7 @@ function distributeMoonAngles(
 function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   const N = slots.length;
   const { geometry, cloudTex } = buildBodyDiscGeometry(
-    slots.map(s => ({ bodyIdx: s.bodyIdx, discPx: s.discPx })),
+    slots.map(s => ({ body: BODIES[s.bodyIdx], discPx: s.discPx })),
   );
   const material = makePlanetMaterial(1.0);
   material.uniforms.uCloudLayerData.value = cloudTex;

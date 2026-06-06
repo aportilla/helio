@@ -370,14 +370,15 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
 
       // Surface-mode worley cell pitch — equivalent screen-pixels at
       // disc center. Cells live in sphere-space (lon, lat) scaled by
-      // vRadius / SURFACE_PATCH_PX, so a 60-px planet disc still gets
-      // ~15 cells across the equator but the cells foreshorten as they
-      // approach the limb (the natural sphere-projection compression).
-      // Jittered cell centers in the angular frame make the patch
-      // silhouettes non-grid-aligned; the ground reads as organic lumps
-      // wrapping a globe rather than rectangular tiles stamped on a
-      // disc.
-      const float SURFACE_PATCH_PX = 4.0;
+      // vRadius / SURFACE_PATCH_PX, so a 60-px planet disc gets ~17 cells
+      // across the equator but the cells foreshorten as they approach the
+      // limb (the natural sphere-projection compression). Jittered cell
+      // centers in the angular frame make the patch silhouettes non-grid-
+      // aligned; the ground reads as organic lumps wrapping a globe rather
+      // than rectangular tiles stamped on a disc. This is the foundational
+      // pass — ice, biome, linea AND the zone regions (× RESOURCE_LAYER_
+      // PATCH_FACTOR) all derive their density from it.
+      const float SURFACE_PATCH_PX = 2.5;
 
       // Sphere-projection inset for surface mode. The disc edge maps
       // to the point on the sphere where (nxs, nys) reach
@@ -397,20 +398,30 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // must reach the disc edge or it clips entirely.
       const float SPHERE_VISIBLE_FRAC = 0.85;
 
-      // Continent grouping: every CONTINENT_GROUP worley cells along
-      // each axis share one ocean/land decision. Inherits the worley
-      // boundary irregularity for free (rather than grid-aligned 16-px
-      // squares), so continents have ragged Earth-like coasts at no
-      // extra shader cost beyond one hash. 4 → ~16 px continents.
-      const float CONTINENT_GROUP = 4.0;
+      // Liquid-fill elevation. Water floods the low ground using the SAME zone
+      // geometry as the land (the shoreline distance + Uplands/Lowlands flag),
+      // so the waterline follows the visible terrain rather than an independent
+      // field — see the liquid block in the surface pass. Within a zone the
+      // elevation ramps from 0.5 at the shoreline to 0 (deep Lowland interior)
+      // or 1 (deep Upland interior) over WATER_INTERIOR_PX; a little value-noise
+      // (at WATER_ELEV_PITCH_PX) of amplitude WATER_COAST_FUZZ only roughens the
+      // coastline so it reads organic, not as the hard worley edge.
+      const float WATER_INTERIOR_PX   = 8.0;
+      const float WATER_ELEV_PITCH_PX = 14.0;
+      const float WATER_COAST_FUZZ    = 0.22;
 
-      // Coastal-fringe highlight deltas (consumed by the two-ring coast
-      // logic in the surface block). Ring 1 (one worley cell from land)
-      // paints a solid +COAST_LIGHT_DELTA shoreline; ring 2 (two cells
-      // out) dithers that same highlight at COAST_R2_COVERAGE density so
-      // the band fades into the deep ocean instead of ending hard.
-      const float COAST_LIGHT_DELTA = 0.14;
-      const float COAST_R2_COVERAGE = 0.35;
+      // Continental shelf — read straight from the topo: the shallow submerged
+      // terrain near the coast reads brighter and stipples out into the deep.
+      // WATER_SHELF_DEPTH is the elevation depth of the shelf break (how far
+      // below the waterline the shelf reaches). That depth resolves to pixels
+      // through the local seabed slope, so the shelf is WIDE where the bottom
+      // slopes gently and NARROW where it drops steeply — no fixed ring. shelfT
+      // runs 1 at the waterline → 0 at the break: above WATER_SHELF_SOLID_T the
+      // highlight is solid, below it a per-pixel dither (density = shelfT) thins
+      // it with depth so the shelf fades out organically.
+      const float WATER_SHELF_DEPTH   = 0.18;
+      const float WATER_SHELF_SOLID_T = 0.7;
+      const float COAST_LIGHT_DELTA   = 0.14;
 
       // Ocean fill color is per-body and read from vOceanColor (sampled
       // from uCloudLayerData), derived in disc-palette/ocean.ts so two
@@ -521,6 +532,53 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // reads as one dominant colour with sparse contrast rather than
       // checkerboard alternation.
       const float SECONDARY_COVERAGE = 0.20;
+
+      // ── Surface topology: Uplands / Lowlands, each split Outer / Inner ──
+      // The primary resource's abundance (vWeights.x = a0) claims the disc into
+      // two areas via a jittered worley tessellation — the resource patch
+      // (UPLANDS, area ≈ a0) and the regolith remainder (LOWLANDS, 1 − a0). The
+      // shoreline between them then carves each area into an OUTER coastal band
+      // (within SURFACE_INSET_DEPTH_PX of the boundary) and an INNER core
+      // beyond it — four zones. Each paints a shade of the body's single
+      // primary colour (vPalette0); the geometry is fixed and abundance-driven,
+      // the colour is what we tune into it.
+
+      // Patch scale for the Uplands/Lowlands claim: the worley runs at
+      // RESOURCE_LAYER_PATCH_FACTOR × the fine SURFACE_PATCH_PX pitch, so each
+      // patch spans roughly that many fine cells. Patch SIZE is fixed;
+      // abundance sets only the FRACTION of patches that are Uplands, so a
+      // resource-poor world reads as sparse resource "continents" in a regolith
+      // sea rather than one shrinking blob. Irregular jittered polygons (not a
+      // floor() grid, which reads boxy). At 4.0 a 64-px disc carries ~5-6
+      // patches per axis.
+      const float RESOURCE_LAYER_PATCH_FACTOR = 4.0;
+
+      // Inset depth — how far inward (env-px from the shoreline) the Outer
+      // coastal band reaches before the Inner core begins. A patch thinner than
+      // the depth is all Outer (no developed core) — physically apt for a small
+      // deposit.
+      const float SURFACE_INSET_DEPTH_PX = 5.0;
+
+      // A very small ordered (Bayer) dither on BOTH topo edges — the Uplands/
+      // Lowlands seam and the Outer/Inner inset contour — so they read as a
+      // ~1 px stipple fray rather than hard contours, without losing the four
+      // clean areas.
+      const float SURFACE_EDGE_DITHER_PX = 0.5;
+
+      // Shade step — the four zones are a mirrored value ramp around the primary
+      // colour P: Uplands Inner = P lightened 1.5·step toward white, Uplands
+      // Outer 0.5·step, Lowlands Outer 0.5·step toward black, Lowlands Inner
+      // 1.5·step. One knob sets the whole ramp's spread; the buried regolith a
+      // crater / linea exposes reuses the darkest shade (Lowlands Inner).
+      const float SURFACE_SHADE_STEP = 0.12;
+
+      // Secondary-resource blend into the Lowlands. On top of the primary
+      // shades, the two Lowlands zones lerp toward the SECONDARY resource hue
+      // (vPalette1) by the secondary's abundance (vWeights.y) × this max —
+      // heaviest in Lowlands Inner and HALF that in Lowlands Outer — so the
+      // second deposit reads as a stain pooling in the low ground. Uplands are
+      // untouched.
+      const float LOWLAND_SECONDARY_BLEND = 0.6;
 
       // Phase 1.5c — discrete crater features + ejecta rays. Crater
       // seed cells are CRATER_PATCH_FACTOR × the fine worley cell
@@ -978,6 +1036,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // separate budget pairs — the same decorrelate-by-distinct-offset trick.
       const vec2 SALT_SURFACE_JITTER_A = vec2(13.0, 19.0);
       const vec2 SALT_SURFACE_JITTER_B = vec2(23.0, 29.0);
+      const vec2 SALT_WATER_OCTAVE     = vec2(1201.0, 1213.0);
       const vec2 SALT_CONTINENT        = vec2(113.0, 127.0);
       const vec2 SALT_COAST_DITHER     = vec2(257.0, 379.0);
       const vec2 SALT_BIOME_STIPPLE    = vec2(197.0, 311.0);
@@ -985,6 +1044,8 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       const vec2 SALT_REGION_PRIMARY   = vec2(401.0, 419.0);
       const vec2 SALT_REGION_SECONDARY = vec2(431.0, 433.0);
       const vec2 SALT_RESOURCE_PICK    = vec2(1009.0, 2017.0);
+      const vec2 SALT_RESLAYER_JIT_A   = vec2(1031.0, 1051.0);
+      const vec2 SALT_RESLAYER_JIT_B   = vec2(1063.0, 1087.0);
       const vec2 SALT_CRATER_EXIST     = vec2(547.0, 569.0);
       const vec2 SALT_CRATER_JITTER_X  = vec2(587.0, 547.0);
       const vec2 SALT_CRATER_JITTER_Y  = vec2(569.0, 587.0);
@@ -1031,6 +1092,20 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // matrix derivation.
       ${BAYER4_GLSL}
       ${STAR_CRESCENT_LIGHTING_GLSL}
+
+      // Smooth value noise in [0,1] — bilinear-interpolated hash over the
+      // integer lattice with a smoothstep fade. Builds the organic liquid-fill
+      // elevation field (see the liquid block). Cheap: 4 hash21 + a few mixes.
+      float valueNoise2(vec2 p, vec2 salt) {
+        vec2 i = floor(p);
+        vec2 f = p - i;
+        f = f * f * (3.0 - 2.0 * f);
+        float a = hash21(i + salt);
+        float b = hash21(i + vec2(1.0, 0.0) + salt);
+        float c = hash21(i + vec2(0.0, 1.0) + salt);
+        float dd = hash21(i + vec2(1.0, 1.0) + salt);
+        return mix(mix(a, b, f.x), mix(c, dd, f.x), f.y);
+      }
 
       // Worley F1/F2 cell scan over the 3×3 neighborhood. For a fragment
       // at cellFrac within integer cell cellId, finds the nearest (F1)
@@ -1149,6 +1224,44 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         }
         int tertiary = (secondary == primary) ? primary : (3 - primary - secondary);
         return ivec3(primary, secondary, tertiary);
+      }
+
+      // Assign a surface patch to a zone by a hash against weights.x (the
+      // Uplands fraction a0): returns 0 (Uplands) for that fraction of patches
+      // and 2 (Lowlands) for the rest — the abundance-driven split.
+      // weights.y/.z don't participate: the committed layout carries the
+      // SECONDARY resource's abundance in weights.y for the Lowlands blend (not
+      // an area), so a patch is only ever 0 or 2. nearestDiffLayerD2 pairs with
+      // this to find the shoreline between zones.
+      int rankedLayer(vec2 patchCell, vec3 weights, float seed) {
+        float h = hash21(patchCell + seed * SALT_RESOURCE_PICK);
+        return (h < weights.x) ? 0 : 2;
+      }
+
+      // Squared distance to the nearest patch seed whose LAYER differs from L0,
+      // scanning the 3x3 neighbourhood of the fragment's patch cell in the same
+      // jitter frame as worleyF1F2. Same-layer cells are skipped, so pairing the
+      // result with the fragment's own F1 distance (lMinD2) yields the bisector
+      // distance to the CONTIGUOUS region edge — the boundary where the resource
+      // actually changes — rather than to each individual cell wall. Returns a
+      // large sentinel when every neighbour shares L0 (the fragment is a region
+      // interior, > 1 cell from any layer boundary); a 3x3 scan fully resolves
+      // regions up to ~2 cells thick and leaves the centre of thicker ones
+      // un-fringed.
+      float nearestDiffLayerD2(vec2 cellId, vec2 cellFrac, vec2 saltA, vec2 saltB,
+                               vec3 weights, float seed, int L0) {
+        float best = 1e9;
+        for (int dx = -1; dx <= 1; dx++) {
+          for (int dy = -1; dy <= 1; dy++) {
+            vec2 off = vec2(float(dx), float(dy));
+            vec2 nCell = cellId + off;
+            if (rankedLayer(nCell, weights, seed) == L0) continue;
+            vec2 jitter = vec2(hash21(nCell + saltA), hash21(nCell + saltB));
+            vec2 diff = off + jitter - cellFrac;
+            best = min(best, dot(diff, diff));
+          }
+        }
+        return best;
       }
 
       // Rec.709 relative luminance — used by the Rayleigh rim hue shift
@@ -1617,18 +1730,12 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           // rays and a Callisto impact throws ICE_COLOR rays —
           // the same colors those impacts' bowls would expose.
           //
-          // Per-crater region picks the subsurface mask, so every
-          // fragment of one crater (interior + every ray) paints
-          // the same color rather than fragmenting along the
-          // region-boundary seams the surface pass would normally
-          // honor.
-          vec2 paintCraterId = inCrater ? bestCraterId : bestRayCraterId;
-          float pjx = hash21(paintCraterId + vSeed * SALT_CRATER_JITTER_X);
-          float pjy = hash21(paintCraterId + vSeed * SALT_CRATER_JITTER_Y);
-          vec2  pCenter = (paintCraterId + vec2(pjx, pjy)) * CRATER_PATCH_FACTOR;
-          vec2  pRegionCell = floor(pCenter / REGION_PATCH_FACTOR);
-          ivec3 pSlots = pickRegionSlots(pRegionCell, vWeights.xyz, vSeed);
-          vec3 pRevealCol = slotColor(pSlots.z, vPalette0, vPalette1, vPalette2);
+          // The excavated material is buried regolith — the darkest zone shade
+          // (Lowlands Inner: the primary colour pushed toward black), so a bowl
+          // or ray never reads as one of the brighter surface zones. Zone-
+          // independent, so a crater spanning the Uplands/Lowlands shoreline
+          // paints one uniform colour with no boundary seam.
+          vec3 pRevealCol = mix(vPalette0, vec3(0.0), SURFACE_SHADE_STEP * 1.5);
 
           vec3 pYoung = pRevealCol;
           vec3 pOld   = icyHere ? ICE_COLOR : pRevealCol;
@@ -1713,85 +1820,102 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           bool icyHere;
           iceComposite(winnerCell, latSinDisc, icyHere);
 
-          // CONTINENT_GROUP-sized blocks of worley cells share one
-          // ocean/land coin flip. Salt offset from the resource-pick
-          // hash so the two scales decorrelate. vLiquidFrac IS the liquid
-          // cover procgen settled per the dominant solvent's actual phase
-          // window (water, ammonia, methane, nitrogen, sulfur — each with
-          // its own freeze point, salinity-depressed), so a liquid cell is
-          // liquid however cold the body reads by water standards; no
-          // water-centric re-freeze here. A genuinely frozen-out body just
-          // carries vLiquidFrac = 0 (procgen froze it), so no ocean paints.
-          vec2 contCell = floor(winnerCell / CONTINENT_GROUP);
-          vec2 contSalt = vSeed * SALT_CONTINENT;
-          float contH = hash21(contCell + contSalt);
-          bool  liquidHere = contH < vLiquidFrac;
-          bool  liquidOceanHere = liquidHere;
+          // Liquid fill is computed after the surface zones below — water floods
+          // the low ground using the zone-biased elevation field.
 
-          // Coastal fringe. Only the worley cells AT THE EDGE of a
-          // liquid continent block (the row/column touching a land
-          // block) get a sparse highlight/lowlight dither within the
-          // body's own ocean hue — never bleeding toward land color.
-          // Keeps a large ocean area from reading as a flat fill while
-          // leaving the deep interior pure.
-          //
-          // Detection: step ONE worley cell in each axis and re-floor
-          // to a continent block. Interior worley cells stay in the
-          // same block (liquid → no flag). Only the 1-cell-wide ring
-          // along a block's boundary actually crosses into a neighbor
-          // block, which may evaluate to land.
-          //
-          // Coastal fringe — two graded rings.
-          //
-          // Ring 1 (one worley cell from a land continent block): solid
-          //   +COAST_LIGHT_DELTA highlight on every pixel — reads as a
-          //   continuous shoreline ringing each continent.
-          // Ring 2 (two worley cells out): sparse-dithered highlight
-          //   at COAST_R2_COVERAGE density — fades the band into the
-          //   deeper ocean rather than ending in a hard edge.
-          // Interior (no land within 2 worley cells in any axis):
-          //   plain vOceanColor.
-          //
-          // Both rings are detected by stepping winnerCell ±1 / ±2
-          // and re-flooring to a continent block; interior cells stay
-          // in this (liquid) block on every step so they don't flag.
-          // 8 hash21 evaluations per ocean fragment, cheap GPU-side.
+          // ── Surface zones — Uplands / Lowlands, each Outer / Inner. The
+          // primary abundance (vWeights.x = a0) claims a jittered worley
+          // tessellation into the resource patch (Uplands) and the regolith
+          // remainder (Lowlands); rankedLayer against (a0, 0, 1−a0) returns 0
+          // for an Uplands patch and 2 for a Lowlands one (slot 1 is dead). The
+          // shoreline distance (bisector to the nearest patch of the OTHER
+          // zone, via nearestDiffLayerD2) then splits each area into an Outer
+          // coastal band and an Inner core. Four zones; each paints a mirrored
+          // shade of the single primary colour. See the topology const block.
+          float layerPitchPx = SURFACE_PATCH_PX * RESOURCE_LAYER_PATCH_FACTOR;
+          vec2 layerPos  = vec2(lon, lat) * vRadius / layerPitchPx;
+          vec2 layerId   = floor(layerPos);
+          vec2 layerFrac = layerPos - layerId;
+          float lMinD2, lSecD2;
+          vec2  lWinner, lSecond;
+          worleyF1F2(layerId, layerFrac,
+                     vSeed * SALT_RESLAYER_JIT_A, vSeed * SALT_RESLAYER_JIT_B,
+                     lWinner, lSecond, lMinD2, lSecD2);
+          int zone = rankedLayer(lWinner, vWeights.xyz, vSeed);  // 0 = Uplands, 2 = Lowlands
+          bool upland = (zone == 0);
+
+          // Distance to the contiguous shoreline. Sentinel deep inside an area,
+          // where the 3x3 scan finds no other-zone patch — those fragments are
+          // unambiguously the Inner core.
+          float shoreDiff = nearestDiffLayerD2(layerId, layerFrac,
+                                               vSeed * SALT_RESLAYER_JIT_A, vSeed * SALT_RESLAYER_JIT_B,
+                                               vWeights.xyz, vSeed, zone);
+          float shorePx = (shoreDiff < 1e8)
+            ? (sqrt(shoreDiff) - sqrt(lMinD2)) * 0.5 * layerPitchPx
+            : 1e6;
+
+          // Topo edges carry a very small Bayer dither so they fray ~1 px instead
+          // of cutting hard. Seam: within SURFACE_EDGE_DITHER_PX of the shoreline
+          // the two zones stipple-interleave (flip density rises toward the
+          // seam). Inset: the Outer/Inner contour is jittered ±½·dither per pixel.
+          if (shorePx < SURFACE_EDGE_DITHER_PX) {
+            if (bayer4(gl_FragCoord.xy + vec2(71.0, 37.0)) > shorePx / SURFACE_EDGE_DITHER_PX) upland = !upland;
+          }
+          float insetJit = (bayer4(gl_FragCoord.xy + vec2(17.0, 53.0)) - 0.5) * SURFACE_EDGE_DITHER_PX;
+          bool inner = shorePx >= SURFACE_INSET_DEPTH_PX + insetJit;
+
+          // ── Liquid fill — water floods the low ground, following the SAME
+          // terrain the land paints. The elevation is built from the zone
+          // geometry already computed above: a ramp from the shoreline distance
+          // (0.5 at the Uplands/Lowlands shore → 0 deep in a Lowland interior, 1
+          // deep in an Upland interior), so deep Lowlands sit lowest and deep
+          // Uplands highest. Water then fills everything below the body's liquid-
+          // cover level (vLiquidFrac). A small value-noise term only roughens
+          // the waterline so coastlines read organic rather than as the hard
+          // worley edge — it is too small to reorder the terrain. vLiquidFrac is
+          // procgen's per-solvent cover (water/ammonia/methane/nitrogen/sulfur,
+          // each frozen per its own phase window), so a frozen-out body carries 0
+          // and paints no liquid.
+          float depth01 = clamp(shorePx / WATER_INTERIOR_PX, 0.0, 1.0);  // 0 at shore → 1 deep interior
+          float elev = upland ? (0.5 + 0.5 * depth01) : (0.5 - 0.5 * depth01);
+          vec2 elevPos = vec2(lon, lat) * vRadius / WATER_ELEV_PITCH_PX;
+          float fuzz = valueNoise2(elevPos,       vSeed * SALT_CONTINENT)
+                     + valueNoise2(elevPos * 2.0, vSeed * SALT_WATER_OCTAVE) * 0.5;
+          elev += (fuzz / 1.5 - 0.5) * WATER_COAST_FUZZ;   // ±½·FUZZ organic coastline jitter
+          elev = clamp(elev, 0.0, 1.0);
+          bool liquidOceanHere = (vLiquidFrac > 0.0) && (elev < vLiquidFrac);
+
+          // Continental shelf — taken straight from the submerged topo. shelfT
+          // is 1 at the waterline and ramps to 0 at WATER_SHELF_DEPTH below it,
+          // so the shelf width follows the seabed slope (the same elevation field
+          // the land uses) — wide on gentle bottoms, narrow on steep drop-offs,
+          // never a fixed-width ring. Solid highlight in the shallows; a
+          // depth-proportional dither thins it out organically toward the break.
           vec3 oceanCol = vOceanColor;
           if (liquidOceanHere) {
-            float n1E = hash21(floor((winnerCell + vec2( 1.0,  0.0)) / CONTINENT_GROUP) + contSalt);
-            float n1W = hash21(floor((winnerCell + vec2(-1.0,  0.0)) / CONTINENT_GROUP) + contSalt);
-            float n1N = hash21(floor((winnerCell + vec2( 0.0,  1.0)) / CONTINENT_GROUP) + contSalt);
-            float n1S = hash21(floor((winnerCell + vec2( 0.0, -1.0)) / CONTINENT_GROUP) + contSalt);
-            bool ring1 = (n1E >= vLiquidFrac) || (n1W >= vLiquidFrac)
-                      || (n1N >= vLiquidFrac) || (n1S >= vLiquidFrac);
-
-            if (ring1) {
+            float shelfT = 1.0 - clamp((vLiquidFrac - elev) / WATER_SHELF_DEPTH, 0.0, 1.0);
+            float dH = hash21(floor(d) + vSeed * SALT_COAST_DITHER);
+            if (shelfT > WATER_SHELF_SOLID_T || dH < shelfT) {
               oceanCol = clamp(vOceanColor * (1.0 + COAST_LIGHT_DELTA), 0.0, 1.0);
-            } else {
-              float n2E = hash21(floor((winnerCell + vec2( 2.0,  0.0)) / CONTINENT_GROUP) + contSalt);
-              float n2W = hash21(floor((winnerCell + vec2(-2.0,  0.0)) / CONTINENT_GROUP) + contSalt);
-              float n2N = hash21(floor((winnerCell + vec2( 0.0,  2.0)) / CONTINENT_GROUP) + contSalt);
-              float n2S = hash21(floor((winnerCell + vec2( 0.0, -2.0)) / CONTINENT_GROUP) + contSalt);
-              bool ring2 = (n2E >= vLiquidFrac) || (n2W >= vLiquidFrac)
-                        || (n2N >= vLiquidFrac) || (n2S >= vLiquidFrac);
-              if (ring2) {
-                float dH = hash21(floor(d) + vSeed * SALT_COAST_DITHER);
-                if (dH < COAST_R2_COVERAGE) {
-                  oceanCol = clamp(vOceanColor * (1.0 + COAST_LIGHT_DELTA), 0.0, 1.0);
-                }
-              }
             }
           }
 
-          // Per-region (primary, secondary, tertiary) palette election;
-          // primary covers most cells, secondary fills sparse decoration,
-          // tertiary stays unused on the surface. See the
-          // REGION_PATCH_FACTOR comment block above for the why.
-          vec2 regionCell = floor(winnerCell / REGION_PATCH_FACTOR);
-          ivec3 slots = pickRegionSlots(regionCell, vWeights.xyz, vSeed);
-          float resH = hash21(winnerCell + vSeed * SALT_RESOURCE_PICK);
-          int chosenSlot = (resH < SECONDARY_COVERAGE) ? slots.y : slots.x;
-          vec3 landCol = slotColor(chosenSlot, vPalette0, vPalette1, vPalette2);
+          // Base: four mirrored shades of the single primary colour (vPalette0)
+          // — Uplands brighten inward, Lowlands darken inward. The Lowlands two
+          // then blend toward the SECONDARY resource hue (vPalette1), scaled by
+          // its abundance (vWeights.y) and heaviest in the Inner core, so the
+          // second deposit pools in the low ground. Uplands stay pure shades.
+          vec3 P = vPalette0;
+          vec3 landCol;
+          if (upland) {
+            landCol = inner ? mix(P, vec3(1.0), SURFACE_SHADE_STEP * 1.5)     // Uplands Inner  (lightest)
+                            : mix(P, vec3(1.0), SURFACE_SHADE_STEP * 0.5);    // Uplands Outer
+          } else {
+            vec3 loBase = inner ? mix(P, vec3(0.0), SURFACE_SHADE_STEP * 1.5) // Lowlands Inner (darkest)
+                                : mix(P, vec3(0.0), SURFACE_SHADE_STEP * 0.5);// Lowlands Outer
+            float secBlend = vWeights.y * LOWLAND_SECONDARY_BLEND * (inner ? 1.0 : 0.5);
+            landCol = mix(loBase, vPalette1, secBlend);
+          }
 
           // Biome stipple paints over land cells in the temperate band.
           // Per-pixel hash flips individual land pixels to the body's
@@ -1814,11 +1938,11 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           }
           vec3 resourceSurface = liquidOceanHere ? oceanCol : landCol;
 
-          // Subsurface = the region's tertiary slot. Surface only ever
-          // paints primary + secondary, so tertiary is the buried
-          // mineralogy a crater impact or linea crack would expose.
-          // Collapses to primary on 1-slot bodies (flat fill).
-          vec3 resourceSubsurface = slotColor(slots.z, vPalette0, vPalette1, vPalette2);
+          // Subsurface = buried regolith — the darkest zone shade (Lowlands
+          // Inner: the primary colour pushed toward black). A crater impact, a
+          // linea crack, and debris staining through ice all expose this same
+          // dark buried rock rather than a brighter surface zone.
+          vec3 resourceSubsurface = mix(vPalette0, vec3(0.0), SURFACE_SHADE_STEP * 1.5);
 
           // Default fragment color. Ice is pure ICE_COLOR with a
           // stippled resource stain showing through — denser toward the

@@ -8,6 +8,7 @@
 import {
   BufferGeometry, DataTexture, Points, Scene, ShaderMaterial,
 } from 'three';
+import { BODIES } from '../../../data/stars';
 import { makePlanetMaterial } from '../../materials';
 import { buildBodyDiscGeometry, setBodyDiscHovered } from './body-disc';
 import { pickDiscPool } from '../geom/hit';
@@ -63,7 +64,7 @@ export class PlanetsLayer {
 
     const P = this.planetIndices.length;
     const { geometry, cloudTex } = buildBodyDiscGeometry(
-      this.planetIndices.map((bodyIdx, i) => ({ bodyIdx, discPx: this.planetDiscPx[i] })),
+      this.planetIndices.map((bodyIdx, i) => ({ body: BODIES[bodyIdx], discPx: this.planetDiscPx[i] })),
     );
     this.geometry = geometry;
     this.cloudTex = cloudTex;

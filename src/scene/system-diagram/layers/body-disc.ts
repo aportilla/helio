@@ -11,7 +11,7 @@ import {
   BufferAttribute, BufferGeometry, DataTexture, FloatType, NearestFilter,
   RGBAFormat,
 } from 'three';
-import { BODIES } from '../../../data/stars';
+import type { Body } from '../../../data/stars';
 import {
   ATM_COLUMN_TEXEL_OFFSET, BODY_TEXTURE_WIDTH, DECK_COLOR_BASE_OFFSET,
   EMBER_TINT_TEXEL_OFFSET, LAVA_TINT_TEXEL_OFFSET, MAX_CLOUD_LAYERS,
@@ -19,9 +19,11 @@ import {
 } from '../../materials';
 import { buildDiscPalette } from '../disc-palette';
 
-// One body to pack: its index into BODIES and its disc diameter in env-px.
+// One body to pack: the resolved body record and its disc diameter in
+// env-px. Carrying the record (rather than a BODIES index) lets callers
+// feed synthetic bodies that never enter the global catalog.
 export interface BodyDiscEntry {
-  bodyIdx: number;
+  body: Body;
   discPx: number;
 }
 
@@ -66,8 +68,10 @@ export function buildBodyDiscGeometry(entries: readonly BodyDiscEntry[]): BodyDi
   const palette0  = new Float32Array(P * 4);
   const palette1  = new Float32Array(P * 4);
   const palette2  = new Float32Array(P * 4);
-  // Surface palette weights (xyz, sum-to-1). The .w slot carries the
-  // per-body limb Rayleigh scatter strength for the rim hue shift.
+  // Surface zone weights: .x = Uplands area fraction (a0), .y = secondary
+  // resource abundance (a1, the Lowlands stain amount — not an area), .z =
+  // Lowlands area fraction (1 − a0). The .w slot carries the per-body limb
+  // Rayleigh scatter strength for the rim hue shift.
   const weights   = new Float32Array(P * 4);
   // Surface scalars: [waterFrac, iceFrac, surfaceAge, iceCoverage].
   const surfaceScalars = new Float32Array(P * 4);
@@ -81,9 +85,8 @@ export function buildBodyDiscGeometry(entries: readonly BodyDiscEntry[]): BodyDi
   // hover] — conflated so the total attribute count fits under the
   // driver's gl_MaxVertexAttribs cap. setHovered writes hazeColors[i*4+3].
   const hazeColors = new Float32Array(P * 4);
-  entries.forEach(({ bodyIdx, discPx }, i) => {
-    const b = BODIES[bodyIdx];
-    const disc = buildDiscPalette(b, discPx);
+  entries.forEach(({ body, discPx }, i) => {
+    const disc = buildDiscPalette(body, discPx);
     palette0[i * 4 + 0] = disc.palette[0];
     palette0[i * 4 + 1] = disc.palette[1];
     palette0[i * 4 + 2] = disc.palette[2];

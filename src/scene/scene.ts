@@ -128,6 +128,10 @@ export class StarmapScene {
   // clicking a star. AppController wires this to enterSystem().
   onViewSystem: (clusterIdx: number) => void = () => {};
 
+  // Routes the galaxy HUD's test-view trigger up to AppController, peer of
+  // onViewSystem. Takes no args — the test grid is self-contained.
+  onViewTest: () => void = () => {};
+
   private readonly _onResize = () => this.resize();
 
   // Reusable per-frame scratch.
@@ -227,6 +231,7 @@ export class StarmapScene {
     };
     this.hud.onDeselect = () => this.deselect();
     this.hud.onViewSystem = (idx) => this.onViewSystem(idx);
+    this.hud.onViewTest = () => this.onViewTest();
     this.hud.onFocus = (idx) => {
       const com = STAR_CLUSTERS[idx].com;
       this.animateFocusTo(com.x, com.y, com.z);

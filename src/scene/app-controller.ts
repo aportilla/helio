@@ -3,10 +3,12 @@
 // canvas; the controller decides which scene's render loop is currently
 // driving the canvas.
 //
-// Two peer scenes share the same canvas + renderer:
+// Three peer scenes share the same canvas + renderer:
 //   - StarmapScene (galaxy view, the default)
 //   - SystemScene  (close-up of a single cluster, lazily constructed
 //                   per enterSystem and disposed on exit)
+//   - TestScene    (planet-render test grid, lazily constructed per
+//                   enterTest and disposed on exit)
 // Only one is running its tick() loop at a time. Galaxy view state
 // (camera, selection, settings) lives on its instance and is preserved
 // across the round-trip — restoring is just StarmapScene.start().
@@ -14,6 +16,7 @@
 import { ColorManagement, LinearSRGBColorSpace, WebGLRenderer } from 'three';
 import { StarmapScene } from './scene';
 import { SystemScene } from './system-scene';
+import { TestScene } from './test-view/test-scene';
 
 // Opt out of Three.js color management. Without this, hex values in shader
 // uniforms (new Color(0x1e6fc4)) and hex strings in canvas fillStyle
@@ -29,6 +32,7 @@ export class AppController {
   private readonly renderer: WebGLRenderer;
   private readonly starmap: StarmapScene;
   private system?: SystemScene;
+  private test?: TestScene;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -39,6 +43,7 @@ export class AppController {
 
     this.starmap = new StarmapScene(canvas, this.renderer);
     this.starmap.onViewSystem = (idx) => this.enterSystem(idx);
+    this.starmap.onViewTest = () => this.enterTest();
   }
 
   start(): void {
@@ -49,6 +54,8 @@ export class AppController {
     this.starmap.stop();
     this.system?.dispose();
     this.system = undefined;
+    this.test?.dispose();
+    this.test = undefined;
   }
 
   enterSystem(clusterIdx: number): void {
@@ -63,6 +70,21 @@ export class AppController {
     if (!this.system) return;
     this.system.dispose();
     this.system = undefined;
+    this.starmap.start();
+  }
+
+  enterTest(): void {
+    if (this.test) return;
+    this.starmap.stop();
+    this.test = new TestScene(this.canvas, this.renderer);
+    this.test.onExit = () => this.exitTest();
+    this.test.start();
+  }
+
+  exitTest(): void {
+    if (!this.test) return;
+    this.test.dispose();
+    this.test = undefined;
     this.starmap.start();
   }
 }
