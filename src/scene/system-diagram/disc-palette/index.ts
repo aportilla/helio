@@ -4,10 +4,11 @@
 // + per-body data-texture row consumed by makePlanetMaterial.
 //
 // The shader composes a layered stack per fragment, bottom to top:
-//   - **surface**  — worley/voronoi cell texture painted with the body's
-//                    top 2 resource archetypes. World-class color only
-//                    surfaces as a flat-fill fallback when a body has
-//                    no resource signal. Substituted with `atmColumnColor`
+//   - **surface**  — a terraced elevation field shaded from the body's
+//                    primary resource hue, with the secondary flooding the
+//                    low ground (see the surface-palette section below).
+//                    World-class color only surfaces as a flat-fill fallback
+//                    when a body has no resource signal. Substituted with `atmColumnColor`
 //                    when the body has no accessible surface (gas / ice
 //                    giants) — the void between cloud cells shows the
 //                    deep atm column tint there.
@@ -38,34 +39,32 @@
 // stack such that the upper NH3 hides everything below it, while
 // Jupiter's lower NH3 coverage rents zonally to reveal NH4SH bands.
 //
-// ─── Surface palette: four zones from one primary colour ───────────
+// ─── Surface palette: a terraced elevation field in one primary colour ──
 //
 // `buildDiscPalette` derives ONE primary surface colour per body from its
-// dominant resources via `dominantResources(body, 2)`, and the shader builds
-// the visible surface as a fixed, abundance-driven TOPOLOGY of four zones:
+// dominant resources via `dominantResources(body, 2)`, and the shader paints
+// the visible surface as a terraced elevation field:
 //
-//   Uplands  (the resource patch, disc area ≈ primary abundance a0)
-//     ├─ Outer  — coastal band hugging the Uplands/Lowlands shoreline
-//     └─ Inner  — the patch core beyond the inset depth
-//   Lowlands (the regolith remainder, area 1 − a0)
-//     ├─ Outer  — coastal band
-//     └─ Inner  — the core
-//
-// The split is a jittered worley tessellation (Uplands vs Lowlands by an
-// abundance-weighted hash), then a per-area Outer/Inner inset cut by distance
-// to the shoreline — all in the shader. Each zone paints a SHADE of the one
-// primary colour (the first colour-assignment heuristic): a mirrored value ramp
-// — Uplands Inner lightest, then Uplands Outer, Lowlands Outer, Lowlands Inner
-// darkest — so the geometry is fixed and the colour is what we tune.
+//   - An elevation is built per fragment from multi-octave relief noise plus a
+//     resource-topology bias: an abundance-claimed worley patch (Uplands, disc
+//     area ≈ a0) trends HIGH and the regolith remainder (Lowlands, 1 − a0)
+//     trends LOW, so the resource patch still reads as bright high ground while
+//     the relief itself comes from the independent noise.
+//   - That elevation is quantized into reliefBands discrete terraces, each a
+//     fixed shade off the primary colour (lighter uphill, darker downhill,
+//     mirrored about the mid terrace). Per-step contrast is constant; the band
+//     COUNT is the relief depth. reliefBands and a granularity feature-size
+//     factor are per-body, derived read-side here in `terrainRoughnessFor`.
 //
 // The primary colour (slot 0): the PRIMARY resource's archetype hue, diluted
 // toward regolith by the regolith share (1 − a0) — pure primary-over-regolith,
 // so a rich world keeps its resource hue and a poor one washes toward barren
 // regolith. The SECONDARY resource (slot 1) enters ONLY through the shader's
-// Lowlands blend (vWeights.y = a1 scales it, heaviest in Lowlands Inner): it
-// stains the low ground and never touches the Uplands or claims an area.
-// vWeights.x = a0 drives the Uplands/Lowlands split. World-class colour appears
-// only as a flat-fill fallback when a body has no resource signal at all.
+// stain pass: it floods the low ground as a dithered partial overlay up to an
+// elevation level set by its abundance (vWeights.y = a1), never claiming an
+// area of its own. vWeights.x = a0 drives the Uplands/Lowlands elevation bias.
+// World-class colour appears only as a flat-fill fallback when a body has no
+// resource signal at all.
 //
 // Gas / ice giants skip the surface entirely and paint `atmColumnColor`
 // — a frac × GAS_POTENCY weighted blend of the body's atm slots that
@@ -160,7 +159,7 @@ import {
 } from './atmosphere';
 import { lavaDrivesFor } from './lava';
 import { oceanColorFor, OCEAN_FALLBACK_COLOR } from './ocean';
-import { BLACK_COLOR, clamp01, weightedColorBlend, WHITE_COLOR } from './shared';
+import { BLACK_COLOR, clamp01, smoothstep01, weightedColorBlend, WHITE_COLOR } from './shared';
 
 // Per-body brightness shift — deterministic ±RANGE in [0..1] applied
 // uniformly across both archetype palette slots so the body's internal
@@ -189,11 +188,11 @@ const TEMP_HOT_K     = 700;
 // flat-fill fallback (a body whose entire resource grid is empty).
 
 // Surface AREA model — primary abundance (a0) splits the disc into Uplands (the
-// resource patch, area a0) and Lowlands (regolith, 1 − a0); the shader carves an
-// Outer/Inner inset into each for the four zones. AREA carries abundance: a
-// trace deposit reads as sparse small Uplands patches on a mostly-regolith disc,
-// a motherlode fills it. The secondary resource is ignored for AREA — it only
-// tints the primary COLOR (see the blend in buildDiscPalette).
+// resource patch, area a0) and Lowlands (regolith, 1 − a0); that split biases
+// the shader's elevation field (Uplands trend high/bright). AREA carries
+// abundance: a trace deposit reads as sparse small Uplands patches on a mostly-
+// regolith disc, a motherlode fills it. The secondary resource is ignored for
+// AREA — it floods the low ground as a separate stain (see buildDiscPalette).
 
 // Regolith base — the barren-rock colour the primary surface colour dilutes
 // toward by the regolith share (1 − a0), so a resource-poor world reads as mostly
@@ -208,8 +207,9 @@ const REGOLITH_BASE_COLOR = new Color(0x4a4742);
 // Minimum disc fraction each big area (Uplands / Lowlands) always keeps, so
 // neither fully vanishes at the abundance extremes — a pure motherlode still
 // shows some regolith and a barren world still shows some resource, both
-// keeping a shoreline (and thus the four-zone structure). Only a0 < FLOOR or
-// a0 > 1 − FLOOR is affected; the mid-range area stays exactly abundance.
+// keeping a shoreline (so the elevation bias has both a high and a low pole).
+// Only a0 < FLOOR or a0 > 1 − FLOOR is affected; the mid-range area stays
+// exactly abundance.
 const ZONE_AREA_FLOOR = 0.15;
 
 // Synthetic base deck params for no-surface bodies. The deck color is
@@ -300,6 +300,68 @@ function iceCoverageForFraction(iceFraction: number): number {
   // Renormalize so iceFraction === ICE_COVERAGE_SATURATE maps to 1.0; clamp
   // pins anything above to full so the top end fills without a bare strip.
   return clamp01(lifted / Math.pow(ICE_COVERAGE_SATURATE, ICE_COVERAGE_GAMMA));
+}
+
+// ── Surface terrain roughness — relief depth + feature granularity, derived
+// read-side from stored physics (no stored field, the same discipline as
+// iceCoverageForFraction / surfaceAge). Two visual axes the disc shader
+// consumes:
+//
+//   reliefBands — how many discrete elevation terraces the surface shades into
+//     (RELIEF_BANDS_MIN ≈ flat, RELIEF_BANDS_MAX ≈ rugged). The per-terrace
+//     contrast is fixed in the shader; the COUNT is the relief depth. Relief
+//     survives on ANCIENT surfaces (low surfaceAge) and is amplified by low
+//     surface gravity (g = M⊕/R⊕²); it is erased by resurfacing (high
+//     surfaceAge), atmospheric / fluvial erosion, and warm-ice viscous
+//     relaxation. A small tectonic-uplift term keeps active worlds off the floor.
+//   granularity — feature fineness [0 = coarse provinces, 1 = fine grain]. Old
+//     cratered surfaces read fine (many small features); active tectonic + large
+//     bodies read coarse (few big provinces). 0.5 ≈ the historical fixed look.
+//
+// These are the tuning surface — the weights/anchors below are where the
+// judgment lives. Rough reliefBands anchors: Moon/Callisto ≈ 6, Mars ≈ 5,
+// Earth ≈ 2, Venus ≈ 2, Europa ≈ 2, Enceladus ≈ 1.
+const RELIEF_BANDS_MIN = 1;
+const RELIEF_BANDS_MAX = 6;
+// Fraction of relief a high-gravity world still keeps (low-g worlds reach 1).
+const RELIEF_GRAVITY_FLOOR = 0.4;
+const RELIEF_TECT_UPLIFT = 0.25;
+const RELIEF_EROSION_WEIGHT = 0.30;
+// Ice viscous-relaxation window — below T_LO ice is rigid and holds relief;
+// above T_HI it flows and slumps. Scales the iceFraction relaxation destroyer.
+const ICE_RELAX_T_LO = 120;
+const ICE_RELAX_T_HI = 260;
+
+function terrainRoughnessFor(body: Body): { reliefBands: number; granularity: number } {
+  const surfaceAge = body.surfaceAge ?? 0.5;
+  const tect = body.tectonicActivity ?? 0.3;
+  const mE = body.massEarth;
+  const rE = body.radiusEarth;
+  const g = mE !== null && rE !== null && rE > 0 ? mE / (rE * rE) : 1;
+  // Low surface gravity supports taller relief (Mars, Vesta); high gravity damps
+  // it toward the floor (super-earths).
+  const gravityGen = 1 - smoothstep01(0.2, 2.0, g);
+  const gravMult = RELIEF_GRAVITY_FLOOR + (1 - RELIEF_GRAVITY_FLOOR) * gravityGen;
+
+  // Destroyers — relief loses to the strongest of atmospheric erosion (column
+  // mass), fluvial erosion (standing liquid), and warm-ice relaxation.
+  const P = body.surfacePressureBar ?? 0;
+  const atmErode = clamp01(Math.log10(P + 1) / 2); // ≈ 1 by 100 bar (Venus)
+  const fluvErode = body.surfaceLiquidFraction ?? 0;
+  const T = body.avgSurfaceTempK;
+  const iceRelax = (body.iceFraction ?? 0) * (T === null ? 0 : smoothstep01(ICE_RELAX_T_LO, ICE_RELAX_T_HI, T));
+  const erosion = Math.max(atmErode, fluvErode, iceRelax);
+
+  const amplitude = clamp01(
+    (1 - surfaceAge) * gravMult + RELIEF_TECT_UPLIFT * tect - RELIEF_EROSION_WEIGHT * erosion,
+  );
+  const reliefBands = RELIEF_BANDS_MIN + Math.round(amplitude * (RELIEF_BANDS_MAX - RELIEF_BANDS_MIN));
+
+  // Granularity — fine on old cratered surfaces, coarse on active / large bodies.
+  const sizeCoarse = rE === null ? 0 : smoothstep01(0.5, 3.0, rE);
+  const granularity = clamp01(0.5 + 0.4 * (1 - surfaceAge) - 0.4 * tect - 0.3 * sizeCoarse);
+
+  return { reliefBands, granularity };
 }
 
 export interface DiscPalette {
@@ -415,6 +477,14 @@ export interface DiscPalette {
   // Forced to 0.5 on no-surface bodies and tiny discs (the surface
   // block is unreachable there) so the attribute schema stays uniform.
   readonly surfaceAge: number;
+  // Surface terrain roughness (see terrainRoughnessFor). reliefBands [1..6] =
+  // the number of discrete elevation terraces the shader shades the disc into
+  // (relief depth, constant per-step contrast); granularity [0..1] = feature
+  // fineness (coarse provinces → fine grain), scaling the macro patch + relief
+  // noise pitch. Defaulted (reliefBands 1, granularity 0.5) on suppressed
+  // surfaces where the surface block is unreachable.
+  readonly reliefBands: number;
+  readonly granularity: number;
   // Ice coverage [0..1] — a pure function of iceFraction (no temperature;
   // procgen already folded thermal state into iceFraction). Drives the
   // shader's single continuous latitude model: the snow line sits at
@@ -502,23 +572,23 @@ export function buildDiscPalette(
   const hasSurface = surfaceOpacity > 0;
   const tinyDisc = discPx < PROCEDURAL_TEXTURE_MIN_PX;
 
-  // ── SURFACE PALETTE — one primary colour (shaded into four zones by the
-  // shader) for terrestrials, bulk-atm column tint for gas/ice giants. World-
-  // class colour re-enters as a flat-fill fallback when a body carries no
+  // ── SURFACE PALETTE — one primary colour (terraced into elevation shades by
+  // the shader) for terrestrials, bulk-atm column tint for gas/ice giants.
+  // World-class colour re-enters as a flat-fill fallback when a body carries no
   // resource signal at all.
   //
   // Slot mapping (terrestrials with N>=1 nonzero resources):
   //   slot 0 = the primary surface colour — the PRIMARY resource hue diluted
-  //            toward regolith by (1 − a0) and tinted toward the SECONDARY by a1.
-  //            The shader derives the four zone shades from it.
-  //   slot 1 = the raw SECONDARY resource hue, which the shader pools into the
-  //            Lowlands zones (blend amount = vWeights.y = a1).
+  //            toward regolith by (1 − a0). Pure primary-over-regolith; the
+  //            secondary is NOT tinted in here. The shader terraces it.
+  //   slot 1 = the raw SECONDARY resource hue, which the shader floods into the
+  //            low ground (up to an elevation level set by vWeights.y = a1).
   //   slot 2 = schema filler (equal to slot 0; the shader reads slot 0).
   //
   // vWeights.x = a0 splits the disc into Uplands (resource patch, area a0) and
-  // Lowlands (regolith, 1 − a0); the shader insets each into Outer/Inner.
-  // vWeights.y = a1 is NOT an area — it scales the Lowlands secondary stain. So
-  // the secondary still claims no patch; it only colours.
+  // Lowlands (regolith, 1 − a0), biasing the shader's elevation field.
+  // vWeights.y = a1 is NOT an area — it sets the secondary stain's flood level.
+  // So the secondary still claims no patch; it only colours.
   let sC0: Color, sC1: Color, sC2: Color;
   let sW0: number, sW1: number, sW2: number;
   if (!hasSurface) {
@@ -557,14 +627,14 @@ export function buildDiscPalette(
       const primary = lerpColor(resHue, regolith, clamp01(1 - a0));
       sC0 = primary; sC1 = secHue; sC2 = primary;
       // AREA — the resource (Uplands) covers the primary abundance, regolith
-      // (Lowlands) the rest. vWeights.x = a0 drives the shader's zone split.
+      // (Lowlands) the rest. vWeights.x = a0 drives the shader's elevation bias.
       // Clamped away from 0/1 by ZONE_AREA_FLOOR: a pure motherlode (a0 = 1)
-      // would otherwise leave no Lowlands — no shoreline, no inset — and the
-      // disc would collapse to one flat zone. Only the extreme tails move; the
-      // "area = abundance" mapping is exact through the middle of the range.
+      // would otherwise leave no Lowlands — no shoreline, so the elevation bias
+      // would have no low pole. Only the extreme tails move; the "area =
+      // abundance" mapping is exact through the middle of the range.
       const upArea = Math.min(1 - ZONE_AREA_FLOOR, Math.max(ZONE_AREA_FLOOR, clamp01(a0)));
       sW0 = upArea;
-      sW1 = clamp01(a1);  // → vWeights.y: the secondary's Lowlands blend amount, NOT an area
+      sW1 = clamp01(a1);  // → vWeights.y: the secondary's stain flood level, NOT an area
       sW2 = 1 - upArea;
     }
   }
@@ -598,6 +668,13 @@ export function buildDiscPalette(
   // coverage by liquid extent here would double-count what iceFraction
   // already excludes.
   const iceCoverage = surfaceSuppressed ? 0 : iceCoverageForFraction(iceFrac);
+
+  // Terrain roughness — relief terrace count + feature granularity, derived
+  // from stored physics. Defaulted on suppressed surfaces (the surface block is
+  // unreachable there) so the texel pack stays uniform.
+  const { reliefBands, granularity } = surfaceSuppressed
+    ? { reliefBands: 1, granularity: 0.5 }
+    : terrainRoughnessFor(body);
 
   // Unified haze blend — one color + one opacity per body, derived
   // from the atmospheric contributor list (bulk gases × pressure ×
@@ -784,6 +861,8 @@ export function buildDiscPalette(
     scatterColor: scatter.color,
     scatterStrength: scatter.strength,
     surfaceAge,
+    reliefBands,
+    granularity,
     iceCoverage,
     moltenCoverage,
     emissionTempNorm,

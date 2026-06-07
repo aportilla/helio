@@ -15,7 +15,7 @@ import type { Body } from '../../../data/stars';
 import {
   ATM_COLUMN_TEXEL_OFFSET, BODY_TEXTURE_WIDTH, DECK_COLOR_BASE_OFFSET,
   EMBER_TINT_TEXEL_OFFSET, LAVA_TINT_TEXEL_OFFSET, MAX_CLOUD_LAYERS,
-  OCEAN_COLOR_TEXEL_OFFSET, SCATTER_COLOR_TEXEL_OFFSET,
+  OCEAN_COLOR_TEXEL_OFFSET, SCATTER_COLOR_TEXEL_OFFSET, TERRAIN_TEXEL_OFFSET,
 } from '../../materials';
 import { buildDiscPalette } from '../disc-palette';
 
@@ -69,8 +69,8 @@ export function buildBodyDiscGeometry(entries: readonly BodyDiscEntry[]): BodyDi
   const palette1  = new Float32Array(P * 4);
   const palette2  = new Float32Array(P * 4);
   // Surface zone weights: .x = Uplands area fraction (a0), .y = secondary
-  // resource abundance (a1, the Lowlands stain amount — not an area), .z =
-  // Lowlands area fraction (1 − a0). The .w slot carries the per-body limb
+  // resource abundance (a1, the secondary stain's flood level — not an area),
+  // .z = Lowlands area fraction (1 − a0). The .w slot carries the per-body limb
   // Rayleigh scatter strength for the rim hue shift.
   const weights   = new Float32Array(P * 4);
   // Surface scalars: [waterFrac, iceFrac, surfaceAge, iceCoverage].
@@ -158,6 +158,11 @@ export function buildBodyDiscGeometry(entries: readonly BodyDiscEntry[]): BodyDi
     cloudLayerData[emberOff + 0] = disc.emberTint[0];
     cloudLayerData[emberOff + 1] = disc.emberTint[1];
     cloudLayerData[emberOff + 2] = disc.emberTint[2];
+    // Surface-terrain scalars — .r = reliefBands (terrace count / relief depth),
+    // .g = granularity (feature fineness). See terrainRoughnessFor in disc-palette.
+    const terrainOff = rowBase + TERRAIN_TEXEL_OFFSET * 4;
+    cloudLayerData[terrainOff + 0] = disc.reliefBands;
+    cloudLayerData[terrainOff + 1] = disc.granularity;
     surfaceScalars[i * 4 + 0] = disc.waterFrac;
     surfaceScalars[i * 4 + 1] = disc.iceFrac;
     surfaceScalars[i * 4 + 2] = disc.surfaceAge;

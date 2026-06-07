@@ -23,6 +23,7 @@ export {
   MAX_CLOUD_LAYERS,
   OCEAN_COLOR_TEXEL_OFFSET,
   SCATTER_COLOR_TEXEL_OFFSET,
+  TERRAIN_TEXEL_OFFSET,
   makePlanetMaterial,
 } from './planet';
 export {

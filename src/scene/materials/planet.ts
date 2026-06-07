@@ -14,15 +14,20 @@ import { MAX_LIGHTS, BAYER4_GLSL, HASH_GLSL, RIM_GLOW_FOCUS, STAR_CRESCENT_LIGHT
 // Planet + moon disc material. Renders a pixel-crisp disc whose interior
 // is a layered composite, bottom to top:
 //
-//   1. **Surface** (only when aRenderMeta.y > 0.5) — sphere-projected
-//      worley/voronoi cell texture: every fragment reconstructs its
-//      surface normal, derives latitude + longitude in the band-aligned
-//      frame, and hashes into a cell whose coords are (lon, lat) scaled
-//      so disc-center cells stay at SURFACE_PATCH_PX while limb cells
-//      compress under foreshortening. Driven CPU-side by world-class
-//      color + dominant resources. Skipped on gas/ice giants — the
-//      cloud layer is their canvas; their base color comes from the
-//      atm column color substituted into the surface palette.
+//   1. **Surface** (only when aRenderMeta.y > 0.5) — a sphere-projected
+//      elevation field terraced into shades of one primary colour. Every
+//      fragment reconstructs its surface normal, derives latitude +
+//      longitude in the band-aligned frame, and builds an elevation from
+//      multi-octave relief noise plus a resource-topology bias (the
+//      abundance-claimed Uplands patch trends high/bright). That elevation
+//      is quantized into vReliefBands discrete terraces, each a fixed
+//      SURFACE_SHADE_STEP off the primary colour, so the band COUNT carries
+//      the body's relief depth at constant per-step contrast; the secondary
+//      resource then floods the low ground as a dithered partial overlay.
+//      reliefBands + a granularity feature-size factor are per-body, derived
+//      read-side in disc-palette (terrainRoughnessFor). Skipped on gas/ice
+//      giants — the cloud layer is their canvas; their base color comes from
+//      the atm column color substituted into the surface palette.
 //   2. **Cloud** — up to MAX_CLOUD_LAYERS stratified condensate decks,
 //      composited back-to-front by altitude. Per-deck data (coverage,
 //      windSpeed, altitude, seed, condensate color) lives in the
@@ -103,12 +108,20 @@ import { MAX_LIGHTS, BAYER4_GLSL, HASH_GLSL, RIM_GLOW_FOCUS, STAR_CRESCENT_LIGHT
 //                                       `scatteringRimFor` in disc-palette/atmosphere.ts);
 //                                       its strength rides on aWeights.w.
 //   [MAX_CLOUD_LAYERS+1+N+2]          — per-body lava composition signal
-//                                       (.r = sulfur fraction; gba unused).
-//                                       The molten sub-pass lifts the ember's
-//                                       green channel by .r so sulfurous
-//                                       volcanism (Io) reads yellower than
-//                                       silicate lava (see lavaSulfurFrac in
+//                                       (.r = sulfur fraction — the molten
+//                                       sub-pass lifts the ember's green channel
+//                                       by it so sulfurous volcanism (Io) reads
+//                                       yellower; .gba = cooled-crust RGB. See
+//                                       lavaSulfurFrac / lavaCrustColor in
 //                                       disc-palette/lava.ts).
+//   [MAX_CLOUD_LAYERS+1+N+3]          — per-body ember chromophore tint (rgb,
+//                                       .a unused). Multiplies the molten ember
+//                                       so the glow signals composition (see
+//                                       emberTint in disc-palette/lava.ts).
+//   [MAX_CLOUD_LAYERS+1+N+4]          — per-body surface-terrain scalars
+//                                       (.r = reliefBands terrace count, .g =
+//                                       granularity feature fineness; ba unused.
+//                                       See terrainRoughnessFor in disc-palette).
 // Pulling everything off vertex attributes brings the per-pool attribute
 // count back under the gl_MaxVertexAttribs cap.
 // Up to 4 stratified decks per body — 3 chemistry decks (Jupiter
@@ -137,8 +150,14 @@ export const LAVA_TINT_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 
 // (radioactives → sickly green, metals → whiter-orange; see emberTint in
 // disc-palette/lava.ts). .a unused.
 export const EMBER_TINT_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1 + 1 + 1;
+// Per-body surface-terrain scalars — .r = reliefBands (the count of discrete
+// elevation terraces the surface shades into, 1 ≈ flat → 6 ≈ rugged); .g =
+// granularity (feature fineness 0 = coarse provinces → 1 = fine grain). Both
+// derived read-side in disc-palette (terrainRoughnessFor) from stored physics,
+// not stored fields. .ba unused.
+export const TERRAIN_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1 + 1 + 1 + 1;
 export const BODY_TEXTURE_WIDTH =
-  MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1 + 1 + 1 + 1;
+  MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1 + 1 + 1 + 1 + 1;
 
 // mode='all' renders disc + halo (moons; keeps the original single-pass
 // behavior). mode='disc' or 'halo' splits the disc-interior and the
@@ -398,17 +417,19 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // must reach the disc edge or it clips entirely.
       const float SPHERE_VISIBLE_FRAC = 0.85;
 
-      // Liquid-fill elevation. Water floods the low ground using the SAME zone
-      // geometry as the land (the shoreline distance + Uplands/Lowlands flag),
-      // so the waterline follows the visible terrain rather than an independent
-      // field — see the liquid block in the surface pass. Within a zone the
-      // elevation ramps from 0.5 at the shoreline to 0 (deep Lowland interior)
-      // or 1 (deep Upland interior) over WATER_INTERIOR_PX; a little value-noise
-      // (at WATER_ELEV_PITCH_PX) of amplitude WATER_COAST_FUZZ only roughens the
-      // coastline so it reads organic, not as the hard worley edge.
+      // Elevation field. The surface terrain is an independent multi-octave
+      // relief noise (RELIEF_PITCH_PX, its wavelength scaled by the body's
+      // granularity) carrying the full 0..1 range on its own, plus a gentle
+      // resource-topology bias (RESOURCE_ELEV_BIAS) that tilts the Uplands
+      // resource patch upward (brighter) and the Lowlands regolith downward —
+      // so abundance still reads as bright high ground while the relief DEPTH
+      // (the number of visible terraces) is set independently per body. The
+      // bias ramps in from the shoreline to the patch interior over
+      // WATER_INTERIOR_PX. Both the terrace shading and the liquid flood read
+      // this one field, so water always pools in the low terraces.
       const float WATER_INTERIOR_PX   = 8.0;
-      const float WATER_ELEV_PITCH_PX = 14.0;
-      const float WATER_COAST_FUZZ    = 0.22;
+      const float RELIEF_PITCH_PX     = 13.0;
+      const float RESOURCE_ELEV_BIAS  = 0.5;
 
       // Continental shelf — read straight from the topo: the shallow submerged
       // terrain near the coast reads brighter and stipples out into the deep.
@@ -533,52 +554,62 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // checkerboard alternation.
       const float SECONDARY_COVERAGE = 0.20;
 
-      // ── Surface topology: Uplands / Lowlands, each split Outer / Inner ──
+      // ── Surface topology: a resource patch over a terraced elevation field ──
       // The primary resource's abundance (vWeights.x = a0) claims the disc into
       // two areas via a jittered worley tessellation — the resource patch
-      // (UPLANDS, area ≈ a0) and the regolith remainder (LOWLANDS, 1 − a0). The
-      // shoreline between them then carves each area into an OUTER coastal band
-      // (within SURFACE_INSET_DEPTH_PX of the boundary) and an INNER core
-      // beyond it — four zones. Each paints a shade of the body's single
-      // primary colour (vPalette0); the geometry is fixed and abundance-driven,
-      // the colour is what we tune into it.
+      // (UPLANDS, area ≈ a0) and the regolith remainder (LOWLANDS, 1 − a0). That
+      // split biases the elevation field (Uplands trend high/bright), but the
+      // RELIEF itself comes from an independent multi-octave noise quantized
+      // into vReliefBands terraces (see the elevation + terrace blocks in the
+      // surface pass). Each terrace paints a shade of the single primary colour
+      // (vPalette0); the per-step contrast is fixed and the band COUNT carries
+      // the body's relief depth.
 
       // Patch scale for the Uplands/Lowlands claim: the worley runs at
-      // RESOURCE_LAYER_PATCH_FACTOR × the fine SURFACE_PATCH_PX pitch, so each
-      // patch spans roughly that many fine cells. Patch SIZE is fixed;
-      // abundance sets only the FRACTION of patches that are Uplands, so a
-      // resource-poor world reads as sparse resource "continents" in a regolith
-      // sea rather than one shrinking blob. Irregular jittered polygons (not a
-      // floor() grid, which reads boxy). At 4.0 a 64-px disc carries ~5-6
-      // patches per axis.
+      // RESOURCE_LAYER_PATCH_FACTOR × the fine SURFACE_PATCH_PX pitch (further
+      // scaled per-body by granularityPitchMul), so each patch spans roughly
+      // that many fine cells. Patch SIZE is fixed by abundance only in FRACTION,
+      // so a resource-poor world reads as sparse resource "continents" in a
+      // regolith sea rather than one shrinking blob. Irregular jittered polygons
+      // (not a floor() grid, which reads boxy). At 4.0 a 64-px disc carries
+      // ~5-6 patches per axis at neutral granularity.
       const float RESOURCE_LAYER_PATCH_FACTOR = 4.0;
 
-      // Inset depth — how far inward (env-px from the shoreline) the Outer
-      // coastal band reaches before the Inner core begins. A patch thinner than
-      // the depth is all Outer (no developed core) — physically apt for a small
-      // deposit.
-      const float SURFACE_INSET_DEPTH_PX = 5.0;
+      // Granularity → feature-size multiplier on the macro resource patches and
+      // the relief noise pitch (NOT the fine SURFACE_PATCH_PX grain that ice /
+      // craters / biome ride). granularity 0 = coarse provinces (big multiplier
+      // → fewer, larger features), 1 = fine grain (small multiplier). 0.5 is
+      // ≈ the historical fixed look. Applied as mix(COARSE, FINE, granularity).
+      const float GRANULARITY_PITCH_COARSE = 1.6;
+      const float GRANULARITY_PITCH_FINE   = 0.6;
 
-      // A very small ordered (Bayer) dither on BOTH topo edges — the Uplands/
-      // Lowlands seam and the Outer/Inner inset contour — so they read as a
-      // ~1 px stipple fray rather than hard contours, without losing the four
-      // clean areas.
-      const float SURFACE_EDGE_DITHER_PX = 0.5;
-
-      // Shade step — the four zones are a mirrored value ramp around the primary
-      // colour P: Uplands Inner = P lightened 1.5·step toward white, Uplands
-      // Outer 0.5·step, Lowlands Outer 0.5·step toward black, Lowlands Inner
-      // 1.5·step. One knob sets the whole ramp's spread; the buried regolith a
-      // crater / linea exposes reuses the darkest shade (Lowlands Inner).
+      // Shade step — the per-terrace value contrast. The elevation field is
+      // quantized into vReliefBands levels each offset (band − (N−1)/2)·step
+      // toward white (uphill) or black (downhill), so ADJACENT terraces always
+      // differ by exactly one step regardless of band count — relief "depth"
+      // is the count, not the contrast. The buried regolith a crater / linea
+      // exposes reuses the deepest terrace's shade.
       const float SURFACE_SHADE_STEP = 0.12;
 
-      // Secondary-resource blend into the Lowlands. On top of the primary
-      // shades, the two Lowlands zones lerp toward the SECONDARY resource hue
-      // (vPalette1) by the secondary's abundance (vWeights.y) × this max —
-      // heaviest in Lowlands Inner and HALF that in Lowlands Outer — so the
-      // second deposit reads as a stain pooling in the low ground. Uplands are
-      // untouched.
-      const float LOWLAND_SECONDARY_BLEND = 0.6;
+      // Per-pixel ordered dither on the terrace band index (as a fraction of one
+      // band width, so the fray is consistent across band counts) — just enough
+      // to break the contour off the pixel grid without softening it; the
+      // terraces should read crisp, not feathered.
+      const float BAND_EDGE_DITHER_FRAC = 0.18;
+
+      // Secondary-resource stain — a topographic flood of the secondary hue
+      // (vPalette1) into the low ground, like the ocean fill but for a surface
+      // mineral: below an abundance-set elevation level (vWeights.y ×
+      // STAIN_FLOOD_MAX) the terrace takes a PARTIAL, CONSTANT overlay of the
+      // secondary so the topo blends through (constant amount → no soft gradient,
+      // no glow). The waterline itself is DITHERED: the fill probability ramps
+      // through STAIN_EDGE_DITHER (elev units) CENTERED on the level — solid in
+      // the deep, ordered-Bayer stipple through the band, empty above. Centering
+      // keeps the average coverage of a hard edge (same perceptual weight) while
+      // the solid core fills a bit less and frays into a pixel stipple. No shelf.
+      const float SECONDARY_STAIN_STRENGTH = 0.25;
+      const float STAIN_FLOOD_MAX  = 0.7;
+      const float STAIN_EDGE_DITHER = 0.08;  // elev-unit width of the dithered fringe
 
       // Phase 1.5c — discrete crater features + ejecta rays. Crater
       // seed cells are CRATER_PATCH_FACTOR × the fine worley cell
@@ -1083,6 +1114,9 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // exposed-rock blotches don't track the ice edge. Fresh prime pairs.
       const vec2 SALT_STAIN_LOBE_MED    = vec2(1093.0, 1097.0);
       const vec2 SALT_STAIN_LOBE_COARSE = vec2(1103.0, 1109.0);
+      // Relief-elevation third octave (the first two reuse SALT_CONTINENT /
+      // SALT_WATER_OCTAVE). Fresh prime pair.
+      const vec2 SALT_RELIEF_FINE       = vec2(1117.0, 1123.0);
 
       ${HASH_GLSL}
 
@@ -1607,7 +1641,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       //   crater age (ray):  (631, 641) — per-crater impact recency
       //   ray base angle:    (653, 659) — per-crater angular offset
       //   per-ray length:    (677, 683) — per-(crater, ray-index) length jitter
-      vec3 craterRayPass(vec3 col, vec2 cellPos, bool icyHere) {
+      vec3 craterRayPass(vec3 col, vec2 cellPos, bool icyHere, float reliefBands) {
         vec2 craterCellPos  = cellPos / CRATER_PATCH_FACTOR;
         vec2 craterCellId   = floor(craterCellPos);
         vec2 craterCellFrac = craterCellPos - craterCellId;
@@ -1730,12 +1764,14 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           // rays and a Callisto impact throws ICE_COLOR rays —
           // the same colors those impacts' bowls would expose.
           //
-          // The excavated material is buried regolith — the darkest zone shade
-          // (Lowlands Inner: the primary colour pushed toward black), so a bowl
-          // or ray never reads as one of the brighter surface zones. Zone-
+          // The excavated material is buried regolith — the deepest terrace's
+          // shade (the primary colour pushed toward black), so a bowl or ray
+          // never reads as one of the brighter terraces. Floored at one step so
+          // craters stay visible even on a near-flat (low-band) world. Terrace-
           // independent, so a crater spanning the Uplands/Lowlands shoreline
           // paints one uniform colour with no boundary seam.
-          vec3 pRevealCol = mix(vPalette0, vec3(0.0), SURFACE_SHADE_STEP * 1.5);
+          float pDeepStep = max((reliefBands - 1.0) * 0.5 * SURFACE_SHADE_STEP, SURFACE_SHADE_STEP);
+          vec3 pRevealCol = mix(vPalette0, vec3(0.0), pDeepStep);
 
           vec3 pYoung = pRevealCol;
           vec3 pOld   = icyHere ? ICE_COLOR : pRevealCol;
@@ -1756,7 +1792,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // come from main(); everything else reads from varyings/uniforms in scope.
       vec3 surfaceColor(vec2 d, float lxs, float lys, float lon, float lat,
                         vec3 vOceanColor, vec3 vAtmColumnColor, float sulfurFrac, vec3 crustColor,
-                        vec3 emberTint,
+                        vec3 emberTint, float reliefBands, float granularity,
                         out vec3 lavaEmissive) {
         lavaEmissive = vec3(0.0);
         vec3 col;
@@ -1823,16 +1859,17 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           // Liquid fill is computed after the surface zones below — water floods
           // the low ground using the zone-biased elevation field.
 
-          // ── Surface zones — Uplands / Lowlands, each Outer / Inner. The
-          // primary abundance (vWeights.x = a0) claims a jittered worley
-          // tessellation into the resource patch (Uplands) and the regolith
-          // remainder (Lowlands); rankedLayer against (a0, 0, 1−a0) returns 0
-          // for an Uplands patch and 2 for a Lowlands one (slot 1 is dead). The
-          // shoreline distance (bisector to the nearest patch of the OTHER
-          // zone, via nearestDiffLayerD2) then splits each area into an Outer
-          // coastal band and an Inner core. Four zones; each paints a mirrored
-          // shade of the single primary colour. See the topology const block.
-          float layerPitchPx = SURFACE_PATCH_PX * RESOURCE_LAYER_PATCH_FACTOR;
+          // ── Resource patch — Uplands / Lowlands. The primary abundance
+          // (vWeights.x = a0) claims a jittered worley tessellation into the
+          // resource patch (Uplands) and the regolith remainder (Lowlands);
+          // rankedLayer against (a0, 0, 1−a0) returns 0 for an Uplands patch and
+          // 2 for a Lowlands one (slot 1 is dead). This split only BIASES the
+          // elevation field below (Uplands trend high/bright); the relief itself
+          // is the independent noise. The macro patch pitch is scaled per-body
+          // by granularity, so a coarse-grained world reads as a few large
+          // provinces and a fine-grained one as many small ones.
+          float granularityPitchMul = mix(GRANULARITY_PITCH_COARSE, GRANULARITY_PITCH_FINE, granularity);
+          float layerPitchPx = SURFACE_PATCH_PX * RESOURCE_LAYER_PATCH_FACTOR * granularityPitchMul;
           vec2 layerPos  = vec2(lon, lat) * vRadius / layerPitchPx;
           vec2 layerId   = floor(layerPos);
           vec2 layerFrac = layerPos - layerId;
@@ -1844,9 +1881,10 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           int zone = rankedLayer(lWinner, vWeights.xyz, vSeed);  // 0 = Uplands, 2 = Lowlands
           bool upland = (zone == 0);
 
-          // Distance to the contiguous shoreline. Sentinel deep inside an area,
-          // where the 3x3 scan finds no other-zone patch — those fragments are
-          // unambiguously the Inner core.
+          // Distance to the Uplands/Lowlands shoreline — feeds the elevation
+          // bias below (depth01 ramps the resource patch up from its edge to its
+          // core). Sentinel deep inside an area, where the 3x3 scan finds no
+          // other-zone patch.
           float shoreDiff = nearestDiffLayerD2(layerId, layerFrac,
                                                vSeed * SALT_RESLAYER_JIT_A, vSeed * SALT_RESLAYER_JIT_B,
                                                vWeights.xyz, vSeed, zone);
@@ -1854,35 +1892,26 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
             ? (sqrt(shoreDiff) - sqrt(lMinD2)) * 0.5 * layerPitchPx
             : 1e6;
 
-          // Topo edges carry a very small Bayer dither so they fray ~1 px instead
-          // of cutting hard. Seam: within SURFACE_EDGE_DITHER_PX of the shoreline
-          // the two zones stipple-interleave (flip density rises toward the
-          // seam). Inset: the Outer/Inner contour is jittered ±½·dither per pixel.
-          if (shorePx < SURFACE_EDGE_DITHER_PX) {
-            if (bayer4(gl_FragCoord.xy + vec2(71.0, 37.0)) > shorePx / SURFACE_EDGE_DITHER_PX) upland = !upland;
-          }
-          float insetJit = (bayer4(gl_FragCoord.xy + vec2(17.0, 53.0)) - 0.5) * SURFACE_EDGE_DITHER_PX;
-          bool inner = shorePx >= SURFACE_INSET_DEPTH_PX + insetJit;
-
-          // ── Liquid fill — water floods the low ground, following the SAME
-          // terrain the land paints. The elevation is built from the zone
-          // geometry already computed above: a ramp from the shoreline distance
-          // (0.5 at the Uplands/Lowlands shore → 0 deep in a Lowland interior, 1
-          // deep in an Upland interior), so deep Lowlands sit lowest and deep
-          // Uplands highest. Water then fills everything below the body's liquid-
-          // cover level (vLiquidFrac). A small value-noise term only roughens
-          // the waterline so coastlines read organic rather than as the hard
-          // worley edge — it is too small to reorder the terrain. vLiquidFrac is
-          // procgen's per-solvent cover (water/ammonia/methane/nitrogen/sulfur,
-          // each frozen per its own phase window), so a frozen-out body carries 0
-          // and paints no liquid.
-          float depth01 = clamp(shorePx / WATER_INTERIOR_PX, 0.0, 1.0);  // 0 at shore → 1 deep interior
-          float elev = upland ? (0.5 + 0.5 * depth01) : (0.5 - 0.5 * depth01);
-          vec2 elevPos = vec2(lon, lat) * vRadius / WATER_ELEV_PITCH_PX;
-          float fuzz = valueNoise2(elevPos,       vSeed * SALT_CONTINENT)
-                     + valueNoise2(elevPos * 2.0, vSeed * SALT_WATER_OCTAVE) * 0.5;
-          elev += (fuzz / 1.5 - 0.5) * WATER_COAST_FUZZ;   // ±½·FUZZ organic coastline jitter
-          elev = clamp(elev, 0.0, 1.0);
+          // ── Elevation field — an independent multi-octave relief noise plus a
+          // resource-topology bias. The relief carries the full 0..1 range on
+          // its own (three value-noise octaves at a granularity-scaled pitch),
+          // so the terrace COUNT below controls relief depth identically on a
+          // resource-rich and a resource-poor world. topoBias only TILTS it:
+          // Uplands lift toward the bright high ground and Lowlands sink, by up
+          // to ±½·RESOURCE_ELEV_BIAS, ramping in from the shoreline to the patch
+          // interior (depth01) so the resource patch still reads as elevated.
+          // Both the terrace shading and the liquid flood read this one field,
+          // so water always pools in the low terraces. vLiquidFrac is procgen's
+          // per-solvent cover (water/ammonia/methane/nitrogen/sulfur, each
+          // frozen per its own phase window), so a frozen-out body paints none.
+          float depth01  = clamp(shorePx / WATER_INTERIOR_PX, 0.0, 1.0);  // 0 at shore → 1 deep interior
+          float topoBias = upland ? (0.5 + 0.5 * depth01) : (0.5 - 0.5 * depth01);
+          float reliefPitchPx = RELIEF_PITCH_PX * granularityPitchMul;
+          vec2  reliefPos = vec2(lon, lat) * vRadius / reliefPitchPx;
+          float relief = valueNoise2(reliefPos,       vSeed * SALT_CONTINENT)    * 0.6
+                       + valueNoise2(reliefPos * 2.3, vSeed * SALT_WATER_OCTAVE) * 0.3
+                       + valueNoise2(reliefPos * 4.7, vSeed * SALT_RELIEF_FINE)  * 0.1;
+          float elev = clamp(relief + (topoBias - 0.5) * RESOURCE_ELEV_BIAS, 0.0, 1.0);
           bool liquidOceanHere = (vLiquidFrac > 0.0) && (elev < vLiquidFrac);
 
           // Continental shelf — taken straight from the submerged topo. shelfT
@@ -1900,21 +1929,27 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
             }
           }
 
-          // Base: four mirrored shades of the single primary colour (vPalette0)
-          // — Uplands brighten inward, Lowlands darken inward. The Lowlands two
-          // then blend toward the SECONDARY resource hue (vPalette1), scaled by
-          // its abundance (vWeights.y) and heaviest in the Inner core, so the
-          // second deposit pools in the low ground. Uplands stay pure shades.
+          // Base: terrace the elevation field into reliefBands discrete levels,
+          // each a fixed SURFACE_SHADE_STEP of value off the single primary
+          // colour (vPalette0) — lighter uphill, darker downhill, mirrored about
+          // the mid terrace. Per-step contrast is constant; the relief DEPTH is
+          // the band count (1 ≈ flat, 6 ≈ rugged). A per-pixel ordered dither on
+          // the band index (a fraction of a band width) frays each terrace
+          // contour ~1px instead of cutting hard. The secondary resource hue
+          // (vPalette1) then floods the low ground as a partial overlay (see the
+          // SECONDARY_STAIN block below).
           vec3 P = vPalette0;
-          vec3 landCol;
-          if (upland) {
-            landCol = inner ? mix(P, vec3(1.0), SURFACE_SHADE_STEP * 1.5)     // Uplands Inner  (lightest)
-                            : mix(P, vec3(1.0), SURFACE_SHADE_STEP * 0.5);    // Uplands Outer
-          } else {
-            vec3 loBase = inner ? mix(P, vec3(0.0), SURFACE_SHADE_STEP * 1.5) // Lowlands Inner (darkest)
-                                : mix(P, vec3(0.0), SURFACE_SHADE_STEP * 0.5);// Lowlands Outer
-            float secBlend = vWeights.y * LOWLAND_SECONDARY_BLEND * (inner ? 1.0 : 0.5);
-            landCol = mix(loBase, vPalette1, secBlend);
+          float bandDither = (bayer4(gl_FragCoord.xy + vec2(29.0, 83.0)) - 0.5)
+                             * BAND_EDGE_DITHER_FRAC / reliefBands;
+          float band  = floor(clamp(elev + bandDither, 0.0, 0.99999) * reliefBands);
+          float vstep = (band - (reliefBands - 1.0) * 0.5) * SURFACE_SHADE_STEP;
+          vec3 landCol = vstep >= 0.0 ? mix(P, vec3(1.0), vstep) : mix(P, vec3(0.0), -vstep);
+          if (vWeights.y > 0.0) {
+            float stainLevel = vWeights.y * STAIN_FLOOD_MAX;
+            float stainFill = clamp((stainLevel - elev) / STAIN_EDGE_DITHER + 0.5, 0.0, 1.0);
+            if (bayer4(gl_FragCoord.xy + vec2(43.0, 91.0)) < stainFill) {
+              landCol = mix(landCol, vPalette1, SECONDARY_STAIN_STRENGTH);
+            }
           }
 
           // Biome stipple paints over land cells in the temperate band.
@@ -1938,11 +1973,13 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           }
           vec3 resourceSurface = liquidOceanHere ? oceanCol : landCol;
 
-          // Subsurface = buried regolith — the darkest zone shade (Lowlands
-          // Inner: the primary colour pushed toward black). A crater impact, a
-          // linea crack, and debris staining through ice all expose this same
-          // dark buried rock rather than a brighter surface zone.
-          vec3 resourceSubsurface = mix(vPalette0, vec3(0.0), SURFACE_SHADE_STEP * 1.5);
+          // Subsurface = buried regolith — the deepest terrace's shade (the
+          // primary colour pushed toward black), floored at one step so it stays
+          // visible on a near-flat world. A crater impact, a linea crack, and
+          // debris staining through ice all expose this same dark buried rock
+          // rather than a brighter terrace.
+          float deepStep = max((reliefBands - 1.0) * 0.5 * SURFACE_SHADE_STEP, SURFACE_SHADE_STEP);
+          vec3 resourceSubsurface = mix(vPalette0, vec3(0.0), deepStep);
 
           // Default fragment color. Ice is pure ICE_COLOR with a
           // stippled resource stain showing through — denser toward the
@@ -2000,7 +2037,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           bool openLiquid  = liquidOceanHere && !icyHere;
           bool smoothFrost = icyHere && vSurfaceAge > FRESH_FROST_AGE;
           if (!openLiquid && !smoothFrost) {
-            col = craterRayPass(col, cellPos, icyHere);
+            col = craterRayPass(col, cellPos, icyHere, reliefBands);
           }
 
           // Phase 1.5d — linea. Voronoi cell-boundary cracks painted
@@ -2485,6 +2522,13 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         // beside the lava texel; .a unused.
         float emberTexelU = (float(${EMBER_TINT_TEXEL_OFFSET}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
         vec3 vEmberTint = texture2D(uCloudLayerData, vec2(emberTexelU, vBodyV)).rgb;
+        // Per-body surface-terrain scalars — .r = reliefBands (terrace count,
+        // the relief depth), .g = granularity (feature fineness). Sampled here
+        // beside the other per-body texels and passed into surfaceColor.
+        float terrainTexelU = (float(${TERRAIN_TEXEL_OFFSET}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
+        vec2 vTerrain = texture2D(uCloudLayerData, vec2(terrainTexelU, vBodyV)).rg;
+        float vReliefBands = max(vTerrain.r, 1.0);
+        float vGranularity = vTerrain.g;
 
         // Surface (or atm-column) base color + self-luminous lava emission.
         // lavaEmissive is added back AFTER the reflectance lighting pass (see
@@ -2494,6 +2538,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         vec3 lavaEmissive;
         vec3 col = surfaceColor(d, lxs, lys, lon, lat,
                                 vOceanColor, vAtmColumnColor, vSulfurFrac, vLavaCrustColor, vEmberTint,
+                                vReliefBands, vGranularity,
                                 lavaEmissive);
 
         // ── Haze blanket ──
