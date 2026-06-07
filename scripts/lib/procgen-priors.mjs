@@ -2208,15 +2208,23 @@ export const CONDENSABLES = [
 // `coverageFullMax` (deck IS the visible color) toward `coverageSparseMax`
 // (deck reads as scattered cirrus over a column the bulk gas already tints),
 // the blend weight ramping over `sparseSignal` for gases above
-// `strongAbsorberPotency`. Peak zonal wind at a deck's altitude scales off
-// `windBaseGaseousMS` / `windBaseTerrestrialMS` (gas giants run cloud-top
-// jets ~an order of magnitude faster than terrestrials).
+// `strongAbsorberPotency`. `pressureTaper` then scales coverage by total
+// atmospheric column: a near-vacuum world that just clears the formation
+// floor can't sustain a thick deck regardless of condensable mole fraction,
+// so coverage ramps from ~0 at the floor (window lo = ATMOSPHERE_MIN_PRESSURE_BAR)
+// to full once the column is Earth-thick. The ramp is in log10(P) since
+// pressure spans orders of magnitude; bodies with no surface pressure
+// (gas giants) skip it — their bulk column always supports decks. Peak
+// zonal wind at a deck's altitude scales off `windBaseGaseousMS` /
+// `windBaseTerrestrialMS` (gas giants run cloud-top jets ~an order of
+// magnitude faster than terrestrials).
 export const CLOUD_DECK = {
   strengthThreshold: 0.01,
   coverageFullMax: 0.90,
   coverageSparseMax: 0.15,
   strongAbsorberPotency: 5,
   sparseSignal: [0.01, 0.05],
+  pressureTaper: [0.01, 1.0],
   windBaseGaseousMS: 200,
   windBaseTerrestrialMS: 30,
 };

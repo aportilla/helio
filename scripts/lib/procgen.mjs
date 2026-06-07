@@ -1057,7 +1057,8 @@ function surfaceOpacityFor(body) {
 // species' condensation window AND runs the species' precursor gate.
 // Every species whose product strength > CLOUD_DECK.strengthThreshold
 // emits a deck. Coverage is derived from strength + a sparse-cirrus mode
-// gate (see coverageFor below). Wind speed is a per-altitude proxy
+// gate, then tapered by total atmospheric column (see coverageFor below).
+// Wind speed is a per-altitude proxy
 // (gas giants run cloud-top jets ~5–10x faster than terrestrials).
 //
 // No regime classification: Jupiter, Saturn, Uranus, Neptune,
@@ -1080,14 +1081,31 @@ function surfaceOpacityFor(body) {
 // potency 8) keeps NH3 on a gas giant in full-cover mode even when
 // procgen seeds NH3 into the atm record — NH3 doesn't tint a thick
 // column the way CH4 does, so it shouldn't behave like Neptune's
-// cirrus.
-function coverageFor(_body, _gas, strength, atmFrac, gasPotency) {
+// cirrus. Whichever mode wins, coverageFor scales the result by
+// pressureCoverFactor below.
+//
+// Thin-atmosphere coverage taper. A condensable's mole fraction sets the
+// *mode* (full vs cirrus) but says nothing about how much gas is actually
+// there — 1% H2O is 4 mbar of water on Earth but 0.2 mbar at 0.02 bar.
+// Without this, a world that just clears the formation floor renders the
+// same banded cover as a 1-bar world. Ramp in log10(P) from the floor to
+// Earth-thick. No surface pressure (gas giants) → bulk column always
+// supports the deck, factor 1.
+function pressureCoverFactor(body) {
+  const P = body.surfacePressureBar;
+  if (P == null) return 1;
+  const [lo, hi] = CLOUD_DECK.pressureTaper;
+  return smoothstep(Math.log10(lo), Math.log10(hi), Math.log10(Math.max(P, lo)));
+}
+
+function coverageFor(body, _gas, strength, atmFrac, gasPotency) {
   const strongAbsorber = gasPotency >= CLOUD_DECK.strongAbsorberPotency;
   const absorptionSignal = atmFrac * gasPotency;
   const sparse = strongAbsorber ? smoothstep(CLOUD_DECK.sparseSignal[0], CLOUD_DECK.sparseSignal[1], absorptionSignal) : 0;
   const fullCover = strength * CLOUD_DECK.coverageFullMax;
   const sparseCover = strength * CLOUD_DECK.coverageSparseMax;
-  return fullCover + (sparseCover - fullCover) * sparse;
+  const base = fullCover + (sparseCover - fullCover) * sparse;
+  return base * pressureCoverFactor(body);
 }
 
 // Peak zonal wind at this deck's altitude. Gaseous bodies run an
@@ -2192,7 +2210,8 @@ function fillBody(b, allBodies, stars) {
   // condensation gates (cloudDecksFor) iterate CONDENSABLES: each
   // species' temp window × precursor gate produces a strength; coverage
   // is then derived from strength + a sparse-cirrus mode gate keyed
-  // off the species' contribution to atm column color. Curated bodies
+  // off the species' contribution to atm column color, then tapered by
+  // total surface pressure so thin atmospheres read as wisps. Curated bodies
   // that authored decks in body_layers.csv skip this and keep the CSV
   // values. Surface opacity is co-derived here so the renderer always
   // has a scalar to drive composition (gas giants = 0, terrestrials = 1).
