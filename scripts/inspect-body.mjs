@@ -131,8 +131,8 @@ if (body.kind === 'planet' || body.kind === 'moon') {
     out.push(`  temp: ${body.avgSurfaceTempK} K${range}`);
   }
   if (body.surfacePressureBar != null) out.push(`  pressure: ${n(body.surfacePressureBar, 3)} bar`);
-  if (body.waterFraction != null || body.iceFraction != null || body.surfaceAge != null) {
-    out.push(`  surface: water ${n(body.waterFraction, 2)}    ice ${n(body.iceFraction, 2)}    age ${n(body.surfaceAge, 2)}`);
+  if (body.surfaceLiquidFraction != null || body.iceFraction != null || body.surfaceAge != null) {
+    out.push(`  surface: liquid-water ${n(traits.liquidWaterCover(body), 2)}    ice ${n(body.iceFraction, 2)}    age ${n(body.surfaceAge, 2)}`);
   }
   const atm = atmosphereLine(body);
   if (atm) out.push(`  atmosphere: ${atm}`);

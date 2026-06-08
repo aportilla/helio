@@ -511,7 +511,7 @@ function buildClusters(stars) {
 //
 // Three cell states from the CSV collapse into two in the runtime JSON:
 //   - empty cell → null (placeholder for procgen to fill in a later pass)
-//   - 'n/a'      → null (not applicable — gas giants have no water_fraction,
+//   - 'n/a'      → null (not applicable — gas giants have no ice_fraction,
 //                        airless bodies have no atmosphere)
 //   - value      → typed value
 // Once procgen ships, empties become synthesized values at build time. The
@@ -556,7 +556,6 @@ const BODY_NUMERIC_FIELDS = [
   ['avg_surface_temp_k',     'avgSurfaceTempK'],
   ['surface_temp_min_k',     'surfaceTempMinK'],
   ['surface_temp_max_k',     'surfaceTempMaxK'],
-  ['water_fraction',         'waterFraction'],
   ['ice_fraction',           'iceFraction'],
   ['surface_age',            'surfaceAge'],
   ['magnetic_field_gauss',   'magneticFieldGauss'],

@@ -159,10 +159,13 @@ export function buildBodyDiscGeometry(entries: readonly BodyDiscEntry[]): BodyDi
     cloudLayerData[emberOff + 1] = disc.emberTint[1];
     cloudLayerData[emberOff + 2] = disc.emberTint[2];
     // Surface-terrain scalars — .r = reliefBands (terrace count / relief depth),
-    // .g = granularity (feature fineness). See terrainRoughnessFor in disc-palette.
+    // .g = granularity (feature fineness), .b = shellFraction (bulk-ice fraction
+    // 0..1: 1 ages via a dust mantle, 0 a rocky snowball, between a blend). See
+    // terrainRoughnessFor / shellFraction in disc-palette.
     const terrainOff = rowBase + TERRAIN_TEXEL_OFFSET * 4;
     cloudLayerData[terrainOff + 0] = disc.reliefBands;
     cloudLayerData[terrainOff + 1] = disc.granularity;
+    cloudLayerData[terrainOff + 2] = disc.shellFraction;
     surfaceScalars[i * 4 + 0] = disc.waterFrac;
     surfaceScalars[i * 4 + 1] = disc.iceFrac;
     surfaceScalars[i * 4 + 2] = disc.surfaceAge;

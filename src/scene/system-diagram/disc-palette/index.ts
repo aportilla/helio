@@ -332,6 +332,15 @@ const RELIEF_EROSION_WEIGHT = 0.30;
 const ICE_RELAX_T_LO = 120;
 const ICE_RELAX_T_HI = 260;
 
+// Ice-shell composition ramp — bulk ice (water + volatile) fraction over which
+// a frozen surface ages as an ICE SHELL (dark sublimation dust mantle, craters
+// excavating bright ice — Callisto) rather than a ROCKY snowball (bright snow
+// veneer over rock, craters exposing dark regolith). A continuous smoothstep,
+// never a threshold: a half-ice world reads as a blend of both aging modes.
+// LO ≈ rock-wearing-frost; HI ≈ unambiguous ice shell (Europa/Callisto floor).
+const ICE_SHELL_LO = 0.05;
+const ICE_SHELL_HI = 0.45;
+
 function terrainRoughnessFor(body: Body): { reliefBands: number; granularity: number } {
   const surfaceAge = body.surfaceAge ?? 0.5;
   const tect = body.tectonicActivity ?? 0.3;
@@ -362,6 +371,19 @@ function terrainRoughnessFor(body: Body): { reliefBands: number; granularity: nu
   const granularity = clamp01(0.5 + 0.4 * (1 - surfaceAge) - 0.4 * tect - 0.3 * sizeCoarse);
 
   return { reliefBands, granularity };
+}
+
+// Ice-shell composition fraction [0..1] — how ice-dominated a body's BULK is, a
+// continuous smoothstep over bulkWater+bulkVolatile (ICE_SHELL_LO/HI), never a
+// hard flag. The single source for the renderer's icy-surface aging blend (dust
+// mantle / crater reveal / linea), exported so the planet-test grid can label
+// its sweep by the axis that actually drives the disc rather than the raw input.
+export function shellFractionFor(body: Body): number {
+  return smoothstep01(
+    ICE_SHELL_LO,
+    ICE_SHELL_HI,
+    (body.bulkWaterFraction ?? 0) + (body.bulkVolatileFraction ?? 0),
+  );
 }
 
 export interface DiscPalette {
@@ -485,6 +507,13 @@ export interface DiscPalette {
   // surfaces where the surface block is unreachable.
   readonly reliefBands: number;
   readonly granularity: number;
+  // Ice-shell fraction [0..1] — how ice-dominated the body's BULK is, a
+  // continuous smoothstep over bulkWater+bulkVolatile (ICE_SHELL_LO/HI), never a
+  // hard flag. Drives how a frozen surface ages: at 1 it's an ice shell (dark
+  // sublimation dust mantle, craters excavating bright ice — Callisto); at 0 a
+  // rocky snowball (bright snow over rock, craters exposing dark regolith);
+  // between, a continuous blend of the two. 0 on suppressed surfaces.
+  readonly shellFraction: number;
   // Ice coverage [0..1] — a pure function of iceFraction (no temperature;
   // procgen already folded thermal state into iceFraction). Drives the
   // shader's single continuous latitude model: the snow line sits at
@@ -676,6 +705,13 @@ export function buildDiscPalette(
     ? { reliefBands: 1, granularity: 0.5 }
     : terrainRoughnessFor(body);
 
+  // Ice-shell composition fraction — how ice-dominated the BULK is, a continuous
+  // smoothstep (no hard threshold) over bulkWater+bulkVolatile. Drives whether
+  // the shader's frozen surface ages as a dust-mantled ice shell (Callisto, → 1)
+  // or a bright rocky snowball (→ 0), blending continuously across the middle.
+  // 0 on suppressed surfaces.
+  const shellFraction = surfaceSuppressed ? 0 : shellFractionFor(body);
+
   // Unified haze blend — one color + one opacity per body, derived
   // from the atmospheric contributor list (bulk gases × pressure ×
   // potency, Rayleigh scattering, formation-gated aerosol products,
@@ -863,6 +899,7 @@ export function buildDiscPalette(
     surfaceAge,
     reliefBands,
     granularity,
+    shellFraction,
     iceCoverage,
     moltenCoverage,
     emissionTempNorm,

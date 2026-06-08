@@ -14,6 +14,9 @@ export const BODY_THRESHOLDS: Record<string, number>;
 export function isGaseousBody(b: Body): boolean;
 export function isClassifiable(b: Body): boolean;
 
+// Liquid surface-water cover, projected from the generic surface-liquid fields.
+export function liquidWaterCover(b: Body): number;
+
 // Gaseous family.
 export function isVeiledIce(b: Body): boolean;
 export function isHelium(b: Body): boolean;
@@ -38,5 +41,6 @@ export function isVolcanic(b: Body): boolean;
 export function isIron(b: Body): boolean;
 export function isFrostbound(b: Body): boolean;
 export function isGlacial(b: Body): boolean;
+export function isIceShell(b: Body): boolean;
 export function isSuperEarth(b: Body): boolean;
 export function isDesert(b: Body): boolean;

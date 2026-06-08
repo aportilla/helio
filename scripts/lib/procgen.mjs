@@ -41,9 +41,11 @@
 //                               so a young/massive giant reads hot far out.
 //                               Sub-steps inside each pass:
 //                                 dominantSurfaceLiquid (per-species phase
-//                                   gate over SurfaceLiquidSpecies; waterFraction
-//                                   = water cover, surfaceLiquidFraction =
-//                                   dominant solvent of any species)
+//                                   gate over SurfaceLiquidSpecies →
+//                                   surfaceLiquidFraction = cover of the
+//                                   dominant solvent of any species; liquid
+//                                   water is the water case, read via
+//                                   liquidWaterCover)
 //                                 surfaceIceCover         (cold-trap OR polar-cap)
 //   8.  surfaceAge              tect^exp × noise + tidal lift for
 //                               eccentric moons of giants
@@ -157,7 +159,7 @@ import {
 // The radius/temperature gaseous-bracket thresholds and the gaseous predicate
 // are owned by the shared body-traits library, so the physics passes here and
 // the renderer-side readers share one table + one gate and can't drift.
-import { BODY_THRESHOLDS, isGaseousBody } from './body-traits.mjs';
+import { BODY_THRESHOLDS, isGaseousBody, liquidWaterCover } from './body-traits.mjs';
 
 const VALID_ARCHETYPES = new Set(BIOSPHERE_ARCHETYPES);
 const VALID_COMPLEXITY = new Set(BIOSPHERE_COMPLEXITY);
@@ -308,8 +310,7 @@ function cloudBumpFromComposition(body) {
 // composition-derived (liquid × per-species albedo + iceFraction × ice +
 // land × rocky). The liquid term reads surfaceLiquidFraction (the
 // dominant solvent of any species) so a hydrocarbon or ammonia sea
-// darkens the disc the way an ocean does; on a water world
-// surfaceLiquidFraction equals waterFraction and the blend is unchanged.
+// darkens the disc the way a water ocean does.
 // The cloud bump dispatches on atm-presence: composition path when
 // atm1/2/3 are known (Pass B), bulkWater proxy otherwise (Pass A).
 //
@@ -641,30 +642,29 @@ function solventBudgetFor(body, species) {
 
 // Dominant surface-liquid species + its cover. Evaluates every
 // SurfaceLiquidSpecies against the body's settled T/P + per-species budget
-// and picks the highest-cover candidate. Returns the water cover
-// separately so waterFraction keeps its locked meaning (surface H2O
-// cover specifically, D1) regardless of which species dominates — for a
-// water-dominant world the two are equal. surfaceLiquidSpecies is null
-// iff the dominant cover is 0.
+// and picks the highest-cover candidate. surfaceLiquidSpecies is null iff the
+// dominant cover is 0. Liquid water carries no privileged field — it's read
+// back out where needed via liquidWaterCover (the dominant cover when the
+// winner is water, else 0), exactly like any other solvent.
 function dominantSurfaceLiquid(body, T_mean, surfacePressureBar, salinity, noiseMult) {
   let bestSpecies = null;
   let bestCover = 0;
-  let waterCover = 0;
   for (const species of Object.keys(SOLVENT_PHASE)) {
     const budget = solventBudgetFor(body, species);
     const cover = surfaceLiquidCover(species, budget, T_mean, surfacePressureBar, salinity, noiseMult);
-    if (species === 'water') waterCover = cover;
-    // Exotic solvents only count as the dominant liquid once their cover
-    // clears the meaningful-feature floor — a trace film doesn't make a
-    // world a nitrogen- or sulfur-sea. Water is exempt (calibrated cover).
-    const effective = species === 'water' || cover >= MIN_SURFACE_LIQUID_COVER ? cover : 0;
+    // A solvent counts as the dominant liquid only once its cover clears its
+    // per-species meaningful-feature floor (SOLVENT_PHASE.minFeatureCover,
+    // defaulting to MIN_SURFACE_LIQUID_COVER) — a trace film doesn't make a
+    // world a nitrogen- or sulfur-sea. Water carries a 0 floor as data (its
+    // cover is calibrated via SURFACE_WATER_SAT), so no species is branched on.
+    const floor = SOLVENT_PHASE[species].minFeatureCover ?? MIN_SURFACE_LIQUID_COVER;
+    const effective = cover >= floor ? cover : 0;
     if (effective > bestCover) {
       bestCover = effective;
       bestSpecies = species;
     }
   }
   return {
-    waterCover,
     liquidFraction: bestCover,
     liquidSpecies: bestCover > 0 ? bestSpecies : null,
   };
@@ -910,8 +910,8 @@ function surfaceRadiationFor(body, hostStar, hostBody, S) {
 // (linear). Thick atm + a liquid sea → small swing (Earth ±50K seasonal);
 // airless dry body → wild swing (Mercury ±300K). Any solvent buffers the
 // swing, not just water, so a hydrocarbon sea damps a Titan-analog's
-// seasons; on a water world surfaceLiquidFraction equals waterFraction and
-// the term is unchanged. Class isn't an input.
+// seasons — the term reads surfaceLiquidFraction, not a water-only field.
+// Class isn't an input.
 function surfaceTempRangeFor(body) {
   if (body.avgSurfaceTempK == null) return { min: null, max: null };
   const P = body.surfacePressureBar ?? 0;
@@ -1297,8 +1297,7 @@ function hazeContribution(gas, body) {
       if (so2Gate === 0) return 0;
       const tempGate = smoothstep(spec.tempRise[0], spec.tempRise[1], T) * (1 - smoothstep(spec.tempFall[0], spec.tempFall[1], T));
       const pressGate = 1 - smoothstep(spec.pressFall[0], spec.pressFall[1], P);
-      const waterFrac = body.waterFraction ?? 0;
-      const dryGate = 1 - smoothstep(spec.dryFall[0], spec.dryFall[1], waterFrac);
+      const dryGate = 1 - smoothstep(spec.dryFall[0], spec.dryFall[1], liquidWaterCover(body));
       return tempGate * so2Gate * pressGate * dryGate;
     }
     case 'SILICATE': {
@@ -1327,8 +1326,7 @@ function dustStrengthFor(body) {
   // at any pressure including Mars's 0.006 bar. Upper cap (maxPressureBar):
   // thicker air becomes too dense to keep dust airborne.
   if (P <= 0 || P > DUST_GATE.maxPressureBar) return 0;
-  const waterFrac = body.waterFraction ?? 0;
-  const dryGate = 1 - smoothstep(DUST_GATE.dryFall[0], DUST_GATE.dryFall[1], waterFrac);
+  const dryGate = 1 - smoothstep(DUST_GATE.dryFall[0], DUST_GATE.dryFall[1], liquidWaterCover(body));
   const pressGate = 1 - smoothstep(DUST_GATE.pressFall[0], DUST_GATE.pressFall[1], P);
   const tempGate = smoothstep(DUST_GATE.tempRise[0], DUST_GATE.tempRise[1], T) * (1 - smoothstep(DUST_GATE.tempFall[0], DUST_GATE.tempFall[1], T));
   return Number((dryGate * pressGate * tempGate).toFixed(3));
@@ -1416,7 +1414,7 @@ function resourcesFor(body, hostStar, hostBody) {
     metalRichHost: metallicity >= C.metalRichHostDex,
     metalPoorHost: metallicity <= C.metalPoorHostDex,
     youngHost:     stellarAge <= C.youngHostGyr,
-    icy:           (body.iceFraction ?? 0) >= C.icyFrac || (body.waterFraction ?? 0) >= C.wateryFrac,
+    icy:           (body.iceFraction ?? 0) >= C.icyFrac || liquidWaterCover(body) >= C.wateryFrac,
   };
 
   // ── Effective occurrence weight per resource = base × Π(active axes) ×
@@ -1520,7 +1518,7 @@ function productivityPreAtm(body, hostStar) {
   const T = body.avgSurfaceTempK;
   const Tmin = body.surfaceTempMinK;
   const Tmax = body.surfaceTempMaxK;
-  const water = body.waterFraction ?? 0;
+  const water = liquidWaterCover(body);
   const P = body.surfacePressureBar ?? 0;
   const g = bodyGravityEarth(body);
   const colMass = P > 0 ? Math.log10(P / g + 1) : 0;
@@ -1894,15 +1892,14 @@ export function fillBodies(bodies, stars) {
 }
 
 // One cover→albedo→temp→cover iteration for a given greenhouse offset.
-// `prevWater`/`prevIce` seed the albedo's cloud/ice contribution so the
+// `prevIce`/`prevLiquid` seed the albedo's ice + liquid contribution so the
 // caller can run it twice (cold start, then refined by pass 1's cover).
 // Reads the body's settled physics off `ctx.working`; returns all-null
 // when T can't be resolved (missing radius or insolation).
-function runTempIcePass(ctx, prevWater, prevIce, prevLiquid, greenhouseK) {
+function runTempIcePass(ctx, prevIce, prevLiquid, greenhouseK) {
   const { working, S, ageGyr, surfacePressureBar, bulkWaterFraction, salinity, waterNoise, iceNoise } = ctx;
   const stateForAlbedo = {
     ...working,
-    waterFraction: prevWater,
     iceFraction:   prevIce,
     surfaceLiquidFraction: prevLiquid,
     // T not yet known; bondAlbedoFor's cloud gate uses T — pass null
@@ -1912,29 +1909,26 @@ function runTempIcePass(ctx, prevWater, prevIce, prevLiquid, greenhouseK) {
   // First T-pass without cloud temperature gate
   let A = bondAlbedoFor(stateForAlbedo);
   let T = avgSurfaceTempFromAlbedo(working.radiusEarth, S, A, greenhouseK, working.massEarth, ageGyr);
-  if (T == null) return { T: null, Tmin: null, Tmax: null, ice: null, water: null, liquidFraction: null, liquidSpecies: null };
+  if (T == null) return { T: null, Tmin: null, Tmax: null, ice: null, liquidFraction: null, liquidSpecies: null };
   // Recompute albedo with T available so the cloud-temperate gate fires
   A = bondAlbedoFor({ ...stateForAlbedo, avgSurfaceTempK: T });
   T = avgSurfaceTempFromAlbedo(working.radiusEarth, S, A, greenhouseK, working.massEarth, ageGyr);
-  if (T == null) return { T: null, Tmin: null, Tmax: null, ice: null, water: null, liquidFraction: null, liquidSpecies: null };
+  if (T == null) return { T: null, Tmin: null, Tmax: null, ice: null, liquidFraction: null, liquidSpecies: null };
   const { min: Tmin, max: Tmax } = surfaceTempRangeFor({
     ...working,
     avgSurfaceTempK: T,
     surfaceLiquidFraction: prevLiquid,
     surfacePressureBar,
   });
-  // Dominant surface liquid across every solvent species. waterFraction
-  // keeps its locked meaning (the water-species cover specifically, D1);
-  // surfaceLiquidFraction is the dominant liquid of any species, equal to
-  // waterFraction on a water-dominant world.
+  // Dominant surface liquid across every solvent species (water included —
+  // liquidWaterCover projects the water case back out downstream).
   const dom = dominantSurfaceLiquid(
     { ...working, avgSurfaceTempK: T, surfacePressureBar },
     T, surfacePressureBar, salinity, waterNoise,
   );
-  const water = dom.waterCover;
   const ice   = surfaceIceCover(bulkWaterFraction, T, Tmin, surfacePressureBar, iceNoise);
   return {
-    T, Tmin, Tmax, ice, water,
+    T, Tmin, Tmax, ice,
     liquidFraction: dom.liquidFraction,
     liquidSpecies: dom.liquidSpecies,
   };
@@ -1981,7 +1975,7 @@ function fillBody(b, allBodies, stars) {
   //     BODY_STRING_FIELDS       (build-catalog.mjs) — JSON (de)serialization typing
   let {
     radiusEarth, bulkWaterFraction, bulkMetalFraction, bulkVolatileFraction,
-    waterFraction, iceFraction, surfaceAge,
+    iceFraction, surfaceAge,
     surfaceLiquidFraction, surfaceLiquidSpecies, subsurfaceOceanSpecies, salinity,
     avgSurfaceTempK, surfaceTempMinK, surfaceTempMaxK,
     tectonicActivity, rotationPeriodHours, magneticFieldGauss,
@@ -2137,13 +2131,12 @@ function fillBody(b, allBodies, stars) {
   // share this body so the five-field commit lives in one place.
   const applyTempPass = (greenhouseK) => {
     const ctx = { working, S, ageGyr: hostStar?.ageGyr ?? 5.0, surfacePressureBar, bulkWaterFraction, salinity, waterNoise, iceNoise };
-    const p1 = runTempIcePass(ctx, 0, 0, 0, greenhouseK);
-    const p2 = runTempIcePass(ctx, p1.water ?? 0, p1.ice ?? 0, p1.liquidFraction ?? 0, greenhouseK);
+    const p1 = runTempIcePass(ctx, 0, 0, greenhouseK);
+    const p2 = runTempIcePass(ctx, p1.ice ?? 0, p1.liquidFraction ?? 0, greenhouseK);
     if (unknowns.has('avgSurfaceTempK') && p2.T != null) avgSurfaceTempK = p2.T;
     if (unknowns.has('surfaceTempMinK') && p2.Tmin != null) surfaceTempMinK = p2.Tmin;
     if (unknowns.has('surfaceTempMaxK') && p2.Tmax != null) surfaceTempMaxK = p2.Tmax;
     if (unknowns.has('iceFraction')   && p2.ice   != null) iceFraction   = p2.ice;
-    if (unknowns.has('waterFraction') && p2.water != null) waterFraction = p2.water;
     if (unknowns.has('surfaceLiquidFraction') && p2.liquidFraction != null) {
       surfaceLiquidFraction = p2.liquidFraction;
       // Species is locked to the cover it describes: null iff cover is 0.
@@ -2152,7 +2145,7 @@ function fillBody(b, allBodies, stars) {
     working = {
       ...working,
       avgSurfaceTempK, surfaceTempMinK, surfaceTempMaxK,
-      iceFraction, waterFraction,
+      iceFraction,
       surfaceLiquidFraction, surfaceLiquidSpecies,
     };
   };
@@ -2327,7 +2320,7 @@ function fillBody(b, allBodies, stars) {
   return {
     ...rest,
     radiusEarth, bulkWaterFraction, bulkMetalFraction, bulkVolatileFraction,
-    waterFraction, iceFraction, surfaceAge,
+    iceFraction, surfaceAge,
     surfaceLiquidFraction, surfaceLiquidSpecies, subsurfaceOceanSpecies, salinity,
     surfaceFrostSpecies, carbonWorld,
     avgSurfaceTempK, surfaceTempMinK, surfaceTempMaxK,

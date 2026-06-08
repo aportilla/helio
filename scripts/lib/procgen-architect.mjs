@@ -278,7 +278,7 @@ const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI'
 // Architect's output declares its dependencies cleanly to the next layer.
 const FILLER_TARGET_FIELDS = [
   'avgSurfaceTempK', 'surfaceTempMinK', 'surfaceTempMaxK',
-  'waterFraction', 'iceFraction', 'surfaceAge',
+  'iceFraction', 'surfaceAge',
   'salinity', 'surfaceLiquidFraction', 'surfaceLiquidSpecies', 'subsurfaceOceanSpecies',
   'magneticFieldGauss', 'tectonicActivity',
   'surfacePressureBar',
@@ -313,7 +313,7 @@ function makeBody(props) {
     shepherdId: null,
     shepherdBodyIdx: null,
     avgSurfaceTempK: null, surfaceTempMinK: null, surfaceTempMaxK: null,
-    waterFraction: null, iceFraction: null, surfaceAge: null,
+    iceFraction: null, surfaceAge: null,
     salinity: null, surfaceLiquidFraction: null,
     surfaceLiquidSpecies: null, subsurfaceOceanSpecies: null,
     magneticFieldGauss: null, tectonicActivity: null,

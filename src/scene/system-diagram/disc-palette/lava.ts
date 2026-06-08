@@ -22,6 +22,7 @@
 // deliberate — CPU resolves coverage/temp, GPU resolves where on the disc.
 
 import { Body } from '../../../data/stars';
+import { liquidWaterCover } from '../../../../scripts/lib/body-traits.mjs';
 import { dominantResources, rockArchetypeFor, RESOURCE_EMBER_TINT, RESOURCE_EMBER_POTENCY } from '../color-science';
 import { atmFracOf, clamp01, smoothstep01 } from './shared';
 
@@ -151,7 +152,7 @@ export interface LavaDrives {
 export function lavaDrivesFor(body: Body, surfaceAge: number): LavaDrives {
   const T = body.avgSurfaceTempK ?? 0;
   const tect = body.tectonicActivity ?? 0;
-  const wf = body.waterFraction ?? 0;
+  const wf = liquidWaterCover(body);
   const iceF = body.iceFraction ?? 0;
   const resVolNorm = clamp01((body.resVolatiles ?? 0) / 10);
   const heatMelt = smoothstep01(LAVA_SOLIDUS_LOW_K, LAVA_SOLIDUS_HIGH_K, T);

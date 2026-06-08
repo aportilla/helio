@@ -1,6 +1,7 @@
 // PlanetGridDiagram — flat 2D test grid of 30 synthetic bodies, rendered
 // through the real disc path so a tuning edit can be eyeballed across the whole
-// resource × tier sweep at once. Coordinator only, mirroring SystemDiagram:
+// surface-decoration sweep (shellFraction × surfaceAge) at once. Coordinator only,
+// mirroring SystemDiagram:
 // owns the Scene + OrthographicCamera (1 unit = 1 buffer px), holds the disc
 // layer and the caption layer, and threads resize → layout through them.
 //

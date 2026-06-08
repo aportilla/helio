@@ -193,7 +193,7 @@ export interface Body {
   // Orbital distance the planet formed at, before any Type II disk
   // migration. Usually equals semiMajorAu (in-situ formation); a hot
   // Jupiter has formationAu past the H2O frost line and semiMajorAu
-  // inside ~0.1 AU. Bulk composition (waterFraction / metalFraction)
+  // inside ~0.1 AU. Bulk composition (bulkWaterFraction / bulkMetalFraction)
   // samples on formationAu insolation, not current — a migrated giant
   // keeps its outer-zone water budget despite its hot current orbit.
   // Set on planets only (architect samples + persists); null on moons,
@@ -278,12 +278,12 @@ export interface Body {
   readonly avgSurfaceTempK: number | null;
   readonly surfaceTempMinK: number | null;
   readonly surfaceTempMaxK: number | null;
-  readonly waterFraction: number | null;
   readonly iceFraction: number | null;
-  // Generalized standing-liquid cover, decoupled from the H2O-specific
-  // waterFraction: the fraction of surface under the dominant liquid of
-  // whatever species condenses here, so methane- or ammonia-sea worlds get
-  // a real liquid extent the water proxy would read as dry.
+  // Standing surface-liquid cover for the dominant solvent of WHATEVER species
+  // condenses here (water, hydrocarbon, ammonia, nitrogen, sulfur) — methane-
+  // and ammonia-sea worlds get a real liquid extent, and liquid water is simply
+  // this cover when surfaceLiquidSpecies === 'water' (see liquidWaterCover in
+  // body-traits). There is no separate H2O field.
   readonly surfaceLiquidFraction: number | null;
   // Which solvent that dominant surface liquid is; null only when nothing
   // stands on the surface, since a zero-cover world has no liquid to name.

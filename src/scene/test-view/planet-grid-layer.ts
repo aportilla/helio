@@ -30,7 +30,7 @@ export interface GridCenter {
 
 // Uniform disc diameter for every test cell (env-px). The grid is a visual
 // reference sweep, so all discs render at one size rather than the catalog's
-// radius-derived sizing — comparing the resource/tier variation is the point,
+// radius-derived sizing — comparing the surface-decoration variation is the point,
 // and a constant disc keeps the eye on the surface texture, not the silhouette.
 // 64 leaves the procedural suite (surface worley + clouds + craters) plenty of
 // pixels to resolve while still fitting 8 across a typical landscape viewport.

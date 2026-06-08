@@ -34,7 +34,7 @@ import {
   isClassifiable, isGaseousBody, isVeiledIce, isHelium, isGasGiant, isHotGiant,
   isIceGiant, isBrimstone, isTholin, isGaian, isAmmoniaSea, isSubglacialOcean,
   isChthonian, isLava, isMagmaOcean, isVolcanic, isIron, isFrostbound, isGlacial,
-  isOcean, isSuperEarth, isDesert,
+  isOcean, isSuperEarth, isDesert, liquidWaterCover,
 } from './lib/body-traits.mjs';
 import {
   STELLAR_CLASSES,
@@ -729,7 +729,7 @@ function auditCoverBugClosure() {
     const warm    = b.avgSurfaceTempK > 280;
     if (small && airless && b.avgSurfaceTempK > 250) {
       totalSmallAirless += 1;
-      if ((b.waterFraction ?? 0) > 0.1) smallAirlessOcean += 1;
+      if (liquidWaterCover(b) > 0.1) smallAirlessOcean += 1;
     }
     if (warm && airless) {
       totalWarmAirless += 1;
@@ -752,7 +752,7 @@ function auditSurfaceCover() {
     if (b.kind !== 'planet' && b.kind !== 'moon') continue;
     if (b.source !== 'procgen') continue;
     if (GASEOUS_ARCHETYPES.has(archOf(b))) continue;
-    const w = b.waterFraction ?? 0;
+    const w = liquidWaterCover(b);
     const i = b.iceFraction ?? 0;
     if (w > 0.05 && i < 0.5)     liquidGated += 1;
     else if (i > 0.5)             frozenGlobal += 1;
@@ -898,7 +898,7 @@ console.log();
     if (b.kind !== 'planet' && b.kind !== 'moon') continue;
     if (b.source !== 'procgen') continue;
     const T = b.avgSurfaceTempK ?? 0;
-    const dry = (b.waterFraction ?? 0) < 0.05 && (b.iceFraction ?? 0) < 0.3;
+    const dry = liquidWaterCover(b) < 0.05 && (b.iceFraction ?? 0) < 0.3;
     if (T >= 273 && dry && (b.surfacePressureBar ?? 0) >= 0.001) {
       dryWarm += 1;
       if ((b.salinity ?? 0) >= 0.6) evap += 1;

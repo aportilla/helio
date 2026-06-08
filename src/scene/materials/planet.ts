@@ -120,8 +120,10 @@ import { MAX_LIGHTS, BAYER4_GLSL, HASH_GLSL, RIM_GLOW_FOCUS, STAR_CRESCENT_LIGHT
 //                                       emberTint in disc-palette/lava.ts).
 //   [MAX_CLOUD_LAYERS+1+N+4]          — per-body surface-terrain scalars
 //                                       (.r = reliefBands terrace count, .g =
-//                                       granularity feature fineness; ba unused.
-//                                       See terrainRoughnessFor in disc-palette).
+//                                       granularity feature fineness, .b =
+//                                       shellFraction (bulk-ice fraction 0..1);
+//                                       .a unused. See terrainRoughnessFor /
+//                                       shellFraction in disc-palette).
 // Pulling everything off vertex attributes brings the per-pool attribute
 // count back under the gl_MaxVertexAttribs cap.
 // Up to 4 stratified decks per body — 3 chemistry decks (Jupiter
@@ -152,9 +154,11 @@ export const LAVA_TINT_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 
 export const EMBER_TINT_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1 + 1 + 1;
 // Per-body surface-terrain scalars — .r = reliefBands (the count of discrete
 // elevation terraces the surface shades into, 1 ≈ flat → 6 ≈ rugged); .g =
-// granularity (feature fineness 0 = coarse provinces → 1 = fine grain). Both
-// derived read-side in disc-palette (terrainRoughnessFor) from stored physics,
-// not stored fields. .ba unused.
+// granularity (feature fineness 0 = coarse provinces → 1 = fine grain); .b =
+// shellFraction (bulk-ice fraction 0..1: 1 = an ice shell whose frozen surface
+// ages via a dust mantle, 0 = rocky snowball, between = a continuous blend).
+// All derived read-side in disc-palette (terrainRoughnessFor / shellFraction)
+// from stored physics, not stored fields. .a unused.
 export const TERRAIN_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1 + 1 + 1 + 1;
 export const BODY_TEXTURE_WIDTH =
   MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1 + 1 + 1 + 1 + 1;
@@ -454,6 +458,15 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // against a dark scene background.
       const vec3 ICE_COLOR = vec3(0.93, 0.97, 1.0);
 
+      // Sublimation dust-lag tint — as a frozen surface ages, volatile ice
+      // sublimes / sputters away and leaves a non-volatile lag that DIRTIES the
+      // ice with the body's own PRIMARY resource colour (vPalette0), lightly
+      // darkened for the concentration effect. Dirty ice, NOT black rock: the
+      // hue is the resource's and the value only modestly drops, so an aged
+      // shell reads as soiled/dusty ice (Callisto) that's still recognizably
+      // icy, with bright fresh-ice craters punching through for contrast.
+      const float DUST_DIRT_DARKEN = 0.2;
+
       // Biome stipple latitude window. Past BIOME_LAT_MAX (|sin lat| ≈
       // sin(58°)) life thins to zero; BIOME_LAT_RAMP feathers the edge
       // so the transition reads as "thinning toward the poles" rather
@@ -667,6 +680,18 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       //         only contribute rays.
       const float CRATER_PATCH_FACTOR = 1.5;
       const float CRATER_DENSITY_MAX  = 0.85;
+      // Ice shells weather a softer crater record than bare rock — fresh ice
+      // viscously relaxes old bowls and the bright-ice reveals already read
+      // busy — so density scales down toward this on a full ice shell.
+      const float ICE_CRATER_DENSITY_SCALE = 0.65;
+      // Effective-weathering-age floor for ice shells — remaps the raw surfaceAge
+      // so even a fresh shell (surfaceAge → 1) reads at this much aging, lifting
+      // the bland pristine-fresh end out of the visible range: effAge =
+      // FLOOR + (1−FLOOR)·(1−surfaceAge). 0 = raw age (a truly pristine fresh
+      // shell); 0.4 ≈ "the freshest reads like a moderately-aged surface." Shared
+      // by the dust-lag coverage and the crater density, both ice-scoped so rock
+      // is untouched.
+      const float ICE_WEATHER_FLOOR = 0.4;
       const float CRATER_RADIUS_MIN   = 0.20;
       const float CRATER_RADIUS_MAX   = 0.7;
 
@@ -1103,17 +1128,14 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       const vec2 LAYER_SALT_CLOUD_VORTEX = vec2(37.0, 41.0);
       const float SALT_BAND_LIGHTNESS  = 67.0;
       const float LAYER_SALT_BAND      = 13.0;
-      // Resource stain stipple on icy fragments — fresh prime pair, no
-      // overlap with the cloud/lava/crater salt budget above.
-      const vec2 SALT_ICE_STAIN        = vec2(1051.0, 1061.0);
       // Snow-line margin lobe octaves (the fine octave reuses
       // SALT_CAP_JITTER). Fresh prime pairs, distinct from the budget above.
       const vec2 SALT_SNOW_MED         = vec2(1063.0, 1069.0);
       const vec2 SALT_SNOW_COARSE      = vec2(1087.0, 1091.0);
-      // Stain-boundary lobe octaves — decorrelated from the snow line so the
-      // exposed-rock blotches don't track the ice edge. Fresh prime pairs.
-      const vec2 SALT_STAIN_LOBE_MED    = vec2(1093.0, 1097.0);
-      const vec2 SALT_STAIN_LOBE_COARSE = vec2(1103.0, 1109.0);
+      // Dust-lag blotch octaves — the value-noise field whose threshold against
+      // age-driven coverage grows the sublimation lag as mottled patches.
+      const vec2 SALT_DUST_BLOTCH_A     = vec2(1117.0, 1123.0);
+      const vec2 SALT_DUST_BLOTCH_B     = vec2(1129.0, 1151.0);
       // Relief-elevation third octave (the first two reuse SALT_CONTINENT /
       // SALT_WATER_OCTAVE). Fresh prime pair.
       const vec2 SALT_RELIEF_FINE       = vec2(1117.0, 1123.0);
@@ -1528,8 +1550,8 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // grow organically from the poles toward the equator as coverage
       // rises, all the way to a wholly frozen disc. vIceCoverage is a
       // pure function of iceFraction (no temperature double-count). The
-      // resource-stain decoration on top is graded by latitude and
-      // freshness at the paint site, not here.
+      // sublimation dust-lag decoration on top is graded by latitude (cold-trap)
+      // and freshness at the paint site, not here.
       //
       // The snow line is perturbed by three octaves of blocky value
       // noise in the same sphere-projected worley-cell frame as the
@@ -1641,12 +1663,24 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       //   crater age (ray):  (631, 641) — per-crater impact recency
       //   ray base angle:    (653, 659) — per-crater angular offset
       //   per-ray length:    (677, 683) — per-(crater, ray-index) length jitter
-      vec3 craterRayPass(vec3 col, vec2 cellPos, bool icyHere, float reliefBands) {
+      vec3 craterRayPass(vec3 col, vec2 cellPos, bool icyHere, float shellFraction, float reliefBands) {
         vec2 craterCellPos  = cellPos / CRATER_PATCH_FACTOR;
         vec2 craterCellId   = floor(craterCellPos);
         vec2 craterCellFrac = craterCellPos - craterCellId;
         float ageMissing    = 1.0 - vSurfaceAge;
-        float craterDensity = ageMissing * ageMissing * CRATER_DENSITY_MAX;
+        // Frozen surfaces (a bright rocky snowball OR an ice shell) lift the
+        // effective weathering age (ICE_WEATHER_FLOOR) so even a fresh icy world
+        // carries some crater record — the bland-fresh range is remapped out.
+        // Gated by how ICY the surface is (vIceFrac), NOT the ice-shell fraction,
+        // so a snowball (shellFraction 0 but icy) weathers too; a hot dry rock
+        // (Io, vIceFrac 0) keeps the raw age and a freshly-resurfaced rock stays
+        // clean. The density REDUCTION below stays shellFraction-gated — only a
+        // true ice shell viscously relaxes its bowls.
+        float weatherMissing = mix(ageMissing,
+                                   ICE_WEATHER_FLOOR + (1.0 - ICE_WEATHER_FLOOR) * ageMissing,
+                                   vIceFrac);
+        float craterDensity = weatherMissing * weatherMissing * CRATER_DENSITY_MAX
+                            * mix(1.0, ICE_CRATER_DENSITY_SCALE, shellFraction);
 
         float bestDist  = 1e9;
         vec2  bestCraterId = vec2(0.0);
@@ -1764,18 +1798,21 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           // rays and a Callisto impact throws ICE_COLOR rays —
           // the same colors those impacts' bowls would expose.
           //
-          // The excavated material is buried regolith — the deepest terrace's
-          // shade (the primary colour pushed toward black), so a bowl or ray
-          // never reads as one of the brighter terraces. Floored at one step so
-          // craters stay visible even on a near-flat (low-band) world. Terrace-
-          // independent, so a crater spanning the Uplands/Lowlands shoreline
-          // paints one uniform colour with no boundary seam.
+          // Excavated material. On an ICE-SHELL world (shellFraction → 1) an
+          // impact punches through the dark dust mantle and exposes the bright
+          // clean ICE beneath, so an ancient globe reads dark with bright
+          // ice-floored bowls + rays — the Callisto / Tycho look. On ROCK
+          // (shellFraction → 0) — whether bare or wearing a snow veneer
+          // (snowball) — it exposes the buried regolith instead (the primary
+          // colour pushed toward black, the deepest terrace shade), so a snowball
+          // gains DARK crater spots. The reveal blends continuously between the
+          // two by shellFraction, so a half-ice world excavates a muddy ice-rock
+          // mix rather than snapping between the regimes. Floored at one step so a
+          // crater stays visible on a near-flat world, and terrace-independent so
+          // a bowl spanning the Uplands/Lowlands shoreline paints one colour.
           float pDeepStep = max((reliefBands - 1.0) * 0.5 * SURFACE_SHADE_STEP, SURFACE_SHADE_STEP);
-          vec3 pRevealCol = mix(vPalette0, vec3(0.0), pDeepStep);
-
-          vec3 pYoung = pRevealCol;
-          vec3 pOld   = icyHere ? ICE_COLOR : pRevealCol;
-          col = mix(pOld, pYoung, vSurfaceAge);
+          vec3 rockReveal = mix(vPalette0, vec3(0.0), pDeepStep);
+          col = mix(rockReveal, ICE_COLOR, icyHere ? shellFraction : 0.0);
         }
         return col;
       }
@@ -1792,7 +1829,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       // come from main(); everything else reads from varyings/uniforms in scope.
       vec3 surfaceColor(vec2 d, float lxs, float lys, float lon, float lat,
                         vec3 vOceanColor, vec3 vAtmColumnColor, float sulfurFrac, vec3 crustColor,
-                        vec3 emberTint, float reliefBands, float granularity,
+                        vec3 emberTint, float reliefBands, float granularity, float shellFraction,
                         out vec3 lavaEmissive) {
         lavaEmissive = vec3(0.0);
         vec3 col;
@@ -1845,13 +1882,14 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           //     fragment: ocean (surface-liquid cell) or 1.5b region-masked
           //     resource pick (+ biome stipple).
           //   resourceSubsurface — the 1.5c complement-masked resource
-          //     pick: the body's exposed-rock color (the ice stain below,
-          //     and what a crater excavates).
-          // An icy fragment is pure ICE_COLOR, broken by a stippled resource
-          // stain (resourceSubsurface) that thickens toward the equator and on
-          // older (low-vSurfaceAge, regolith-laden) surfaces — see the stain
-          // block below. The vSurfaceAge young/old layer order (ice-on-top vs
-          // regolith-on-top) lives in the crater reveal, not the base ice paint.
+          //     pick: the body's exposed-rock color — what a rocky crater
+          //     excavates, and the linea-crack fill.
+          // An icy fragment is clean bright ICE_COLOR when fresh, buried under a
+          // SOLID dark dust mantle (the primary resource darkened) as it ages —
+          // mantled from the warm equator outward, the cold poles holding ice
+          // longest — see the dust-mantle block below. Impacts then expose the
+          // bright ice from beneath that mantle (in the crater reveal), so an
+          // ancient icy globe reads dark with bright ice-floored craters.
 
           bool icyHere;
           iceComposite(winnerCell, latSinDisc, icyHere);
@@ -1975,49 +2013,62 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
 
           // Subsurface = buried regolith — the deepest terrace's shade (the
           // primary colour pushed toward black), floored at one step so it stays
-          // visible on a near-flat world. A crater impact, a linea crack, and
-          // debris staining through ice all expose this same dark buried rock
-          // rather than a brighter terrace.
+          // visible on a near-flat world. The linea-crack fill exposes this dark
+          // buried rock rather than a brighter terrace.
           float deepStep = max((reliefBands - 1.0) * 0.5 * SURFACE_SHADE_STEP, SURFACE_SHADE_STEP);
           vec3 resourceSubsurface = mix(vPalette0, vec3(0.0), deepStep);
 
-          // Default fragment color. Ice is pure ICE_COLOR with a
-          // stippled resource stain showing through — denser toward the
-          // equator (debris-laden ablation margins) and on older
-          // regolith-laden surfaces, thinning to clean polar ice. The
-          // stain is a hard per-cell hash pick (stippled, no alpha
-          // blend); equatorBias only shapes the pick PROBABILITY.
-          //   STAIN_BASE   — full stain reachable on old equatorial ice
-          //     so a heavily-cratered icy world (Callisto) reads dark.
-          //   STAIN_FLOOR  — small everywhere-floor so a fully-covered
-          //     fresh world (Europa, Enceladus) isn't a flat-white disc
-          //     at the poles.
-          //   STAIN_LAT_LO/HI — the |sin lat| window over which the
-          //     stain thins toward the pole.
-          const float STAIN_BASE   = 1.0;
-          const float STAIN_FLOOR  = 0.05;
-          const float STAIN_LAT_LO = 0.2;
-          const float STAIN_LAT_HI = 0.9;
-          // Coarse value-noise lobes perturb the latitude driving the
-          // equator→pole stain falloff, so exposed rock reads as irregular
-          // blotches (continents of rock) amid the ice rather than a clean
-          // latitude band — the "clinical" zonal look. Bigger lobes than the
-          // snow line (rock provinces, not a fringe); disc-size-gated by the
-          // same SNOW_LOBE_*_PX so small moons keep a simple edge.
-          const float STAIN_LOBE_MED_DIV    = 3.0;
-          const float STAIN_LOBE_COARSE_DIV = 8.0;
-          const float STAIN_LOBE_MED_AMP    = 0.14;
-          const float STAIN_LOBE_COARSE_AMP = 0.22;
+          // Default fragment color — the sublimation weathering that ages an
+          // ICE-SHELL world:
+          //   • a FRESH surface (vSurfaceAge → 1) is clean bright ICE_COLOR
+          //     (Europa / Enceladus), textured only by linea;
+          //   • as it AGES (vSurfaceAge → 0) volatile ice sublimes / sputters
+          //     and leaves a non-volatile DUST LAG that DIRTIES the ice with the
+          //     body's primary resource colour (DUST_DIRT_DARKEN) — dirty ice,
+          //     not black rock;
+          //   • impacts then EXPOSE bright ice from beneath (craterRayPass), so
+          //     an ancient globe reads as mottled dirty ice with bright
+          //     ice-floored craters.
+          // The lag is MOTTLED, not a latitude band: a multi-octave value-noise
+          // field (blotch) thresholded against an age-driven COVERAGE grows the
+          // dust as organic patches — no hemispheric seam. A gentle equatorial
+          // lean (LAT_POLE_KEEP) keeps the cold poles cleaner without a hard
+          // contour, and coverage scales by shellFraction so a rocky snowball
+          // (→ 0) never dusts and a half-ice world wears a sparse lag.
+          //   DUST_AGE_GAMMA    — curve on (1−surfaceAge); >1 keeps young ice
+          //                       clean longer before the lag sets in.
+          //   LAT_POLE_KEEP     — coverage multiplier at the pole (equator = 1).
+          //   DUST_BLOTCH_*_DIV — worley-block sizes of the two blotch octaves.
+          const float DUST_AGE_GAMMA    = 1.4;
+          const float LAT_POLE_KEEP     = 0.55;
+          const float DUST_BLOTCH_A_DIV = 2.0;
+          const float DUST_BLOTCH_B_DIV = 5.0;
+          const float DUST_EDGE_DITHER  = 0.10;
           if (icyHere) {
-            float stainMed    = hash21(floor(winnerCell / STAIN_LOBE_MED_DIV)    + vSeed * SALT_STAIN_LOBE_MED)    - 0.5;
-            float stainCoarse = hash21(floor(winnerCell / STAIN_LOBE_COARSE_DIV) + vSeed * SALT_STAIN_LOBE_COARSE) - 0.5;
-            float stainLat    = abs(latSinDisc)
-                              + (stainMed * STAIN_LOBE_MED_AMP + stainCoarse * STAIN_LOBE_COARSE_AMP)
-                                * smoothstep(SNOW_LOBE_MIN_PX, SNOW_LOBE_FULL_PX, vRadius);
-            float equatorBias = 1.0 - smoothstep(STAIN_LAT_LO, STAIN_LAT_HI, stainLat);
-            float stainProb = clamp(STAIN_BASE * (1.0 - vSurfaceAge) * equatorBias + STAIN_FLOOR, 0.0, 1.0);
-            float stainH = hash21(winnerCell + vSeed * SALT_ICE_STAIN);
-            col = (stainH < stainProb) ? resourceSubsurface : ICE_COLOR;
+            // Age-driven coverage. The raw surfaceAge is first lifted by
+            // ICE_WEATHER_FLOOR so even a fresh shell carries some lag (the bland
+            // pristine-fresh range is remapped out of view); coverage then rises
+            // with age, leans toward the warm equator, and scales by how ice-rich
+            // the bulk is (shellFraction → 0 keeps a rocky snowball's snow bright).
+            float weatherAge = ICE_WEATHER_FLOOR + (1.0 - ICE_WEATHER_FLOOR) * (1.0 - vSurfaceAge);
+            float aging      = pow(weatherAge, DUST_AGE_GAMMA);
+            float latLean    = mix(LAT_POLE_KEEP, 1.0, 1.0 - abs(latSinDisc));
+            float coverage   = clamp(aging * latLean * shellFraction, 0.0, 1.0);
+            // Multi-octave value-noise blotch field in [0,1], blocky at the
+            // worley scale so patches read pixel-crisp; collapses to a uniform
+            // 0.5 on tiny moons (SNOW_LOBE_*_PX) so small discs stay simple.
+            float lobeAtten = smoothstep(SNOW_LOBE_MIN_PX, SNOW_LOBE_FULL_PX, vRadius);
+            float bA = hash21(floor(winnerCell / DUST_BLOTCH_A_DIV) + vSeed * SALT_DUST_BLOTCH_A);
+            float bB = hash21(floor(winnerCell / DUST_BLOTCH_B_DIV) + vSeed * SALT_DUST_BLOTCH_B);
+            float blotch = mix(0.5, 0.5 * bA + 0.5 * bB, lobeAtten);
+            // Sub-cell Bayer jitter frays the patch edges; gated on coverage > 0
+            // so a perfectly fresh surface never trips a stray dust pixel.
+            float jitter = (bayer4(gl_FragCoord.xy + vec2(23.0, 47.0)) - 0.5) * DUST_EDGE_DITHER;
+            bool isDust = coverage > 0.0 && blotch < coverage + jitter;
+            // Lag colour: the body's primary resource (vPalette0) dirtying the
+            // ice, lightly darkened — dirty ice, never black rock.
+            vec3 dirt = mix(vPalette0, vec3(0.0), DUST_DIRT_DARKEN);
+            col = isDust ? dirt : ICE_COLOR;
           } else {
             col = resourceSurface;
           }
@@ -2027,25 +2078,27 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           // excavated subsurface palette into the bowl, and any crater
           // whose rays reach this fragment throws the same material
           // along its ejecta — layer-ordered against ice by vSurfaceAge.
-          // Craters pit solid, ancient surfaces — bare rock/regolith and old
-          // ice crust (Callisto, Ganymede). They do NOT pock an open liquid
-          // sea, nor smooth fresh frost (young seasonal ice reads smooth, like
-          // Europa/Enceladus and Mars's seasonal caps), so skip both. Gate on
-          // FRESH_FROST_AGE so old icy crust still craters while fresh frost
-          // stays smooth.
-          const float FRESH_FROST_AGE = 0.6;
-          bool openLiquid  = liquidOceanHere && !icyHere;
-          bool smoothFrost = icyHere && vSurfaceAge > FRESH_FROST_AGE;
-          if (!openLiquid && !smoothFrost) {
-            col = craterRayPass(col, cellPos, icyHere, reliefBands);
+          // Craters pit solid surfaces — bare rock/regolith and icy crust
+          // (Callisto, Ganymede). They do NOT pock an open liquid sea, so skip
+          // that. There's no hard "fresh frost is smooth" cutoff: crater DENSITY
+          // already scales with the effective weathering age inside craterRayPass
+          // (few bowls when fresh, many when ancient), and the ICE_WEATHER_FLOOR
+          // lift keeps even a fresh icy world from reading as a blank disc. If the
+          // floor were dropped to 0, fresh density → 0 and frost reads smooth
+          // again on its own — no separate gate needed.
+          bool openLiquid = liquidOceanHere && !icyHere;
+          if (!openLiquid) {
+            col = craterRayPass(col, cellPos, icyHere, shellFraction, reliefBands);
           }
 
           // Phase 1.5d — linea. Voronoi cell-boundary cracks painted
           // with the body's subsurface palette. Fires where the body
-          // has young icy crust (Europa, Enceladus). Body-level gate
-          // on iceFraction × surfaceAge keeps the pass off non-icy or
-          // ancient surfaces; fragment-level icyHere gate keeps cracks
-          // confined to the actual ice. Painting subsurface fits the
+          // has young icy crust (Europa, Enceladus). Crack DENSITY scales with
+          // shellFraction — linea is ice-shell tectonics (a cracked-open global
+          // ice crust), so it fades out toward a rocky snowball whose snow veneer
+          // doesn't crack — plus a body-level iceFraction × surfaceAge gate (off
+          // on non-icy / ancient surfaces) and the fragment-level icyHere
+          // gate (cracks confined to actual ice). Painting subsurface fits the
           // layered resource model — a linea is "the ice shell cracked
           // open and the underlying composition is visible."
           //
@@ -2058,12 +2111,12 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
           // The edge key is winnerCell + secondCell (commutative, so
           // the same edge keyed identically regardless of which side
           // the fragment is on). Salts SALT_LINEA_EDGE.
-          if (icyHere && (vIceFrac * vSurfaceAge) > LINEA_BODY_THRESHOLD) {
+          if (shellFraction > 0.0 && icyHere && (vIceFrac * vSurfaceAge) > LINEA_BODY_THRESHOLD) {
             float edgeDist = sqrt(secondMinDist2) - sqrt(minDist2);
             if (edgeDist < LINEA_WIDTH_FRAC) {
               vec2 edgeKey = winnerCell + secondCell;
               float edgeH = hash21(edgeKey + vSeed * SALT_LINEA_EDGE);
-              if (edgeH < LINEA_DENSITY) {
+              if (edgeH < LINEA_DENSITY * shellFraction) {
                 col = resourceSubsurface;
               }
             }
@@ -2523,12 +2576,14 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         float emberTexelU = (float(${EMBER_TINT_TEXEL_OFFSET}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
         vec3 vEmberTint = texture2D(uCloudLayerData, vec2(emberTexelU, vBodyV)).rgb;
         // Per-body surface-terrain scalars — .r = reliefBands (terrace count,
-        // the relief depth), .g = granularity (feature fineness). Sampled here
-        // beside the other per-body texels and passed into surfaceColor.
+        // the relief depth), .g = granularity (feature fineness), .b =
+        // shellFraction (bulk-ice fraction 0..1). Sampled here beside the other
+        // per-body texels and passed into surfaceColor.
         float terrainTexelU = (float(${TERRAIN_TEXEL_OFFSET}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
-        vec2 vTerrain = texture2D(uCloudLayerData, vec2(terrainTexelU, vBodyV)).rg;
-        float vReliefBands = max(vTerrain.r, 1.0);
-        float vGranularity = vTerrain.g;
+        vec3 vTerrain = texture2D(uCloudLayerData, vec2(terrainTexelU, vBodyV)).rgb;
+        float vReliefBands    = max(vTerrain.r, 1.0);
+        float vGranularity    = vTerrain.g;
+        float vShellFraction  = vTerrain.b;
 
         // Surface (or atm-column) base color + self-luminous lava emission.
         // lavaEmissive is added back AFTER the reflectance lighting pass (see
@@ -2538,7 +2593,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         vec3 lavaEmissive;
         vec3 col = surfaceColor(d, lxs, lys, lon, lat,
                                 vOceanColor, vAtmColumnColor, vSulfurFrac, vLavaCrustColor, vEmberTint,
-                                vReliefBands, vGranularity,
+                                vReliefBands, vGranularity, vShellFraction,
                                 lavaEmissive);
 
         // ── Haze blanket ──

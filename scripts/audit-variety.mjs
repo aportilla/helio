@@ -25,7 +25,7 @@ import {
   isClassifiable, isGaseousBody, isVeiledIce, isHelium, isGasGiant, isHotGiant,
   isIceGiant, isBrimstone, isTholin, isGaian, isAmmoniaSea, isSubglacialOcean,
   isChthonian, isLava, isMagmaOcean, isVolcanic, isIron, isFrostbound, isGlacial,
-  isOcean, isSuperEarth, isDesert,
+  isOcean, isSuperEarth, isDesert, liquidWaterCover,
 } from './lib/body-traits.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -197,7 +197,7 @@ const habitableEarthish = procgenPlanets.filter(b => {
   const T = b.avgSurfaceTempK;
   const P = b.surfacePressureBar;
   return T != null && T > 250 && T < 320 && P != null && P >= 0.1 && P < 50
-      && (b.waterFraction ?? 0) > 0.1;
+      && liquidWaterCover(b) > 0.1;
 });
 row('Earth-like habitables (T 250-320K, P 0.1-50bar)', habitableEarthish,
     procgenPlanets.length, topExamples(habitableEarthish, b => b.massEarth));
@@ -271,7 +271,7 @@ const habitableMoonsOfGiants = procgenMoons.filter(m => {
   const P = m.surfacePressureBar;
   if (P == null || P < 0.05) return false;
   const T = m.avgSurfaceTempK;
-  const water = m.waterFraction ?? 0;
+  const water = liquidWaterCover(m);
   const bulkW = m.bulkWaterFraction ?? 0;
   const subAq = m.bioticSubsurfaceAqueous ?? 0;
   // Pandora — warm + surface ocean
@@ -433,7 +433,7 @@ const ringedHabitables = ringedHostPlanets.filter(p => {
   if ((p.radiusEarth ?? 0) > 2) return false;
   const T = p.avgSurfaceTempK, P = p.surfacePressureBar;
   return T != null && T > 250 && T < 320 && P != null && P >= 0.1 && P < 50
-      && (p.waterFraction ?? 0) > 0.1;
+      && liquidWaterCover(p) > 0.1;
 });
 row('Ringed habitable worlds (SF trope)', ringedHabitables,
     procgenPlanets.length, topExamples(ringedHabitables, p => p.massEarth));
@@ -581,7 +581,7 @@ const clusterStats = clusters.map(cl => {
       if ((p.radiusEarth ?? 0) > 2) return false;
       const T = p.avgSurfaceTempK, P = p.surfacePressureBar;
       return T != null && T > 250 && T < 320 && P != null && P >= 0.1 && P < 50
-          && (p.waterFraction ?? 0) > 0.1;
+          && liquidWaterCover(p) > 0.1;
     }),
     hasHabitableMoon: planetMoons.some(m => {
       const host = bodies[m.hostBodyIdx];
@@ -590,7 +590,7 @@ const clusterStats = clusters.map(cl => {
       const P = m.surfacePressureBar;
       if (P == null || P < 0.05) return false;
       const T = m.avgSurfaceTempK;
-      const water = m.waterFraction ?? 0;
+      const water = liquidWaterCover(m);
       const bulkW = m.bulkWaterFraction ?? 0;
       const subAq = m.bioticSubsurfaceAqueous ?? 0;
       if (T != null && T >= 273 && T < 340 && water > 0.1) return true;
@@ -603,7 +603,7 @@ const clusterStats = clusters.map(cl => {
       for (const p of planets) {
         const T = p.avgSurfaceTempK, P = p.surfacePressureBar;
         if (T != null && T > 250 && T < 320 && P != null && P >= 0.1 && P < 50
-            && (p.waterFraction ?? 0) > 0.1 && (p.radiusEarth ?? 0) <= 2) n++;
+            && liquidWaterCover(p) > 0.1 && (p.radiusEarth ?? 0) <= 2) n++;
       }
       return n >= 2;
     })(),

@@ -47,6 +47,7 @@
 // touching CSV ids. Per-generator version suffixes are layered on top.
 
 import { sampleLogTruncated } from './prng.mjs';
+import { liquidWaterCover } from './body-traits.mjs';
 
 // Deep merge a sparse `tune` over `base`. Plain objects are merged
 // recursively (so a tune entry can override a single nested field without
@@ -643,7 +644,7 @@ export function sampleBulkFraction(prng, formationAu, frostLinesAu, byZoneTable)
 // Body-mass fraction that is H₂O ice / liquid water. Architect samples
 // once per body from one of four zones, then persists — bulk composition
 // is a formation-time property, not a re-rollable surface scalar. The
-// Filler derives surface waterFraction / iceFraction / pressure-retention
+// Filler derives surface liquid cover / iceFraction / pressure-retention
 // from this attribute + temperature + pressure.
 //
 // Zones (formationAu vs per-star frost lines):
@@ -783,7 +784,7 @@ export const AXIAL_TILT_DEG = { mean: 20, sd: 20, min: 0, max: 180 };
 // the version reseeds the whole galaxy without changing CSV ids. Per-
 // generator suffixes can be layered on top by individual generators that
 // want to be re-rollable independently.
-export const PROCGEN_VERSION = 'v18';
+export const PROCGEN_VERSION = 'v19';
 
 // ---------------------------------------------------------------------------
 // Belts — system-level structural bands
@@ -1274,6 +1275,10 @@ export const SOLVENT_PHASE = {
     feeds:      'bulkWater',
     minBudget:  SURFACE_WATER_SAT,
     triplePointBar: TRIPLE_POINT_BAR,
+    // Water counts as the dominant liquid at any non-zero cover (its extent is
+    // already calibrated via SURFACE_WATER_SAT); the exotics inherit the
+    // MIN_SURFACE_LIQUID_COVER default instead. Data, not a code branch.
+    minFeatureCover: 0,
   },
   // Hydrocarbon (methane/ethane) — Titan lakes, stable liquid 91-112 K at
   // ~1.5 bar N2. Boil anchors bracket the cryogenic methane window.
@@ -1342,15 +1347,16 @@ export const SOLVENT_PHASE = {
   },
 };
 
-// Minimum non-water surface-liquid cover that counts as a defining feature.
+// Default minimum surface-liquid cover that counts as a defining feature —
+// the floor a solvent's row inherits unless it sets its own minFeatureCover.
 // Every volatile-bearing world condenses a trace film of *some* exotic
 // solvent once it sits in that solvent's phase window; recording each one as
 // the body's dominant liquid would make liquid-nitrogen and molten-sulfur
-// surfaces read as common when they should be exotic. A non-water candidate
-// below this cover is discarded (the world reads as dry or water-dominated),
-// so the rare-solvent worlds that survive are the ones with a genuinely
-// substantial sea. Water is exempt — its cover is calibrated separately
-// (SURFACE_WATER_SAT) and a thin water film is still meaningfully wet.
+// surfaces read as common when they should be exotic. A candidate below its
+// floor is discarded (the world reads as dry or water-dominated), so the
+// rare-solvent worlds that survive are the ones with a genuinely substantial
+// sea. Water sets minFeatureCover 0 on its SOLVENT_PHASE row (its cover is
+// calibrated via SURFACE_WATER_SAT); the exotics use this default.
 export const MIN_SURFACE_LIQUID_COVER = 0.05;
 
 // ---------------------------------------------------------------------------
@@ -1713,16 +1719,17 @@ export const TIDAL_LOCK_RANGE = mergeTunes(TIDAL_LOCK_RANGE_REALISTIC, TIDAL_LOC
 // ---------------------------------------------------------------------------
 //
 // swing = SWING_BASE / inertia × tilt_factor × ecc_factor × noise
-// where inertia = max(inertiaMin, 1 + atmTerm×log10(P+0.001) + oceanTerm×waterFraction)
+// where inertia = max(inertiaMin, 1 + atmTerm×log10(P+0.001) + oceanTerm×surfaceLiquidFraction)
 //
-// Thick atmospheres and oceans buffer thermal variability; thin atms +
-// dry bodies (Mars, Mercury) swing wildly. Class isn't an input — the
-// physics-determined P and waterFraction are.
+// Thick atmospheres and standing seas buffer thermal variability; thin atms +
+// dry bodies (Mars, Mercury) swing wildly. Any solvent buffers (the term reads
+// surfaceLiquidFraction, not a water-only field). Class isn't an input — the
+// physics-determined P and liquid cover are.
 export const TEMP_SWING = {
   swingBase:   0.4,   // base fractional swing at unit inertia
   inertiaMin:  0.3,   // floor on inertia for airless bodies
   atmTerm:     0.5,   // log10(P) coefficient
-  oceanTerm:   1.5,   // waterFraction coefficient
+  oceanTerm:   1.5,   // surfaceLiquidFraction coefficient
   noise:       { mean: 1.0, sd: 0.2, min: 0.5, max: 1.5 },
 };
 
@@ -2030,7 +2037,7 @@ export const PRESSURE_HISTORY_MULTIPLIER = {
 //                     cosmic-abundance trace for NH3/NH4SH/CH4/H2O
 //                     even though those aren't recorded in the 3-slot
 //                     atm. Terrestrials gate on the actual atm record
-//                     + waterFraction.
+//                     + liquid-water cover (liquidWaterCover).
 //
 // strength = tempCondenseFactor(effectiveT, lo, hi) × precursor(body, ctx).
 // coverage is then derived in cloudDecksFor — see the procgen.mjs
@@ -2139,7 +2146,7 @@ export const CONDENSABLES = [
     precursor: (body, ctx) => {
       if (ctx.isGaseous) return 1.0;
       const atmGate = ctx.smoothstep(0.001, 0.01, ctx.atmFrac('H2O'));
-      const waterGate = body.waterFraction ?? 0;
+      const waterGate = liquidWaterCover(body);
       const direct = 0.05 + 0.5 * Math.max(atmGate, waterGate);
       return direct;
     },

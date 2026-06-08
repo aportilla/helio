@@ -1,5 +1,5 @@
 // Per-cell captions for the planet-test-grid — one bitmap-font label under each
-// disc naming its resource/tier sweep position. Display-only: no fade, no
+// disc naming its shellFraction / surfaceAge sweep position. Display-only: no fade, no
 // selection, no projection (the grid lives entirely in buffer space, so the
 // caption anchors come straight from the layer's published disc centers).
 // Mirrors labels.ts's overlay idiom (CanvasTexture quad + integer top-left
