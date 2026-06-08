@@ -47,11 +47,6 @@ export const BODY_THRESHOLDS = {
   ironMetalMin:           0.5,
   iceIceMin:              0.7,
   iceWaterCeiling:        0.1,
-  // Bulk ice fraction (water + volatile) above which a body is an ICE SHELL —
-  // largely made of ice, not a rock with surface frost. Icy moons (Europa /
-  // Callisto / Ganymede / Enceladus / Titan / Triton) sit at ~0.45–0.6; rocky
-  // worlds (Earth / Mars / Luna / Io) at <0.01, so the gate is wide and clean.
-  iceShellBulkMin:        0.25,
   carbonBulkVolatileMin:  0.10,
   oceanWaterFloor:        0.5,
   solidGiantMassMin:      1.5,
@@ -266,19 +261,6 @@ export function isFrostbound(b) {
 export function isGlacial(b) {
   return terr(b) && (b.iceFraction ?? 0) >= W.iceIceMin &&
     liquidWaterCover(b) < W.iceWaterCeiling;
-}
-
-// An ICE-SHELL world — a body whose BULK is largely water/volatile ice (a thick
-// global ice shell + mantle over a small rocky core, often a subsurface ocean):
-// Europa / Ganymede / Callisto / Enceladus / Titan / Triton. This is a
-// COMPOSITION axis, orthogonal to isGlacial (which is surface-ice cover, a state
-// a rocky snowball shares). It distinguishes how a frozen surface AGES: an ice
-// shell's surface is ice all the way down, so it darkens under a sublimation
-// dust lag (Callisto) and impacts excavate bright ice — whereas a rocky world
-// merely wears a bright snow veneer over rock and craters expose dark regolith.
-export function isIceShell(b) {
-  return terr(b) &&
-    ((b.bulkWaterFraction ?? 0) + (b.bulkVolatileFraction ?? 0)) >= W.iceShellBulkMin;
 }
 
 // A massive, large terrestrial — the band real astronomy calls a "super-Earth".

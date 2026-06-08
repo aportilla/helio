@@ -1064,7 +1064,7 @@ function surfaceOpacityFor(body) {
 // No regime classification: Jupiter, Saturn, Uranus, Neptune,
 // Earth, Mars, Venus, Titan, Triton, and any procgen body all run
 // the same loop. Which decks emerge falls out of the body's actual
-// T + atm + waterFraction + bulkWaterFraction. Coverage / wind / strength
+// T + atm + liquid-water cover + bulkWaterFraction. Coverage / wind / strength
 // tuning lives in CLOUD_DECK (procgen-priors).
 
 // Coverage derivation. Two modes blend smoothly:

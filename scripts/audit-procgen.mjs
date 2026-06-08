@@ -736,7 +736,7 @@ function auditCoverBugClosure() {
       if ((b.iceFraction ?? 0) > 0.1) warmAirlessIce += 1;
     }
   }
-  console.log('  small (M<0.1) + airless (P<triple) + temperate (T>250K) with waterFrac>0.1:');
+  console.log('  small (M<0.1) + airless (P<triple) + temperate (T>250K) with liquid-water>0.1:');
   console.log('    ' + smallAirlessOcean + ' / ' + totalSmallAirless + (smallAirlessOcean === 0 ? '  ✓' : '  ← bug not closed'));
   console.log('  warm (T>280K) + airless (P<triple) with iceFrac>0.1:');
   console.log('    ' + warmAirlessIce + ' / ' + totalWarmAirless + (warmAirlessIce === 0 ? '  ✓' : '  ← bug not closed'));

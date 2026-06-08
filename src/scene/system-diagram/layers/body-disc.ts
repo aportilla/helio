@@ -73,7 +73,7 @@ export function buildBodyDiscGeometry(entries: readonly BodyDiscEntry[]): BodyDi
   // .z = Lowlands area fraction (1 − a0). The .w slot carries the per-body limb
   // Rayleigh scatter strength for the rim hue shift.
   const weights   = new Float32Array(P * 4);
-  // Surface scalars: [waterFrac, iceFrac, surfaceAge, iceCoverage].
+  // Surface scalars: [liquidFrac, iceFrac, surfaceAge, iceCoverage].
   const surfaceScalars = new Float32Array(P * 4);
   // Atmospheric scalars: [hazeOpacity, rimWidthPx, moltenCoverage,
   // emissionTempNorm]. Cloud coverage / windSpeedMS / altitude live
@@ -166,7 +166,7 @@ export function buildBodyDiscGeometry(entries: readonly BodyDiscEntry[]): BodyDi
     cloudLayerData[terrainOff + 0] = disc.reliefBands;
     cloudLayerData[terrainOff + 1] = disc.granularity;
     cloudLayerData[terrainOff + 2] = disc.shellFraction;
-    surfaceScalars[i * 4 + 0] = disc.waterFrac;
+    surfaceScalars[i * 4 + 0] = disc.liquidFrac;
     surfaceScalars[i * 4 + 1] = disc.iceFrac;
     surfaceScalars[i * 4 + 2] = disc.surfaceAge;
     surfaceScalars[i * 4 + 3] = disc.iceCoverage;

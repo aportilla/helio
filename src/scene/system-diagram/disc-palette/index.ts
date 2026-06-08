@@ -414,18 +414,18 @@ export interface DiscPalette {
   readonly tilt: number;
   // Surface-liquid cover (dominant species, any solvent) [0..1]. Surface
   // block splits the disc into coarse continent cells; a per-cell hash <
-  // waterFrac flips that cell from resource patch to flat ocean color.
+  // liquidFrac flips that cell from resource patch to flat ocean color.
   // Earth at 0.71 reads as ~71% ocean; a Titan-class hydrocarbon world
   // paints its liquid cells from its own cover; Mars at 0 stays all-land.
   // Forced to 0 on no-surface bodies and on tiny discs
   // (PROCEDURAL_TEXTURE_MIN_PX gate).
-  readonly waterFrac: number;
+  readonly liquidFrac: number;
   // Per-body ocean color [0..1]^3 — replaces the shader's hard-coded
   // OCEAN_COLOR constant for surface-liquid cells. Derived through five
   // physical pathways (stellar SED × sky reflection + solvent base ×
   // CDOM × pigment × sediment) so close-analog bodies get distinguishable
   // hues — `oceanColorFor` receives the full body, so species/salinity
-  // reach it for the actual color; the waterFrac scalar is only the
+  // reach it for the actual color; the liquidFrac scalar is only the
   // surface-liquid cover (dominant species, any solvent) that gates
   // which cells are liquid. See `oceanColorFor` above for the full stack. Painted only
   // where the shader's existing `liquidOceanHere` predicate fires;
@@ -884,7 +884,7 @@ export function buildDiscPalette(
     surfaceOpacity,
     seed,
     tilt: bodyVisualTiltRad(body),
-    waterFrac: liquidFrac,
+    liquidFrac,
     oceanColor,
     iceFrac,
     biomeColor,
