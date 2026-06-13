@@ -204,7 +204,7 @@ export function buildTestGrid(): TestCell[] {
   // (conventional age 0 → freshly resurfaced); col 0 the LEFT column
   // (bulk water 0 → rocky snowball).
   for (let row = 0; row < GRID_ROW_COUNT; row++) {
-    const age = AGE_ROWS[row];          // conventional: 0 fresh → 1 ancient
+    const age = AGE_ROWS[row]!;         // conventional: 0 fresh → 1 ancient
     const surfaceAge = 1 - age;         // field is inverted (high = young)
     for (let col = 0; col < GRID_COL_COUNT; col++) {
       const bulkWaterFraction = BULK_WATER_COLUMNS[col];

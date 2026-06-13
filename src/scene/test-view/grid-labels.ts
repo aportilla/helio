@@ -54,8 +54,8 @@ export class GridLabels {
   layout(centers: readonly GridCenter[]): void {
     const n = Math.min(centers.length, this.captions.length);
     for (let i = 0; i < n; i++) {
-      const center = centers[i];
-      const cap = this.captions[i];
+      const center = centers[i]!;
+      const cap = this.captions[i]!;
       // Caption sits under the disc: its top edge is CAPTION_GAP_PX below the
       // disc's bottom edge. Buffer coords are Y-UP, so "below" is a LOWER y.
       const topY = center.cy - center.discPx * 0.5 - CAPTION_GAP_PX;

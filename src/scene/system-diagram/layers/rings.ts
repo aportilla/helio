@@ -70,9 +70,10 @@ export class RingsLayer {
   constructor(scene: Scene, rowSlots: readonly RowSlot[]) {
     const planetItems = rowSlots.filter(r => r.kind === 'planet');
     for (const item of planetItems) {
-      const planet = BODIES[item.bodyIdx];
+      const planet = BODIES[item.bodyIdx]!;
       if (planet.ring == null) continue;
       const ring = BODIES[planet.ring];
+      if (!ring) continue;
       const built = buildRing(ring, planet, planet.ring, item.bodyIdx, item.widthPx);
       this.rings.push(built);
       this.ringByBodyIdx.set(built.bodyIdx, built);
@@ -116,14 +117,14 @@ export class RingsLayer {
       }
     }
     if (best === null) {
-      u.uHasShadow.value = 0;
+      u.uHasShadow!.value = 0;
       return;
     }
     const dx = best.x - cx, dy = best.y - cy;
     const len = Math.hypot(dx, dy) || 1;
-    u.uLightDir2D.value.set(dx / len, dy / len);
-    u.uCenter.value.set(cx, cy);
-    u.uHasShadow.value = 1;
+    u.uLightDir2D!.value.set(dx / len, dy / len);
+    u.uCenter!.value.set(cx, cy);
+    u.uHasShadow!.value = 1;
   }
 
   pickFront(x: number, y: number, centers: PlanetCenterIndex): DiagramHit | null {
@@ -159,7 +160,7 @@ export class RingsLayer {
     if (pick.kind !== 'ring') return;
     const ring = this.ringByBodyIdx.get(pick.bodyIdx);
     if (!ring) return;
-    ring.material.uniforms.uHovered.value = value;
+    ring.material.uniforms.uHovered!.value = value;
   }
 
   dispose(): void {
@@ -197,9 +198,9 @@ function buildRing(ring: Body, hostPlanet: Body, ringBodyIdx: number, hostBodyId
   // Constant per-ring shadow inputs (the rest — center, light dir — are
   // written each layout). Both normalized into outerR units, matching the
   // shader's frame.
-  material.uniforms.uInnerNorm.value  = innerR / outerR;
-  material.uniforms.uPlanetNorm.value = (hostDiscPx / 2) / outerR;
-  material.uniforms.uInvOuterR.value  = 1 / outerR;
+  material.uniforms.uInnerNorm!.value  = innerR / outerR;
+  material.uniforms.uPlanetNorm!.value = (hostDiscPx / 2) / outerR;
+  material.uniforms.uInvOuterR!.value  = 1 / outerR;
   const backGeometry  = buildHalfAnnulusGeometry(innerR, outerR, tiltRad, /*upperHalf=*/ true);
   const frontGeometry = buildHalfAnnulusGeometry(innerR, outerR, tiltRad, /*upperHalf=*/ false);
   const backMesh  = new Mesh(backGeometry,  material);

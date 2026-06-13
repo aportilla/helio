@@ -1976,11 +1976,18 @@ function fillBody(b, allBodies, stars) {
   // results within the same pass.
   //
   // ⚠ This destructure and the return object at the end of fillBody are the
-  // canonical Body field list. Nothing enforces it, but three other lists
-  // must stay in lockstep when a field is added/removed/renamed:
+  // canonical Body field list. These other lists must stay in lockstep when a
+  // field is added/removed/renamed:
   //   • makeBody                 (procgen-architect.mjs) — the architect's body factory
   //   • BODY_NUMERIC_FIELDS /
   //     BODY_STRING_FIELDS       (build-catalog.mjs) — JSON (de)serialization typing
+  //   • CANONICAL_BODY_KEYS      (build-catalog.mjs) — the emit-shape guard
+  //     (assertBodyShape) that throws if the emitted own-key set drifts, so a
+  //     missed list above fails the build loudly instead of shipping a bad Body.
+  // Four fields are ALWAYS DERIVED here, never CSV-authored — absent from
+  // BODY_*_FIELDS but still emitted: surfaceRadiation + biosphereSurfaceImpact
+  // (pre-seeded null in parseCsvBodies) and surfaceFrostSpecies + carbonWorld
+  // (added by fillBody alone, below — they aren't in this destructure).
   let {
     radiusEarth, bulkWaterFraction, bulkMetalFraction, bulkVolatileFraction,
     iceFraction, surfaceAge,

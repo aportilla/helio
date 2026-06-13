@@ -49,7 +49,7 @@ export function resolveCandidateCluster(
     return hoveredCluster;
   }
   if (!focusAnimating && nearestClusterIdx >= 0 && nearestClusterIdx !== selectedClusterIdx) {
-    const com = STAR_CLUSTERS[nearestClusterIdx].com;
+    const com = STAR_CLUSTERS[nearestClusterIdx]!.com;
     const dx = target.x - com.x;
     const dy = target.y - com.y;
     const dz = target.z - com.z;

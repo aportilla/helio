@@ -116,9 +116,11 @@ export function surfaceHazeContributors(body: Body): Array<{ color: Color; weigh
   }
   if (body.hazeAerosols !== null) {
     const deckGases = deckGasesFor(body);
-    for (const [species, strength] of Object.entries(body.hazeAerosols)) {
+    // Object.entries widens the AtmGas keys back to string (and Partial makes
+    // the values number|undefined), so re-assert the typed shape once at the
+    // boundary — not unsound: procgen only ever keys hazeAerosols by AtmGas.
+    for (const [gas, strength] of Object.entries(body.hazeAerosols) as Array<[AtmGas, number]>) {
       if (strength <= 0) continue;
-      const gas = species as AtmGas;
       if (deckGases.has(gas)) continue;
       if (RENDERER_SKIP_AEROSOLS.has(gas)) continue;
       const col = GAS_COLOR[gas];

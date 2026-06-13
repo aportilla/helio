@@ -96,7 +96,7 @@ export class StarsRowLayer {
     // is the primary (most massive), so it takes the leftmost slot and
     // companions follow rightward.
     this.starMembers     = cluster.members.slice();
-    this.starSlotDiscPx  = this.starMembers.map(m => Math.floor(STARS[m].pxSize * DISC_SCALE + 0.5));
+    this.starSlotDiscPx  = this.starMembers.map(m => Math.floor(STARS[m]!.pxSize * DISC_SCALE + 0.5));
     this.slotByStarIdx   = new Map(this.starMembers.map((s, i) => [s, i]));
 
     // Pre-normalize per-slot intensities so the largest cluster member
@@ -111,23 +111,23 @@ export class StarsRowLayer {
     // scaling); layout() rebuilds them if a different size is needed.
     // Initial position is (0, 0); resize fills it in.
     this.starMembers.forEach((starIdx, slot) => {
-      const s = STARS[starIdx];
-      const classCol = CLASS_COLOR[s.cls] ?? CLASS_COLOR.M;
+      const s = STARS[starIdx]!;
+      const classCol = CLASS_COLOR[s.cls];
       const col = tuneStarColorForSystemView(classCol);
-      const d = this.starSlotDiscPx[slot];
+      const d = this.starSlotDiscPx[slot]!;
       const r = d / 2;
 
       const material = makeStarMeshMaterial();
-      material.uniforms.uColor.value.setRGB(col.r, col.g, col.b);
-      material.uniforms.uRadius.value = r;
+      material.uniforms.uColor!.value.setRGB(col.r, col.g, col.b);
+      material.uniforms.uRadius!.value = r;
       const geometry = new PlaneGeometry(d, d);
       const mesh = new Mesh(geometry, material);
 
       const haloMaterial = makeStarHaloMaterial();
-      haloMaterial.uniforms.uColor.value.setRGB(col.r, col.g, col.b);
-      haloMaterial.uniforms.uDiscRadius.value = r;
+      haloMaterial.uniforms.uColor!.value.setRGB(col.r, col.g, col.b);
+      haloMaterial.uniforms.uDiscRadius!.value = r;
       const haloR = r * STAR_HALO_RADIUS_FACTOR;
-      haloMaterial.uniforms.uHaloRadius.value = haloR;
+      haloMaterial.uniforms.uHaloRadius!.value = haloR;
       const haloDiam = Math.ceil(haloR * 2);
       const haloGeometry = new PlaneGeometry(haloDiam, haloDiam);
       const halo = new Mesh(haloGeometry, haloMaterial);
@@ -144,7 +144,7 @@ export class StarsRowLayer {
         mesh, geometry, material,
         halo, haloGeometry, haloMaterial,
         currentDiam: d,
-        intensity: slotIntensity[slot],
+        intensity: slotIntensity[slot]!,
         lightColor: [col.r, col.g, col.b],
       });
     });
@@ -180,7 +180,7 @@ export class StarsRowLayer {
     const startX = sizes.edgePad;
     let cursor = startX;
     for (let slot = 0; slot < N; slot++) {
-      const d = Math.max(1, Math.round(this.starSlotDiscPx[slot] * discScale));
+      const d = Math.max(1, Math.round(this.starSlotDiscPx[slot]! * discScale));
       const r = d / 2;
       // Horizontal: clamp the center off the left edge so a tiny disc
       // doesn't tuck under the top-left back button. Only binds for small
@@ -208,18 +208,18 @@ export class StarsRowLayer {
       const cx = snapPxParity(cxTarget, d);
       const cy = snapPxParity(cyTarget, d);
 
-      const disc = this.starDiscs[slot];
+      const disc = this.starDiscs[slot]!;
       // Rebuild the plane geometries only when diameter actually
       // changed; a resize that doesn't change layout leaves them intact.
       if (disc.currentDiam !== d) {
         disc.geometry.dispose();
         disc.geometry = new PlaneGeometry(d, d);
         disc.mesh.geometry = disc.geometry;
-        disc.material.uniforms.uRadius.value = r;
+        disc.material.uniforms.uRadius!.value = r;
 
         const haloR = r * STAR_HALO_RADIUS_FACTOR;
-        disc.haloMaterial.uniforms.uDiscRadius.value = r;
-        disc.haloMaterial.uniforms.uHaloRadius.value = haloR;
+        disc.haloMaterial.uniforms.uDiscRadius!.value = r;
+        disc.haloMaterial.uniforms.uHaloRadius!.value = haloR;
         disc.haloGeometry.dispose();
         const haloDiam = Math.ceil(haloR * 2);
         disc.haloGeometry = new PlaneGeometry(haloDiam, haloDiam);
@@ -228,10 +228,10 @@ export class StarsRowLayer {
         disc.currentDiam = d;
       }
       disc.mesh.position.set(cx, cy, 0);
-      (disc.material.uniforms.uCenter.value as Vector2).set(cx, cy);
+      (disc.material.uniforms.uCenter!.value as Vector2).set(cx, cy);
       disc.mesh.visible = true;
       disc.halo.position.set(cx, cy, 0);
-      (disc.haloMaterial.uniforms.uCenter.value as Vector2).set(cx, cy);
+      (disc.haloMaterial.uniforms.uCenter!.value as Vector2).set(cx, cy);
       disc.halo.visible = true;
 
       // Advance from the placed center (not the raw cursor) so the
@@ -243,15 +243,15 @@ export class StarsRowLayer {
   pickAt(x: number, y: number): DiagramHit | null {
     return pickDiscPool(
       x, y, this.starDiscs.length,
-      i => this.starDiscs[i].mesh.position.x,
-      i => this.starDiscs[i].mesh.position.y,
-      i => this.starDiscs[i].currentDiam / 2,
+      i => this.starDiscs[i]!.mesh.position.x,
+      i => this.starDiscs[i]!.mesh.position.y,
+      i => this.starDiscs[i]!.currentDiam / 2,
       // Stars sit at z 0 (their own row, above the dome bands), so they
       // lose every band tie to a body — matching their last-place spot
       // in the coordinator's priority list. Flat z across the pool, so
       // the in-pool resolve is a no-op tiebreak (earliest slot wins).
-      i => this.starDiscs[i].mesh.position.z,
-      i => ({ pick: { kind: 'star', starIdx: this.starMembers[i] }, z: this.starDiscs[i].mesh.position.z }),
+      i => this.starDiscs[i]!.mesh.position.z,
+      i => ({ pick: { kind: 'star', starIdx: this.starMembers[i]! }, z: this.starDiscs[i]!.mesh.position.z }),
     );
   }
 
@@ -277,7 +277,7 @@ export class StarsRowLayer {
     if (pick.kind !== 'star') return;
     const slot = this.slotByStarIdx.get(pick.starIdx);
     if (slot === undefined) return;
-    this.starDiscs[slot].material.uniforms.uHovered.value = value;
+    this.starDiscs[slot]!.material.uniforms.uHovered!.value = value;
   }
 
   dispose(): void {

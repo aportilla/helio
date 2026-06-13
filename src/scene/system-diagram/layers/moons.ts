@@ -10,7 +10,7 @@ import {
   BufferGeometry, DataTexture, Points, Scene, ShaderMaterial,
 } from 'three';
 import { BODIES } from '../../../data/stars';
-import { makePlanetMaterial } from '../../materials';
+import { makePlanetMaterial, unregisterSnappedMaterial } from '../../materials';
 import { buildBodyDiscGeometry, setBodyDiscHovered } from './body-disc';
 import { disposePool } from './dispose';
 import {
@@ -63,22 +63,22 @@ export class MoonsLayer {
     const backSlots:  MoonSlot[] = [];
     const frontSlots: MoonSlot[] = [];
     for (const item of planetItems) {
-      const parent = BODIES[item.bodyIdx];
+      const parent = BODIES[item.bodyIdx]!;
       const Nm = parent.moons.length;
       if (Nm === 0) continue;
       // Pre-compute moon disc sizes so the angle distribution can use
       // real radii for its geometric margins.
-      const moonDiscs = parent.moons.map(idx => moonDiscPx(BODIES[idx].radiusEarth));
+      const moonDiscs = parent.moons.map(idx => moonDiscPx(BODIES[idx]!.radiusEarth));
       const moonRadii = moonDiscs.map(d => d / 2);
       const parentR = item.widthPx / 2;
       const moonAngles = distributeMoonAngles(moonRadii, parentR, parent.id);
       parent.moons.forEach((moonBodyIdx, j) => {
-        const angle = moonAngles[j];
+        const angle = moonAngles[j]!;
         const slot: MoonSlot = {
           parentBodyIdx: item.bodyIdx,
           bodyIdx: moonBodyIdx,
           parentR,
-          discPx: moonDiscs[j],
+          discPx: moonDiscs[j]!,
           angle,
         };
         if (Math.sin(angle) > 0) backSlots.push(slot);
@@ -130,6 +130,10 @@ export class MoonsLayer {
   }
 
   dispose(): void {
+    // Drop both pool materials from the snapped-viewport registry before
+    // freeing them, so the next scene's resize doesn't re-touch dead handles.
+    if (this.backPool)  unregisterSnappedMaterial(this.backPool.material);
+    if (this.frontPool) unregisterSnappedMaterial(this.frontPool.material);
     disposePool(this.backPool);
     disposePool(this.frontPool);
   }
@@ -137,24 +141,24 @@ export class MoonsLayer {
 
 function pickFromPool(pool: MoonPool | null, x: number, y: number): DiagramHit | null {
   if (!pool) return null;
-  const pos = pool.geometry.attributes.position.array as Float32Array;
+  const pos = pool.geometry.attributes.position!.array as Float32Array;
   return pickDiscPool(
     x, y, pool.slots.length,
-    i => pos[i * 3 + 0],
-    i => pos[i * 3 + 1],
-    i => pool.slots[i].discPx / 2,
+    i => pos[i * 3 + 0]!,
+    i => pos[i * 3 + 1]!,
+    i => pool.slots[i]!.discPx / 2,
     // z is the bandZ writePoolPositions wrote into the moon vertex (its
     // parent's row band + the back/front sub-offset). One front/back pool
     // mixes moons from every parent, so this resolves the topmost when
     // moons of different planets overlap.
-    i => pos[i * 3 + 2],
-    i => ({ pick: { kind: 'moon', bodyIdx: pool.slots[i].bodyIdx }, z: pos[i * 3 + 2] }),
+    i => pos[i * 3 + 2]!,
+    i => ({ pick: { kind: 'moon', bodyIdx: pool.slots[i]!.bodyIdx }, z: pos[i * 3 + 2]! }),
   );
 }
 
 function writePoolPositions(pool: MoonPool | null, centers: PlanetCenterIndex, layerZ: number): void {
   if (!pool) return;
-  const out = pool.geometry.attributes.position.array as Float32Array;
+  const out = pool.geometry.attributes.position!.array as Float32Array;
   pool.slots.forEach((slot, i) => {
     const parent = centers.get(slot.parentBodyIdx);
     if (!parent) return;
@@ -163,7 +167,7 @@ function writePoolPositions(pool: MoonPool | null, centers: PlanetCenterIndex, l
     out[i * 3 + 1] = snapPx(parent.cy + Math.sin(slot.angle) * D);
     out[i * 3 + 2] = bandZ(parent.rowIdx, layerZ);
   });
-  pool.geometry.attributes.position.needsUpdate = true;
+  pool.geometry.attributes.position!.needsUpdate = true;
 }
 
 function moonDiscPx(radiusEarth: number | null): number {
@@ -218,7 +222,7 @@ function distributeMoonAngles(
   interface Placed { angle: number; radius: number; sourceIdx: number }
   const placed: Placed[] = [{
     angle: rng() * Math.PI * 2,
-    radius: moonRadii[0],
+    radius: moonRadii[0]!,
     sourceIdx: 0,
   }];
 
@@ -226,13 +230,13 @@ function distributeMoonAngles(
     // Walk the sorted angle list once and find the widest gap (wrap-around
     // last → first as a circular gap of length 2π + sorted[0] - last).
     const sorted = [...placed].sort((a, b) => a.angle - b.angle);
-    let bestStart = sorted[0];
-    let bestEnd   = sorted[0];
+    let bestStart = sorted[0]!;
+    let bestEnd   = sorted[0]!;
     let bestGap   = 0;
     for (let j = 0; j < sorted.length; j++) {
-      const startMoon = sorted[j];
+      const startMoon = sorted[j]!;
       const isLast = j + 1 === sorted.length;
-      const endMoon = isLast ? sorted[0] : sorted[j + 1];
+      const endMoon = isLast ? sorted[0]! : sorted[j + 1]!;
       const endAngle = isLast ? endMoon.angle + Math.PI * 2 : endMoon.angle;
       const size = endAngle - startMoon.angle;
       if (size > bestGap) {
@@ -242,7 +246,7 @@ function distributeMoonAngles(
       }
     }
 
-    const rNew = moonRadii[i];
+    const rNew = moonRadii[i]!;
     const leftPad  = 2 * Math.asin(Math.min(1, (rNew + bestStart.radius) / (2 * D)));
     const rightPad = 2 * Math.asin(Math.min(1, (rNew + bestEnd.radius)   / (2 * D)));
 
@@ -269,11 +273,11 @@ function distributeMoonAngles(
 function makeMoonPool(slots: MoonSlot[], renderOrder: number): MoonPool {
   const N = slots.length;
   const { geometry, cloudTex } = buildBodyDiscGeometry(
-    slots.map(s => ({ body: BODIES[s.bodyIdx], discPx: s.discPx })),
+    slots.map(s => ({ body: BODIES[s.bodyIdx]!, discPx: s.discPx })),
   );
   const material = makePlanetMaterial(1.0);
-  material.uniforms.uCloudLayerData.value = cloudTex;
-  material.uniforms.uCloudLayerRows.value = N;
+  material.uniforms.uCloudLayerData!.value = cloudTex;
+  material.uniforms.uCloudLayerRows!.value = N;
   const points = new Points(geometry, material);
   points.renderOrder = renderOrder;
   // Moon positions move per resize — see disableCulling.

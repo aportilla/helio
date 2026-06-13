@@ -11,8 +11,9 @@
 // The atlas is rebuilt lazily, so addGlyph() (used to inject the custom ►
 // pointer onto Monaco) just sets a dirty flag and the next draw rebuilds.
 //
-// Canvas creation prefers HTMLCanvasElement when document is available and
-// falls back to OffscreenCanvas — keeps the renderer worker-safe.
+// Canvas creation uses document.createElement — the HUD atlas is always built
+// on the main thread (no worker renders text), so the type surface stays the
+// concrete DOM canvas rather than a worker-safe union.
 
 export interface Glyph {
   adv: number;          // advance width (DWIDTH x)
@@ -51,7 +52,7 @@ function decideCodepoint(name: string, encoding: number): number {
   // Glyphs named uniXXXX (e.g. Chicago's re-encoded mac symbols) carry their
   // Unicode codepoint in the name itself.
   const m = /^uni([0-9A-Fa-f]{4,6})$/.exec(name);
-  if (m) return parseInt(m[1], 16);
+  if (m) return parseInt(m[1]!, 16);
   // Encoding ≥ 256 means the BDF was already authored with Unicode codepoints.
   if (encoding >= 256) return encoding;
   // Printable ASCII: encoding == codepoint.
@@ -63,16 +64,10 @@ function decideCodepoint(name: string, encoding: number): number {
   return -1;
 }
 
-type AnyCanvas = HTMLCanvasElement | OffscreenCanvas;
-type AnyCtx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-
-function makeCanvas(w: number, h: number): AnyCanvas {
-  if (typeof document !== 'undefined') {
-    const c = document.createElement('canvas');
-    c.width = w; c.height = h;
-    return c;
-  }
-  return new OffscreenCanvas(w, h);
+function makeCanvas(w: number, h: number): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  return c;
 }
 
 function isWhite(color: string): boolean {
@@ -86,7 +81,7 @@ export class BdfFont {
   readonly descent: number;
   private glyphs = new Map<number, Glyph>();
   private slots = new Map<number, AtlasSlot>();
-  private atlas: AnyCanvas | null = null;
+  private atlas: HTMLCanvasElement | null = null;
   private atlasDirty = true;
 
   constructor(opts: { name: string; pixelSize: number; ascent: number; descent: number }) {
@@ -129,7 +124,7 @@ export class BdfFont {
   // recess the first glyph from its column. Negative leading bearings
   // (EspySans 'A' = -1) are preserved as overhang, since the designer drew
   // the diagonal hanging past the cursor on purpose.
-  drawText(g2d: AnyCtx2D, text: string, x: number, y: number, color: string): void {
+  drawText(g2d: CanvasRenderingContext2D, text: string, x: number, y: number, color: string): void {
     if (this.atlasDirty) this.buildAtlas();
     if (!this.atlas) return;
 
@@ -157,7 +152,7 @@ export class BdfFont {
     const w = advW + leadingPad + trailingPad;
     const h = this.lineHeight;
     const tmp = makeCanvas(w, h);
-    const tctx = tmp.getContext('2d') as AnyCtx2D;
+    const tctx = tmp.getContext('2d')!;
     tctx.imageSmoothingEnabled = false;
     this.blitGlyphs(tctx, text, leadingPad, 0);
     // source-in keeps only pixels that overlap existing alpha — fillRect with
@@ -172,7 +167,7 @@ export class BdfFont {
     g2d.drawImage(tmp as CanvasImageSource, x - leadingPad - trim, y);
   }
 
-  private blitGlyphs(g2d: AnyCtx2D, text: string, x: number, y: number): void {
+  private blitGlyphs(g2d: CanvasRenderingContext2D, text: string, x: number, y: number): void {
     if (!this.atlas) return;
     let cursor = x;
     for (let i = 0; i < text.length; i++) {
@@ -210,7 +205,7 @@ export class BdfFont {
     const W = Math.max(1, total);
     const H = Math.max(1, maxH);
     const canvas = makeCanvas(W, H);
-    const ctx = canvas.getContext('2d') as AnyCtx2D;
+    const ctx = canvas.getContext('2d')!;
     ctx.imageSmoothingEnabled = false;
 
     // Build the whole atlas as one ImageData then putImageData once — far
@@ -221,9 +216,9 @@ export class BdfFont {
       this.slots.set(cp, { ax, w: g.w, h: g.h, drawX: g.ox, drawY, adv: g.adv });
       if (g.w <= 0 || g.h <= 0) continue;
       for (let r = 0; r < g.h; r++) {
-        const row = g.bytes[r];
+        const row = g.bytes[r]!;
         for (let c = 0; c < g.w; c++) {
-          const byte = row[c >> 3];
+          const byte = row[c >> 3]!;
           if (!((byte >> (7 - (c & 7))) & 1)) continue;
           const idx = (r * W + (ax + c)) * 4;
           data[idx] = 255; data[idx + 1] = 255; data[idx + 2] = 255; data[idx + 3] = 255;
@@ -280,14 +275,14 @@ export function parseBdf(text: string, fontName: string): BdfFont {
     else if (line.startsWith('STARTCHAR ')) curName = line.slice(10).trim();
     else if (line.startsWith('ENCODING ')) curEnc = parseInt(line.slice(9), 10);
     else if (line.startsWith('DWIDTH ')) {
-      curAdv = parseInt(line.slice(7).trim().split(/\s+/)[0], 10);
+      curAdv = parseInt(line.slice(7).trim().split(/\s+/)[0]!, 10);
     }
     else if (line.startsWith('BBX ')) {
       const parts = line.slice(4).trim().split(/\s+/);
-      curW = parseInt(parts[0], 10);
-      curH = parseInt(parts[1], 10);
-      curOx = parseInt(parts[2], 10);
-      curOy = parseInt(parts[3], 10);
+      curW = parseInt(parts[0]!, 10);
+      curH = parseInt(parts[1]!, 10);
+      curOx = parseInt(parts[2]!, 10);
+      curOy = parseInt(parts[3]!, 10);
     }
     else if (line === 'BITMAP') {
       inBitmap = true;

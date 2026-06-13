@@ -13,10 +13,11 @@
 // (camera, selection, settings) lives on its instance and is preserved
 // across the round-trip — restoring is just StarmapScene.start().
 
-import { ColorManagement, LinearSRGBColorSpace, WebGLRenderer } from 'three';
+import { ColorManagement, LinearSRGBColorSpace, ShaderMaterial, WebGLRenderer } from 'three';
 import { StarmapScene } from './scene';
 import { SystemScene } from './system-scene';
 import { TestScene } from './test-view/test-scene';
+import { warmPlanetShaders } from './warm-shaders';
 
 // Opt out of Three.js color management. Without this, hex values in shader
 // uniforms (new Color(0x1e6fc4)) and hex strings in canvas fillStyle
@@ -33,6 +34,10 @@ export class AppController {
   private readonly starmap: StarmapScene;
   private system?: SystemScene;
   private test?: TestScene;
+  // Retained planet-material variants (disc / halo / moon 'all'), kept alive so
+  // their compiled GL programs survive every SystemScene round-trip. See
+  // warm-shaders.ts. Undefined until the deferred idle warm runs.
+  private warmedShaders?: ShaderMaterial[];
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -48,14 +53,41 @@ export class AppController {
 
   start(): void {
     this.starmap.start();
+    this.scheduleShaderWarm();
   }
 
   stop(): void {
-    this.starmap.stop();
+    // App teardown — fully dispose the starmap (releases its viewport's
+    // window/matchMedia listeners), unlike the enterSystem/enterTest paths
+    // below which only stop() it so start() can resume the same instance.
+    this.starmap.dispose();
     this.system?.dispose();
     this.system = undefined;
     this.test?.dispose();
     this.test = undefined;
+    if (this.warmedShaders) {
+      for (const m of this.warmedShaders) m.dispose();
+      this.warmedShaders = undefined;
+    }
+  }
+
+  // Compile the planet-shader variants during galaxy-view idle, off both the
+  // startup path and the later "View System" click (see warm-shaders.ts).
+  // Deferred to an idle callback so it never delays first paint; best-effort,
+  // so any failure leaves the system view paying the original compile rather
+  // than breaking the app.
+  private scheduleShaderWarm(): void {
+    if (this.warmedShaders) return;
+    const warm = (): void => {
+      if (this.warmedShaders) return;
+      try {
+        this.warmedShaders = warmPlanetShaders(this.renderer);
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn('[warm] planet-shader warm failed (non-fatal):', e);
+      }
+    };
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(warm, { timeout: 2000 });
+    else setTimeout(warm, 500);
   }
 
   enterSystem(clusterIdx: number): void {

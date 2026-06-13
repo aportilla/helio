@@ -102,11 +102,11 @@ export function bakeBlob(
   r: number, g: number, b: number,
   vertexBase: number,
 ): number {
-  const shape = shapes[shapeIdx];
+  const shape = shapes[shapeIdx]!;
   const cos = Math.cos(rotation);
   const sin = Math.sin(rotation);
   for (let i = 0; i < shape.length; i++) {
-    const [vx, vy] = shape[i];
+    const [vx, vy] = shape[i]!;
     const rx = (vx * cos - vy * sin) * size;
     const ry = (vx * sin + vy * cos) * size;
     posOut.push(cx + rx, cy + ry, 0);
@@ -186,7 +186,7 @@ export function sampleBeltChunks(
       const k = CHUNK_SIZE_BIAS_BASE - CHUNK_SIZE_BIAS_CENTER_GAIN * centerProx;
       const u = rng();
       const sizeIdx = Math.min(sizes.length - 1, Math.floor(Math.pow(u, k) * sizes.length));
-      const size = sizes[sizeIdx];
+      const size = sizes[sizeIdx]!;
       if (overlapsAny(cx, cy, size, placed)) continue;
       chosen = {
         cx, cy, size,

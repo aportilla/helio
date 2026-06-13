@@ -36,7 +36,6 @@ export function isOcean(b: Body): boolean;
 // Base terrestrial family.
 export function isChthonian(b: Body): boolean;
 export function isLava(b: Body): boolean;
-export function isMagmaOcean(b: Body): boolean;
 export function isVolcanic(b: Body): boolean;
 export function isIron(b: Body): boolean;
 export function isFrostbound(b: Body): boolean;

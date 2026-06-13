@@ -59,9 +59,9 @@ export function weightedColorBlend(
 // than being re-derived at each call site.
 export function atmGasPairs(body: Body): Array<[AtmGas, number]> {
   const out: Array<[AtmGas, number]> = [];
-  if (body.atm1 !== null && (body.atm1Frac ?? 0) > 0) out.push([body.atm1 as AtmGas, body.atm1Frac as number]);
-  if (body.atm2 !== null && (body.atm2Frac ?? 0) > 0) out.push([body.atm2 as AtmGas, body.atm2Frac as number]);
-  if (body.atm3 !== null && (body.atm3Frac ?? 0) > 0) out.push([body.atm3 as AtmGas, body.atm3Frac as number]);
+  if (body.atm1 !== null && (body.atm1Frac ?? 0) > 0) out.push([body.atm1, body.atm1Frac as number]);
+  if (body.atm2 !== null && (body.atm2Frac ?? 0) > 0) out.push([body.atm2, body.atm2Frac as number]);
+  if (body.atm3 !== null && (body.atm3Frac ?? 0) > 0) out.push([body.atm3, body.atm3Frac as number]);
   return out;
 }
 

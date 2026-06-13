@@ -37,7 +37,7 @@ function addDarkHalo(g: CanvasRenderingContext2D, w: number, h: number): void {
   const px = img.data;
   const mask = new Uint8Array(w * h);
   for (let i = 0, k = 0; k < mask.length; i += 4, k++) {
-    mask[k] = px[i + 3] > 0 ? 1 : 0;
+    mask[k] = px[i + 3]! > 0 ? 1 : 0;
   }
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {

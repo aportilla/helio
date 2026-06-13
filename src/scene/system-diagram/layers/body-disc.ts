@@ -112,7 +112,7 @@ export function buildBodyDiscGeometry(entries: readonly BodyDiscEntry[]): BodyDi
     // Empty slots stay zeroed (coverage = 0 → shader skips).
     const rowBase = i * BODY_TEXTURE_WIDTH * 4;
     for (let li = 0; li < disc.cloudLayers.length && li < MAX_CLOUD_LAYERS; li++) {
-      const l = disc.cloudLayers[li];
+      const l = disc.cloudLayers[li]!;
       const scalarOff = rowBase + li * 4;
       cloudLayerData[scalarOff + 0] = l.coverage;
       cloudLayerData[scalarOff + 1] = l.windSpeedMS;

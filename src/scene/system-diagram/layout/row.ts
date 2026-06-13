@@ -89,14 +89,14 @@ export function planetDiscPx(radiusEarth: number | null): number {
 export function buildRowSlots(cluster: StarCluster): RowSlot[] {
   const items: RowSlot[] = [];
   for (const starIdx of cluster.members) {
-    for (const pIdx of STARS[starIdx].planets) {
+    for (const pIdx of STARS[starIdx]!.planets) {
       items.push({
         kind: 'planet', bodyIdx: pIdx,
-        widthPx: planetDiscPx(BODIES[pIdx].radiusEarth),
+        widthPx: planetDiscPx(BODIES[pIdx]!.radiusEarth),
         cx: 0, cy: 0, rowIdx: 0,
       });
     }
-    for (const bIdx of STARS[starIdx].belts) {
+    for (const bIdx of STARS[starIdx]!.belts) {
       items.push({
         kind: 'belt', bodyIdx: bIdx,
         widthPx: BELT_SLOT_WIDTH,
@@ -105,8 +105,8 @@ export function buildRowSlots(cluster: StarCluster): RowSlot[] {
     }
   }
   items.sort((a, b) => {
-    const aa = BODIES[a.bodyIdx].semiMajorAu ?? Infinity;
-    const bb = BODIES[b.bodyIdx].semiMajorAu ?? Infinity;
+    const aa = BODIES[a.bodyIdx]!.semiMajorAu ?? Infinity;
+    const bb = BODIES[b.bodyIdx]!.semiMajorAu ?? Infinity;
     return aa - bb;
   });
   items.forEach((r, i) => { r.rowIdx = i; });
@@ -149,7 +149,7 @@ export function layoutRow(items: RowSlot[], bufferW: number, bufferH: number): v
 
   let cursor = xLeft + gap;
   for (let i = 0; i < N; i++) {
-    const item = items[i];
+    const item = items[i]!;
     const r = item.widthPx / 2;
     const cx = cursor + r;
     // sin(π·t) peaks at t = 0.5 and is 0 at t = 0 / t = 1.

@@ -217,16 +217,6 @@ export function isLava(b) {
   return terr(b) && b.avgSurfaceTempK >= W.lavaTempFloorK;
 }
 
-// An exposed magma ocean — hot, tectonically active, above the exposed-melt
-// temperature. (With current thresholds the exposed gate sits above lavaTempFloorK
-// while this branch only ever saw sub-lava temperatures in the old cascade, so
-// this stays an unreached niche; transcribed faithfully rather than re-tuned.)
-export function isMagmaOcean(b) {
-  return terr(b) && b.avgSurfaceTempK >= W.magmaOceanTempFloorK &&
-    (b.tectonicActivity ?? 0) >= W.magmaOceanTectMin &&
-    b.avgSurfaceTempK >= MAGMA_OCEAN_EXPOSED_TEMP_K;
-}
-
 // Silicate volcanism — either an insolation-warmed crusted melt below the
 // exposed-magma temperature, or tidal volcanism (young, tectonic, cold, dry).
 export function isVolcanic(b) {

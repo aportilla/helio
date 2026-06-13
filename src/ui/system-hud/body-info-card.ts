@@ -173,7 +173,7 @@ function k(label: string): string {
 }
 
 function rowsForStar(starIdx: number): BodyRow[] {
-  const s = STARS[starIdx];
+  const s = STARS[starIdx]!;
   // Class (rawClass) is now the subtitle under the name — see subtitleFor.
   const rows: BodyRow[] = [
     { key: k('mass'),   val: `${s.mass.toFixed(2)} Msun` },
@@ -186,7 +186,7 @@ function rowsForStar(starIdx: number): BodyRow[] {
 }
 
 function rowsForBody(bodyIdx: number): BodyRow[] {
-  const b = BODIES[bodyIdx];
+  const b = BODIES[bodyIdx]!;
   if (b.kind === 'belt') return rowsForBelt(b);
   if (b.kind === 'ring') return rowsForRing(b);
   // Class is now the composed subtitle under the name — see subtitleFor.
@@ -275,7 +275,8 @@ function rowsForBelt(b: Body): BodyRow[] {
   // this belt. Only set on asteroid + ice belts in giant-bearing
   // systems; debris fields and giantless belts have no shepherd.
   if (b.shepherdBodyIdx !== null) {
-    rows.push({ key: k('shepherd'), val: BODIES[b.shepherdBodyIdx].name });
+    const shepherd = BODIES[b.shepherdBodyIdx];
+    if (shepherd) rows.push({ key: k('shepherd'), val: shepherd.name });
   }
   for (const e of dominantResourceEntries(b)) {
     rows.push({ key: k(e.label), val: formatAbundance(e.abundance) });
@@ -300,16 +301,16 @@ function rowsForRing(b: Body): BodyRow[] {
 }
 
 function titleFor(pick: DiagramPick): string {
-  if (pick.kind === 'star') return STARS[pick.starIdx].name;
-  return BODIES[pick.bodyIdx].name;
+  if (pick.kind === 'star') return STARS[pick.starIdx]!.name;
+  return BODIES[pick.bodyIdx]!.name;
 }
 
 // Subtitle line under the name — the "what is this" descriptor. Stars show
 // their raw spectral class; planets/moons show the richly-composed world
 // label (see body-label.ts). Belts/rings have no class, so no subtitle.
 function subtitleFor(pick: DiagramPick): string | null {
-  if (pick.kind === 'star') return STARS[pick.starIdx].rawClass;
-  const b = BODIES[pick.bodyIdx];
+  if (pick.kind === 'star') return STARS[pick.starIdx]!.rawClass;
+  const b = BODIES[pick.bodyIdx]!;
   if (b.kind === 'belt' || b.kind === 'ring') return null;
   return composeWorldLabel(b);
 }

@@ -634,7 +634,7 @@ export const RENDERER_SKIP_AEROSOLS: ReadonlySet<AtmGas> = new Set<AtmGas>(['CHR
 // already paint as a deck and shouldn't also blanket the disc.
 export function deckGasesFor(body: Body): ReadonlySet<AtmGas> {
   if (body.cloudLayers.length === 0) return new Set<AtmGas>();
-  return new Set<AtmGas>(body.cloudLayers.map(l => l.gas as AtmGas));
+  return new Set<AtmGas>(body.cloudLayers.map(l => l.gas));
 }
 
 export interface CloudDeckPalette {
@@ -663,13 +663,13 @@ const STRATOSPHERIC_HAZE_ANCHORS: ReadonlyArray<readonly [number, number]> = [
 
 export function stratosphericHazeStrengthFor(tempK: number | null): number {
   if (tempK == null) return 0.30;
-  const first = STRATOSPHERIC_HAZE_ANCHORS[0];
-  const last = STRATOSPHERIC_HAZE_ANCHORS[STRATOSPHERIC_HAZE_ANCHORS.length - 1];
+  const first = STRATOSPHERIC_HAZE_ANCHORS[0]!;
+  const last = STRATOSPHERIC_HAZE_ANCHORS[STRATOSPHERIC_HAZE_ANCHORS.length - 1]!;
   if (tempK <= first[0]) return first[1];
   if (tempK >= last[0]) return last[1];
   for (let i = 0; i < STRATOSPHERIC_HAZE_ANCHORS.length - 1; i++) {
-    const [t0, s0] = STRATOSPHERIC_HAZE_ANCHORS[i];
-    const [t1, s1] = STRATOSPHERIC_HAZE_ANCHORS[i + 1];
+    const [t0, s0] = STRATOSPHERIC_HAZE_ANCHORS[i]!;
+    const [t1, s1] = STRATOSPHERIC_HAZE_ANCHORS[i + 1]!;
     if (tempK >= t0 && tempK <= t1) {
       const a = (tempK - t0) / (t1 - t0);
       return s0 + (s1 - s0) * a;
@@ -683,8 +683,7 @@ export function stratosphericHazeStrengthFor(tempK: number | null): number {
 // from in-deck palette mixing. Species without a CONDENSATE_COLOR
 // entry (H2SO4 droplets, SILICATE particles, etc.) fall back to
 // GAS_COLOR — their visible aerosol form is the condensate.
-export function cloudDeckPalette(_body: Body, layerGas: string): CloudDeckPalette {
-  const gas = layerGas as AtmGas;
+export function cloudDeckPalette(_body: Body, gas: AtmGas): CloudDeckPalette {
   return {
     color: CONDENSATE_COLOR[gas] ?? GAS_COLOR[gas] ?? BLACK_COLOR,
   };

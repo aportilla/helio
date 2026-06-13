@@ -233,7 +233,7 @@ export class StarmapScene {
     this.hud.onViewSystem = (idx) => this.onViewSystem(idx);
     this.hud.onViewTest = () => this.onViewTest();
     this.hud.onFocus = (idx) => {
-      const com = STAR_CLUSTERS[idx].com;
+      const com = STAR_CLUSTERS[idx]!.com;
       this.animateFocusTo(com.x, com.y, com.z);
     };
 
@@ -285,6 +285,23 @@ export class StarmapScene {
     this.lastTickMs = 0;
   }
 
+  // Tear down for good — mirrors SystemScene/TestScene.dispose(). stop() only
+  // pauses the loop and drops listeners (so the galaxy view can resume after a
+  // system-view round-trip); dispose() additionally releases the owned GPU /
+  // HUD resources and, via viewport.dispose(), the RenderScaleObserver's
+  // window + matchMedia listeners that stop() leaves live. The starmap is a
+  // forever-singleton today, so this is latent — but AppController.stop() (the
+  // app-teardown path, distinct from the enterSystem/enterTest pause path)
+  // wires it so the contract is correct before a screen ever swaps the starmap
+  // out. Idempotent: stop() guards on `running`, and the disposes are safe once.
+  dispose(): void {
+    this.stop();
+    this.hud.dispose();
+    this.selectionBrackets.dispose();
+    this.candidateBrackets.dispose();
+    this.viewport.dispose();
+  }
+
   // -- input wiring -----------------------------------------------------
 
   // Bridge from InputController gesture intents to scene-side state. The
@@ -306,7 +323,7 @@ export class StarmapScene {
           // Right-click hook. Logs in dev so the wiring is observable in
           // DevTools (silent in prod); becomes a real game action when
           // right-click gets a binding.
-          if (import.meta.env.DEV) console.info('[scene] right-click hook on cluster', clusterIdx, STARS[STAR_CLUSTERS[clusterIdx].primary].name);
+          if (import.meta.env.DEV) console.info('[scene] right-click hook on cluster', clusterIdx, STARS[STAR_CLUSTERS[clusterIdx]!.primary]!.name);
           return;
         }
         if (button === 0) this.selectAndFocusCluster(clusterIdx);
@@ -316,7 +333,7 @@ export class StarmapScene {
         // Long-press hook. Same shape as the right-click hook above —
         // logs in dev only; becomes a real action when touch long-press
         // gets a binding.
-        if (import.meta.env.DEV) console.info('[scene] long-press hook on cluster', clusterIdx, STARS[STAR_CLUSTERS[clusterIdx].primary].name);
+        if (import.meta.env.DEV) console.info('[scene] long-press hook on cluster', clusterIdx, STARS[STAR_CLUSTERS[clusterIdx]!.primary]!.name);
       },
       onPointerHoverChanged: (x, y, has) => {
         if (has) {
@@ -339,7 +356,7 @@ export class StarmapScene {
           return;
         }
         if (this.selectedClusterIdx < 0) return;
-        const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
+        const com = STAR_CLUSTERS[this.selectedClusterIdx]!.com;
         this.animateFocusTo(com.x, com.y, com.z);
       },
       onFocusSelection: () => {
@@ -348,7 +365,7 @@ export class StarmapScene {
         // spacebar's "advance to candidate". Mirrors the Focus pill button
         // on the info card.
         if (this.selectedClusterIdx < 0) return;
-        const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
+        const com = STAR_CLUSTERS[this.selectedClusterIdx]!.com;
         this.animateFocusTo(com.x, com.y, com.z);
       },
       onEnter: () => {
@@ -373,7 +390,7 @@ export class StarmapScene {
     this.starPoints.setSelectedCluster(clusterIdx);
     this.selectionBrackets.setCluster(clusterIdx);
     this.hud.setSelectedCluster(clusterIdx);
-    const com = STAR_CLUSTERS[clusterIdx].com;
+    const com = STAR_CLUSTERS[clusterIdx]!.com;
     // Grid runs its own sequential expand/collapse off this call.
     // Droplines snap to the new plane immediately for now; staggering them
     // to match the ring choreography is a follow-up once the rings settle.
@@ -474,7 +491,7 @@ export class StarmapScene {
   // gated, so calling this every frame only allocates on transition.
   private updateSelectedFocusedState(): void {
     if (this.selectedClusterIdx < 0) return;
-    const com = STAR_CLUSTERS[this.selectedClusterIdx].com;
+    const com = STAR_CLUSTERS[this.selectedClusterIdx]!.com;
     this.hud.setSelectedFocused(isTargetFocusedOnCom(this.view.target, com));
   }
 

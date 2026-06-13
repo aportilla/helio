@@ -10,12 +10,10 @@ import {
 import { STARS, STAR_CLUSTERS, WAYPOINT_STAR_IDS } from '../data/stars';
 import { makeLabelTexture } from '../data/pixel-font';
 import {
-  PIVOT_FADE_NEAR,
   PIVOT_FADE_FAR,
-  CAMERA_FADE_NEAR,
   CAMERA_FADE_FAR,
-  clampRamp,
   invRamp,
+  clusterFadeOpacity,
 } from './cluster-fade';
 import { projectWorldToBuffer } from './project-buffer';
 
@@ -64,6 +62,15 @@ const LABEL_YELLOW_DIM = '#8c7c40';
 
 // Cluster-label distance fade ramps live in ./cluster-fade so droplines and
 // labels stay in lockstep as either gets tuned (PIVOT_FADE_*, CAMERA_FADE_*).
+
+// Squared FAR thresholds for the per-label projection pre-cull. Derived from
+// the imported FAR distances so a tweak in cluster-fade.ts propagates here too.
+// The pre-cull skips the mat4 projectWorldToBuffer for any plain label the OR
+// fade gate below would hide anyway — comparing squared distances avoids the
+// sqrt as well as the projection. Polarity matches the fade gate (OR), so the
+// visible set is unchanged.
+const PIVOT_FADE_FAR_SQ = PIVOT_FADE_FAR * PIVOT_FADE_FAR;
+const CAMERA_FADE_FAR_SQ = CAMERA_FADE_FAR * CAMERA_FADE_FAR;
 
 // Waymarker fade-in. A separate opacity ramp keyed to the camera's
 // distance from Sol (i.e. the origin) so a small curated set of well-known
@@ -127,7 +134,7 @@ export class Labels {
     // the memory cost is negligible (~2 small textures × ~1k clusters).
     // Same dimensions for both so the swap is positionally invisible.
     STAR_CLUSTERS.forEach((cluster, clusterIdx) => {
-      const primary = STARS[cluster.primary];
+      const primary = STARS[cluster.primary]!;
       const isSol = primary.id === 'sol';
       const plainColor = isSol ? '#ffffcc' : '#5ec8ff';
       const extras = cluster.members.length - 1;
@@ -221,23 +228,30 @@ export class Labels {
       if (!this.showLabels && !isYellow) {
         L.plainMesh.visible = false; L.yellowMesh.visible = false; continue;
       }
-      const s = STARS[L.primaryStarIdx];
+      const s = STARS[L.primaryStarIdx]!;
       this._world.set(s.x, s.y, s.z);
+      // Pre-cull before the mat4 projection: a plain, non-waypoint label that
+      // the OR fade gate below would zero out can be skipped without ever
+      // projecting it. Yellow (selected/candidate) bypasses — it's always
+      // visible; waypoints bypass too — their opacity can be lifted by the
+      // camera-from-Sol ramp even when both normal ramps are at zero.
+      if (!isYellow && !L.isWaypoint) {
+        const dFocusSq = this._world.distanceToSquared(viewTarget);
+        const dCamSq = this._world.distanceToSquared(camera.position);
+        if (dFocusSq >= PIVOT_FADE_FAR_SQ || dCamSq >= CAMERA_FADE_FAR_SQ) {
+          L.plainMesh.visible = false; L.yellowMesh.visible = false; continue;
+        }
+      }
       if (!projectWorldToBuffer(this._world, camera, this.viewTarget, this.bufferW, this.bufferH, this._screen)) {
         L.plainMesh.visible = false; L.yellowMesh.visible = false; continue;
       }
       const dCam = this._world.distanceTo(camera.position);
       let opacity = 1;
       if (!isYellow) {
-        // Standard per-label fade — focus and camera-distance ramps multiply.
+        // Standard per-label fade — the shared pivot × camera ramp product
+        // (0 when either distance is past its FAR threshold).
         const dFocus = this._world.distanceTo(viewTarget);
-        let normalOpacity = 1;
-        if (dFocus >= PIVOT_FADE_FAR || dCam >= CAMERA_FADE_FAR) {
-          normalOpacity = 0;
-        } else {
-          normalOpacity *= clampRamp(dFocus, PIVOT_FADE_NEAR, PIVOT_FADE_FAR);
-          normalOpacity *= clampRamp(dCam, CAMERA_FADE_NEAR, CAMERA_FADE_FAR);
-        }
+        const normalOpacity = clusterFadeOpacity(dFocus, dCam);
         // Waymarker fade-in keyed to camera-from-Sol, max'd with the
         // regular ramp so a waypoint already inside the pivot bubble
         // doesn't blink out between the regular PIVOT_FADE_FAR cutoff

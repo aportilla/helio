@@ -9,7 +9,7 @@ import {
   BufferGeometry, DataTexture, Points, Scene, ShaderMaterial,
 } from 'three';
 import { BODIES } from '../../../data/stars';
-import { makePlanetMaterial } from '../../materials';
+import { makePlanetMaterial, unregisterSnappedMaterial } from '../../materials';
 import { buildBodyDiscGeometry, setBodyDiscHovered } from './body-disc';
 import { pickDiscPool } from '../geom/hit';
 import { disableCulling } from '../geom/cull';
@@ -64,15 +64,15 @@ export class PlanetsLayer {
 
     const P = this.planetIndices.length;
     const { geometry, cloudTex } = buildBodyDiscGeometry(
-      this.planetIndices.map((bodyIdx, i) => ({ body: BODIES[bodyIdx], discPx: this.planetDiscPx[i] })),
+      this.planetIndices.map((bodyIdx, i) => ({ body: BODIES[bodyIdx]!, discPx: this.planetDiscPx[i]! })),
     );
     this.geometry = geometry;
     this.cloudTex = cloudTex;
     this.discMaterial = makePlanetMaterial(1.0, 'disc');
     this.haloMaterial = makePlanetMaterial(1.0, 'halo');
     for (const m of [this.discMaterial, this.haloMaterial]) {
-      m.uniforms.uCloudLayerData.value = cloudTex;
-      m.uniforms.uCloudLayerRows.value = P;
+      m.uniforms.uCloudLayerData!.value = cloudTex;
+      m.uniforms.uCloudLayerRows!.value = P;
     }
     this.discPoints = new Points(this.geometry, this.discMaterial);
     this.discPoints.renderOrder = RENDER_ORDER_PLANET;
@@ -92,7 +92,7 @@ export class PlanetsLayer {
   layout(rowSlots: readonly RowSlot[]): void {
     this.centerIndex.clear();
     if (!this.geometry) return;
-    const positions = this.geometry.attributes.position.array as Float32Array;
+    const positions = this.geometry.attributes.position!.array as Float32Array;
     let pi = 0;
     for (const item of rowSlots) {
       if (item.kind !== 'planet') continue;
@@ -107,7 +107,7 @@ export class PlanetsLayer {
       this.centerIndex.set(item.bodyIdx, { cx: item.cx, cy: item.cy, rowIdx: item.rowIdx });
       pi++;
     }
-    this.geometry.attributes.position.needsUpdate = true;
+    this.geometry.attributes.position!.needsUpdate = true;
   }
 
   // Read-only view of the published planet centers. Empty before the
@@ -128,16 +128,16 @@ export class PlanetsLayer {
 
   pickAt(x: number, y: number): DiagramHit | null {
     if (!this.geometry) return null;
-    const pos = this.geometry.attributes.position.array as Float32Array;
+    const pos = this.geometry.attributes.position!.array as Float32Array;
     return pickDiscPool(
       x, y, this.planetIndices.length,
-      i => pos[i * 3 + 0],
-      i => pos[i * 3 + 1],
-      i => this.planetDiscPx[i] / 2,
+      i => pos[i * 3 + 0]!,
+      i => pos[i * 3 + 1]!,
+      i => this.planetDiscPx[i]! / 2,
       // z is the bandZ layout() wrote into the disc vertex — drives both
       // the in-pool topmost pick and the coordinator's cross-pool resolve.
-      i => pos[i * 3 + 2],
-      i => ({ pick: { kind: 'planet', bodyIdx: this.planetIndices[i] }, z: pos[i * 3 + 2] }),
+      i => pos[i * 3 + 2]!,
+      i => ({ pick: { kind: 'planet', bodyIdx: this.planetIndices[i]! }, z: pos[i * 3 + 2]! }),
     );
   }
 
@@ -149,6 +149,10 @@ export class PlanetsLayer {
   }
 
   dispose(): void {
+    // Drop both materials from the snapped-viewport registry before freeing
+    // them, so the next scene's resize doesn't re-touch dead GPU handles.
+    if (this.discMaterial) unregisterSnappedMaterial(this.discMaterial);
+    if (this.haloMaterial) unregisterSnappedMaterial(this.haloMaterial);
     // One geometry + cloudTex shared by both passes; the halo material is
     // the second consumer of that shared geometry, so it frees separately.
     disposePool({ geometry: this.geometry, material: this.discMaterial, cloudTex: this.cloudTex });

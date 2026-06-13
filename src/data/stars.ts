@@ -160,7 +160,7 @@ export type SurfaceFrostSpecies =
 // in m/s rather than 0..1 so the value is physically meaningful and
 // procgen can derive it from rotation + insolation gradient.
 export interface CloudLayer {
-  readonly gas: string;
+  readonly gas: AtmGas;
   readonly coverage: number;    // 0..1 — fraction of disc covered
   readonly windSpeedMS: number; // m/s — cloud-top peak zonal winds
   readonly altitudeNorm: number;// 0..1 — deep → top
@@ -321,11 +321,11 @@ export interface Body {
   readonly surfaceRadiation: number | null;
   // Atmosphere — top three gases by fraction. atm1 is the dominant species.
   readonly surfacePressureBar: number | null;
-  readonly atm1: string | null;
+  readonly atm1: AtmGas | null;
   readonly atm1Frac: number | null;
-  readonly atm2: string | null;
+  readonly atm2: AtmGas | null;
   readonly atm2Frac: number | null;
-  readonly atm3: string | null;
+  readonly atm3: AtmGas | null;
   readonly atm3Frac: number | null;
   // Cloud layers — up to 3 stratified decks per body, sorted ascending
   // by altitudeNorm (deep first, top last). Each deck names its
@@ -350,7 +350,7 @@ export interface Body {
   // hazeOpacity for the unified haze pass. Species keys: THOLIN, NH4SH,
   // CHROMOPHORE, SALT, H2SO4, SULFUR, SILICATE. Only firing species
   // appear in the record. Null on bodies with no atmosphere.
-  readonly hazeAerosols: Readonly<Record<string, number>> | null;
+  readonly hazeAerosols: Readonly<Partial<Record<AtmGas, number>>> | null;
   // Lifted mineral dust strength [0..1], post-gate. Body resource grid
   // supplies the color when this folds into the haze blend (iron-grey
   // on metal-dominant, rust on Mars-class, tan on silicate-dominant).
@@ -466,6 +466,47 @@ export const STARS: readonly Star[] = catalog.stars as readonly Star[];
 export const STAR_CLUSTERS: readonly StarCluster[] = catalog.clusters as readonly StarCluster[];
 export const BODIES: readonly Body[] = catalog.bodies as readonly Body[];
 
+// DEV-only cast invariants. The three `as` casts above accept the JSON
+// verbatim — a drift between catalog.generated.json and these interfaces
+// (a `cls` outside SpectralClass, an out-of-range index join, a kind/host
+// discriminant mismatch) would otherwise surface as a confusing `undefined`
+// deep inside a consumer instead of here. Mirror font-provider.ts's drift
+// check: in DEV, walk the freshly-cast arrays and warn on any structural
+// violation the cast silently let through. Tree-shaken out of prod builds.
+if (import.meta.env.DEV) {
+  const CLASSES = new Set<SpectralClass>(['O', 'B', 'A', 'F', 'G', 'K', 'M', 'WD', 'BD']);
+  const nStars = STARS.length;
+  const nBodies = BODIES.length;
+  const inStars = (i: number): boolean => i >= 0 && i < nStars;
+  const inBodies = (i: number): boolean => i >= 0 && i < nBodies;
+  for (const s of STARS) {
+    if (!CLASSES.has(s.cls)) console.warn(`[catalog] star ${s.id} has cls "${s.cls}" outside SpectralClass`);
+  }
+  STAR_CLUSTERS.forEach((c, ci) => {
+    if (!inStars(c.primary)) console.warn(`[catalog] cluster ${ci} primary ${c.primary} out of [0,${nStars})`);
+    for (const m of c.members) {
+      if (!inStars(m)) console.warn(`[catalog] cluster ${ci} member ${m} out of [0,${nStars})`);
+    }
+  });
+  for (const b of BODIES) {
+    // Discriminant: planets + belts host on a star; moons + rings host on a body.
+    const starHosted = b.kind === 'planet' || b.kind === 'belt';
+    if (starHosted && (b.hostStarIdx === null || b.hostBodyIdx !== null)) {
+      console.warn(`[catalog] ${b.kind} ${b.id} must host on a star (hostStarIdx set, hostBodyIdx null)`);
+    }
+    if (!starHosted && (b.hostBodyIdx === null || b.hostStarIdx !== null)) {
+      console.warn(`[catalog] ${b.kind} ${b.id} must host on a body (hostBodyIdx set, hostStarIdx null)`);
+    }
+    if (b.hostStarIdx !== null && !inStars(b.hostStarIdx)) console.warn(`[catalog] body ${b.id} hostStarIdx ${b.hostStarIdx} out of range`);
+    if (b.hostBodyIdx !== null && !inBodies(b.hostBodyIdx)) console.warn(`[catalog] body ${b.id} hostBodyIdx ${b.hostBodyIdx} out of range`);
+    if (b.shepherdBodyIdx !== null && !inBodies(b.shepherdBodyIdx)) console.warn(`[catalog] body ${b.id} shepherdBodyIdx ${b.shepherdBodyIdx} out of range`);
+    if (b.ring !== null && !inBodies(b.ring)) console.warn(`[catalog] body ${b.id} ring ${b.ring} out of range`);
+    for (const mi of b.moons) {
+      if (!inBodies(mi)) console.warn(`[catalog] body ${b.id} moon index ${mi} out of range`);
+    }
+  }
+}
+
 // =============================================================================
 // Visual properties
 // =============================================================================
@@ -505,7 +546,19 @@ const STAR_TO_CLUSTER = (() => {
 })();
 
 export function clusterIndexFor(starIdx: number): number {
-  return STAR_TO_CLUSTER[starIdx];
+  return STAR_TO_CLUSTER[starIdx]!;
+}
+
+// Display name for a cluster: the primary's name, with a " +N" suffix when the
+// cluster carries N additional members (e.g. "Sirius A +1"). The single source
+// for the label the info-card title and the system-view header both show, so
+// the "+N" form can't drift between them. labels.ts builds the same text from
+// separately-colored segments and keeps its own bespoke composition.
+export function clusterDisplayName(clusterIdx: number): string {
+  const cluster = STAR_CLUSTERS[clusterIdx]!;
+  const primary = STARS[cluster.primary]!;
+  const extras = cluster.members.length - 1;
+  return extras > 0 ? `${primary.name} +${extras}` : primary.name;
 }
 
 // Nearest cluster (by COM) to (x, y, z). Returns -1 only if STAR_CLUSTERS is

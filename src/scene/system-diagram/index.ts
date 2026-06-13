@@ -44,7 +44,7 @@ export class SystemDiagram {
   private hoveredPick: DiagramPick | null = null;
 
   constructor(clusterIdx: number) {
-    const cluster = STAR_CLUSTERS[clusterIdx];
+    const cluster = STAR_CLUSTERS[clusterIdx]!;
     this.rowSlots = buildRowSlots(cluster);
 
     this.stars   = new StarsRowLayer(this.scene, cluster);

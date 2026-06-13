@@ -46,6 +46,19 @@ export function invRamp(d: number, near: number, far: number): number {
   return (d - near) / (far - near);
 }
 
+// Combined per-cluster fade opacity: the product of the pivot-distance and
+// camera-distance ramps. The product is 0 exactly when either distance is past
+// its FAR threshold (clampRamp returns 0 there), so this single expression
+// captures both the "either-far hides it" gate and the in-between lerp. The
+// shared shape Labels (its non-waypoint opacity) and Droplines (gating the
+// pin's visibility) both consume, so the dual ramp can't drift between them —
+// each caller keeps its own tail (Labels max()'s in the waymarker ramp;
+// Droplines hides the pin when this returns 0).
+export function clusterFadeOpacity(dFocus: number, dCam: number): number {
+  return clampRamp(dFocus, PIVOT_FADE_NEAR, PIVOT_FADE_FAR)
+       * clampRamp(dCam, CAMERA_FADE_NEAR, CAMERA_FADE_FAR);
+}
+
 // ── Dropline subsystem shared geometry + palette ───────────────────────
 // Shared by Droplines (per-cluster vertical pins) and FocusMarker (the
 // view.target dropline) so the two render in one identical visual language.

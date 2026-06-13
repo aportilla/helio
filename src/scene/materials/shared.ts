@@ -35,7 +35,18 @@ export const snappedMaterials: ShaderMaterial[] = [];
 // by the live scene's ViewportSizer; see the one-live-scene invariant on
 // snappedMaterials above — there is no per-scene partitioning here.
 export function setSnappedLineViewport(w: number, h: number): void {
-  for (const m of snappedMaterials) m.uniforms.uViewport.value.set(w, h);
+  for (const m of snappedMaterials) m.uniforms.uViewport!.value.set(w, h);
+}
+
+// Remove a material from the registry when its owning layer disposes. The
+// system-view disc/moon layers register a fresh material on every rebuild but
+// only ever .dispose()d them — so each enter→exit of SystemScene used to leave
+// the already-disposed material in this push-only list, and the next resize
+// re-touched dead GPU handles forever. Layers call this from dispose()
+// alongside material.dispose(). No-op if the material was never registered.
+export function unregisterSnappedMaterial(m: ShaderMaterial): void {
+  const i = snappedMaterials.indexOf(m);
+  if (i >= 0) snappedMaterials.splice(i, 1);
 }
 
 // JS number → glsl float literal. Always emits a decimal point so 50

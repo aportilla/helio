@@ -41,9 +41,9 @@ const LAVA_VENT_AGE_LOW   = 0.9;
 const LAVA_VENT_AGE_HIGH  = 1.0;
 const LAVA_VENT_TECT_LOW  = 0.3;
 const LAVA_VENT_TECT_HIGH = 0.9;
-// MAGMA-OCEAN drive — a hot, tectonically active interior pushes partial
+// MAGMA drive — a hot, tectonically active interior pushes partial
 // surface melt below the full insolation solidus. Two-axis gate (warm AND
-// active) mirrors the `isMagmaOcean` predicate's own definition, so a
+// active) mirrors `isVolcanic`'s warm-melt band, so a
 // hot-but-DEAD body (Venus: 737 K, tect 0.3) stays solid while an active
 // one (70 Oph A b: 804 K, tect 0.51) shows molten veins. The temperature
 // window opens below the solidus floor precisely because active interiors
@@ -98,8 +98,9 @@ const LAVA_EMIT_T_MAX = 2400;
 // into. Data-driven now: the shader's Tier-1 crust backdrop reads this
 // (blended toward the body's rock mineralogy) per-body rather than from a
 // single global shader constant, so co-orbiting lava worlds keep distinct
-// crust hues between molten features.
-const LAVA_CRUST_BASE: readonly [number, number, number] = [0.34, 0.20, 0.21];
+// crust hues between molten features. Exported so disc-palette/index.ts reuses
+// it as the no-molten-surface crust fallback rather than duplicating the literal.
+export const LAVA_CRUST_BASE: readonly [number, number, number] = [0.34, 0.20, 0.21];
 // How far the cooled crust leans from neutral basalt toward the body's
 // dominant rock-archetype hue. Moderate — this is COOLED rock, not the
 // saturated gameplay resource color, so the native palette reads through
@@ -212,9 +213,9 @@ export function lavaDrivesFor(body: Body, surfaceAge: number): LavaDrives {
   let lavaCrustColor = LAVA_CRUST_BASE;
   const res = dominantResources(body, 2);
   if (res.length > 0) {
-    const k0 = res[0].key;
+    const k0 = res[0]!.key;
     const k1 = res[1]?.key ?? null;
-    const a0 = res[0].abundance;
+    const a0 = res[0]!.abundance;
     const a1 = res[1]?.abundance ?? 0;
     // a0 + a1 > 0: dominantResources filters to value > 0, so res[0] is
     // strictly positive whenever res.length > 0 — the ratio can't divide by 0.
@@ -236,9 +237,9 @@ export function lavaDrivesFor(body: Body, surfaceAge: number): LavaDrives {
   // luminance-preserving lerp), so a no-resource body is left unshifted.
   let emberTint: readonly [number, number, number] = EMBER_NEUTRAL_TARGET;
   if (res.length > 0) {
-    const t0 = RESOURCE_EMBER_TINT[res[0].key];
+    const t0 = RESOURCE_EMBER_TINT[res[0]!.key];
     const t1 = res[1] ? RESOURCE_EMBER_TINT[res[1].key] : t0;
-    const w0 = res[0].abundance * RESOURCE_EMBER_POTENCY[res[0].key];
+    const w0 = res[0]!.abundance * RESOURCE_EMBER_POTENCY[res[0]!.key];
     const w1 = res[1]
       ? res[1].abundance * RESOURCE_EMBER_POTENCY[res[1].key]
       : 0;

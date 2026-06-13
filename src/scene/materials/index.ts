@@ -5,7 +5,7 @@
 // shared GLSL fragments in ./chunks.ts, and shared infrastructure
 // (registry + glsl helper) in ./shared.ts.
 
-export { setSnappedLineViewport } from './shared';
+export { setSnappedLineViewport, unregisterSnappedMaterial } from './shared';
 export { MAX_LIGHTS } from './chunks';
 export {
   makeStarsMaterial,

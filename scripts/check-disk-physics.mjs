@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 //
-// Phase-A regression gate for the architect refactor. Prints the
-// disk-physics anchor values driven by procgen-priors.mjs constants:
+// Disk-physics anchor regression gate. Prints the disk-physics anchor values
+// driven by procgen-priors.mjs constants, then exits non-zero if any
+// gate-severity anchor fell out of band (the [FAIL] rows). Values:
 //
 //   - Frost-line positions for H2O / NH3 / CH4 around several star types
 //   - Solid surface density Σ(a) at canonical radii
@@ -142,8 +143,13 @@ const mIso5 = isolationMass(5.0, 1.0, sigma5);
 const sigma20 = solidSurfaceDensity(1.0, 20, sunFrost, MMSN_NORMALIZATION, SNOW_LINE_BOOSTS);
 const mIso20 = isolationMass(20, 1.0, sigma20);
 
+// Gate-severity failures flip this; the script exits 1 at the end so the
+// "regression gate" name is honest. 'info' checks (out of band by known design,
+// e.g. the 20 AU M_iso overshoot) print a note and never gate.
+let anyGateFailed = false;
 const check = (name, actual, low, high, severity = 'gate') => {
   const pass = actual != null && actual >= low && actual <= high;
+  if (!pass && severity === 'gate') anyGateFailed = true;
   const symbol = pass ? 'pass' : (severity === 'gate' ? 'FAIL' : 'note');
   console.log(
     '  [' + symbol + '] ' + pad(name, 38) +
@@ -181,3 +187,12 @@ for (const s of STARS) {
     (firstA == null ? '— (never)' : fmt(firstA, 2) + ' AU'));
 }
 console.log();
+
+// Regression-gate contract: exit non-zero if any gate-severity anchor drifted
+// out of band. Run manually (npm run check:disk-physics); intentionally NOT
+// wired into check.mjs — the anchors move deliberately during prior tuning, so
+// this gates an explicit calibration check, not the every-build sweep.
+if (anyGateFailed) {
+  console.error('check-disk-physics: one or more gate anchors out of band — see [FAIL] rows above.');
+  process.exit(1);
+}

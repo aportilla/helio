@@ -57,7 +57,7 @@ export class KDTree3<P> {
     this.srcIdx = new Int32Array(n);
     this.axis = new Uint8Array(n);
     for (let i = 0; i < n; i++) {
-      const p = extract(points[i]);
+      const p = extract(points[i]!);
       this.cx[i] = p.x;
       this.cy[i] = p.y;
       this.cz[i] = p.z;
@@ -76,7 +76,7 @@ export class KDTree3<P> {
     this._bestSq = Infinity;
     this._bestNode = -1;
     this.nearestRec(0, this.n, qx, qy, qz);
-    return this._bestNode < 0 ? -1 : this.srcIdx[this._bestNode];
+    return this._bestNode < 0 ? -1 : this.srcIdx[this._bestNode]!;
   }
 
   // ===== Build ==============================================================
@@ -98,7 +98,7 @@ export class KDTree3<P> {
     let yMin = Infinity, yMax = -Infinity;
     let zMin = Infinity, zMax = -Infinity;
     for (let i = lo; i < hi; i++) {
-      const x = this.cx[i], y = this.cy[i], z = this.cz[i];
+      const x = this.cx[i]!, y = this.cy[i]!, z = this.cz[i]!;
       if (x < xMin) xMin = x;
       if (x > xMax) xMax = x;
       if (y < yMin) yMin = y;
@@ -141,14 +141,14 @@ export class KDTree3<P> {
   }
 
   private axisCoord(i: number, ax: 0 | 1 | 2): number {
-    return ax === 0 ? this.cx[i] : ax === 1 ? this.cy[i] : this.cz[i];
+    return ax === 0 ? this.cx[i]! : ax === 1 ? this.cy[i]! : this.cz[i]!;
   }
 
   private swap(a: number, b: number): void {
-    let t = this.cx[a]; this.cx[a] = this.cx[b]; this.cx[b] = t;
-    t = this.cy[a]; this.cy[a] = this.cy[b]; this.cy[b] = t;
-    t = this.cz[a]; this.cz[a] = this.cz[b]; this.cz[b] = t;
-    const ti = this.srcIdx[a]; this.srcIdx[a] = this.srcIdx[b]; this.srcIdx[b] = ti;
+    let t = this.cx[a]!; this.cx[a] = this.cx[b]!; this.cx[b] = t;
+    t = this.cy[a]!; this.cy[a] = this.cy[b]!; this.cy[b] = t;
+    t = this.cz[a]!; this.cz[a] = this.cz[b]!; this.cz[b] = t;
+    const ti = this.srcIdx[a]!; this.srcIdx[a] = this.srcIdx[b]!; this.srcIdx[b] = ti;
   }
 
   // ===== Query internals ====================================================
@@ -157,9 +157,9 @@ export class KDTree3<P> {
   private nearestRec(lo: number, hi: number, qx: number, qy: number, qz: number): void {
     if (hi - lo <= 0) return;
     const mid = (lo + hi) >> 1;
-    const dx = qx - this.cx[mid];
-    const dy = qy - this.cy[mid];
-    const dz = qz - this.cz[mid];
+    const dx = qx - this.cx[mid]!;
+    const dy = qy - this.cy[mid]!;
+    const dz = qz - this.cz[mid]!;
     const d2 = dx * dx + dy * dy + dz * dz;
     if (d2 < this._bestSq) {
       this._bestSq = d2;

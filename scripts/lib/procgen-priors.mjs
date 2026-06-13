@@ -1,6 +1,11 @@
 // Procgen priors — the data side of the body-catalog procgen pipeline.
 //
-// Mostly constants plus one merge helper. The Architect (in
+// Mostly constants plus one merge helper. A few tables also carry small
+// per-species predicate closures co-located with their tuning — notably
+// CONDENSABLES, whose condensation rows each pair a build-time precursor gate
+// with their T-window / altitude so the chemistry and its trigger tune as one
+// unit. That co-location is deliberate (a species' gate lives beside its
+// numbers), not stray logic escaping into the data file. The Architect (in
 // procgen-architect.mjs) reads these to sample per-system architecture: how many planets
 // a star is likely to host, where they sit in orbit, what mass/radius mix
 // is plausible at each insolation, how many moons each planet type carries.

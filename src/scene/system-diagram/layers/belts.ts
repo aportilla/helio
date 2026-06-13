@@ -88,18 +88,18 @@ export class BeltsLayer {
   // parity-snap intent at chunk scale).
   layout(rowSlots: readonly RowSlot[]): void {
     if (!this.pool) return;
-    const positions    = this.pool.geometry.attributes.position.array as Float32Array;
-    const chunkCenters = this.pool.geometry.attributes.aChunkCenter.array as Float32Array;
+    const positions    = this.pool.geometry.attributes.position!.array as Float32Array;
+    const chunkCenters = this.pool.geometry.attributes.aChunkCenter!.array as Float32Array;
     let bi = 0;
     for (const item of rowSlots) {
       if (item.kind !== 'belt') continue;
-      const slot = this.pool.slots[bi];
+      const slot = this.pool.slots[bi]!;
       slot.cx = item.cx;
       slot.cy = item.cy;
       const z = bandZ(slot.rowIdx, Z_BELT);
       for (let v = slot.startVertex; v < slot.endVertex; v++) {
-        const off    = slot.chunkOffsets[v - slot.startVertex];
-        const cOff   = slot.chunkCenterOffsets[v - slot.startVertex];
+        const off    = slot.chunkOffsets[v - slot.startVertex]!;
+        const cOff   = slot.chunkCenterOffsets[v - slot.startVertex]!;
         positions[v * 3 + 0] = snapPx(item.cx + off.dx);
         positions[v * 3 + 1] = snapPx(item.cy + off.dy);
         positions[v * 3 + 2] = z;
@@ -108,8 +108,8 @@ export class BeltsLayer {
       }
       bi++;
     }
-    this.pool.geometry.attributes.position.needsUpdate = true;
-    this.pool.geometry.attributes.aChunkCenter.needsUpdate = true;
+    this.pool.geometry.attributes.position!.needsUpdate = true;
+    this.pool.geometry.attributes.aChunkCenter!.needsUpdate = true;
   }
 
   // Push the cluster's star positions / colors / intensities into the
@@ -201,6 +201,7 @@ function buildBeltPool(
   let cursor = 0;
   for (const { bodyIdx, rowIdx } of belts) {
     const belt = BODIES[bodyIdx];
+    if (!belt) continue;
     const rng = mulberry32(hash32(`belt:${belt.id}`));
 
     // Scale the base palette by the belt's parent-body inventory so chunk
@@ -291,14 +292,14 @@ function buildBeltPool(
       let acc = 0;
       let pi = deposits.length - 1;
       for (let d = 0; d < deposits.length; d++) {
-        acc += deposits[d].abundance / totalAb;
+        acc += deposits[d]!.abundance / totalAb;
         if (u <= acc) { pi = d; break; }
       }
       // Secondary = the other deposit (or the same one if the belt only
       // drew a single deposit, which makes the hint a no-op).
       const si = deposits.length > 1 ? (pi === 0 ? 1 : 0) : pi;
-      chunkPrimary.push(depCols[pi]);
-      chunkSecondary.push(depCols[si]);
+      chunkPrimary.push(depCols[pi]!);
+      chunkSecondary.push(depCols[si]!);
       const ang = rng() * Math.PI * 2;
       chunkBlendDir.push({ x: Math.cos(ang), y: Math.sin(ang) });
     }
@@ -307,10 +308,10 @@ function buildBeltPool(
     const offsets:        { dx: number; dy: number }[] = [];
     const centerOffsets:  { dx: number; dy: number }[] = [];
     for (let ci = 0; ci < chunks.length; ci++) {
-      const chunk = chunks[ci];
-      const col = chunkPrimary[ci];
-      const colB = chunkSecondary[ci];
-      const dir = chunkBlendDir[ci];
+      const chunk = chunks[ci]!;
+      const col = chunkPrimary[ci]!;
+      const colB = chunkSecondary[ci]!;
+      const dir = chunkBlendDir[ci]!;
       const scratchPos:    number[] = [];
       const scratchCenter: number[] = [];
       const scratchSize:   number[] = [];
@@ -323,11 +324,11 @@ function buildBeltPool(
         cursor,
       );
       for (let v = 0; v < written; v++) {
-        offsets.push({ dx: scratchPos[v * 3 + 0], dy: scratchPos[v * 3 + 1] });
-        centerOffsets.push({ dx: scratchCenter[v * 2 + 0], dy: scratchCenter[v * 2 + 1] });
+        offsets.push({ dx: scratchPos[v * 3 + 0]!, dy: scratchPos[v * 3 + 1]! });
+        centerOffsets.push({ dx: scratchCenter[v * 2 + 0]!, dy: scratchCenter[v * 2 + 1]! });
         positions.push(0, 0, 0);
         chunkCenters.push(0, 0);
-        chunkSizes.push(scratchSize[v]);
+        chunkSizes.push(scratchSize[v]!);
         // Secondary hue + blend direction are constant across the chunk's
         // vertices (the per-fragment ramp lives in the shader).
         colorsB.push(colB.r, colB.g, colB.b);

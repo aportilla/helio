@@ -376,7 +376,7 @@ export class Panel extends BasePanel {
     if (activeTab) {
       for (let si = 0; si < activeTab.sections.length; si++) {
         if (si > 0) H += sizes.panelSectionGapBefore;
-        const section = activeTab.sections[si];
+        const section = activeTab.sections[si]!;
         if (section.header) {
           H += bodyLineH + sizes.panelSectionGapAfter;
         }
@@ -428,7 +428,7 @@ export class Panel extends BasePanel {
     if (activeTab) {
       for (let si = 0; si < activeTab.sections.length; si++) {
         if (si > 0) cursorY += sizes.panelSectionGapBefore;
-        const section = activeTab.sections[si];
+        const section = activeTab.sections[si]!;
         if (section.header) {
           drawPixelText(g, section.header, sizes.padX, cursorY, colors.textKey);
           cursorY += bodyLineH + sizes.panelSectionGapAfter;

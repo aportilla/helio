@@ -18,7 +18,7 @@ import {
   Scene,
 } from 'three';
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
-import { STARS, STAR_CLUSTERS } from '../../data/stars';
+import { clusterDisplayName } from '../../data/stars';
 import type { DiagramPick } from '../../scene/system-diagram';
 import { BasePanel } from '../base-panel';
 import { type HitResult } from '../hit-test';
@@ -87,12 +87,7 @@ export class SystemHud {
   onBack: () => void = () => {};
 
   constructor(clusterIdx: number) {
-    const cluster = STAR_CLUSTERS[clusterIdx];
-    const primary = STARS[cluster.primary];
-    const isMulti = cluster.members.length > 1;
-    const text = isMulti
-      ? `${primary.name} +${cluster.members.length - 1}`
-      : primary.name;
+    const text = clusterDisplayName(clusterIdx);
 
     this.nameLabel = new SystemNameLabel(text, 99);
     this.nameLabel.addTo(this.scene);

@@ -83,7 +83,7 @@ import type { Body } from '../../data/stars';
 import {
   isClassifiable, isGaseousBody, isVeiledIce, isHelium, isGasGiant, isHotGiant,
   isIceGiant, isBrimstone, isTholin, isAmmoniaSea, isSubglacialOcean, isOcean,
-  isChthonian, isMagmaOcean, isLava, isVolcanic, isIron, isFrostbound, isGlacial,
+  isChthonian, isLava, isVolcanic, isIron, isFrostbound, isGlacial,
   isDesert,
 } from '../../../scripts/lib/body-traits.mjs';
 import { hash32 } from '../../../scripts/lib/prng.mjs';
@@ -441,7 +441,7 @@ function draw(b: Body, ns: string, pool: readonly Word[], avoid?: ReadonlySet<st
     const clear = eligible.filter((w) => !tokensOf(typeof w === 'string' ? w : w[0]).some((t) => avoidStems.has(stemOf(t))));
     if (clear.length) eligible = clear;
   }
-  const w = eligible[hash32(b.id + '§' + ns) % eligible.length];
+  const w = eligible[hash32(b.id + '§' + ns) % eligible.length]!;
   return typeof w === 'string' ? w : w[0];
 }
 
@@ -626,7 +626,7 @@ function deriveBiome(b: Body): Sense {
     return sense(b, 'exotic', { leadForce: draw(b, 'chthonian:lead', CHTHONIAN_LEAD, new Set(tokensOf(terrain))), terrain });
   }
   if (isBrimstone(b)) return sense(b, 'volcanic', { leadForce: draw(b, 'brimstone:lead', BRIMSTONE_LEAD) });
-  if (isLava(b) || isMagmaOcean(b)) return sense(b, 'volcanic');
+  if (isLava(b)) return sense(b, 'volcanic');
 
   // ── Exotic / sulfur biospheres — silicon-based life draws the lattice pool ──
   if (b.biosphereArchetype === 'silicate' && hasLife(b)) return sense(b, 'exotic');

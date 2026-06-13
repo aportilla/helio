@@ -127,7 +127,7 @@ export class ClusterBrackets {
   // renderedStarPxSize (materials/galaxy.ts), the canonical mirror of the
   // stars shader's size math — both read the same shader constants.
   private computeRenderedStarSize(starIdx: number, camera: Camera): number {
-    const s = STARS[starIdx];
+    const s = STARS[starIdx]!;
     this._view.set(s.x, s.y, s.z).applyMatrix4(camera.matrixWorldInverse);
     return renderedStarPxSize(s.pxSize, this._view.z, this.pxScale);
   }
@@ -147,6 +147,18 @@ export class ClusterBrackets {
     this.currentSize = size;
   }
 
+  // Release the GPU resources this bracket owns: the current bracket
+  // CanvasTexture, the quad geometry, and the material. The mesh lives in the
+  // labels overlay scene that StarmapScene drops wholesale on teardown, but the
+  // texture + geometry need explicit disposal. Idempotent — safe to call once
+  // from StarmapScene.dispose().
+  dispose(): void {
+    const mat = this.mesh.material as MeshBasicMaterial;
+    mat.map?.dispose();
+    mat.dispose();
+    this.mesh.geometry.dispose();
+  }
+
   // Place the mesh so its top-left texel lands on an integer buffer pixel —
   // necessary so all four texture corners align with the buffer pixel grid
   // and every texel renders. Snapping just the center silently drops a row
@@ -163,7 +175,7 @@ export class ClusterBrackets {
       this.mesh.visible = false;
       return;
     }
-    const cluster = STAR_CLUSTERS[this.clusterIdx];
+    const cluster = STAR_CLUSTERS[this.clusterIdx]!;
 
     // Anchor the bracket on the cluster COM rather than the bbox midpoint
     // of projected members. When view.target sits on this COM (i.e. the
@@ -193,7 +205,7 @@ export class ClusterBrackets {
     // ones rather than hiding the whole bracket.
     let radius = 0;
     for (const memIdx of cluster.members) {
-      const s = STARS[memIdx];
+      const s = STARS[memIdx]!;
       this._world.set(s.x, s.y, s.z);
       if (!projectWorldToBuffer(this._world, camera, this.viewTarget, this.bufferW, this.bufferH, this._screen)) continue;
       const r = this.computeRenderedStarSize(memIdx, camera) * 0.5;

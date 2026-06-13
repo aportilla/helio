@@ -177,6 +177,10 @@ export class InputController {
   private pinchStartAy = 0;
   private pinchStartBx = 0;
   private pinchStartBy = 0;
+  // Reused holders for the active first-two pointers, populated by
+  // capturePinchPair() so the per-move pinch math doesn't allocate a tuple.
+  private _pinchA: Pt = { x: 0, y: 0 };
+  private _pinchB: Pt = { x: 0, y: 0 };
 
   // Held-key state for WASD pan + QE orbit + ZX lift. Continuous-while-held;
   // cleared on blur so a key whose keyup got swallowed (alt-tab, etc.)
@@ -290,12 +294,7 @@ export class InputController {
       document.body.classList.remove('grabbing');
       this.pinching = true;
       this.pinchMode = 'undecided';
-      this.pinchDist = this.measurePinch();
-      this.pinchStartDist = this.pinchDist;
-      this.capturePinchMid();
-      this.pinchStartMidX = this.pinchMidX;
-      this.pinchStartMidY = this.pinchMidY;
-      this.capturePinchStart();
+      this.snapshotPinchAnchors();
       return;
     }
 
@@ -330,6 +329,11 @@ export class InputController {
         this.pinching = false;
         this.pinchDist = 0;
         this.pinchMode = 'undecided';
+      } else if (this.pointers.size >= 2 && this.pinchMode === 'undecided') {
+        // Dropped from 3+ to 2 fingers before the gesture committed — the
+        // surviving pair may differ from the original first-two, so re-baseline
+        // the anchors off it rather than against a now-lifted finger.
+        this.snapshotPinchAnchors();
       }
       return;
     }
@@ -388,6 +392,11 @@ export class InputController {
       this.pinchMode = 'undecided';
       this.dragging = false;
       document.body.classList.remove('grabbing');
+    } else if (this.pointers.size >= 2 && this.pinchMode === 'undecided') {
+      // Palm/extra finger cancelled mid-gesture, dropping 3+ → 2 before it
+      // committed — re-baseline the anchors off the surviving pair (the palm-
+      // reject path is the likelier real trigger for the 3→2 transition).
+      this.snapshotPinchAnchors();
     }
   }
 
@@ -409,9 +418,10 @@ export class InputController {
     } else {
       this.handlers.onPointerHoverChanged(e.clientX, e.clientY, true);
     }
-    if (this.pointers.has(e.pointerId)) {
-      this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    }
+    // Mutate the tracked point in place rather than allocating a fresh
+    // {x,y} literal every move — these fire at pointer-event rate.
+    const pt = this.pointers.get(e.pointerId);
+    if (pt) { pt.x = e.clientX; pt.y = e.clientY; }
 
     // Cancel a pending long-press the moment the holding finger drifts
     // beyond LONG_PRESS_MOVE_PX from its press position — we'd rather
@@ -444,7 +454,8 @@ export class InputController {
           // way at different speeds) doesn't fake a separation change.
           let sepDelta = 0;
           if (this.pinchStartDist > 0) {
-            const [a, b] = this.firstTwoPointers();
+            this.capturePinchPair();
+            const a = this._pinchA, b = this._pinchB;
             const ux = (this.pinchStartBx - this.pinchStartAx) / this.pinchStartDist;
             const uy = (this.pinchStartBy - this.pinchStartAy) / this.pinchStartDist;
             const projA = (a.x - this.pinchStartAx) * ux + (a.y - this.pinchStartAy) * uy;
@@ -601,29 +612,46 @@ export class InputController {
     this.longPressFired = true;
   }
 
-  // The active two-pointer pair, in first-seen Map-iteration order. Every
-  // pinch computation (separation, midpoint, per-finger start anchor) reads
-  // the same two pointers in the same order. Only call with size >= 2 — the
-  // non-null assertions assume both entries exist.
-  private firstTwoPointers(): [Pt, Pt] {
+  // Snapshot the active two-pointer pair (first-seen Map-iteration order) into
+  // the reused _pinchA/_pinchB fields. Every pinch computation (separation,
+  // midpoint, per-finger start anchor) reads the same two pointers in the same
+  // order, so capturing into shared fields avoids a fresh tuple per call on the
+  // pinch-move path. Only call with size >= 2 — the non-null assertions assume
+  // both entries exist.
+  private capturePinchPair(): void {
     const it = this.pointers.values();
-    return [it.next().value!, it.next().value!];
+    this._pinchA = it.next().value!;
+    this._pinchB = it.next().value!;
   }
 
   private measurePinch(): number {
-    const [a, b] = this.firstTwoPointers();
-    return Math.hypot(a.x - b.x, a.y - b.y);
+    this.capturePinchPair();
+    return Math.hypot(this._pinchA.x - this._pinchB.x, this._pinchA.y - this._pinchB.y);
   }
 
   private capturePinchMid(): void {
-    const [a, b] = this.firstTwoPointers();
-    this.pinchMidX = (a.x + b.x) * 0.5;
-    this.pinchMidY = (a.y + b.y) * 0.5;
+    this.capturePinchPair();
+    this.pinchMidX = (this._pinchA.x + this._pinchB.x) * 0.5;
+    this.pinchMidY = (this._pinchA.y + this._pinchB.y) * 0.5;
   }
 
   private capturePinchStart(): void {
-    const [a, b] = this.firstTwoPointers();
-    this.pinchStartAx = a.x; this.pinchStartAy = a.y;
-    this.pinchStartBx = b.x; this.pinchStartBy = b.y;
+    this.capturePinchPair();
+    this.pinchStartAx = this._pinchA.x; this.pinchStartAy = this._pinchA.y;
+    this.pinchStartBx = this._pinchB.x; this.pinchStartBy = this._pinchB.y;
+  }
+
+  // Re-baseline every pinch anchor (separation, midpoint, per-finger start) off
+  // the CURRENT first-two pointers. Called on pinch entry and whenever a lift or
+  // cancel drops the gesture from 3+ fingers back to two before it commits, so
+  // the undecided classifier never measures the surviving pair against a lifted
+  // finger's stale start position.
+  private snapshotPinchAnchors(): void {
+    this.pinchDist = this.measurePinch();
+    this.pinchStartDist = this.pinchDist;
+    this.capturePinchMid();
+    this.pinchStartMidX = this.pinchMidX;
+    this.pinchStartMidY = this.pinchMidY;
+    this.capturePinchStart();
   }
 }

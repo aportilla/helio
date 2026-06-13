@@ -33,7 +33,7 @@ import { insolation, frostLineAU, hillRadiusAu } from './lib/astrophysics.mjs';
 import {
   isClassifiable, isGaseousBody, isVeiledIce, isHelium, isGasGiant, isHotGiant,
   isIceGiant, isBrimstone, isTholin, isGaian, isAmmoniaSea, isSubglacialOcean,
-  isChthonian, isLava, isMagmaOcean, isVolcanic, isIron, isFrostbound, isGlacial,
+  isChthonian, isLava, isVolcanic, isIron, isFrostbound, isGlacial,
   isOcean, isSuperEarth, isDesert, liquidWaterCover,
 } from './lib/body-traits.mjs';
 import {
@@ -123,7 +123,6 @@ function archOf(b) {
   if (isSubglacialOcean(b)) return 'subglacial_ocean';
   if (isChthonian(b)) return 'chthonian';
   if (isLava(b)) return 'lava';
-  if (isMagmaOcean(b)) return 'magma_ocean';
   if (isVolcanic(b)) return 'volcanic';
   if (isIron(b)) return 'iron';
   if (isFrostbound(b)) return 'frostbound';

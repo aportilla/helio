@@ -24,7 +24,7 @@ import { insolation } from './lib/astrophysics.mjs';
 import {
   isClassifiable, isGaseousBody, isVeiledIce, isHelium, isGasGiant, isHotGiant,
   isIceGiant, isBrimstone, isTholin, isGaian, isAmmoniaSea, isSubglacialOcean,
-  isChthonian, isLava, isMagmaOcean, isVolcanic, isIron, isFrostbound, isGlacial,
+  isChthonian, isLava, isVolcanic, isIron, isFrostbound, isGlacial,
   isOcean, isSuperEarth, isDesert, liquidWaterCover,
 } from './lib/body-traits.mjs';
 
@@ -84,7 +84,6 @@ function arch(b) {
   if (isSubglacialOcean(b)) return 'subglacial_ocean';
   if (isChthonian(b)) return 'chthonian';
   if (isLava(b)) return 'lava';
-  if (isMagmaOcean(b)) return 'magma_ocean';
   if (isVolcanic(b)) return 'volcanic';
   if (isIron(b)) return 'iron';
   if (isFrostbound(b)) return 'frostbound';
@@ -315,11 +314,8 @@ const lavaWorlds = procgenPlanets.filter(b => arch(b) === 'lava');
 row('Lava worlds (surface > 1000K)', lavaWorlds,
     procgenPlanets.length, topExamples(lavaWorlds, b => b.avgSurfaceTempK));
 
-// Magma ocean — partial melt. Old magma_ocean worldClass split into the
-// exposed-melt 'magma_ocean' + crusted 'volcanic' archetypes.
-const magmaWorlds = procgenPlanets.filter(b => arch(b) === 'magma_ocean');
-row('Magma-ocean worlds (exposed melt)', magmaWorlds,
-    procgenPlanets.length, topExamples(magmaWorlds, b => b.avgSurfaceTempK));
+// Volcanic — crusted, tectonically-active silicate melt below the lava floor,
+// plus tidal-volcanism (Io-class). Exposed-melt worlds read as 'lava' above.
 const volcanicWorlds = procgenPlanets.filter(b => arch(b) === 'volcanic');
 row('Volcanic worlds (crusted, active)', volcanicWorlds,
     procgenPlanets.length, topExamples(volcanicWorlds, b => b.avgSurfaceTempK));

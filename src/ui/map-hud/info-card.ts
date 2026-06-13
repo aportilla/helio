@@ -12,7 +12,7 @@
 // orchestrator. Dismissal policy (clear selection) lives there.
 
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
-import { STARS, STAR_CLUSTERS } from '../../data/stars';
+import { STARS, STAR_CLUSTERS, clusterDisplayName } from '../../data/stars';
 import { BasePanel } from '../base-panel';
 import { paintSurface } from '../painter';
 import { colors, fonts, sizes } from '../theme';
@@ -20,7 +20,7 @@ import { colors, fonts, sizes } from '../theme';
 interface BodyRow { key: string; val: string; }
 
 function bodyForStar(starIdx: number): BodyRow[] {
-  const s = STARS[starIdx];
+  const s = STARS[starIdx]!;
   return [
     { key: 'class    ', val: s.rawClass },
     { key: 'distance ', val: `${s.distLy.toFixed(2)} ly` },
@@ -35,7 +35,7 @@ function bodyForStar(starIdx: number): BodyRow[] {
 // card doesn't carry redundant text for the ~95% of rows where the
 // colloquial name already IS the IAU form.
 function iauLineFor(starIdx: number): string | null {
-  const s = STARS[starIdx];
+  const s = STARS[starIdx]!;
   if (!s.iauName || s.iauName === s.name) return null;
   return s.iauName;
 }
@@ -62,10 +62,9 @@ export class InfoCard extends BasePanel {
 
   protected measure(): { w: number; h: number } {
     if (this.clusterIdx < 0) return { w: 0, h: 0 };
-    const cluster = STAR_CLUSTERS[this.clusterIdx];
-    const primary = STARS[cluster.primary];
+    const cluster = STAR_CLUSTERS[this.clusterIdx]!;
     const isMulti = cluster.members.length > 1;
-    const titleText = isMulti ? `${primary.name} +${cluster.members.length - 1}` : primary.name;
+    const titleText = clusterDisplayName(this.clusterIdx);
     const titleLineH = getFont(fonts.cardName).lineHeight;
     const bodyLineH = getFont(fonts.body).lineHeight;
 
@@ -84,11 +83,11 @@ export class InfoCard extends BasePanel {
       bodyH += bodyLineH;
     }
     for (let i = 0; i < cluster.members.length; i++) {
-      const memIdx = cluster.members[i];
+      const memIdx = cluster.members[i]!;
       if (isMulti) {
         // Sub-header for this member.
         if (i > 0) bodyH += MEMBER_BLOCK_GAP;
-        const nameW = measurePixelText(STARS[memIdx].name);
+        const nameW = measurePixelText(STARS[memIdx]!.name);
         if (nameW > maxBodyW) maxBodyW = nameW;
         bodyH += bodyLineH;
         const memberIau = iauLineFor(memIdx);
@@ -115,10 +114,9 @@ export class InfoCard extends BasePanel {
   }
 
   protected paintInto(g: CanvasRenderingContext2D, w: number, h: number): void {
-    const cluster = STAR_CLUSTERS[this.clusterIdx];
-    const primary = STARS[cluster.primary];
+    const cluster = STAR_CLUSTERS[this.clusterIdx]!;
     const isMulti = cluster.members.length > 1;
-    const titleText = isMulti ? `${primary.name} +${cluster.members.length - 1}` : primary.name;
+    const titleText = clusterDisplayName(this.clusterIdx);
     const titleLineH = getFont(fonts.cardName).lineHeight;
     const bodyLineH = getFont(fonts.body).lineHeight;
 
@@ -133,10 +131,10 @@ export class InfoCard extends BasePanel {
       cursorY += bodyLineH;
     }
     for (let i = 0; i < cluster.members.length; i++) {
-      const memIdx = cluster.members[i];
+      const memIdx = cluster.members[i]!;
       if (isMulti) {
         if (i > 0) cursorY += MEMBER_BLOCK_GAP;
-        drawPixelText(g, STARS[memIdx].name, sizes.padX, cursorY, colors.starName);
+        drawPixelText(g, STARS[memIdx]!.name, sizes.padX, cursorY, colors.starName);
         cursorY += bodyLineH;
         const memberIau = iauLineFor(memIdx);
         if (memberIau) {

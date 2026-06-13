@@ -85,9 +85,10 @@ node scripts/expand-systems-from-catalog.mjs --apply
 node scripts/lint-star-csv.mjs
 node scripts/lint-star-csv.mjs --prune
 
-# 6. Wire into src/data/stars.ts:
-#    - add `import fortyFortyFiveCsv from './stars-40-45ly.csv?raw';`
-#    - add `{ text: fortyFortyFiveCsv, label: 'stars-40-45ly.csv' }` to the sources array
+# 6. Wire into the build pipeline:
+#    - add `'stars-40-45ly.csv'` to the `SOURCES` array in scripts/build-catalog.mjs
+#    - run `npm run build:catalog` to regenerate src/data/catalog.generated.json
+#      (stars.ts reads only that JSON snapshot — there is no per-CSV ?raw import)
 
 # 7. Update README's project layout to mention the new file
 ```
@@ -116,7 +117,8 @@ node scripts/expand-systems-from-catalog.mjs --apply
 # 5. Drop faint rows the catalog couldn't give a class or position
 node scripts/lint-star-csv.mjs --prune
 
-# 6. Wire into stars.ts as above
+# 6. Wire into the build pipeline as above (add to SOURCES in
+#    build-catalog.mjs, then `npm run build:catalog`)
 ```
 
 The two known schemas are `--schema=nearest` (11-col, used by "List of nearest stars") and `--schema=20-25` (9-col, used by every "List of star systems within X-Y light-years" page). If a future Wikipedia page uses yet another column layout, add a profile to the `SCHEMAS` dict in `scrape-wiki-stars.mjs`.

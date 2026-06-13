@@ -22,9 +22,9 @@ for (const [path, text] of Object.entries(modules)) {
   const m = path.match(/\/BDF\/([^/]+)\/(\d+)\.bdf$/);
   if (!m) continue;
   const [, family, sizeStr] = m;
-  const size = parseInt(sizeStr, 10);
-  let sizes = catalog.get(family);
-  if (!sizes) { sizes = new Map(); catalog.set(family, sizes); }
+  const size = parseInt(sizeStr!, 10);
+  let sizes = catalog.get(family!);
+  if (!sizes) { sizes = new Map(); catalog.set(family!, sizes); }
   sizes.set(size, text);
 }
 

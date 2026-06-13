@@ -76,6 +76,13 @@ export class FocusMarker {
   private readonly dotsMat: ShaderMaterial;
   private selectedCluster = -1;
 
+  // Last dropline geometry we baked, so a parked pivot skips the per-frame
+  // vertex rewrite + GPU re-upload. The pin geometry is a pure function of
+  // these two; opacity still rides the live ramp each frame. NaN sentinel
+  // forces the first bake (mirrors droplines.ts's lastPlaneZ guard).
+  private lastBottomZ = Number.NaN;
+  private lastSameSide = false;
+
   constructor() {
     this.group.visible = false;
 
@@ -144,7 +151,7 @@ export class FocusMarker {
     this.group.position.copy(viewTarget);
 
     const ramp = invRamp(anchorDist, FOCUS_MARKER_NEAR, FOCUS_MARKER_FAR);
-    this.ringMat.uniforms.uOpacity.value = ramp * RING_BASE_OPACITY;
+    this.ringMat.uniforms.uOpacity!.value = ramp * RING_BASE_OPACITY;
 
     // Dropline portion: only when a cluster is selected — that's the
     // only state where a plane exists to drop to. Ring renders alone
@@ -155,7 +162,7 @@ export class FocusMarker {
       return;
     }
 
-    const planeZ = STAR_CLUSTERS[this.selectedCluster].com.z;
+    const planeZ = STAR_CLUSTERS[this.selectedCluster]!.com.z;
     const localBottomZ = planeZ - viewTarget.z;
     const dropLen = Math.abs(localBottomZ);
 
@@ -172,30 +179,43 @@ export class FocusMarker {
     const targetAbove = viewTarget.z >= planeZ;
     const sameSide = targetAbove === camAbove;
 
+    // Dirty-check: the pin geometry is a pure function of (localBottomZ,
+    // sameSide). When the pivot is parked (both unchanged frame-to-frame) skip
+    // the vertex rewrite + GPU re-upload — otherwise the marker re-bakes the
+    // same dropline every frame. Visibility + opacity below stay unconditional
+    // (opacity tracks the live pan ramp even when the geometry holds).
+    const geomDirty = localBottomZ !== this.lastBottomZ || sameSide !== this.lastSameSide;
+
     if (sameSide) {
       this.solid.visible = true;
       this.dots.visible = false;
-      const pos = this.solid.geometry.attributes.position as Float32BufferAttribute;
-      pos.setXYZ(1, 0, 0, localBottomZ);
-      pos.needsUpdate = true;
-      this.solidMat.uniforms.uOpacity.value = ramp;
+      if (geomDirty) {
+        const pos = this.solid.geometry.attributes.position as Float32BufferAttribute;
+        pos.setXYZ(1, 0, 0, localBottomZ);
+        pos.needsUpdate = true;
+      }
+      this.solidMat.uniforms.uOpacity!.value = ramp;
     } else {
       this.solid.visible = false;
       this.dots.visible = true;
-      // Local frame: 0 is the ring (top, at view.target), localBottomZ is the
-      // plane. Dots run from the ring toward the plane at fixed period.
-      const pos = this.dots.geometry.attributes.position as Float32BufferAttribute;
-      const count = fillVerticalDotPin(
-        pos, 0, 0, 0, localBottomZ, DROPLINE_DOT_PERIOD_LY, MAX_DOTS,
-      );
-      pos.needsUpdate = true;
-      this.dots.geometry.setDrawRange(0, count);
-      this.dotsMat.uniforms.uOpacity.value = ramp;
+      if (geomDirty) {
+        // Local frame: 0 is the ring (top, at view.target), localBottomZ is the
+        // plane. Dots run from the ring toward the plane at fixed period.
+        const pos = this.dots.geometry.attributes.position as Float32BufferAttribute;
+        const count = fillVerticalDotPin(
+          pos, 0, 0, 0, localBottomZ, DROPLINE_DOT_PERIOD_LY, MAX_DOTS,
+        );
+        pos.needsUpdate = true;
+        this.dots.geometry.setDrawRange(0, count);
+      }
+      this.dotsMat.uniforms.uOpacity!.value = ramp;
     }
+    this.lastBottomZ = localBottomZ;
+    this.lastSameSide = sameSide;
   }
 
   private distToCluster(viewTarget: Vector3, clusterIdx: number): number {
-    const com = STAR_CLUSTERS[clusterIdx].com;
+    const com = STAR_CLUSTERS[clusterIdx]!.com;
     const dx = viewTarget.x - com.x;
     const dy = viewTarget.y - com.y;
     const dz = viewTarget.z - com.z;

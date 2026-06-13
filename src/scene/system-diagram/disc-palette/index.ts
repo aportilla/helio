@@ -157,7 +157,7 @@ import {
   rimWidthForNoSurfaceAtmosphere, rimWidthForSurfaceAtmosphere,
   RIM_PRESENCE_FLOOR_PX, scatteringRimFor, surfaceHazeContributors,
 } from './atmosphere';
-import { lavaDrivesFor } from './lava';
+import { lavaDrivesFor, LAVA_CRUST_BASE as LAVA_CRUST_FALLBACK } from './lava';
 import { oceanColorFor, OCEAN_FALLBACK_COLOR } from './ocean';
 import { BLACK_COLOR, clamp01, smoothstep01, weightedColorBlend, WHITE_COLOR } from './shared';
 
@@ -565,11 +565,6 @@ export interface DiscPalette {
 // slotting into an arbitrary palette.
 const NO_ATM_FALLBACK_COLOR = new Color(0x808080);
 
-// Neutral cooled-basalt crust for bodies with no molten surface (the
-// shader never reads the crust channel there, but the field is always
-// present so the texel pack stays uniform). Matches lava.ts's LAVA_CRUST_BASE.
-const LAVA_CRUST_FALLBACK: readonly [number, number, number] = [0.34, 0.20, 0.21];
-
 // Neutral (no-op) ember chromophore filter for bodies with no molten surface.
 // A multiplicative white leaves the shader's blackbody ember untouched.
 const EMBER_TINT_NEUTRAL: readonly [number, number, number] = [1, 1, 1];
@@ -635,9 +630,9 @@ export function buildDiscPalette(
       sC0 = base; sC1 = base; sC2 = base;
       sW0 = 1; sW1 = 0; sW2 = 0;
     } else {
-      const k0 = res[0].key;
+      const k0 = res[0]!.key;
       const k1 = res[1]?.key ?? null;
-      const a0 = res[0].abundance;
+      const a0 = res[0]!.abundance;
       const a1 = res[1]?.abundance ?? 0;
       // Slot 0 — the PRIMARY surface colour the shader shades into the four
       // zones: the primary resource's hue diluted toward regolith by the
@@ -729,7 +724,9 @@ export function buildDiscPalette(
   // ── LAVA / MOLTEN-SURFACE EMISSION — three continuous melt drives folded
   // to (coverage, emission temp, sulfur hue). See lavaDrivesFor in ./lava.
   // Suppressed surfaces (no-surface / tiny disc) emit nothing, so the
-  // shader's molten sub-pass early-outs.
+  // shader's molten sub-pass early-outs — but lavaCrustColor still gets the
+  // neutral basalt fallback (the shader never reads it there, yet the field
+  // must be present so the texel pack stays uniform).
   let { moltenCoverage, emissionTempNorm, lavaSulfurFrac, lavaCrustColor, emberTint } = surfaceSuppressed
     ? { moltenCoverage: 0, emissionTempNorm: 0, lavaSulfurFrac: 0, lavaCrustColor: LAVA_CRUST_FALLBACK, emberTint: EMBER_TINT_NEUTRAL }
     : lavaDrivesFor(body, surfaceAge);

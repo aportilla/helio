@@ -15,6 +15,10 @@ import { GRID_FADE_NEAR, GRID_FADE_FAR, clampRamp } from './cluster-fade';
 
 const GRID_OPACITY  = 0.32;
 const ARROW_OPACITY = 0.45;
+// Below this ramp delta, applyZoomFade skips re-writing both uOpacity uniforms
+// — a holding frame at a steady zoom would otherwise re-write the same value
+// every tick. The ramp is in [0,1], so this is far below a perceptible step.
+const GRID_FADE_RAMP_EPSILON = 1e-4;
 
 const RING_RADII = [5, 10, 15, 20] as const;
 const RING_SEGMENTS = 128;
@@ -46,6 +50,10 @@ interface Frame {
   // COMs and would otherwise share one fade value.
   lineMat: ShaderMaterial;
   arrowMat: ShaderMaterial;
+  // Last ramp value written to the two materials, so a holding frame whose
+  // camera distance hasn't moved skips re-writing both uOpacity uniforms.
+  // -1 forces the first write (a real ramp is always in [0,1]).
+  lastRamp: number;
 }
 
 function ringPoints(radius: number, segments: number): Vector3[] {
@@ -106,10 +114,10 @@ function buildFrame(): Frame {
   // from the selection's center"; the outermost ring + axes + arrow share
   // the final step so the +X arrow caps the frame at full extent.
   const steps: Object3D[][] = [
-    [rings[0]],
-    [rings[1]],
-    [rings[2]],
-    [rings[3], xAxis, yAxis, arrowShaft, arrowHead],
+    [rings[0]!],
+    [rings[1]!],
+    [rings[2]!],
+    [rings[3]!, xAxis, yAxis, arrowShaft, arrowHead],
   ];
 
   return {
@@ -120,6 +128,7 @@ function buildFrame(): Frame {
     position: new Vector3(),
     lineMat,
     arrowMat,
+    lastRamp: -1,
   };
 }
 
@@ -149,18 +158,18 @@ export class Grid {
   setSelection(com: Vector3 | null): void {
     if (com === null) {
       if (this.activeIdx >= 0) {
-        this.startCollapse(this.frames[this.activeIdx]);
+        this.startCollapse(this.frames[this.activeIdx]!);
         this.activeIdx = -1;
       }
       return;
     }
 
-    if (this.activeIdx >= 0 && this.frames[this.activeIdx].position.equals(com)) return;
+    if (this.activeIdx >= 0 && this.frames[this.activeIdx]!.position.equals(com)) return;
 
     // Begin collapsing whatever was active so its sequence runs concurrently
     // with the new frame's expand. Both frames render together for the
     // overlap window — the AB pattern's whole point.
-    if (this.activeIdx >= 0) this.startCollapse(this.frames[this.activeIdx]);
+    if (this.activeIdx >= 0) this.startCollapse(this.frames[this.activeIdx]!);
 
     const target = this.pickFrame();
     this.startExpand(target, com);
@@ -240,7 +249,7 @@ export class Grid {
     if (f.state === 'expanding') {
       for (let k = 0; k < totalSteps; k++) {
         if (elapsed >= k * RING_STAGGER_EXPAND_MS) {
-          for (const o of f.steps[k]) o.visible = true;
+          for (const o of f.steps[k]!) o.visible = true;
         }
       }
       if (elapsed >= (totalSteps - 1) * RING_STAGGER_EXPAND_MS) f.state = 'holding';
@@ -249,7 +258,7 @@ export class Grid {
 
     for (let k = 0; k < totalSteps; k++) {
       if (elapsed >= k * RING_STAGGER_COLLAPSE_MS) {
-        for (const o of f.steps[totalSteps - 1 - k]) o.visible = false;
+        for (const o of f.steps[totalSteps - 1 - k]!) o.visible = false;
       }
     }
     if (elapsed >= (totalSteps - 1) * RING_STAGGER_COLLAPSE_MS) {
@@ -265,7 +274,11 @@ export class Grid {
     if (f.state === 'idle') return;
     const dCam = cameraPos.distanceTo(f.position);
     const ramp = clampRamp(dCam, GRID_FADE_NEAR, GRID_FADE_FAR);
-    f.lineMat.uniforms.uOpacity.value  = ramp * GRID_OPACITY;
-    f.arrowMat.uniforms.uOpacity.value = ramp * ARROW_OPACITY;
+    // Holding-frame skip: at a steady zoom the ramp is constant, so don't
+    // re-write the two uniforms every tick.
+    if (Math.abs(ramp - f.lastRamp) < GRID_FADE_RAMP_EPSILON) return;
+    f.lastRamp = ramp;
+    f.lineMat.uniforms.uOpacity!.value  = ramp * GRID_OPACITY;
+    f.arrowMat.uniforms.uOpacity!.value = ramp * ARROW_OPACITY;
   }
 }

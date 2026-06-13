@@ -13,20 +13,18 @@ import { STARS, STAR_CLUSTERS } from '../data/stars';
 import { snappedDotsMat, snappedLineMat } from './materials';
 import { fillVerticalDotPin } from './dot-pin';
 import {
-  PIVOT_FADE_NEAR,
-  PIVOT_FADE_FAR,
-  CAMERA_FADE_NEAR,
-  CAMERA_FADE_FAR,
   DROPLINE_COLOR_SOLID,
   DROPLINE_COLOR_DOTS,
   DROPLINE_DOT_PERIOD_LY,
   DROPLINE_DEGENERATE_DIST,
-  clampRamp,
+  clusterFadeOpacity,
 } from './cluster-fade';
 
-// Pre-allocated dot capacity per pin (MAX_DOTS_PER_PIN × DROPLINE_DOT_PERIOD_LY
-// of pin length). Comfortably covers the 50 ly catalog's full Z
-// extent before the camera-fade hides the pin at CAMERA_FADE_FAR. We rewrite
+// Pre-allocated dot capacity per pin (MAX_DOTS_PER_PIN dots at
+// DROPLINE_DOT_PERIOD_LY spacing). Comfortably covers the catalog's full signed
+// COM-z span — which runs wider than the catalog's distance radius, since Z is
+// signed and a pin can reach between opposite Z extremes — before the
+// camera-fade hides the pin at CAMERA_FADE_FAR. We rewrite
 // z-values in place each time the selection plane shifts and use setDrawRange
 // to reveal the active slice — avoids reallocating attributes on every
 // selection change.
@@ -114,7 +112,7 @@ export class Droplines {
   constructor(initialMasterVisible: boolean) {
     this.masterVisible = initialMasterVisible;
     for (let cIdx = 0; cIdx < STAR_CLUSTERS.length; cIdx++) {
-      const cluster = STAR_CLUSTERS[cIdx];
+      const cluster = STAR_CLUSTERS[cIdx]!;
       // Sol's cluster used to be skipped (its COM at the origin gave a
       // zero-length pin against the fixed z=0 plane). With the focus plane
       // now keyed to the selected cluster's COM.z, Sol's pin is a real pin
@@ -123,10 +121,12 @@ export class Droplines {
       // degeneracy hiding (DROPLINE_DEGENERATE_DIST) handles the on-plane case
       // (Sol selected, or any cluster co-planar with the selection).
       const com = cluster.com;
-      const primary = STARS[cluster.primary];
+      const primary = STARS[cluster.primary]!;
 
       // Per-drop material clones so each pin can carry its own opacity for
-      // the per-cluster fade ramps below. Cost: ~70 ShaderMaterials total.
+      // the per-cluster fade ramps below. Cost: two clones (solid + dotted)
+      // per cluster — a few thousand ShaderMaterials + matching geometries
+      // across the full catalog.
       const solidMat = snappedLineMat({ color: DROPLINE_COLOR_SOLID });
       const dotsMat  = snappedDotsMat({ color: DROPLINE_COLOR_DOTS });
 
@@ -240,7 +240,7 @@ export class Droplines {
       return;
     }
 
-    const planeZ = STAR_CLUSTERS[this.selectedCluster].com.z;
+    const planeZ = STAR_CLUSTERS[this.selectedCluster]!.com.z;
     if (planeZ !== this.lastPlaneZ) {
       for (const d of this.drops) this.regenerateDrop(d, planeZ);
       this.lastPlaneZ = planeZ;
@@ -269,21 +269,23 @@ export class Droplines {
       if (!bypassFade) {
         const dCam = d.primaryWorld.distanceTo(camera.position);
         const dFocus = d.primaryWorld.distanceTo(viewTarget);
-        if (dFocus >= PIVOT_FADE_FAR || dCam >= CAMERA_FADE_FAR) {
+        // Shared pivot × camera ramp — 0 when either distance is past its FAR
+        // threshold, which hides the pin entirely (the same gate Labels uses).
+        const fade = clusterFadeOpacity(dFocus, dCam);
+        if (fade <= 0) {
           d.solid.visible = false;
           d.dots.visible = false;
           continue;
         }
-        opacity *= clampRamp(dFocus, PIVOT_FADE_NEAR, PIVOT_FADE_FAR);
-        opacity *= clampRamp(dCam, CAMERA_FADE_NEAR, CAMERA_FADE_FAR);
+        opacity *= fade;
       }
 
       const sameSide = (dz >= 0) === camAbove;
       d.solid.visible = sameSide;
       d.dots.visible  = !sameSide;
       const finalOpacity = opacity * this.globalFade;
-      d.solidMat.uniforms.uOpacity.value = finalOpacity;
-      d.dotsMat.uniforms.uOpacity.value  = finalOpacity;
+      d.solidMat.uniforms.uOpacity!.value = finalOpacity;
+      d.dotsMat.uniforms.uOpacity!.value  = finalOpacity;
     }
   }
 }

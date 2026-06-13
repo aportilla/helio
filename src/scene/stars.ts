@@ -19,7 +19,7 @@ export class StarPoints {
       positions[i * 3 + 0] = s.x;
       positions[i * 3 + 1] = s.y;
       positions[i * 3 + 2] = s.z;
-      const col = CLASS_COLOR[s.cls] ?? CLASS_COLOR.M;
+      const col = CLASS_COLOR[s.cls];
       colors[i * 3 + 0] = col.r;
       colors[i * 3 + 1] = col.g;
       colors[i * 3 + 2] = col.b;
@@ -41,7 +41,7 @@ export class StarPoints {
   }
 
   setPxScale(s: number): void {
-    this.material.uniforms.uPxScale.value = s;
+    this.material.uniforms.uPxScale!.value = s;
   }
 
   // Drives the focus-target short-circuit in the vertex shader. The vertex
@@ -49,7 +49,7 @@ export class StarPoints {
   // noisy matrix projection and snaps to buffer center — kills the 1 px disc
   // twitch on the focused star while the camera orbits around it.
   setFocus(world: Vector3): void {
-    this.material.uniforms.uFocusWorld.value.copy(world);
+    this.material.uniforms.uFocusWorld!.value.copy(world);
   }
 
   // Orbit pivot in world space — anchor for the pivot fade ramp that dims
@@ -57,18 +57,18 @@ export class StarPoints {
   // the "snap-to-NDC-zero" key and the fade anchor stay semantically
   // distinct even when they share a value today.
   setPivot(world: Vector3): void {
-    this.material.uniforms.uPivotWorld.value.copy(world);
+    this.material.uniforms.uPivotWorld!.value.copy(world);
   }
 
   // Selected + candidate cluster indices. Members bypass the dim ramp so
   // the dot stays at full brightness regardless of distance from pivot —
   // parallels the yellow-label promotion in labels.ts. -1 = none.
   setSelectedCluster(idx: number): void {
-    this.material.uniforms.uSelectedCluster.value = idx;
+    this.material.uniforms.uSelectedCluster!.value = idx;
   }
 
   setCandidateCluster(idx: number): void {
-    this.material.uniforms.uCandidateCluster.value = idx;
+    this.material.uniforms.uCandidateCluster!.value = idx;
   }
 
   // How much of the pivot-dim effect to apply (1=full, 0=off). Scene drives
@@ -77,6 +77,6 @@ export class StarPoints {
   // would never re-brighten on zoom-out (every star is far from a zoomed-
   // out camera, including the nearby ones we want bright).
   setDimAmount(a: number): void {
-    this.material.uniforms.uDimAmount.value = a;
+    this.material.uniforms.uDimAmount!.value = a;
   }
 }

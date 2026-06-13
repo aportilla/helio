@@ -9,7 +9,7 @@
 import {
   BufferGeometry, DataTexture, Points, Scene, ShaderMaterial,
 } from 'three';
-import { makePlanetMaterial } from '../materials';
+import { makePlanetMaterial, unregisterSnappedMaterial } from '../materials';
 import { buildBodyDiscGeometry } from '../system-diagram/layers/body-disc';
 import { disableCulling } from '../system-diagram/geom/cull';
 import { disposePool } from '../system-diagram/layers/dispose';
@@ -101,8 +101,8 @@ export class PlanetGridLayer {
     this.discMaterial = makePlanetMaterial(1.0, 'disc');
     this.haloMaterial = makePlanetMaterial(1.0, 'halo');
     for (const m of [this.discMaterial, this.haloMaterial]) {
-      m.uniforms.uCloudLayerData.value = cloudTex;
-      m.uniforms.uCloudLayerRows.value = this.cellCount;
+      m.uniforms.uCloudLayerData!.value = cloudTex;
+      m.uniforms.uCloudLayerRows!.value = this.cellCount;
     }
     this.discPoints = new Points(this.geometry, this.discMaterial);
     this.discPoints.renderOrder = RENDER_ORDER_PLANET;
@@ -160,7 +160,7 @@ export class PlanetGridLayer {
     // the top of the centered block and step DOWN by pitchY per row.
     const topY = (minCy + maxCy) * 0.5 + blockH * 0.5;
 
-    const positions = this.geometry.attributes.position.array as Float32Array;
+    const positions = this.geometry.attributes.position!.array as Float32Array;
     for (let row = 0; row < GRID_ROW_COUNT; row++) {
       for (let col = 0; col < GRID_COL_COUNT; col++) {
         const i = row * GRID_COL_COUNT + col;
@@ -173,12 +173,12 @@ export class PlanetGridLayer {
         positions[i * 3 + 1] = cy;
         // Flat z — cells never overlap, so no per-cell banding is needed.
         positions[i * 3 + 2] = Z_PLANET;
-        const c = this.centers[i];
+        const c = this.centers[i]!;
         c.cx = cx;
         c.cy = cy;
       }
     }
-    this.geometry.attributes.position.needsUpdate = true;
+    this.geometry.attributes.position!.needsUpdate = true;
   }
 
   // Published disc centers from the last layout() pass. The diagram threads
@@ -197,6 +197,10 @@ export class PlanetGridLayer {
   }
 
   dispose(): void {
+    // Drop both materials from the snapped-viewport registry before freeing
+    // them, so the next scene's resize doesn't re-touch dead GPU handles.
+    if (this.discMaterial) unregisterSnappedMaterial(this.discMaterial);
+    if (this.haloMaterial) unregisterSnappedMaterial(this.haloMaterial);
     // One geometry + cloudTex shared by both passes; the halo material is the
     // second consumer of that shared geometry, so it frees separately.
     disposePool({ geometry: this.geometry, material: this.discMaterial, cloudTex: this.cloudTex });

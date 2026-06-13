@@ -597,6 +597,67 @@ const BODY_STRING_FIELDS = [
   ['biosphere_complexity', 'biosphereComplexity'],
 ];
 
+// ── Emit-shape guard ────────────────────────────────────────────────────────
+// The canonical own-key set of an emitted Body, assembled from the same field
+// lists the (de)serializer uses, plus the structural + Filler-only keys. This
+// is the FOURTH list the procgen.mjs lockstep comment warns about: makeBody,
+// fillBody, and BODY_*_FIELDS must agree, and `assertBodyShape` (called after
+// the fill pass) turns a drift among them into a loud failure at the emit
+// boundary instead of a silently-malformed runtime Body. Add a Body field here
+// when you add it there.
+//
+// Structural keys parseCsvBodies / makeBody attach. shepherdId is resolved to
+// shepherdBodyIdx and stripped before emit, so it is intentionally absent.
+const STRUCTURAL_BODY_KEYS = [
+  'id', 'hostId', 'kind', 'formalName', 'name', 'source',
+  'hostStarIdx', 'hostBodyIdx', 'shepherdBodyIdx',
+  'surfaceLiquidSpecies', 'subsurfaceOceanSpecies',
+  'biosphereSurfaceImpact', 'surfaceRadiation', 'moons', 'ring',
+];
+// Filler-derived fields with no CSV column (absent from BODY_*_FIELDS): the
+// cloud / haze packs and the two label-only surface reads.
+const FILLER_ONLY_BODY_KEYS = [
+  'cloudLayers', 'surfaceOpacity', 'hazeAerosols', 'dustStrength',
+  'surfaceFrostSpecies', 'carbonWorld',
+];
+const CANONICAL_BODY_KEYS = new Set([
+  ...STRUCTURAL_BODY_KEYS,
+  ...BODY_NUMERIC_FIELDS.map(([, js]) => js),
+  ...BODY_STRING_FIELDS.map(([, js]) => js),
+  ...FILLER_ONLY_BODY_KEYS,
+]);
+// Belts + rings are built narrow by the architect (makeBody, Filler-bypassed),
+// so they legitimately omit the orbital / size fields they have no use for. A
+// CSV-authored belt/ring that DID run the Filler carries them as null — still
+// allowed, since the omission set only relaxes the "no missing key" half of the
+// check, never the "no foreign key" half. Keep in sync if a belt/ring's shape
+// changes.
+const BELT_OPTIONAL_KEYS = new Set([
+  'axialTiltDeg', 'eccentricity', 'inclinationDeg', 'orbitalPhaseDeg', 'periodDays', 'radiusEarth',
+]);
+const RING_OPTIONAL_KEYS = new Set([...BELT_OPTIONAL_KEYS, 'massEarth', 'semiMajorAu']);
+const NO_OPTIONAL_KEYS = new Set();
+
+// Assert one emitted body's own-key set matches the canonical Body shape, with
+// per-kind omissions for belts/rings. Reports the full symmetric difference so
+// a drifted field is named in the failure, not just detected.
+function assertBodyShape(b) {
+  const present = new Set(Object.keys(b));
+  const optional = b.kind === 'belt' ? BELT_OPTIONAL_KEYS
+    : b.kind === 'ring' ? RING_OPTIONAL_KEYS
+    : NO_OPTIONAL_KEYS;
+  const unexpected = [...present].filter(k => !CANONICAL_BODY_KEYS.has(k));
+  const missing = [...CANONICAL_BODY_KEYS].filter(k => !present.has(k) && !optional.has(k));
+  if (unexpected.length || missing.length) {
+    throw new Error(
+      `emit-shape: body ${b.id} (kind=${b.kind}) is out of lockstep with the canonical Body shape.` +
+      (unexpected.length ? `\n  unexpected keys (stale field or typo'd rename — drop, or add to CANONICAL_BODY_KEYS): ${unexpected.join(', ')}` : '') +
+      (missing.length ? `\n  missing keys (makeBody/fillBody dropped a required field): ${missing.join(', ')}` : '') +
+      `\n  Keep makeBody, fillBody, BODY_*_FIELDS, and CANONICAL_BODY_KEYS in lockstep.`,
+    );
+  }
+}
+
 function cellOrNull(raw) {
   const t = (raw ?? '').trim();
   return t === '' || t === 'n/a' ? null : t;
@@ -1218,6 +1279,11 @@ async function main() {
   // support filling (no host star resolved, missing mass/radius) keep
   // their nulls.
   const bodies = fillBodies(resolvedBodies, stars);
+
+  // Emit-shape guard: every body must match the canonical Body key set (with
+  // per-kind omissions for belts/rings). Catches a makeBody/fillBody/
+  // BODY_*_FIELDS lockstep drift here rather than as a malformed runtime Body.
+  for (const b of bodies) assertBodyShape(b);
 
   await mkdir(dirname(OUT_PATH), { recursive: true });
   await writeFile(OUT_PATH, JSON.stringify({ stars, clusters, bodies }));
