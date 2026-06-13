@@ -49,16 +49,24 @@
 //                                 surfaceIceCover         (cold-trap OR polar-cap)
 //   8.  surfaceAge              tect^exp × noise + tidal lift for
 //                               eccentric moons of giants
-//   9.  Pre-atm biotic          bioticCarbonAqueous (drives biotic O₂
-//                               lift in step 10). Runs pre-atm because the
-//                               atm step reads it; the other archetypes
-//                               (including subsurface_aqueous) settle post-
-//                               atm once resources + final T are ready.
-//   10. atm1..atm3 + fractions  Regime dispatch on (radius, T, P, bulkWater)
+//   9.  atm1..atm3 + fractions  Regime dispatch on (radius, T, P, bulkWater)
 //                               into primary / cold_outgassed /
 //                               thick_outgassed / wet_outgassed /
-//                               dry_outgassed. Top-3 species with Jeans-
-//                               escape filter + continuous biotic O₂ lift.
+//                               dry_outgassed. Top-3 by weight after a Jeans-
+//                               escape filter. Dispatched abiotically before
+//                               Pass B (its greenhouse-active gases feed the
+//                               composition greenhouse), then re-dispatched
+//                               with the biotic O₂ lift after step 10 — only
+//                               when life arose. O₂ is IR-transparent, so the
+//                               lift never perturbs the Pass-B temperature, so
+//                               no fixpoint iteration is needed.
+//   10. Carbon-aqueous biotic   bioticCarbonAqueous — evaluated against the
+//                               final (Pass-B) surface state, so a world that
+//                               freezes once its (possibly transparent) atm is
+//                               accounted for carries no aqueous biosphere.
+//                               Drives the step-9 biotic O₂ lift; the other
+//                               archetypes (incl. subsurface_aqueous) settle
+//                               post-atm once resources + final T are ready.
 //   11. cloud + haze            cloudDecksFor walks CONDENSABLES (per-
 //                               species condensation gates); hazeFor
 //                               walks aerosol species + dust gate.
@@ -2165,24 +2173,30 @@ function fillBody(b, allBodies, stars) {
   }
   working = { ...working, surfaceAge };
 
-  // Pre-atm biotic productivity — carbon_aqueous only. Runs before atm
-  // so the atm step can read productivity[carbon_aqueous] for biotic O2
-  // lift (clean acyclic dependency: bio productivity → atm composition).
-  // subsurface_aqueous runs post-atm (needs resRadioactives + final T).
-  if (unknowns.has('bioticCarbonAqueous')) {
-    const p = productivityPreAtm(working, hostStar);
-    bioticCarbonAqueous = p.bioticCarbonAqueous;
-  }
-  working = { ...working, bioticCarbonAqueous };
-
-  // Atmosphere — regime-keyed top-3 gas dispatch with biosphere O2 lift.
-  if (unknowns.has('atm1') || unknowns.has('atm2') || unknowns.has('atm3')) {
+  // Atmosphere dispatch — regime-keyed top-3 gas selection, honoring the
+  // CSV-authored guards. Runs twice around Pass B: first abiotically (the
+  // biotic O2 lift reads bioticCarbonAqueous, still null here) to feed the
+  // composition greenhouse, then again with the lift once carbon-aqueous
+  // productivity has settled against the final temperature. Factored out so
+  // the unknowns-guarded five-field commit lives in one place.
+  const dispatchAtmosphere = () => {
+    if (!(unknowns.has('atm1') || unknowns.has('atm2') || unknowns.has('atm3'))) return;
     const [a1, a2, a3] = atmosphereFor(working, S);
     if (unknowns.has('atm1')) { atm1 = a1?.gas ?? null; atm1Frac = a1?.frac ?? null; }
     if (unknowns.has('atm2')) { atm2 = a2?.gas ?? null; atm2Frac = a2?.frac ?? null; }
     if (unknowns.has('atm3')) { atm3 = a3?.gas ?? null; atm3Frac = a3?.frac ?? null; }
-  }
-  working = { ...working, atm1, atm1Frac, atm2, atm2Frac, atm3, atm3Frac };
+    working = { ...working, atm1, atm1Frac, atm2, atm2Frac, atm3, atm3Frac };
+  };
+
+  // Abiotic atmosphere first. The greenhouse-active gases (CO2/CH4/H2O/…)
+  // are what Pass B's composition greenhouse reads; the biotic O2 lift adds
+  // only a transparent gas, so the abiotic composition is the correct
+  // greenhouse input. Settling temperature here — before carbon-aqueous
+  // productivity — is what lets that productivity see the final temperature
+  // rather than the Pass-A pressure proxy, which over-warms a transparent
+  // N2/O2 column by >100 K and previously lit up aqueous life + O2 on a
+  // world Pass B then froze solid.
+  dispatchAtmosphere();
 
   // ─── Pass B: composition-aware greenhouse refinement ───
   // Pass A used the pressure-proxy greenhouse to settle T/water/ice.
@@ -2197,6 +2211,25 @@ function fillBody(b, allBodies, stars) {
     if (Math.abs(greenhouseB - greenhouseA) > 1) {
       applyTempPass(greenhouseB);
     }
+  }
+
+  // Carbon-aqueous productivity — evaluated against the final (Pass-B)
+  // surface state, so a world that freezes once its atmosphere is correctly
+  // accounted for carries no aqueous biosphere. Its biotic O2 drives the
+  // atmospheric lift; the other archetypes settle post-atm (need
+  // resRadioactives + final T).
+  if (unknowns.has('bioticCarbonAqueous')) {
+    const p = productivityPreAtm(working, hostStar);
+    bioticCarbonAqueous = p.bioticCarbonAqueous;
+  }
+  working = { ...working, bioticCarbonAqueous };
+
+  // Re-dispatch with the biotic O2 lift only when life actually lifts O2 —
+  // sterile worlds keep their abiotic composition (and skip redundant work).
+  // O2 is IR-transparent, so the lift can't perturb the Pass-B temperature;
+  // no further temperature pass is needed.
+  if ((bioticCarbonAqueous ?? 0) > 0) {
+    dispatchAtmosphere();
   }
 
   // Cloud layers — up to MAX_CLOUD_LAYERS stratified decks. Per-species
