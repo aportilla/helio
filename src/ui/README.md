@@ -19,7 +19,7 @@ map-hud/
 system-hud/
   index.ts              SystemHud: floating back button (top-left) + system name (top-right) + bottom facilities bar; routes the body-selection callbacks
   body-info-card.ts     BodyInfoCard: transient on-hover tooltip panel (class / temp / pressure / life / gases / resources per body kind)
-  facilities-panel.ts   FacilitiesPanel: full-width bottom bar — selected body's facilities list + an Add button per buildable type (colony, mining base)
+  facilities-panel.ts   FacilitiesPanel: full-width bottom bar — selected body's facilities list + an Add button per type the body can still host (from SelectedBodyInfo.addableTypes; registry-derived in src/facilities)
   body-label.ts         Generative biome name for the BodyInfoCard subtitle — `[lead] [terrain]` composed from per-family word pools (surface worlds wear a landscape, gaseous worlds a skyscape), family chosen by a precedence cascade over body-traits predicates + raw fields; a notable condition replaces the family's signature lead (never stacks), always 2–3 words, no single body type
 ```
 

@@ -13,7 +13,8 @@
 
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
 import type { BodyKind } from '../../data/stars';
-import type { Facility, FacilityType } from '../../game-state';
+import { facilityLabel, type FacilityType } from '../../facilities';
+import type { Facility } from '../../game-state';
 import { BasePanel } from '../base-panel';
 import { PILL_PAD_X, PILL_PAD_Y, paintPillButton, paintSurface } from '../painter';
 import { colors, fonts, sizes } from '../theme';
@@ -25,6 +26,9 @@ export interface SelectedBodyInfo {
   readonly name: string;
   readonly kind: BodyKind;
   readonly facilities: readonly Facility[];
+  // Types this body can still host (registry-derived: physics predicate AND
+  // build cap), in Add-button order. SystemScene computes it — it owns the Body.
+  readonly addableTypes: readonly FacilityType[];
 }
 
 // What a point on the panel resolves to. 'background' = a solid-but-inert part
@@ -42,15 +46,9 @@ const ADD_BUTTON_GAP = 6;
 const KIND_LABEL: Record<BodyKind, string> = {
   planet: 'planet', moon: 'moon', belt: 'belt', ring: 'ring',
 };
-const FACILITY_LABEL: Record<FacilityType, string> = {
-  colony: 'Colony',
-  'mining-base': 'Mining base',
-};
-// Facility types offered as Add buttons, in display order. The button reads
-// "Add <type>" (derived from FACILITY_LABEL, the single source of the name);
-// a placed facility's row reuses FACILITY_LABEL directly.
-const ADD_ORDER: readonly FacilityType[] = ['colony', 'mining-base'];
-const addLabel = (t: FacilityType): string => `Add ${FACILITY_LABEL[t].toLowerCase()}`;
+// The button reads "Add <label>" using facilityLabel — the registry's single
+// source of the name; a placed facility's row reuses facilityLabel directly.
+const addLabel = (t: FacilityType): string => `Add ${facilityLabel(t).toLowerCase()}`;
 
 interface Rect { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
 interface AddButton { readonly type: FacilityType; readonly label: string; readonly rect: Rect }
@@ -161,17 +159,22 @@ export class FacilitiesPanel extends BasePanel {
       cy += rowH + ROW_GAP;
     }
 
-    cy += sizes.cardActionGap;
-    const addH = getFont(fonts.body).lineHeight + PILL_PAD_Y * 2;
+    // One "Add <label>" pill per type the body can still host. A fully-built
+    // body (everything at cap) shows none — just its rows.
     const addButtons: AddButton[] = [];
-    let ax = sizes.padX;
-    for (const type of ADD_ORDER) {
-      const label = addLabel(type);
-      const w = measurePixelText(label) + PILL_PAD_X * 2;
-      addButtons.push({ type, label, rect: { x: ax, y: cy, w, h: addH } });
-      ax += w + ADD_BUTTON_GAP;
+    if (info.addableTypes.length > 0) {
+      cy += sizes.cardActionGap;
+      const addH = getFont(fonts.body).lineHeight + PILL_PAD_Y * 2;
+      let ax = sizes.padX;
+      for (const type of info.addableTypes) {
+        const label = addLabel(type);
+        const w = measurePixelText(label) + PILL_PAD_X * 2;
+        addButtons.push({ type, label, rect: { x: ax, y: cy, w, h: addH } });
+        ax += w + ADD_BUTTON_GAP;
+      }
+      cy += addH;
     }
-    cy += addH + sizes.padY;
+    cy += sizes.padY;
 
     return { h: cy, addButtons, removeRects };
   }
@@ -199,7 +202,7 @@ export class FacilitiesPanel extends BasePanel {
       paintRemoveX(g, gx, gy, removeHover ? colors.glyphHover : colors.glyphOff);
       const labelX = sizes.padX + sizes.closeBox + REMOVE_LABEL_GAP;
       const labelY = cy + Math.floor((rowH - bodyLineH) / 2);
-      drawPixelText(g, FACILITY_LABEL[f.type], labelX, labelY, colors.textBody);
+      drawPixelText(g, facilityLabel(f.type), labelX, labelY, colors.textBody);
       cy += rowH + ROW_GAP;
     }
 

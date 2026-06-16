@@ -8,7 +8,8 @@
 //   2. build:catalog — does the data pipeline parse + procgen + emit
 //      without throwing? `--strict` also fails on any dropped star row.
 //   3. tsc --noEmit  — does the runtime still type-check?
-//   4. audit-procgen — do the observed distributions match the priors,
+//   4. check-sim-boundary — is the standalone-sim import wall intact?
+//   5. audit-procgen — do the observed distributions match the priors,
 //      or did a tweak land outside its expected envelope?
 //
 // Each step streams its stdout/stderr live. On the first non-zero exit
@@ -22,12 +23,13 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const steps = [
-  { label: '[1/4] lint-star-csv', cmd: 'node',      args: ['scripts/lint-star-csv.mjs'] },
-  { label: '[2/4] build:catalog', cmd: 'node',      args: ['scripts/build-catalog.mjs', '--strict'] },
+  { label: '[1/5] lint-star-csv',     cmd: 'node', args: ['scripts/lint-star-csv.mjs'] },
+  { label: '[2/5] build:catalog',     cmd: 'node', args: ['scripts/build-catalog.mjs', '--strict'] },
   // Direct tsc to skip the pretypecheck hook (which would rebuild the
   // catalog a second time).
-  { label: '[3/4] tsc --noEmit',  cmd: 'npx',       args: ['tsc', '--noEmit'] },
-  { label: '[4/4] audit-procgen', cmd: 'node',      args: ['scripts/audit-procgen.mjs'] },
+  { label: '[3/5] tsc --noEmit',      cmd: 'npx',  args: ['tsc', '--noEmit'] },
+  { label: '[4/5] check-sim-boundary', cmd: 'node', args: ['scripts/check-sim-boundary.mjs'] },
+  { label: '[5/5] audit-procgen',     cmd: 'node', args: ['scripts/audit-procgen.mjs'] },
 ];
 
 for (const step of steps) {

@@ -28,7 +28,7 @@ npm run build:catalog  # regenerate src/data/catalog.generated.json from src/dat
 
 `build:catalog` is auto-run by `predev` / `prebuild` / `pretypecheck` hooks, so you only invoke it directly when iterating on a CSV mid-session and want to refresh the runtime without restarting the dev server.
 
-The standalone economy sim has its own scripts — `npm run test:sim` and `npm run typecheck:sim` — see [sim/README.md](sim/README.md).
+The standalone economy sim has its own scripts — `npm run test:sim` and `npm run typecheck:sim` — see [sim/README.md](sim/README.md). The facility registry + sim-projection seam adds `npm run test:facilities` and `npm run check:boundaries` (the latter guards the standalone-sim import wall and is also part of `npm run check`) — see [src/facilities/README.md](src/facilities/README.md). `npm test` runs both test suites.
 
 ## The big picture
 
@@ -60,6 +60,7 @@ One deep doc per subsystem. Start in the root for orientation, then open the doc
 | `src/scene/` | Three.js galaxy + system scenes, rendering, shaders, camera, input, selection | [src/scene/README.md](src/scene/README.md) |
 | `src/ui/` | Pixel-art widget toolkit (`Widget`/`BasePanel`/painter/theme) + per-screen HUDs | [src/ui/README.md](src/ui/README.md) |
 | `src/data/` | Runtime catalog API + types, cluster/naming model, bundled bitmap fonts | [src/data/README.md](src/data/README.md) |
+| `src/facilities/` | Facility registry (one object per type) + the dormant economy-sim projection seam | [src/facilities/README.md](src/facilities/README.md) |
 | `scripts/` | Star-data tooling + the catalog/procgen **build pipeline** that emits the JSON | [scripts/README.md](scripts/README.md) |
 | `sim/` | Standalone deterministic economy/logistics sim | [sim/README.md](sim/README.md) |
 | `docs/` | Game-systems status, save-state model, roadmap | [docs/game-systems.md](docs/game-systems.md) |

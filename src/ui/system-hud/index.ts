@@ -19,7 +19,7 @@ import {
 } from 'three';
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
 import { clusterDisplayName } from '../../data/stars';
-import type { FacilityType } from '../../game-state';
+import type { FacilityType } from '../../facilities';
 import type { DiagramPick } from '../../scene/system-diagram';
 import { BasePanel } from '../base-panel';
 import { type HitResult } from '../hit-test';

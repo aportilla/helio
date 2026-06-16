@@ -19,12 +19,11 @@
 // here — the GameState shape and the API below stay put.
 
 import { indexOfBodyId } from './data/stars';
+import { FACILITY_BY_TYPE, FACILITY_TYPES, type FacilityType } from './facilities';
 
-// The facility types the player can build. Both are placement markers today;
-// they gain economic behavior when the sim is wired in (a colony projects to a
-// consumer node, a mining base to a producer node — that mapping lives at the
-// future facility → PlanetSpec seam, not here).
-export type FacilityType = 'colony' | 'mining-base';
+// FacilityType + its validation set now live in the facilities registry (the
+// single source of truth for everything about a facility). game-state owns only
+// the SAVE shape — what persists in 'helio.game'.
 
 export interface Facility {
   // Unique within this save (allocated from GameState.seq).
@@ -44,7 +43,6 @@ export interface GameState {
 
 const STORAGE_KEY = 'helio.game';
 const DEFAULTS: GameState = { version: 1, seq: 0, facilities: [] };
-const FACILITY_TYPES: ReadonlySet<string> = new Set<FacilityType>(['colony', 'mining-base']);
 
 function isValidFacility(f: unknown): f is Facility {
   if (!f || typeof f !== 'object') return false;
@@ -94,7 +92,14 @@ export function facilitiesOnBody(bodyId: string): readonly Facility[] {
   return current.facilities.filter(f => f.bodyId === bodyId);
 }
 
-export function addFacility(bodyId: string, type: FacilityType): Facility {
+// Place a facility, or return null if the body is already at the per-(body, type)
+// build cap (FacilityDef.maxPerBody). The UI hides the Add button at cap; this is
+// the defensive backstop so no path can exceed it (plan §10).
+export function addFacility(bodyId: string, type: FacilityType): Facility | null {
+  const cap = FACILITY_BY_TYPE.get(type)?.maxPerBody ?? 1;
+  const placed = current.facilities.filter((f) => f.bodyId === bodyId && f.type === type).length;
+  if (placed >= cap) return null;
+
   const seq = current.seq + 1;
   const facility: Facility = { id: `f${seq}`, bodyId, type };
   current = { ...current, seq, facilities: [...current.facilities, facility] };

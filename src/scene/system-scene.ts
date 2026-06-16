@@ -7,6 +7,7 @@
 
 import { type WebGLRenderer } from 'three';
 import { BODIES } from '../data/stars';
+import { addableTypesFor } from '../facilities';
 import { addFacility, facilitiesOnBody, removeFacility } from '../game-state';
 import { SystemHud } from '../ui/system-hud';
 import { SystemDiagram, type DiagramPick } from './system-diagram';
@@ -139,11 +140,14 @@ export class SystemScene {
     }
   }
 
-  // Update the persistent selection. Only facility-eligible bodies (planet /
-  // moon / belt) can be selected — a star, a ring, or empty space clears it,
-  // so the facilities bar only ever shows for a buildable body.
+  // Update the persistent selection. Only bodies that can host at least one
+  // facility can be selected — a star, a ring, or empty space clears it, so the
+  // facilities bar only ever shows for a buildable body. Eligibility is the
+  // registry's call (addableTypesFor), not an inline kind check, so it stays in
+  // lockstep with the defs as types are added or their predicates diverge.
   private select(pick: DiagramPick | null): void {
-    const eligible = !!pick && pick.kind !== 'star' && pick.kind !== 'ring';
+    const body = pick && pick.kind !== 'star' ? BODIES[pick.bodyIdx] : undefined;
+    const eligible = !!body && addableTypesFor(body, []).length > 0;
     const next = eligible ? pick : null;
     if (picksEqual(next, this.selectedPick)) return;
     this.selectedPick = next;
@@ -161,11 +165,13 @@ export class SystemScene {
       return;
     }
     const body = BODIES[pick.bodyIdx]!;
+    const facilities = facilitiesOnBody(body.id);
     this.hud.setSelectedBody({
       bodyId: body.id,
       name: body.name,
       kind: body.kind,
-      facilities: facilitiesOnBody(body.id),
+      facilities,
+      addableTypes: addableTypesFor(body, facilities),
     });
   }
 
