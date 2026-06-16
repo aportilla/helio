@@ -76,7 +76,7 @@ import { MAX_LIGHTS, BAYER4_GLSL, HASH_GLSL, RIM_GLOW_FOCUS, STAR_CRESCENT_LIGHT
 //      fraction (vWeights.w) so a clear-air limb (Earth) shifts blue
 //      while an absorption/aerosol-dominated one (Venus) barely moves.
 //
-// Pixel-crisp constraints (see README §Pixel-perfect rendering):
+// Pixel-crisp constraints (see src/scene/README.md §Pixel-perfect rendering):
 //   - The disc still does parity-aware center snap so `gl_FragCoord -
 //     vCenter` lands at symmetric pixel offsets.
 //   - Cell boundaries are computed from integer pixel offsets, so each
@@ -168,7 +168,7 @@ export const BODY_TEXTURE_WIDTH =
 // outward halo into two passes so the diagram can render all planet
 // halos AFTER front rings/moons — the halo otherwise blends against
 // background (and depth-rejects the front-ring) when a right neighbor's
-// halo extends over a left neighbor's front-ring/moon. See README's
+// halo extends over a left neighbor's front-ring/moon. See src/scene/README.md's
 // "Per-row-item depth" section + RENDER_ORDER_PLANET_HALO.
 export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc' | 'halo' = 'all'): ShaderMaterial {
   const defines: Record<string, string> = {};
