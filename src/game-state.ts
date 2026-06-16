@@ -1,0 +1,107 @@
+// Persisted game state — the first real save in Helio (distinct from
+// src/settings.ts, which holds user *preferences*). Same hardening as
+// settings: a single namespaced localStorage key, a versioned JSON blob,
+// validate-and-merge-over-defaults reads so adding fields later can't
+// invalidate an old save, and writes that swallow localStorage failures
+// (private browsing, quota) so the session still works, it just won't
+// persist.
+//
+// The save stores player *intent* — "a colony sits on this body" — keyed by
+// the stable catalog Body.id (§2 of the first-light plan). It deliberately
+// stores no economic behavior: what a colony produces/consumes is the sim's
+// concern, derived later by projecting facilities into the node-contributor
+// seam (the standalone sim under sim/), never baked into this blob. So adding
+// the economy won't reshape this file.
+//
+// MULTI-SLOT SEAM: STORAGE_KEY is the single point where the active save's
+// storage location is resolved. Multiple save slots (with a new-game /
+// load-game splash) become "make the key slot-scoped + add a slot index"
+// here — the GameState shape and the API below stay put.
+
+import { indexOfBodyId } from './data/stars';
+
+// The only facility type in v1. A colony is a placement marker today; it
+// gains economic behavior when the sim is wired in.
+export type FacilityType = 'colony';
+
+export interface Facility {
+  // Unique within this save (allocated from GameState.seq).
+  readonly id: string;
+  // The catalog Body.id this facility sits on — stable, serializable.
+  readonly bodyId: string;
+  readonly type: FacilityType;
+}
+
+export interface GameState {
+  version: 1;
+  // Monotonic counter backing Facility.id allocation — stable across reloads,
+  // trivially unique, no Math.random/Date (this isn't the deterministic sim).
+  seq: number;
+  facilities: readonly Facility[];
+}
+
+const STORAGE_KEY = 'helio.game';
+const DEFAULTS: GameState = { version: 1, seq: 0, facilities: [] };
+const FACILITY_TYPES: ReadonlySet<string> = new Set<FacilityType>(['colony']);
+
+function isValidFacility(f: unknown): f is Facility {
+  if (!f || typeof f !== 'object') return false;
+  const o = f as Record<string, unknown>;
+  return typeof o.id === 'string'
+    && typeof o.bodyId === 'string'
+    && typeof o.type === 'string' && FACILITY_TYPES.has(o.type);
+}
+
+function readFromStorage(): GameState {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { ...DEFAULTS };
+    const parsed = JSON.parse(raw) as Partial<GameState>;
+    const rawFacilities = Array.isArray(parsed.facilities) ? parsed.facilities : [];
+    // Skip-on-missing: drop any facility that's malformed or whose body the
+    // rebuilt catalog no longer contains (a PROCGEN_VERSION bump / CSV id
+    // change). Never fatal — a placeholder colony is not worth crashing a load.
+    const facilities = rawFacilities.filter(isValidFacility).filter(f => indexOfBodyId(f.bodyId) >= 0);
+    const dropped = rawFacilities.length - facilities.length;
+    if (import.meta.env.DEV && dropped > 0) {
+      console.warn(`[game-state] dropped ${dropped} facilit${dropped === 1 ? 'y' : 'ies'} with an unknown/invalid body id`);
+    }
+    const seq = typeof parsed.seq === 'number' && parsed.seq >= 0 ? Math.floor(parsed.seq) : 0;
+    return { version: 1, seq, facilities };
+  } catch {
+    return { ...DEFAULTS };
+  }
+}
+
+function writeToStorage(s: GameState): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+  } catch {
+    // localStorage disabled or full — state still applies this session, it
+    // just won't persist. No recovery; swallow (mirrors settings.ts).
+  }
+}
+
+let current: GameState = readFromStorage();
+
+export function getGameState(): Readonly<GameState> {
+  return current;
+}
+
+export function facilitiesOnBody(bodyId: string): readonly Facility[] {
+  return current.facilities.filter(f => f.bodyId === bodyId);
+}
+
+export function addFacility(bodyId: string, type: FacilityType): Facility {
+  const seq = current.seq + 1;
+  const facility: Facility = { id: `f${seq}`, bodyId, type };
+  current = { ...current, seq, facilities: [...current.facilities, facility] };
+  writeToStorage(current);
+  return facility;
+}
+
+export function removeFacility(id: string): void {
+  if (!current.facilities.some(f => f.id === id)) return;
+  current = { ...current, facilities: current.facilities.filter(f => f.id !== id) };
+  writeToStorage(current);
+}

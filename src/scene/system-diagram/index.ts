@@ -38,10 +38,12 @@ export class SystemDiagram {
   private readonly moons:   MoonsLayer;
   private readonly rings:   RingsLayer;
 
-  // Currently-outlined body. setHovered() diffs against this to skip
-  // no-op repaints (cursor moving within the same disc) and to clear the
-  // previous outline before stamping the new one.
+  // Two independent outline channels that share one visual (the 1-px rim):
+  // the transient hover follows the cursor, the persistent selection is set by
+  // a click and survives pointer movement. A body is lit when it is hovered OR
+  // selected, so moving the cursor off the selected body never clears its rim.
   private hoveredPick: DiagramPick | null = null;
+  private selectedPick: DiagramPick | null = null;
 
   constructor(clusterIdx: number) {
     const cluster = STAR_CLUSTERS[clusterIdx]!;
@@ -84,6 +86,10 @@ export class SystemDiagram {
     const centers = this.planets.getCenterIndex();
     this.moons.layout(centers);
     this.rings.layout(centers);
+
+    // Layout rebuilds the per-body outline attributes, so re-stamp the
+    // persistent selection (hover re-applies itself on the next pointer move).
+    if (this.selectedPick) this.writeOutline(this.selectedPick, 1);
   }
 
   // Hit-test the rendered discs at (x, y) in buffer-pixel coords and
@@ -120,22 +126,34 @@ export class SystemDiagram {
     return best?.pick ?? null;
   }
 
-  // Stamp the 1-px outline onto the picked disc, clearing the previous
+  // Stamp the 1-px outline onto the hovered disc, clearing the previous
   // one if any. No-op when the pick is unchanged so continuous pointer
-  // movement within the same disc doesn't churn the GPU upload.
+  // movement within the same disc doesn't churn the GPU upload. The previous
+  // body is only cleared if it isn't also the selected one.
   setHovered(pick: DiagramPick | null): void {
     if (picksEqual(pick, this.hoveredPick)) return;
-    this.writeHover(this.hoveredPick, 0);
-    this.writeHover(pick, 1);
+    const prev = this.hoveredPick;
     this.hoveredPick = pick;
+    if (prev && !picksEqual(prev, this.selectedPick)) this.writeOutline(prev, 0);
+    if (pick) this.writeOutline(pick, 1);
+  }
+
+  // Stamp the persistent selection outline. Same rim as hover; the previous
+  // selection is only cleared if the cursor isn't still hovering it.
+  setSelected(pick: DiagramPick | null): void {
+    if (picksEqual(pick, this.selectedPick)) return;
+    const prev = this.selectedPick;
+    this.selectedPick = pick;
+    if (prev && !picksEqual(prev, this.hoveredPick)) this.writeOutline(prev, 0);
+    if (pick) this.writeOutline(pick, 1);
   }
 
   // Dispatch to the layer that owns the picked kind. Each layer's
-  // setHovered writes its own hover convention (per-vertex aHazeColor.w
+  // setHovered writes its own outline convention (per-vertex aHazeColor.w
   // on planets/moons, per-vertex aHovered on belts, a uHovered uniform
   // on stars/rings). The `satisfies never` default makes a newly-added
   // DiagramPick.kind fail to compile here until it's wired.
-  private writeHover(pick: DiagramPick | null, value: 0 | 1): void {
+  private writeOutline(pick: DiagramPick | null, value: 0 | 1): void {
     if (!pick) return;
     switch (pick.kind) {
       case 'star':   this.stars.setHovered(pick, value); return;

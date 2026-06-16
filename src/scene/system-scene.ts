@@ -6,6 +6,8 @@
 // a static screen diagram, not a navigable space. SystemHud sits on top.
 
 import { type WebGLRenderer } from 'three';
+import { BODIES } from '../data/stars';
+import { addFacility, facilitiesOnBody, removeFacility } from '../game-state';
 import { SystemHud } from '../ui/system-hud';
 import { SystemDiagram, type DiagramPick } from './system-diagram';
 import { picksEqual } from './system-diagram/types';
@@ -36,6 +38,13 @@ export class SystemScene {
   // clears it. Null on mouse, where the card is purely hover-driven.
   private pinnedPick: DiagramPick | null = null;
 
+  // The body the player has selected for facility construction. Distinct from
+  // hover (which follows the cursor) and from pinnedPick (the touch tooltip):
+  // it persists across pointer moves and drives the bottom facilities bar.
+  // Ephemeral by design — a fresh SystemScene starts with nothing selected;
+  // the facilities themselves persist in the game-state store, not here.
+  private selectedPick: DiagramPick | null = null;
+
   // Fired when the user requests to exit the system view (ESC or back
   // button click).
   onExit: () => void = () => {};
@@ -47,6 +56,14 @@ export class SystemScene {
     this.diagram = new SystemDiagram(clusterIdx);
     this.hud = new SystemHud(clusterIdx);
     this.hud.onBack = () => this.onExit();
+    this.hud.onAddFacility = (bodyId) => {
+      addFacility(bodyId, 'colony');
+      this.pushSelectionToHud();
+    };
+    this.hud.onRemoveFacility = (facilityId) => {
+      removeFacility(facilityId);
+      this.pushSelectionToHud();
+    };
 
     // DPR boundary crossings (zoom, monitor swap) re-trigger resize so the
     // pixel-ratio + buffer dims pick up the new integer N.
@@ -97,22 +114,59 @@ export class SystemScene {
   }
 
   private onPointerDown(e: PointerEvent): void {
-    // Route to the HUD first (the back button). The diagram is static —
-    // no drag/orbit fallback.
+    // Route to the HUD first (back button + facilities bar). The diagram is
+    // static — no drag/orbit fallback — so a pointerdown that misses chrome
+    // is a clean click on the diagram.
     this.viewport.clientToHud(e.clientX, e.clientY, this._hudPt);
     if (this.hud.handleClick(this._hudPt.x, this._hudPt.y)) return;
 
-    // Touch/pen has no hover, so a tap stands in for it: pick under the
-    // tap and pin the body card. A tap on empty space (or chrome) pins
-    // null, which dismisses it; re-tapping the pinned body toggles it
-    // back off. Mouse keeps its hover-driven card and never pins.
+    // A click on the diagram (or empty space): pick under it (null over chrome).
+    const hit = this.pickAt(this._hudPt.x, this._hudPt.y);
+
+    // Persistent facility selection (mouse + touch): select an eligible body,
+    // or clear when the pick isn't one (star / ring / empty space).
+    this.select(hit);
+
+    // Touch/pen has no hover, so a tap also stands in for it: pin the body
+    // card. A tap on empty space (or chrome) pins null, which dismisses it;
+    // re-tapping the pinned body toggles it back off. Mouse keeps its
+    // hover-driven card and never pins.
     if (e.pointerType !== 'mouse') {
-      const hit = this.pickAt(this._hudPt.x, this._hudPt.y);
-      const pick = picksEqual(hit, this.pinnedPick) ? null : hit;
-      this.pinnedPick = pick;
-      this.diagram.setHovered(pick);
-      this.hud.setHoveredBody(pick, this._hudPt.x, this._hudPt.y);
+      const pinned = picksEqual(hit, this.pinnedPick) ? null : hit;
+      this.pinnedPick = pinned;
+      this.diagram.setHovered(pinned);
+      this.hud.setHoveredBody(pinned, this._hudPt.x, this._hudPt.y);
     }
+  }
+
+  // Update the persistent selection. Only facility-eligible bodies (planet /
+  // moon / belt) can be selected — a star, a ring, or empty space clears it,
+  // so the facilities bar only ever shows for a buildable body.
+  private select(pick: DiagramPick | null): void {
+    const eligible = !!pick && pick.kind !== 'star' && pick.kind !== 'ring';
+    const next = eligible ? pick : null;
+    if (picksEqual(next, this.selectedPick)) return;
+    this.selectedPick = next;
+    this.diagram.setSelected(next);
+    this.pushSelectionToHud();
+  }
+
+  // Push the selected body (with its current facilities, read fresh from the
+  // game-state store) into the HUD's facilities bar. Called on every selection
+  // change and after each add/remove so the bar stays in sync.
+  private pushSelectionToHud(): void {
+    const pick = this.selectedPick;
+    if (!pick || pick.kind === 'star') {
+      this.hud.setSelectedBody(null);
+      return;
+    }
+    const body = BODIES[pick.bodyIdx]!;
+    this.hud.setSelectedBody({
+      bodyId: body.id,
+      name: body.name,
+      kind: body.kind,
+      facilities: facilitiesOnBody(body.id),
+    });
   }
 
   private onPointerMove(e: PointerEvent): void {
@@ -146,7 +200,14 @@ export class SystemScene {
   }
 
   private onKeyDown(e: KeyboardEvent): void {
-    if (e.key === 'Escape') this.onExit();
+    if (e.key !== 'Escape') return;
+    // Escape clears a body selection first; a second press (nothing selected)
+    // exits the system view.
+    if (this.selectedPick) {
+      this.select(null);
+      return;
+    }
+    this.onExit();
   }
 
   // -- resize / render --------------------------------------------------

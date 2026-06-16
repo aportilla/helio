@@ -27,6 +27,7 @@ import { colors, fonts, sizes } from '../theme';
 import { paintToTexture } from '../widget';
 import { IconButton, type IconButtonStates } from '../icon-button';
 import { BodyInfoCard } from './body-info-card';
+import { FacilitiesPanel, type SelectedBodyInfo } from './facilities-panel';
 
 // The back button box renders at twice the shared icon-box size; the
 // arrow glyph stays at its native 1× resolution (centered), so the button
@@ -76,6 +77,11 @@ export class SystemHud {
   private readonly backBtn: IconButton;
   private readonly backBtnTextures: IconButtonStates;
   private readonly bodyCard: BodyInfoCard;
+  private readonly facilitiesPanel: FacilitiesPanel;
+
+  // The body the facilities bar is currently showing (null = bar hidden).
+  // Held so a click on the Add button knows which body to build on.
+  private selectedInfo: SelectedBodyInfo | null = null;
 
   // Cursor offset for the body info tooltip. Big enough that the card
   // never sits under the cursor (which would create hover cycles with
@@ -85,6 +91,11 @@ export class SystemHud {
   // Fired when the user clicks the back button. SystemScene wires this
   // to onExit, which AppController routes to exitSystem.
   onBack: () => void = () => {};
+
+  // Fired from the facilities bar. SystemScene routes these to the
+  // game-state store, then re-pushes the updated body via setSelectedBody.
+  onAddFacility: (bodyId: string) => void = () => {};
+  onRemoveFacility: (facilityId: string) => void = () => {};
 
   constructor(clusterIdx: number) {
     const text = clusterDisplayName(clusterIdx);
@@ -109,6 +120,11 @@ export class SystemHud {
     // called with a non-null pick.
     this.bodyCard = new BodyInfoCard(110);
     this.bodyCard.addTo(this.scene);
+
+    // Bottom bar. Renders below the floating chrome and the tooltip (which
+    // can overhang it near the bottom edge), so it takes a lower renderOrder.
+    this.facilitiesPanel = new FacilitiesPanel(98);
+    this.facilitiesPanel.addTo(this.scene);
   }
 
   resize(bufferW: number, bufferH: number): void {
@@ -117,14 +133,34 @@ export class SystemHud {
     this.camera.left = 0; this.camera.right = bufferW;
     this.camera.bottom = 0; this.camera.top = bufferH;
     this.camera.updateProjectionMatrix();
+    // The bar spans the full viewport width; re-render it at the new width
+    // (keeps the current body) before layoutAll re-places it at the bottom.
+    this.facilitiesPanel.setWidth(bufferW);
     this.layoutAll();
   }
 
+  // Show / update / hide the facilities bar for the selected body. Null hides
+  // it. SystemScene calls this on every selection change and after each
+  // add/remove so the row list stays in sync with the game-state store.
+  setSelectedBody(info: SelectedBodyInfo | null): void {
+    this.selectedInfo = info;
+    this.facilitiesPanel.setBody(info);
+    if (this.facilitiesPanel.visible) this.facilitiesPanel.placeAt(0, 0);
+  }
+
   // Returns true if the click was consumed by the HUD. The name label is
-  // display-only; only the back button takes pointer events.
+  // display-only; the back button and the facilities bar take pointer events.
   handleClick(bufX: number, bufY: number): boolean {
     if (this.backBtn.bounds.contains(bufX, bufY)) {
       this.onBack();
+      return true;
+    }
+    if (this.facilitiesPanel.visible && this.facilitiesPanel.bounds.contains(bufX, bufY)) {
+      const hit = this.facilitiesPanel.hitTest(bufX, bufY);
+      if (hit?.kind === 'add' && this.selectedInfo) this.onAddFacility(this.selectedInfo.bodyId);
+      else if (hit?.kind === 'remove') this.onRemoveFacility(hit.facilityId);
+      // Background (or null) is absorbed too — a click on the bar must never
+      // fall through to the scene and deselect the body it's describing.
       return true;
     }
     return false;
@@ -133,11 +169,16 @@ export class SystemHud {
   handlePointerMove(bufX: number, bufY: number): boolean {
     const onBack = this.backBtn.bounds.contains(bufX, bufY);
     this.backBtn.setHover(onBack);
-    return onBack;
+    const onPanel = this.facilitiesPanel.visible && this.facilitiesPanel.handlePointerMove(bufX, bufY);
+    return onBack || onPanel;
   }
 
   hitTest(bufX: number, bufY: number): HitResult {
     if (this.backBtn.bounds.contains(bufX, bufY)) return 'interactive';
+    if (this.facilitiesPanel.visible && this.facilitiesPanel.bounds.contains(bufX, bufY)) {
+      const hit = this.facilitiesPanel.hitTest(bufX, bufY);
+      return hit && hit.kind !== 'background' ? 'interactive' : 'opaque';
+    }
     return 'transparent';
   }
 
@@ -192,6 +233,9 @@ export class SystemHud {
     const nameLeft = this.bufferW - sizes.edgePad - nameW;
     const nameBottom = this.bufferH - sizes.edgePad - nameH;
     this.nameLabel.placeAt(nameLeft, nameBottom);
+
+    // Facilities bar: flush to the bottom edge, full width.
+    if (this.facilitiesPanel.visible) this.facilitiesPanel.placeAt(0, 0);
   }
 
   dispose(): void {
@@ -201,5 +245,6 @@ export class SystemHud {
     this.nameLabel.dispose();
     this.backBtn.dispose();
     this.bodyCard.dispose();
+    this.facilitiesPanel.dispose();
   }
 }

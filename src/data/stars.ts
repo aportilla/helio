@@ -549,6 +549,21 @@ export function clusterIndexFor(starIdx: number): number {
   return STAR_TO_CLUSTER[starIdx]!;
 }
 
+// Stable Body.id → BODIES index. Built once at module load (the catalog is
+// immutable at runtime). Backs the game-state save: a persisted facility keys
+// off Body.id — stable across catalog rebuilds as long as the CSV id and
+// PROCGEN_VERSION are unchanged — and load resolves it back to an index,
+// returning -1 for an id the rebuilt catalog no longer carries (skip-on-missing).
+const BODY_INDEX_BY_ID: ReadonlyMap<string, number> = (() => {
+  const m = new Map<string, number>();
+  BODIES.forEach((b, i) => m.set(b.id, i));
+  return m;
+})();
+
+export function indexOfBodyId(id: string): number {
+  return BODY_INDEX_BY_ID.get(id) ?? -1;
+}
+
 // Display name for a cluster: the primary's name, with a " +N" suffix when the
 // cluster carries N additional members (e.g. "Sirius A +1"). The single source
 // for the label the info-card title and the system-view header both show, so
