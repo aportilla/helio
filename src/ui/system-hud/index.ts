@@ -19,6 +19,7 @@ import {
 } from 'three';
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
 import { clusterDisplayName } from '../../data/stars';
+import type { FacilityType } from '../../game-state';
 import type { DiagramPick } from '../../scene/system-diagram';
 import { BasePanel } from '../base-panel';
 import { type HitResult } from '../hit-test';
@@ -94,7 +95,7 @@ export class SystemHud {
 
   // Fired from the facilities bar. SystemScene routes these to the
   // game-state store, then re-pushes the updated body via setSelectedBody.
-  onAddFacility: (bodyId: string) => void = () => {};
+  onAddFacility: (bodyId: string, type: FacilityType) => void = () => {};
   onRemoveFacility: (facilityId: string) => void = () => {};
 
   constructor(clusterIdx: number) {
@@ -157,7 +158,7 @@ export class SystemHud {
     }
     if (this.facilitiesPanel.visible && this.facilitiesPanel.bounds.contains(bufX, bufY)) {
       const hit = this.facilitiesPanel.hitTest(bufX, bufY);
-      if (hit?.kind === 'add' && this.selectedInfo) this.onAddFacility(this.selectedInfo.bodyId);
+      if (hit?.kind === 'add' && this.selectedInfo) this.onAddFacility(this.selectedInfo.bodyId, hit.facilityType);
       else if (hit?.kind === 'remove') this.onRemoveFacility(hit.facilityId);
       // Background (or null) is absorbed too — a click on the bar must never
       // fall through to the scene and deselect the body it's describing.

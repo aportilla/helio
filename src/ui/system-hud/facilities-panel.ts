@@ -1,12 +1,12 @@
 // FacilitiesPanel — the full-width bar along the bottom of the system view.
-// Shows the currently-selected body's name + its colony list + an "Add colony"
-// button. One instance lives on SystemHud; SystemScene drives it through
-// setSelectedBody (selection changed) and the onAddFacility / onRemoveFacility
-// callbacks (button / remove-✕ clicked), re-pushing fresh state after each
-// mutation.
+// Shows the currently-selected body's name + its placed-facility list + one
+// "Add <type>" button per buildable facility type. One instance lives on
+// SystemHud; SystemScene drives it through setSelectedBody (selection changed)
+// and the onAddFacility / onRemoveFacility callbacks (button / remove-✕
+// clicked), re-pushing fresh state after each mutation.
 //
 // Like BodyInfoCard it's a single BasePanel surface: everything (header, rows,
-// remove glyphs, the Add button) is painted into one canvas, and the
+// remove glyphs, the Add buttons) is painted into one canvas, and the
 // interactive sub-regions are hit-tested by recomputing their rects — no nested
 // child widgets to manage as the facility list grows and shrinks. The panel is
 // hidden (measure → 0×0) whenever nothing is selected.
@@ -30,25 +30,33 @@ export interface SelectedBodyInfo {
 // What a point on the panel resolves to. 'background' = a solid-but-inert part
 // of the bar (absorbs the click so it doesn't fall through to deselect).
 export type PanelHit =
-  | { readonly kind: 'add' }
+  | { readonly kind: 'add'; readonly facilityType: FacilityType }
   | { readonly kind: 'remove'; readonly facilityId: string }
   | { readonly kind: 'background' };
 
-const ADD_LABEL = 'Add colony';
 const ROW_GAP = 2;
 const REMOVE_LABEL_GAP = 6;
+// Horizontal gap between the side-by-side Add buttons.
+const ADD_BUTTON_GAP = 6;
 
 const KIND_LABEL: Record<BodyKind, string> = {
   planet: 'planet', moon: 'moon', belt: 'belt', ring: 'ring',
 };
 const FACILITY_LABEL: Record<FacilityType, string> = {
   colony: 'Colony',
+  'mining-base': 'Mining base',
 };
+// Facility types offered as Add buttons, in display order. The button reads
+// "Add <type>" (derived from FACILITY_LABEL, the single source of the name);
+// a placed facility's row reuses FACILITY_LABEL directly.
+const ADD_ORDER: readonly FacilityType[] = ['colony', 'mining-base'];
+const addLabel = (t: FacilityType): string => `Add ${FACILITY_LABEL[t].toLowerCase()}`;
 
 interface Rect { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
+interface AddButton { readonly type: FacilityType; readonly label: string; readonly rect: Rect }
 interface PanelLayout {
   readonly h: number;
-  readonly addRect: Rect;
+  readonly addButtons: readonly AddButton[];
   readonly removeRects: ReadonlyArray<{ readonly id: string; readonly rect: Rect }>;
 }
 
@@ -68,12 +76,13 @@ function paintRemoveX(g: CanvasRenderingContext2D, x: number, y: number, color: 
   }
 }
 
-type HoverHit = { kind: 'add' } | { kind: 'remove'; facilityId: string } | null;
+type HoverHit = { kind: 'add'; facilityType: FacilityType } | { kind: 'remove'; facilityId: string } | null;
 
 function hoverEqual(a: HoverHit, b: HoverHit): boolean {
   if (a === b) return true;
   if (!a || !b || a.kind !== b.kind) return false;
   if (a.kind === 'remove' && b.kind === 'remove') return a.facilityId === b.facilityId;
+  if (a.kind === 'add' && b.kind === 'add') return a.facilityType === b.facilityType;
   return true;
 }
 
@@ -109,7 +118,9 @@ export class FacilitiesPanel extends BasePanel {
     // Y-down. Flip into canvas space, then test the cached rects.
     const cx = bufX - this.visibleBounds.x;
     const cy = (this.visibleBounds.y + this.height) - bufY;
-    if (inRect(cx, cy, this.layoutCache.addRect)) return { kind: 'add' };
+    for (const b of this.layoutCache.addButtons) {
+      if (inRect(cx, cy, b.rect)) return { kind: 'add', facilityType: b.type };
+    }
     for (const r of this.layoutCache.removeRects) {
       if (inRect(cx, cy, r.rect)) return { kind: 'remove', facilityId: r.id };
     }
@@ -121,7 +132,7 @@ export class FacilitiesPanel extends BasePanel {
   handlePointerMove(bufX: number, bufY: number): boolean {
     const hit = this.hitTest(bufX, bufY);
     const interactive = hit !== null && hit.kind !== 'background';
-    const next: HoverHit = hit && hit.kind === 'add' ? { kind: 'add' }
+    const next: HoverHit = hit && hit.kind === 'add' ? { kind: 'add', facilityType: hit.facilityType }
       : hit && hit.kind === 'remove' ? { kind: 'remove', facilityId: hit.facilityId }
       : null;
     if (!hoverEqual(next, this.hovered)) {
@@ -151,12 +162,18 @@ export class FacilitiesPanel extends BasePanel {
     }
 
     cy += sizes.cardActionGap;
-    const addW = measurePixelText(ADD_LABEL) + PILL_PAD_X * 2;
     const addH = getFont(fonts.body).lineHeight + PILL_PAD_Y * 2;
-    const addRect: Rect = { x: sizes.padX, y: cy, w: addW, h: addH };
+    const addButtons: AddButton[] = [];
+    let ax = sizes.padX;
+    for (const type of ADD_ORDER) {
+      const label = addLabel(type);
+      const w = measurePixelText(label) + PILL_PAD_X * 2;
+      addButtons.push({ type, label, rect: { x: ax, y: cy, w, h: addH } });
+      ax += w + ADD_BUTTON_GAP;
+    }
     cy += addH + sizes.padY;
 
-    return { h: cy, addRect, removeRects };
+    return { h: cy, addButtons, removeRects };
   }
 
   protected paintInto(g: CanvasRenderingContext2D, w: number, h: number): void {
@@ -186,8 +203,11 @@ export class FacilitiesPanel extends BasePanel {
       cy += rowH + ROW_GAP;
     }
 
-    // Add button.
-    const addHover = this.hovered?.kind === 'add';
-    paintPillButton(g, this.layoutCache.addRect.x, this.layoutCache.addRect.y, ADD_LABEL, { hover: addHover });
+    // Add buttons — one pill per buildable facility type, side by side.
+    const hov = this.hovered;
+    for (const b of this.layoutCache.addButtons) {
+      const addHover = hov !== null && hov.kind === 'add' && hov.facilityType === b.type;
+      paintPillButton(g, b.rect.x, b.rect.y, b.label, { hover: addHover });
+    }
   }
 }

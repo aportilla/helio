@@ -8,7 +8,7 @@ Almost everything in this repo so far is the **map + system viewer** — the exp
 
 - **Explorable shell — mature.** The galaxy view (`StarmapScene`) and the close-up system view (`SystemScene`) are built out: ~1500 procgen star systems, 8000+ bodies, full disc / atmosphere rendering, hover inspection. This is content + presentation, not game state.
 - **Economy sim — built, standalone, not wired.** A deterministic single-tier logistics core lives under `sim/` (read [the economy sim doc](../sim/README.md)). It runs and is tested in isolation; nothing in the browser app touches it yet. Design: `plans/4x-economy-plan-discrete-single-tier.md`.
-- **Facility construction — first light (just landed).** The first real *game* mechanic and the first real save: select any planet / moon / belt in the system view and place a generic **colony** on it, listed in a bottom bar, persisted across reloads. A colony is a placement marker today — no economy, no cost, no ownership. Design: `plans/4x-facility-construction-plan-first-light.md`.
+- **Facility construction — first light.** The first real *game* mechanic and the first real save: select any planet / moon / belt in the system view and place a **colony** or a **mining base** on it (side-by-side Add buttons in a bottom bar), persisted across reloads. Both are placement markers today — no economy, no cost, no ownership; the two types exist to seed economy-state experiments (a colony will project to a consumer node, a mining base to a producer). Design: `plans/4x-facility-construction-plan-first-light.md`.
 
 **The save-state layering** (the one bone set carefully) — three kinds of state, three homes, kept apart on purpose:
 
@@ -21,7 +21,7 @@ Facilities are deliberately **not** in the sim's save: the sim has no concept of
 **Reasonable next steps** (rough order, none committed):
 
 - A selection rim visually distinct from the hover rim (today they share one).
-- More facility types beyond `colony`, and a real add flow (type picker) once there's more than one.
+- More facility types beyond `colony` / `mining-base`; the bar lists one Add button per type today, which will want a proper picker once the list grows past a handful.
 - Wire the economy sim: a catalog-star → sim-geometry-index adapter + the `facility → PlanetSpec` projection, then read the sim's per-system surplus/deficit back into the system view.
 - Planet ownership / players, then build costs + build time.
 - Multi-slot saves with a new-game / load-game splash (the `STORAGE_KEY` seam).

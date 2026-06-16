@@ -56,8 +56,8 @@ export class SystemScene {
     this.diagram = new SystemDiagram(clusterIdx);
     this.hud = new SystemHud(clusterIdx);
     this.hud.onBack = () => this.onExit();
-    this.hud.onAddFacility = (bodyId) => {
-      addFacility(bodyId, 'colony');
+    this.hud.onAddFacility = (bodyId, type) => {
+      addFacility(bodyId, type);
       this.pushSelectionToHud();
     };
     this.hud.onRemoveFacility = (facilityId) => {

@@ -20,9 +20,11 @@
 
 import { indexOfBodyId } from './data/stars';
 
-// The only facility type in v1. A colony is a placement marker today; it
-// gains economic behavior when the sim is wired in.
-export type FacilityType = 'colony';
+// The facility types the player can build. Both are placement markers today;
+// they gain economic behavior when the sim is wired in (a colony projects to a
+// consumer node, a mining base to a producer node — that mapping lives at the
+// future facility → PlanetSpec seam, not here).
+export type FacilityType = 'colony' | 'mining-base';
 
 export interface Facility {
   // Unique within this save (allocated from GameState.seq).
@@ -42,7 +44,7 @@ export interface GameState {
 
 const STORAGE_KEY = 'helio.game';
 const DEFAULTS: GameState = { version: 1, seq: 0, facilities: [] };
-const FACILITY_TYPES: ReadonlySet<string> = new Set<FacilityType>(['colony']);
+const FACILITY_TYPES: ReadonlySet<string> = new Set<FacilityType>(['colony', 'mining-base']);
 
 function isValidFacility(f: unknown): f is Facility {
   if (!f || typeof f !== 'object') return false;
