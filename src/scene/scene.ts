@@ -680,8 +680,9 @@ export class StarmapScene {
     // unified index is pushed to brackets, labels (yellow promotion +
     // fade-bypass), and stashed for the spacebar handler.
     const candidate = resolveCandidateCluster(
-      hoveredCluster, nearestClusterIdx, this.selectedClusterIdx,
-      this.view.target, this.focusAnimating,
+      hoveredCluster, nearestClusterIdx,
+      nearestClusterIdx >= 0 ? STAR_CLUSTERS[nearestClusterIdx]!.com : null,
+      this.selectedClusterIdx, this.view.target, this.focusAnimating,
     );
     this.candidateClusterIdx = candidate;
     this.candidateBrackets.setCluster(candidate);

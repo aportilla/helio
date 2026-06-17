@@ -38,6 +38,7 @@ import {
   DROPLINE_COLOR_DOTS,
   DROPLINE_DOT_PERIOD_LY,
   DROPLINE_DEGENERATE_DIST,
+  FOCUS_MARKER_NEAR,
   invRamp,
 } from './cluster-fade';
 
@@ -50,15 +51,14 @@ const RING_RADIUS_LY = 0.4;
 const RING_SEGMENTS = 32;
 
 // Distance ramp keyed to |view.target − anchor COM| (selected cluster, or
-// nearest cluster when nothing is selected). Below NEAR the marker is
-// hidden outright; above FAR it sits at full base opacity. Linear in
-// between — pure function of the current pan offset, no animation state,
+// nearest cluster when nothing is selected). Below FOCUS_MARKER_NEAR the
+// marker is hidden outright; above FAR it sits at full base opacity. Linear
+// in between — pure function of the current pan offset, no animation state,
 // so the marker tracks view.target frame-by-frame without lag.
 //
-// NEAR is exported so the candidate-brackets gate uses the same threshold:
-// "pivot is sitting on a star" reads identically for both the focus marker
-// and the candidate-target indicator.
-export const FOCUS_MARKER_NEAR = 0.5;
+// FOCUS_MARKER_NEAR lives in cluster-fade (shared with the candidate-bracket
+// gate in selection-policy.ts) so "pivot is sitting on a star" reads
+// identically for both the focus marker and the candidate-target indicator.
 const FOCUS_MARKER_FAR  = 1.5;
 
 // Pre-allocated capacity. Most pans stay near the selection plane, but

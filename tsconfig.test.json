@@ -1,0 +1,14 @@
+{
+  // Type-checks the test sources, which the root tsconfig excludes (so the app
+  // build stays test-free). Runtime runs them via `node --test` type-stripping;
+  // this is the type-check half. Wired into `npm run check` and `typecheck:test`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  // src/vite-env.d.ts carries the `vite/client` reference so `import.meta.env`
+  // stays typed in source the tests transitively import (stars.ts, registry.ts).
+  "include": ["src/**/test", "src/vite-env.d.ts"],
+  "exclude": ["node_modules", "dist"]
+}

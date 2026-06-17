@@ -5,9 +5,7 @@
 // check, and the orbit-keyed star-dim ramp. No Three.js coupling — they take
 // plain {x,y,z} so a test (or any caller) can pass a literal.
 
-import { STAR_CLUSTERS } from '../data/stars';
-import { FOCUS_MARKER_NEAR } from './focus-marker';
-import { STAR_DIM_FULL_BELOW, STAR_DIM_OFF_ABOVE, clampRamp } from './cluster-fade';
+import { STAR_DIM_FULL_BELOW, STAR_DIM_OFF_ABOVE, FOCUS_MARKER_NEAR, clampRamp } from './cluster-fade.ts';
 
 interface Vec3Like {
   readonly x: number;
@@ -38,9 +36,12 @@ export const FOCUS_EPSILON_SQ = 0.01 * 0.01;
 // brackets don't appear on the cluster the pivot is sitting on (initial-load
 // Sol case, or panning back onto a star). Same threshold as the focus marker
 // so the two indicators turn on/off together.
+// The caller passes the nearest cluster's COM (a plain {x,y,z}) rather than this
+// module reaching into the catalog, so the rule stays pure and node-testable.
 export function resolveCandidateCluster(
   hoveredCluster: number,
   nearestClusterIdx: number,
+  nearestClusterCom: Vec3Like | null,
   selectedClusterIdx: number,
   target: Vec3Like,
   focusAnimating: boolean,
@@ -48,11 +49,10 @@ export function resolveCandidateCluster(
   if (hoveredCluster >= 0 && hoveredCluster !== selectedClusterIdx) {
     return hoveredCluster;
   }
-  if (!focusAnimating && nearestClusterIdx >= 0 && nearestClusterIdx !== selectedClusterIdx) {
-    const com = STAR_CLUSTERS[nearestClusterIdx]!.com;
-    const dx = target.x - com.x;
-    const dy = target.y - com.y;
-    const dz = target.z - com.z;
+  if (!focusAnimating && nearestClusterCom && nearestClusterIdx >= 0 && nearestClusterIdx !== selectedClusterIdx) {
+    const dx = target.x - nearestClusterCom.x;
+    const dy = target.y - nearestClusterCom.y;
+    const dz = target.z - nearestClusterCom.z;
     if (dx * dx + dy * dy + dz * dz >= FOCUS_MARKER_NEAR * FOCUS_MARKER_NEAR) {
       return nearestClusterIdx;
     }

@@ -83,6 +83,13 @@ export const DROPLINE_DOT_PERIOD_LY = 0.25;
 // plane (dz = 0) is the canonical case.
 export const DROPLINE_DEGENERATE_DIST = 0.01;
 
+// Focus-proximity threshold (ly): below this, view.target counts as "sitting
+// on" the anchor cluster. Shared so the focus marker (focus-marker.ts) and the
+// candidate-bracket gate (selection-policy.ts) turn on/off together as the user
+// pans off a star. focus-marker.ts pairs it with its own FAR bound for the
+// marker's fade-in ramp.
+export const FOCUS_MARKER_NEAR = 0.5;
+
 // Range-ring chrome (Grid: rings + axes + galactic-centre arrow) gets its
 // own zoom-fade ramp keyed to camera-to-selection-COM distance. Decoupled
 // from CAMERA_FADE_* so the rings can reach full opacity slightly sooner
@@ -92,7 +99,7 @@ export const GRID_FADE_NEAR = 40;
 export const GRID_FADE_FAR  = 60;
 
 // Stars-only: when to enable / disable the per-star pivot-dim local-focus
-// effect (see stars shader in materials.ts). Keyed to ORBIT DISTANCE
+// effect (see stars shader in materials/galaxy.ts). Keyed to ORBIT DISTANCE
 // (view.distance = camera ↔ pivot), not per-star camera distance, because
 // the user-facing intent is "zoomed in = focus dimming, zoomed out =
 // everything bright." A per-star camera ramp would never re-brighten on

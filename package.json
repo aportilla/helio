@@ -15,7 +15,10 @@
     "test:sim": "node --test 'sim/test/**/*.test.ts'",
     "typecheck:sim": "tsc -p sim/tsconfig.json",
     "test:facilities": "node --test 'src/facilities/test/**/*.test.ts'",
-    "test": "npm run test:sim && npm run test:facilities",
+    "test:data": "node --test 'src/data/test/**/*.test.ts'",
+    "test:scene": "node --test 'src/scene/test/**/*.test.ts'",
+    "test": "npm run test:sim && npm run test:facilities && npm run test:data && npm run test:scene",
+    "typecheck:test": "tsc -p tsconfig.test.json",
     "check:boundaries": "node scripts/check-sim-boundary.mjs",
     "check": "node scripts/check.mjs",
     "audit:procgen": "node scripts/audit-procgen.mjs",
@@ -36,5 +39,8 @@
     "puppeteer": "25.1.0",
     "typescript": "6.0.3",
     "vite": "8.0.10"
+  },
+  "engines": {
+    "node": ">=23.6.0"
   }
 }
