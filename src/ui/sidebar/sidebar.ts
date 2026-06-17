@@ -17,11 +17,7 @@ import { type HitResult } from '../hit-test';
 import { PILL_PAD_X, PILL_PAD_Y, paintHamburger, paintPillButton, paintSurface } from '../painter';
 import { colors, fonts, sizes } from '../theme';
 import { type SidebarContext } from './context';
-
-interface Rect { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
-function inRect(x: number, y: number, r: Rect): boolean {
-  return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
-}
+import { inRect, type Rect } from './shared';
 
 // What an interactive point on the header resolves to. The contextual region's
 // own controls are handled by the active SidebarContext, not here.
@@ -150,8 +146,8 @@ export class Sidebar extends BasePanel {
     paintSurface(g, this.settingsRect.x, this.settingsRect.y, sizes.iconBox, sizes.iconBox,
       { border: sHover ? colors.borderAccent : colors.borderDim });
     paintHamburger(g, this.settingsRect.x, this.settingsRect.y, sizes.iconBox, sHover ? colors.glyphHover : colors.glyphOff);
-    // Divider below the header; the contextual region (selection info / facilities)
-    // will live below it once wired.
+    // Divider below the header; the active context (selection info / facilities)
+    // paints below it.
     const divY = this.nextRect.y + this.nextRect.h + sizes.padY;
     g.fillStyle = colors.borderDim;
     g.fillRect(sizes.padX, divY, w - sizes.padX * 2, 1);

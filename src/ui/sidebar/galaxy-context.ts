@@ -18,23 +18,12 @@ import { facilityCounts } from '../../game-state';
 import { paintPillButton } from '../painter';
 import { colors, fonts, sizes } from '../theme';
 import type { Region, SidebarContext } from './context';
-
-interface Rect { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
-function inRect(x: number, y: number, r: Rect): boolean {
-  return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
-}
+import { fmtMilli, inRect, type Rect } from './shared';
 
 // Gap above each member sub-header (after the first), mirroring the old info card.
 const MEMBER_BLOCK_GAP = 4;
 const SECTION_GAP = 6;   // between the civ block and the selected-system block
 const PILL_GAP = 4;      // between the stacked action pills
-
-// milli-units → a compact unit string for the value column (≤1 decimal, a
-// trailing ".0" trimmed). Mirrors the system context's chip formatting.
-function fmtMilli(milli: number): string {
-  const s = (Math.round(milli / 100) / 10).toFixed(1);
-  return s.endsWith('.0') ? s.slice(0, -2) : s;
-}
 
 interface BodyRow { readonly key: string; readonly val: string }
 

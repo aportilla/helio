@@ -17,6 +17,7 @@ import type { Facility } from '../../game-state';
 import { paintPillButton } from '../painter';
 import { colors, fonts, sizes } from '../theme';
 import type { Region, SidebarContext } from './context';
+import { fmtMilli, inRect, type Rect } from './shared';
 
 // The selected body, plus its facilities, as the context needs to render it.
 // SystemScene composes this from the catalog Body + the game-state store.
@@ -34,11 +35,6 @@ export interface SelectedBodyInfo {
   readonly economy: BodyEconomyView | null;
 }
 
-interface Rect { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
-function inRect(x: number, y: number, r: Rect): boolean {
-  return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
-}
-
 const KIND_LABEL: Record<BodyKind, string> = {
   planet: 'planet', moon: 'moon', belt: 'belt', ring: 'ring',
 };
@@ -53,13 +49,6 @@ const ADD_BUTTON_GAP = 4;
 const ECON_COL_GAP = 5;
 // Indent of a shortfall sub-line under its resource row.
 const ECON_SUB_INDENT = 6;
-
-// milli-units → a compact unit string for the narrow column: ≤1 decimal, a
-// trailing ".0" trimmed (12500 → "12.5", 6000 → "6", -1000 → "-1").
-function fmtMilli(milli: number): string {
-  const s = (Math.round(milli / 100) / 10).toFixed(1);
-  return s.endsWith('.0') ? s.slice(0, -2) : s;
-}
 
 type HoverHit = { kind: 'add'; type: FacilityType } | { kind: 'remove'; id: string } | null;
 

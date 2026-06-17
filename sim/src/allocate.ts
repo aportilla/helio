@@ -13,7 +13,6 @@
 import { floorToGranularity } from './math.ts';
 import { TransportTier } from './resources.ts';
 import { ShortfallReason } from './shortfall.ts';
-import { systemOfStar } from './geometry.ts';
 import { asPlanet, asResource } from './ids.ts';
 import type { PlanetId, ResourceId } from './ids.ts';
 import type { World } from './world.ts';
@@ -189,10 +188,4 @@ function hasReachablePeer(world: World, p: PlanetId): boolean {
     if (Number.isFinite(dist[world.star[q]!]!)) return true;
   }
   return false;
-}
-
-/** Exposed for the read surface's per-system grouping (avoids re-deriving the
- *  star→system walk). */
-export function systemOfPlanet(world: World, p: PlanetId) {
-  return systemOfStar(world.starOf(p));
 }

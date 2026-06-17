@@ -30,8 +30,12 @@ export function drawPixelText(
   getFont(font).drawText(g2d, text, x, y, color);
 }
 
-// Fill any transparent pixel adjacent to an opaque one with dark BG. Gives
-// labels a 1px halo so they read against any background.
+// Near-black RGB stamped into transparent pixels adjacent to an opaque glyph,
+// giving labels a 1-px halo so they read against any background. Named so the
+// one dark value isn't a bare literal buried in the pixel loop.
+const HALO_RGB: readonly [number, number, number] = [0, 0, 16];
+
+// Fill any transparent pixel adjacent to an opaque one with the halo color.
 function addDarkHalo(g: CanvasRenderingContext2D, w: number, h: number): void {
   const img = g.getImageData(0, 0, w, h);
   const px = img.data;
@@ -47,7 +51,7 @@ function addDarkHalo(g: CanvasRenderingContext2D, w: number, h: number): void {
                   (x > 0 && mask[k - 1]) || (x < w - 1 && mask[k + 1]);
       if (has) {
         const o = k * 4;
-        px[o] = 0; px[o + 1] = 0; px[o + 2] = 16; px[o + 3] = 255;
+        px[o] = HALO_RGB[0]; px[o + 1] = HALO_RGB[1]; px[o + 2] = HALO_RGB[2]; px[o + 3] = 255;
       }
     }
   }
