@@ -30,6 +30,8 @@ npm run build:catalog  # regenerate src/data/catalog.generated.json from src/dat
 
 The standalone economy sim has its own scripts — `npm run test:sim` and `npm run typecheck:sim` — see [sim/README.md](sim/README.md). The facility registry + sim-projection seam adds `npm run test:facilities` and `npm run check:boundaries` (the latter guards the standalone-sim import wall and is also part of `npm run check`) — see [src/facilities/README.md](src/facilities/README.md). `npm test` runs both test suites.
 
+For verification, headless economy inspection (`npm run inspect:economy`), and screenshots (`npm run screenshot`), see [docs/dev-tooling.md](docs/dev-tooling.md).
+
 ## The big picture
 
 Helio runs as three layers:
@@ -63,7 +65,7 @@ One deep doc per subsystem. Start in the root for orientation, then open the doc
 | `src/facilities/` | Facility registry (one object per type) + the economy-sim projection seam + the live engine bridge | [src/facilities/README.md](src/facilities/README.md) |
 | `scripts/` | Star-data tooling + the catalog/procgen **build pipeline** that emits the JSON | [scripts/README.md](scripts/README.md) |
 | `sim/` | Standalone deterministic economy/logistics sim | [sim/README.md](sim/README.md) |
-| `docs/` | Game-systems status, save-state model, roadmap | [docs/game-systems.md](docs/game-systems.md) |
+| `docs/` | Game-systems status + roadmap; dev/verification tooling | [docs/game-systems.md](docs/game-systems.md), [docs/dev-tooling.md](docs/dev-tooling.md) |
 | `plans/` | Detailed design docs (gitignored, ephemeral) | — |
 
 ## Planned architecture

@@ -22,7 +22,10 @@
     "audit:variety": "node scripts/audit-variety.mjs",
     "check:disk-physics": "node scripts/check-disk-physics.mjs",
     "inspect:body": "node scripts/inspect-body.mjs",
-    "inspect:csv": "node scripts/inspect-csv.mjs"
+    "inspect:csv": "node scripts/inspect-csv.mjs",
+    "inspect:economy": "node scripts/inspect-economy.ts",
+    "prescreenshot": "npm run build:catalog",
+    "screenshot": "node scripts/screenshot.mjs"
   },
   "dependencies": {
     "three": "0.184.0"
@@ -30,6 +33,7 @@
   "devDependencies": {
     "@types/node": "25.9.3",
     "@types/three": "0.184.0",
+    "puppeteer": "25.1.0",
     "typescript": "6.0.3",
     "vite": "8.0.10"
   }
