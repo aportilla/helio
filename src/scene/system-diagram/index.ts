@@ -27,8 +27,12 @@ export class SystemDiagram {
   readonly scene = new Scene();
   readonly camera = new OrthographicCamera(0, 1, 1, 0, -1, 1);
 
-  private bufferW = 1;
   private bufferH = 1;
+  // Layout + ortho width = the content rect (full buffer minus the reserved
+  // sidebar strip). The diagram's scene renders into the content viewport (1 unit
+  // = 1 content-buffer px), so the pixel-snapped body materials' uViewport (also
+  // the content width) lines up and the strip on the right stays empty.
+  private contentW = 1;
 
   private readonly rowSlots: RowSlot[];
 
@@ -56,19 +60,21 @@ export class SystemDiagram {
     this.rings   = new RingsLayer(this.scene, this.rowSlots);
   }
 
-  resize(bufferW: number, bufferH: number): void {
-    this.bufferW = bufferW;
+  resize(contentW: number, bufferH: number): void {
     this.bufferH = bufferH;
-    this.camera.left = 0; this.camera.right = bufferW;
+    this.contentW = contentW;
+    this.camera.left = 0; this.camera.right = contentW;
     this.camera.bottom = 0; this.camera.top = bufferH;
     this.camera.updateProjectionMatrix();
     this.layout();
   }
 
   private layout(): void {
-    // Row layout writes cx/cy into rowSlots; subsequent passes read it.
-    this.stars.layout(this.bufferW, this.bufferH);
-    layoutRow(this.rowSlots, this.bufferW, this.bufferH);
+    // Row layout writes cx/cy into rowSlots; subsequent passes read it. Width is
+    // the content rect so the diagram centers in the visible area, not under the
+    // sidebar.
+    this.stars.layout(this.contentW, this.bufferH);
+    layoutRow(this.rowSlots, this.contentW, this.bufferH);
     // Star positions are finalized — publish them to the body lighting
     // pass. Pulls from stars (post-layout) and pushes to every body
     // material; no per-tick update needed (the diagram is a static

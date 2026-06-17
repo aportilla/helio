@@ -18,6 +18,8 @@ import { StarmapScene } from './scene';
 import { SystemScene } from './system-scene';
 import { TestScene } from './test-view/test-scene';
 import { warmPlanetShaders } from './warm-shaders';
+import { Sidebar } from '../ui/sidebar/sidebar';
+import { advanceTurn, getGameState } from '../game-state';
 
 // Opt out of Three.js color management. Without this, hex values in shader
 // uniforms (new Color(0x1e6fc4)) and hex strings in canvas fillStyle
@@ -31,6 +33,10 @@ ColorManagement.enabled = false;
 export class AppController {
   private readonly canvas: HTMLCanvasElement;
   private readonly renderer: WebGLRenderer;
+  // Persistent across the galaxy↔system switch: constructed once here, handed to
+  // whichever scene is active to render + route input. Disposed only at app
+  // teardown (stop()), never on a view swap.
+  private readonly sidebar = new Sidebar();
   private readonly starmap: StarmapScene;
   private system?: SystemScene;
   private test?: TestScene;
@@ -46,7 +52,14 @@ export class AppController {
     // Match the disabled ColorManagement above — raw sRGB in, raw sRGB out.
     this.renderer.outputColorSpace = LinearSRGBColorSpace;
 
-    this.starmap = new StarmapScene(canvas, this.renderer);
+    // Next Turn lives on the persistent sidebar; advanceTurn() bumps the saved
+    // turn scalar and we re-push it so the header repaints (no notify primitive —
+    // the repo's mutate-then-re-pull convention). setTurn here seeds the header
+    // from the loaded save.
+    this.sidebar.onNextTurn = () => this.sidebar.setTurn(advanceTurn());
+    this.sidebar.setTurn(getGameState().turn);
+
+    this.starmap = new StarmapScene(canvas, this.renderer, this.sidebar);
     this.starmap.onViewSystem = (idx) => this.enterSystem(idx);
     this.starmap.onViewTest = () => this.enterTest();
   }
@@ -65,6 +78,7 @@ export class AppController {
     this.system = undefined;
     this.test?.dispose();
     this.test = undefined;
+    this.sidebar.dispose();
     if (this.warmedShaders) {
       for (const m of this.warmedShaders) m.dispose();
       this.warmedShaders = undefined;
@@ -93,7 +107,7 @@ export class AppController {
   enterSystem(clusterIdx: number): void {
     if (this.system) return;
     this.starmap.stop();
-    this.system = new SystemScene(this.canvas, this.renderer, clusterIdx);
+    this.system = new SystemScene(this.canvas, this.renderer, clusterIdx, this.sidebar);
     this.system.onExit = () => this.exitSystem();
     this.system.start();
   }

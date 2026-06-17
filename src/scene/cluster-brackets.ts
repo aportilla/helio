@@ -75,7 +75,11 @@ function buildBracketTexture(size: number, style: BracketStyle): CanvasTexture {
 export class ClusterBrackets {
   readonly mesh: Mesh;
   private readonly style: BracketStyle;
-  private bufferW = 1;
+  // Horizontal projection extent = the 3D content-rect width (full buffer minus
+  // the reserved sidebar strip), so a bracket lands on its cluster's disc rather
+  // than drifting under the sidebar. The mesh lives in the labels overlay scene,
+  // which spans the full buffer, so placement at x ≤ projW renders normally.
+  private projW = 1;
   private bufferH = 1;
   // Mirrors the stars shader's uPxScale uniform — needed CPU-side to
   // compute each star's rendered size for the bbox.
@@ -104,8 +108,8 @@ export class ClusterBrackets {
     this.mesh.visible = false;
   }
 
-  resize(bufferW: number, bufferH: number): void {
-    this.bufferW = bufferW;
+  resize(projW: number, bufferH: number): void {
+    this.projW = projW;
     this.bufferH = bufferH;
   }
 
@@ -188,7 +192,7 @@ export class ClusterBrackets {
     // is what lets the trick apply: view.target only ever equals the COM,
     // never an arbitrary member.
     this._world.set(cluster.com.x, cluster.com.y, cluster.com.z);
-    if (!projectWorldToBuffer(this._world, camera, this.viewTarget, this.bufferW, this.bufferH, this._screen)) {
+    if (!projectWorldToBuffer(this._world, camera, this.viewTarget, this.projW, this.bufferH, this._screen)) {
       this.mesh.visible = false;
       return;
     }
@@ -207,7 +211,7 @@ export class ClusterBrackets {
     for (const memIdx of cluster.members) {
       const s = STARS[memIdx]!;
       this._world.set(s.x, s.y, s.z);
-      if (!projectWorldToBuffer(this._world, camera, this.viewTarget, this.bufferW, this.bufferH, this._screen)) continue;
+      if (!projectWorldToBuffer(this._world, camera, this.viewTarget, this.projW, this.bufferH, this._screen)) continue;
       const r = this.computeRenderedStarSize(memIdx, camera) * 0.5;
       const dx = Math.abs(this._screen.x - cx) + r;
       const dy = Math.abs(this._screen.y - cy) + r;

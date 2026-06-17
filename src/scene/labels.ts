@@ -97,8 +97,13 @@ export class Labels {
   readonly scene = new Scene();
   readonly camera = new OrthographicCamera(0, 1, 1, 0, -1, 1);
 
-  private bufferW = 1;
   private bufferH = 1;
+  // Horizontal projection extent = the 3D content-rect width (the full buffer
+  // minus the reserved sidebar strip). The overlay ortho camera still spans the
+  // FULL buffer (1 unit = 1 buffer px, set from the resize param), but star
+  // anchors project into [0, contentW] so a label tracks its star instead of
+  // drifting under the sidebar.
+  private contentW = 1;
 
   private readonly clusterLabels: ClusterLabel[] = [];
 
@@ -165,9 +170,9 @@ export class Labels {
     });
   }
 
-  resize(bufferW: number, bufferH: number): void {
-    this.bufferW = bufferW;
+  resize(bufferW: number, bufferH: number, contentW: number): void {
     this.bufferH = bufferH;
+    this.contentW = contentW;
     this.camera.left = 0; this.camera.right = bufferW;
     this.camera.bottom = 0; this.camera.top = bufferH;
     this.camera.updateProjectionMatrix();
@@ -242,7 +247,7 @@ export class Labels {
           L.plainMesh.visible = false; L.yellowMesh.visible = false; continue;
         }
       }
-      if (!projectWorldToBuffer(this._world, camera, this.viewTarget, this.bufferW, this.bufferH, this._screen)) {
+      if (!projectWorldToBuffer(this._world, camera, this.viewTarget, this.contentW, this.bufferH, this._screen)) {
         L.plainMesh.visible = false; L.yellowMesh.visible = false; continue;
       }
       const dCam = this._world.distanceTo(camera.position);

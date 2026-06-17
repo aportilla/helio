@@ -2,7 +2,7 @@
 // instance lives on SystemHud; SystemScene calls setTarget() each
 // pointer move with the picker's result (star, planet, moon, or null).
 //
-// Visually mirrors the galaxy-view InfoCard family — paintSurface bg,
+// Visually mirrors the rest of the HUD panel family — paintSurface bg,
 // yellow title in EspySans 15, Monaco 11 key/value body rows — but
 // drops the multi-member nesting and the close-X. Tooltips are
 // ephemeral; dismissal is the cursor leaving the disc.

@@ -30,8 +30,24 @@ export class ViewportSizer {
   bufferW = 0;
   bufferH = 0;
 
+  // Content rect = the full buffer minus the reserved right-edge strip (the
+  // persistent sidebar). The HUD overlay still spans the FULL buffer; only the 3D
+  // pass and its camera/picking use these. With reservedEnvPx = 0 (the default)
+  // they equal the full width, so a scene that reserves nothing is unaffected.
+  // No vertical reservation — content height is always cssH/bufferH.
+  contentBufferW = 0;
+  contentCssW = 0;
+
+  // Right-edge strip reserved for the sidebar, in env pixels (= buffer pixels; the
+  // buffer IS the env grid). Fixed for the life of the sizer.
+  private readonly reservedBuffer: number;
+
   private readonly observer = new RenderScaleObserver();
   private readonly _buf = new Vector2();
+
+  constructor(reservedEnvPx = 0) {
+    this.reservedBuffer = Math.max(0, Math.floor(reservedEnvPx));
+  }
 
   // Auto integer N from the observer (before the per-resize preference bias).
   get scale(): RenderScale {
@@ -67,7 +83,16 @@ export class ViewportSizer {
     renderer.getDrawingBufferSize(this._buf);
     this.bufferW = this._buf.x;
     this.bufferH = this._buf.y;
-    setSnappedLineViewport(this.bufferW, this.bufferH);
+    // The 3D content rect is the buffer minus the reserved sidebar strip (left-
+    // anchored at x=0). contentCssW scales by the same cssW/bufferW ratio the
+    // renderer used, so the perspective aspect + raycast NDC stay consistent.
+    this.contentBufferW = Math.max(1, this.bufferW - this.reservedBuffer);
+    this.contentCssW = this.bufferW > 0 ? this.contentBufferW * (this.cssW / this.bufferW) : this.cssW;
+    // Pixel-snapped materials (galaxy stars/lines, the diagram's body discs) all
+    // render into the CONTENT viewport, so their NDC→pixel snap must use the
+    // content width — not the full buffer — or the stars shader's gl_FragCoord-
+    // vs-vCenter discard test rejects every disc right of the left edge.
+    setSnappedLineViewport(this.contentBufferW, this.bufferH);
   }
 
   // Map a CSS-pixel client coord into HUD buffer coords (Y-up, origin at

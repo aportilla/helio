@@ -7,7 +7,8 @@
 // persist.
 //
 // The save stores player *intent* — "a colony sits on this body" — keyed by
-// the stable catalog Body.id (§2 of the first-light plan). It deliberately
+// the stable catalog Body.id (§2 of the first-light plan), plus the current
+// turn number, the player's progress through the game. It deliberately
 // stores no economic behavior: what a colony produces/consumes is the sim's
 // concern, derived later by projecting facilities into the node-contributor
 // seam (the standalone sim under sim/), never baked into this blob. So adding
@@ -19,7 +20,7 @@
 // here — the GameState shape and the API below stay put.
 
 import { indexOfBodyId } from './data/stars';
-import { FACILITY_BY_TYPE, FACILITY_TYPES, type FacilityType } from './facilities';
+import { ADD_ORDER, FACILITY_BY_TYPE, FACILITY_TYPES, type FacilityType } from './facilities';
 
 // FacilityType + its validation set now live in the facilities registry (the
 // single source of truth for everything about a facility). game-state owns only
@@ -35,6 +36,10 @@ export interface Facility {
 
 export interface GameState {
   version: 1;
+  // The player's current turn, 1-based. Advanced by advanceTurn() and persisted so
+  // a reload resumes the same turn. A plain integer — no Math.random/Date (this is
+  // not the deterministic sim).
+  turn: number;
   // Monotonic counter backing Facility.id allocation — stable across reloads,
   // trivially unique, no Math.random/Date (this isn't the deterministic sim).
   seq: number;
@@ -42,7 +47,7 @@ export interface GameState {
 }
 
 const STORAGE_KEY = 'helio.game';
-const DEFAULTS: GameState = { version: 1, seq: 0, facilities: [] };
+const DEFAULTS: GameState = { version: 1, turn: 1, seq: 0, facilities: [] };
 
 function isValidFacility(f: unknown): f is Facility {
   if (!f || typeof f !== 'object') return false;
@@ -67,7 +72,10 @@ function readFromStorage(): GameState {
       console.warn(`[game-state] dropped ${dropped} facilit${dropped === 1 ? 'y' : 'ies'} with an unknown/invalid body id`);
     }
     const seq = typeof parsed.seq === 'number' && parsed.seq >= 0 ? Math.floor(parsed.seq) : 0;
-    return { version: 1, seq, facilities };
+    // Turns are 1-based; an old save (or a corrupt value) reads as turn 1. Adding
+    // this field needs no version bump — reads merge over DEFAULTS (validate-and-merge).
+    const turn = typeof parsed.turn === 'number' && parsed.turn >= 1 ? Math.floor(parsed.turn) : 1;
+    return { version: 1, turn, seq, facilities };
   } catch {
     return { ...DEFAULTS };
   }
@@ -111,4 +119,25 @@ export function removeFacility(id: string): void {
   if (!current.facilities.some(f => f.id === id)) return;
   current = { ...current, facilities: current.facilities.filter(f => f.id !== id) };
   writeToStorage(current);
+}
+
+// Advance the game by one turn and persist. v1 is an honest no-op-but-real advance
+// — it bumps the counter and nothing else, because the economy sim is still
+// standalone. The eventual seam (project facilities → EconomyEngine.step, then read
+// per-body surplus back) hooks HERE; deliberately not built yet, so the save shape
+// and the sim's isolation both stay put. Returns the new turn.
+export function advanceTurn(): number {
+  current = { ...current, turn: current.turn + 1 };
+  writeToStorage(current);
+  return current.turn;
+}
+
+// Per-type facility tallies for the galaxy civ summary. Seeded in ADD_ORDER so the
+// display order is stable and every buildable type is present (0 when none built).
+// This is the only honest civilization-level aggregate today — no economy implied.
+export function facilityCounts(): ReadonlyMap<FacilityType, number> {
+  const counts = new Map<FacilityType, number>();
+  for (const type of ADD_ORDER) counts.set(type, 0);
+  for (const f of current.facilities) counts.set(f.type, (counts.get(f.type) ?? 0) + 1);
+  return counts;
 }

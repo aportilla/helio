@@ -16,10 +16,13 @@ import { InputController, type InputHandlers } from './input-controller';
 import { Labels } from './labels';
 import { StarPoints } from './stars';
 import {
-  resolveCandidateCluster, isTargetFocusedOnCom, dimAmountForOrbit,
+  resolveCandidateCluster, dimAmountForOrbit,
 } from './selection-policy';
 import { ViewportSizer } from './viewport-sizer';
 import { MapHud } from '../ui/map-hud';
+import { Sidebar } from '../ui/sidebar/sidebar';
+import { GalaxyContext } from '../ui/sidebar/galaxy-context';
+import { sizes } from '../ui/theme';
 import { STARS, STAR_CLUSTERS, clusterIndexFor, nearestClusterIdxTo } from '../data/stars';
 import { getSettings } from '../settings';
 
@@ -80,6 +83,14 @@ export class StarmapScene {
   private readonly candidateBrackets: ClusterBrackets;
   private readonly starPoints: StarPoints;
   private readonly hud: MapHud;
+  // Persistent right sidebar, owned by AppController and shared with the system
+  // view. The scene renders + resizes + input-routes it but does not own its
+  // lifecycle. Consulted before the HUD so it intercepts clicks in its strip.
+  private readonly sidebar: Sidebar;
+  // The galaxy view's contextual region inside the sidebar (civ summary +
+  // selected-system info + View System/Focus). Set as the sidebar's context on
+  // start(); fed selection via setCluster.
+  private readonly galaxyContext = new GalaxyContext();
   private readonly input: InputController;
 
   // Hover-pointer state, written by the input controller via the
@@ -156,14 +167,15 @@ export class StarmapScene {
   // pixelRatio drops below 1); pointer math reads viewport.cssW/H (up to N-1
   // physical px less than the window after the rounding) so hovers register
   // across the whole canvas.
-  private readonly viewport = new ViewportSizer();
+  private readonly viewport = new ViewportSizer(sizes.sidebarW);
 
   // Renderer is owned by AppController and shared across view modes.
   // Pixel ratio + size are still driven from this scene's resize() (see
   // resize() for the integer-multiple-of-N rounding that guarantees a
   // clean nearest-neighbor upscale).
-  constructor(canvas: HTMLCanvasElement, renderer: WebGLRenderer) {
+  constructor(canvas: HTMLCanvasElement, renderer: WebGLRenderer, sidebar: Sidebar) {
     this.renderer = renderer;
+    this.sidebar = sidebar;
     const sun = STARS.find(s => s.id === 'sol')!;
     this.view = {
       target: new Vector3(sun.x, sun.y, sun.z),
@@ -229,10 +241,12 @@ export class StarmapScene {
         this.hud.setToggleState('spin', false);
       }
     };
-    this.hud.onDeselect = () => this.deselect();
-    this.hud.onViewSystem = (idx) => this.onViewSystem(idx);
     this.hud.onViewTest = () => this.onViewTest();
-    this.hud.onFocus = (idx) => {
+
+    // Selected-system info + View System / Focus live in the sidebar's galaxy
+    // context now; wire its actions to the same scene methods the info card used.
+    this.galaxyContext.onViewSystem = (idx) => this.onViewSystem(idx);
+    this.galaxyContext.onFocus = (idx) => {
       const com = STAR_CLUSTERS[idx]!.com;
       this.animateFocusTo(com.x, com.y, com.z);
     };
@@ -258,6 +272,12 @@ export class StarmapScene {
     window.addEventListener('resize', this._onResize);
     this.input.start();
     this.resize();
+    // Show the galaxy context on the persistent sidebar (turn header stays); the
+    // current selection survives a system-view round-trip on the singleton scene.
+    this.galaxyContext.setCluster(this.selectedClusterIdx);
+    this.sidebar.setContext(this.galaxyContext);
+    // The sidebar's settings glyph opens this view's settings panel.
+    this.sidebar.onSettings = () => this.hud.toggleSettings();
     this.tick();
     if (this.autoSelectTimer === null && this.selectedClusterIdx < 0) {
       this.autoSelectTimer = window.setTimeout(() => {
@@ -312,9 +332,14 @@ export class StarmapScene {
       clientToHud: (x, y, out) => this.viewport.clientToHud(x, y, out),
       pickStar: (x, y) => this.pickStar(x, y),
       starToCluster: (idx) => clusterIndexFor(idx),
-      hudHandleClick: (x, y) => this.hud.handleClick(x, y),
-      hudHitTest: (x, y) => this.hud.hitTest(x, y),
-      hudHandlePointerMove: (x, y) => this.hud.handlePointerMove(x, y),
+      // Sidebar is consulted before the HUD: it owns the reserved strip, so a
+      // click/hover there must intercept before the (covered) HUD or scene pick.
+      hudHandleClick: (x, y) => this.sidebar.handleClick(x, y) || this.hud.handleClick(x, y),
+      hudHitTest: (x, y) => {
+        const s = this.sidebar.hitTest(x, y);
+        return s !== 'transparent' ? s : this.hud.hitTest(x, y);
+      },
+      hudHandlePointerMove: (x, y) => { this.sidebar.handlePointerMove(x, y); this.hud.handlePointerMove(x, y); },
       applyOrbitDelta: (dx, dy) => this.applyOrbitDelta(dx, dy),
       applyTouchPan: (dx, dy) => this.applyTouchPan(dx, dy),
       zoomBy: (factor) => this.setZoom(this.view.distance * factor),
@@ -389,7 +414,8 @@ export class StarmapScene {
     this.labels.setSelectedCluster(clusterIdx);
     this.starPoints.setSelectedCluster(clusterIdx);
     this.selectionBrackets.setCluster(clusterIdx);
-    this.hud.setSelectedCluster(clusterIdx);
+    this.galaxyContext.setCluster(clusterIdx);
+    this.sidebar.refreshContent();
     const com = STAR_CLUSTERS[clusterIdx]!.com;
     // Grid runs its own sequential expand/collapse off this call.
     // Droplines snap to the new plane immediately for now; staggering them
@@ -398,9 +424,6 @@ export class StarmapScene {
     this.droplines.setSelectedCluster(clusterIdx);
     this.droplines.setFade(1);
     this.focusMarker.setSelectedCluster(clusterIdx);
-    // Focus button starts in the right state for the new selection
-    // (without waiting for the next tick to repaint).
-    this.updateSelectedFocusedState();
     this.animateFocusTo(com.x, com.y, com.z);
   }
 
@@ -477,22 +500,12 @@ export class StarmapScene {
     this.labels.setSelectedCluster(-1);
     this.starPoints.setSelectedCluster(-1);
     this.selectionBrackets.setCluster(-1);
-    this.hud.setSelectedCluster(-1);
+    this.galaxyContext.setCluster(-1);
+    this.sidebar.refreshContent();
     this.grid.setSelection(null);
     this.droplines.setSelectedCluster(-1);
     this.droplines.setFade(0);
     this.focusMarker.setSelectedCluster(-1);
-  }
-
-  // Push the Focus button's enabled/disabled state to the HUD. Disabled
-  // when view.target sits on the selected cluster's COM (i.e. the camera
-  // is already focused on it). No-op when nothing is selected — the
-  // focus button is hidden in that case anyway. The HUD's setter is
-  // gated, so calling this every frame only allocates on transition.
-  private updateSelectedFocusedState(): void {
-    if (this.selectedClusterIdx < 0) return;
-    const com = STAR_CLUSTERS[this.selectedClusterIdx]!.com;
-    this.hud.setSelectedFocused(isTargetFocusedOnCom(this.view.target, com));
   }
 
   // -- camera + zoom -----------------------------------------------------
@@ -503,7 +516,9 @@ export class StarmapScene {
 
   private pickStar(clientX: number, clientY: number): number {
     this._ndc.set(
-      (clientX / this.viewport.cssW) * 2 - 1,
+      // X over the content width — the 3D viewport is inset left of the sidebar,
+      // so a cursor at content's right edge is NDC x = 1.
+      (clientX / this.viewport.contentCssW) * 2 - 1,
       -(clientY / this.viewport.cssH) * 2 + 1,
     );
     this.raycaster.setFromCamera(this._ndc, this.camera);
@@ -562,16 +577,22 @@ export class StarmapScene {
     // snap (+ setPixelRatio / setSize / snapped-material viewport); the
     // subsystem resizes below run off the updated css/buffer dims.
     this.viewport.apply(this.renderer);
-    const { cssW, cssH, bufferW, bufferH } = this.viewport;
-    this.camera.aspect = cssW / cssH;
+    const { cssH, bufferW, bufferH, contentCssW, contentBufferW } = this.viewport;
+    // Aspect from the content width so the narrower (sidebar-inset) viewport
+    // doesn't distort the framing; NDC (0,0) then lands at the centre of the
+    // visible area, so a focused cluster sits there with no target offset.
+    this.camera.aspect = contentCssW / cssH;
     this.camera.updateProjectionMatrix();
     this.starPoints.setPxScale(bufferH / 2);
     this.selectionBrackets.setPxScale(bufferH / 2);
     this.candidateBrackets.setPxScale(bufferH / 2);
+    // HUD spans the full buffer; the overlay projectors place anchors in the
+    // content rect so labels/brackets track their stars left of the sidebar.
     this.hud.resize(bufferW, bufferH);
-    this.labels.resize(bufferW, bufferH);
-    this.selectionBrackets.resize(bufferW, bufferH);
-    this.candidateBrackets.resize(bufferW, bufferH);
+    this.labels.resize(bufferW, bufferH, contentBufferW);
+    this.selectionBrackets.resize(contentBufferW, bufferH);
+    this.candidateBrackets.resize(contentBufferW, bufferH);
+    this.sidebar.resize(bufferW, bufferH);
   }
 
   // -- main loop ---------------------------------------------------------
@@ -604,7 +625,6 @@ export class StarmapScene {
     }
 
     this.updateCamera();
-    this.updateSelectedFocusedState();
     // Grid runs its own per-frame animation off this driver call.
     // Droplines fade is binary (set in selectAndFocusCluster / deselect),
     // so no per-tick scaling is needed here.
@@ -649,12 +669,30 @@ export class StarmapScene {
     this.selectionBrackets.update(this.camera, this.view.target);
     this.candidateBrackets.update(this.camera, this.view.target);
 
-    this.renderer.render(this.scene, this.camera);
-    // Overlay passes — disable autoClear so the second/third renders don't
-    // wipe the first. Both overlays use depthTest: false to always overlay.
+    // One full-buffer clear; the reserved sidebar strip on the right stays
+    // clear-color until the sidebar paints into it. autoClear stays off so the
+    // overlays don't wipe the 3D — both use depthTest: false.
+    const { cssW, cssH, contentCssW } = this.viewport;
     this.renderer.autoClear = false;
+    this.renderer.clear();
+    // 3D content pass: viewport + scissor to the content rect so stars can't
+    // splat under the sidebar.
+    this.renderer.setViewport(0, 0, contentCssW, cssH);
+    this.renderer.setScissor(0, 0, contentCssW, cssH);
+    this.renderer.setScissorTest(true);
+    this.renderer.render(this.scene, this.camera);
+    // Labels + brackets also belong to the content rect: full-buffer ortho
+    // VIEWPORT (so 1 unit = 1 buffer px) but the SCISSOR stays on the content
+    // rect — a label whose star sits at the right edge clips at the sidebar
+    // boundary instead of spilling into the strip, and a just-off-screen star's
+    // label (projectWorldToBuffer only depth-culls, not x) doesn't appear there.
+    this.renderer.setViewport(0, 0, cssW, cssH);
     this.renderer.render(this.labels.scene, this.labels.camera);
+    // HUD then the persistent sidebar, both at full buffer. The sidebar draws
+    // last so it owns the reserved strip on the right.
+    this.renderer.setScissorTest(false);
     this.renderer.render(this.hud.scene, this.hud.camera);
+    this.renderer.render(this.sidebar.scene, this.sidebar.camera);
     this.renderer.autoClear = true;
     this.rafId = requestAnimationFrame(this.tick);
   };

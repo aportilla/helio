@@ -45,6 +45,11 @@ export const sizes = {
   edgePad:    8,    // distance from canvas edges for title / scale / icon
   cardMargin: 14,   // info card inset (bigger than edgePad — gives the boxed border breathing room)
 
+  // Persistent right sidebar — fixed reserved width (env px). The 3D content rect
+  // is the full buffer minus this strip; tune against the widest sidebar content
+  // line (longest body/system name + value). Consumed by the scenes' ViewportSizer.
+  sidebarW: 168,
+
   // Surface internal padding (info card + settings panel use the same values)
   padX: 8,
   padY: 6,

@@ -6,10 +6,13 @@
 // a static screen diagram, not a navigable space. SystemHud sits on top.
 
 import { type WebGLRenderer } from 'three';
-import { BODIES } from '../data/stars';
+import { BODIES, clusterDisplayName } from '../data/stars';
 import { addableTypesFor } from '../facilities';
 import { addFacility, facilitiesOnBody, removeFacility } from '../game-state';
 import { SystemHud } from '../ui/system-hud';
+import { Sidebar } from '../ui/sidebar/sidebar';
+import { SystemContext } from '../ui/sidebar/system-context';
+import { sizes } from '../ui/theme';
 import { SystemDiagram, type DiagramPick } from './system-diagram';
 import { picksEqual } from './system-diagram/types';
 import { ViewportSizer } from './viewport-sizer';
@@ -20,7 +23,13 @@ export class SystemScene {
 
   private readonly diagram: SystemDiagram;
   private readonly hud: SystemHud;
-  private readonly viewport = new ViewportSizer();
+  // Persistent sidebar, owned by AppController (shared with the galaxy view).
+  // Rendered + input-routed here, but not owned. Consulted before the HUD.
+  private readonly sidebar: Sidebar;
+  // The system view's contextual region inside the sidebar (selected body's
+  // facilities). Set as the sidebar's active context on start, cleared on dispose.
+  private readonly context: SystemContext;
+  private readonly viewport = new ViewportSizer(sizes.sidebarW);
 
   private rafId = 0;
   private running = false;
@@ -41,7 +50,7 @@ export class SystemScene {
 
   // The body the player has selected for facility construction. Distinct from
   // hover (which follows the cursor) and from pinnedPick (the touch tooltip):
-  // it persists across pointer moves and drives the bottom facilities bar.
+  // it persists across pointer moves and drives the sidebar's facilities context.
   // Ephemeral by design — a fresh SystemScene starts with nothing selected;
   // the facilities themselves persist in the game-state store, not here.
   private selectedPick: DiagramPick | null = null;
@@ -50,20 +59,26 @@ export class SystemScene {
   // button click).
   onExit: () => void = () => {};
 
-  constructor(canvas: HTMLCanvasElement, renderer: WebGLRenderer, clusterIdx: number) {
+  constructor(canvas: HTMLCanvasElement, renderer: WebGLRenderer, clusterIdx: number, sidebar: Sidebar) {
     this.canvas = canvas;
     this.renderer = renderer;
+    this.sidebar = sidebar;
 
     this.diagram = new SystemDiagram(clusterIdx);
-    this.hud = new SystemHud(clusterIdx);
+    this.hud = new SystemHud();
     this.hud.onBack = () => this.onExit();
-    this.hud.onAddFacility = (bodyId, type) => {
+
+    // Facilities live in the persistent sidebar's contextual region. The context
+    // owns the add/remove callbacks; we mutate game-state then re-push the updated
+    // body so the list stays in sync.
+    this.context = new SystemContext(clusterDisplayName(clusterIdx));
+    this.context.onAddFacility = (bodyId, type) => {
       addFacility(bodyId, type);
-      this.pushSelectionToHud();
+      this.pushSelectionToSidebar();
     };
-    this.hud.onRemoveFacility = (facilityId) => {
+    this.context.onRemoveFacility = (facilityId) => {
       removeFacility(facilityId);
-      this.pushSelectionToHud();
+      this.pushSelectionToSidebar();
     };
 
     // DPR boundary crossings (zoom, monitor swap) re-trigger resize so the
@@ -78,6 +93,12 @@ export class SystemScene {
     this.running = true;
     this.attachListeners();
     this.resize();
+    // Make the sidebar show this system's context (persistent turn header stays).
+    this.sidebar.setContext(this.context);
+    // System-view settings are deferred (the panel's toggles are galaxy-specific);
+    // the header glyph is a no-op here for now.
+    this.sidebar.onSettings = () => {};
+    this.pushSelectionToSidebar();
     this.tick();
   }
 
@@ -91,6 +112,9 @@ export class SystemScene {
   // Idempotent — safe to call after stop().
   dispose(): void {
     this.stop();
+    // Detach this scene's context so the (shared, AppController-owned) sidebar
+    // doesn't paint a disposed context once the galaxy view resumes.
+    this.sidebar.setContext(null);
     this.diagram.dispose();
     this.hud.dispose();
     this.viewport.dispose();
@@ -115,10 +139,11 @@ export class SystemScene {
   }
 
   private onPointerDown(e: PointerEvent): void {
-    // Route to the HUD first (back button + facilities bar). The diagram is
-    // static — no drag/orbit fallback — so a pointerdown that misses chrome
-    // is a clean click on the diagram.
+    // Route to the sidebar, then the HUD (back button), before the diagram. The
+    // diagram is static — no drag/orbit fallback — so a pointerdown that misses
+    // chrome is a clean click on the diagram.
     this.viewport.clientToHud(e.clientX, e.clientY, this._hudPt);
+    if (this.sidebar.handleClick(this._hudPt.x, this._hudPt.y)) return;
     if (this.hud.handleClick(this._hudPt.x, this._hudPt.y)) return;
 
     // A click on the diagram (or empty space): pick under it (null over chrome).
@@ -142,7 +167,7 @@ export class SystemScene {
 
   // Update the persistent selection. Only bodies that can host at least one
   // facility can be selected — a star, a ring, or empty space clears it, so the
-  // facilities bar only ever shows for a buildable body. Eligibility is the
+  // sidebar's facilities context only ever shows Add pills for a buildable body. Eligibility is the
   // registry's call (addableTypesFor), not an inline kind check, so it stays in
   // lockstep with the defs as types are added or their predicates diverge.
   private select(pick: DiagramPick | null): void {
@@ -152,27 +177,29 @@ export class SystemScene {
     if (picksEqual(next, this.selectedPick)) return;
     this.selectedPick = next;
     this.diagram.setSelected(next);
-    this.pushSelectionToHud();
+    this.pushSelectionToSidebar();
   }
 
   // Push the selected body (with its current facilities, read fresh from the
-  // game-state store) into the HUD's facilities bar. Called on every selection
-  // change and after each add/remove so the bar stays in sync.
-  private pushSelectionToHud(): void {
+  // game-state store) into the sidebar's system context. Called on every selection
+  // change and after each add/remove so the list stays in sync.
+  private pushSelectionToSidebar(): void {
     const pick = this.selectedPick;
     if (!pick || pick.kind === 'star') {
-      this.hud.setSelectedBody(null);
+      this.context.setBody(null);
+      this.sidebar.refreshContent();
       return;
     }
     const body = BODIES[pick.bodyIdx]!;
     const facilities = facilitiesOnBody(body.id);
-    this.hud.setSelectedBody({
+    this.context.setBody({
       bodyId: body.id,
       name: body.name,
       kind: body.kind,
       facilities,
       addableTypes: addableTypesFor(body, facilities),
     });
+    this.sidebar.refreshContent();
   }
 
   private onPointerMove(e: PointerEvent): void {
@@ -180,8 +207,9 @@ export class SystemScene {
     // drag must not move/clear the pinned card — only mouse hovers.
     if (e.pointerType !== 'mouse') return;
     this.viewport.clientToHud(e.clientX, e.clientY, this._hudPt);
+    const onSidebar = this.sidebar.handlePointerMove(this._hudPt.x, this._hudPt.y);
     const onButton = this.hud.handlePointerMove(this._hudPt.x, this._hudPt.y);
-    this.canvas.style.cursor = onButton ? 'pointer' : '';
+    this.canvas.style.cursor = (onSidebar || onButton) ? 'pointer' : '';
     const pick = this.pickAt(this._hudPt.x, this._hudPt.y);
     this.diagram.setHovered(pick);
     this.hud.setHoveredBody(pick, this._hudPt.x, this._hudPt.y);
@@ -191,7 +219,8 @@ export class SystemScene {
   // point is over any interactive HUD chrome (back button) so a tooltip
   // can't appear under the chrome the user is aiming at.
   private pickAt(bufX: number, bufY: number): DiagramPick | null {
-    const overChrome = this.hud.hitTest(bufX, bufY) !== 'transparent';
+    const overChrome = this.sidebar.hitTest(bufX, bufY) !== 'transparent'
+      || this.hud.hitTest(bufX, bufY) !== 'transparent';
     return overChrome ? null : this.diagram.pickAt(bufX, bufY);
   }
 
@@ -223,15 +252,29 @@ export class SystemScene {
     // pushes the new dims into every pixel-snapped material's uViewport —
     // including the diagram's planet/moon material via makePlanetMaterial.
     this.viewport.apply(this.renderer);
-    this.diagram.resize(this.viewport.bufferW, this.viewport.bufferH);
+    // Diagram lays out + renders in the content rect (left of the reserved sidebar
+    // strip); the HUD spans the full buffer.
+    this.diagram.resize(this.viewport.contentBufferW, this.viewport.bufferH);
     this.hud.resize(this.viewport.bufferW, this.viewport.bufferH);
+    this.sidebar.resize(this.viewport.bufferW, this.viewport.bufferH);
   }
 
   private tick = (): void => {
     if (!this.running) return;
-    this.renderer.render(this.diagram.scene, this.diagram.camera);
+    // One full-buffer clear (the reserved sidebar strip stays clear-color), then
+    // the diagram clipped to the content rect so its pixel-snapped body materials
+    // line up with the content-width uViewport; the HUD spans the full buffer.
+    const { cssW, cssH, contentCssW } = this.viewport;
     this.renderer.autoClear = false;
+    this.renderer.clear();
+    this.renderer.setViewport(0, 0, contentCssW, cssH);
+    this.renderer.setScissor(0, 0, contentCssW, cssH);
+    this.renderer.setScissorTest(true);
+    this.renderer.render(this.diagram.scene, this.diagram.camera);
+    this.renderer.setScissorTest(false);
+    this.renderer.setViewport(0, 0, cssW, cssH);
     this.renderer.render(this.hud.scene, this.hud.camera);
+    this.renderer.render(this.sidebar.scene, this.sidebar.camera);
     this.renderer.autoClear = true;
     this.rafId = requestAnimationFrame(this.tick);
   };

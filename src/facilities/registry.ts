@@ -2,7 +2,7 @@
 // facility is one object here plus one literal in the FacilityType union: its
 // save-key, UI label, Add-button order, build cap, body-eligibility predicate,
 // and economic projection all flow from that one edit. This collapses what used
-// to be smeared across game-state.ts, facilities-panel.ts, and system-scene.ts.
+// to be smeared across game-state.ts, the system-view facilities UI, and system-scene.ts.
 
 import type { Body } from '../data/stars.ts';
 import type { FacilityDef, FacilityType } from './types.ts';
@@ -98,9 +98,9 @@ export const FACILITY_BY_TYPE: ReadonlyMap<FacilityType, FacilityDef> = new Map(
   Object.entries(DEFS) as Array<[FacilityType, FacilityDef]>,
 );
 
-// Add-button order: buildable (non-retired) defs, sorted by addOrder. The panel
-// renders one "Add <label>" button per entry; system-scene checks placement
-// eligibility through addableTypesFor (eligibility.ts), which filters this list.
+// Add-button order: buildable (non-retired) defs, sorted by addOrder. The sidebar's
+// SystemContext renders one "Add <label>" pill per entry; system-scene checks
+// placement eligibility through addableTypesFor (eligibility.ts), which filters this list.
 export const ADD_ORDER: readonly FacilityType[] = FACILITY_DEFS.filter((d) => !d.retired)
   .slice()
   .sort((a, b) => a.addOrder - b.addOrder)
