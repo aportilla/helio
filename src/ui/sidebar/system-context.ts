@@ -11,6 +11,7 @@
 
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
 import type { BodyKind } from '../../data/stars';
+import type { BodyEconomyView } from '../../facilities/economy-bridge';
 import { facilityLabel, type FacilityType } from '../../facilities';
 import type { Facility } from '../../game-state';
 import { paintPillButton } from '../painter';
@@ -27,6 +28,10 @@ export interface SelectedBodyInfo {
   // Types this body can still host (registry-derived: physics predicate AND build
   // cap), in Add-button order. SystemScene computes it — it owns the Body.
   readonly addableTypes: readonly FacilityType[];
+  // The body's live economy (per-resource stock, balance, shortfall, glut), or
+  // null when it hosts no facility / carries nothing yet. SystemScene reads it
+  // from the EconomyBridge; updated on selection and after each turn.
+  readonly economy: BodyEconomyView | null;
 }
 
 interface Rect { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
@@ -44,6 +49,17 @@ const REMOVE_LABEL_GAP = 6;
 // Vertical gap between the stacked Add buttons (the narrow sidebar stacks them
 // top-down, one pill per row).
 const ADD_BUTTON_GAP = 4;
+// Horizontal gap between the columns of an economy row (name · stock · flow).
+const ECON_COL_GAP = 5;
+// Indent of a shortfall sub-line under its resource row.
+const ECON_SUB_INDENT = 6;
+
+// milli-units → a compact unit string for the narrow column: ≤1 decimal, a
+// trailing ".0" trimmed (12500 → "12.5", 6000 → "6", -1000 → "-1").
+function fmtMilli(milli: number): string {
+  const s = (Math.round(milli / 100) / 10).toFixed(1);
+  return s.endsWith('.0') ? s.slice(0, -2) : s;
+}
 
 type HoverHit = { kind: 'add'; type: FacilityType } | { kind: 'remove'; id: string } | null;
 
@@ -121,6 +137,47 @@ export class SystemContext implements SidebarContext {
       const labelY = y + Math.floor((rowH - bodyLineH) / 2);
       drawPixelText(g, facilityLabel(f.type), labelX, labelY, colors.textBody);
       y += rowH + ROW_GAP;
+    }
+
+    // Economy: per-resource stock + signed balance, once the body is a sim node
+    // (it has a facility projecting into the economy). Each row is
+    // "name · stock · ±balance" — trade-aware cover once a turn has run, else the
+    // intrinsic flow — tinted by sign (surplus green / deficit red), with a glut
+    // marker and a shortfall-reason sub-line when present.
+    const econ = this.info.economy;
+    if (econ) {
+      const econLineH = getFont(fonts.body).lineHeight;
+      y += sizes.cardActionGap;
+      drawPixelText(g, 'ECONOMY', x0, y, colors.textKey, fonts.body);
+      y += econLineH + ROW_GAP;
+      for (const rl of econ.resources) {
+        let lx = x0;
+        drawPixelText(g, rl.name, lx, y, colors.textBody);
+        lx += measurePixelText(rl.name) + ECON_COL_GAP;
+        const stockTxt = fmtMilli(rl.stockMilli);
+        drawPixelText(g, stockTxt, lx, y, colors.textBody);
+        lx += measurePixelText(stockTxt) + ECON_COL_GAP;
+
+        // Signed balance: the sim's trade-aware cover once a digest exists, else
+        // the intrinsic production−consumption. Tinted by sign.
+        const signed = rl.coverMilli ?? rl.netFlowMilli;
+        if (signed !== 0) {
+          const up = signed > 0;
+          const balTxt = (up ? '+' : '') + fmtMilli(signed);
+          drawPixelText(g, balTxt, lx, y, up ? colors.econSurplus : colors.econDeficit);
+          lx += measurePixelText(balTxt) + ECON_COL_GAP;
+        }
+        // Glut: production capped because storage is full.
+        if (rl.glut) drawPixelText(g, 'full', lx, y, colors.titleDim);
+        y += econLineH + ROW_GAP;
+
+        // Shortfall: the binding reason for an unmet demand, indented under the
+        // row in deficit red — the player's cue to build/route a fix.
+        if (rl.shortfall) {
+          drawPixelText(g, rl.shortfall.label, x0 + ECON_SUB_INDENT, y, colors.econDeficit);
+          y += econLineH + ROW_GAP;
+        }
+      }
     }
 
     // One "Add <label>" pill per buildable type, stacked.

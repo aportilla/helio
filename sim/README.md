@@ -6,10 +6,10 @@ discrete-transfer economy from `plans/4x-economy-plan-discrete-single-tier.md`.
 It is built **standalone**: a self-contained TypeScript module with its own
 `tsconfig.json`, no dependency on the Three.js/Vite browser build or the catalog
 pipeline — the import wall is one-directional and CI-enforced
-(`scripts/check-sim-boundary.mjs`). The app reaches it through `sim/src/index.ts`;
-today only the **dormant** facility-projection seam (`src/facilities/`, see
-[its doc](../src/facilities/README.md)) imports it — the live engine isn't
-instantiated yet. It is exercised by `sim/test` and by that seam's tests.
+(`scripts/check-sim-boundary.mjs`). The app reaches it through `sim/src/index.ts`,
+imported only from `src/facilities/` (see [its doc](../src/facilities/README.md)),
+where `economy-bridge.ts` now instantiates and steps a live `EconomyEngine`. It is
+also exercised by `sim/test` and that seam's tests.
 
 ## Running
 

@@ -12,6 +12,7 @@
 
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
 import { STARS, STAR_CLUSTERS, clusterDisplayName } from '../../data/stars';
+import type { SystemEconomyView } from '../../facilities/economy-bridge';
 import { facilityLabel } from '../../facilities';
 import { facilityCounts } from '../../game-state';
 import { paintPillButton } from '../painter';
@@ -27,6 +28,13 @@ function inRect(x: number, y: number, r: Rect): boolean {
 const MEMBER_BLOCK_GAP = 4;
 const SECTION_GAP = 6;   // between the civ block and the selected-system block
 const PILL_GAP = 4;      // between the stacked action pills
+
+// milli-units → a compact unit string for the value column (≤1 decimal, a
+// trailing ".0" trimmed). Mirrors the system context's chip formatting.
+function fmtMilli(milli: number): string {
+  const s = (Math.round(milli / 100) / 10).toFixed(1);
+  return s.endsWith('.0') ? s.slice(0, -2) : s;
+}
 
 interface BodyRow { readonly key: string; readonly val: string }
 
@@ -46,6 +54,9 @@ type Control = 'view' | 'focus' | null;
 
 export class GalaxyContext implements SidebarContext {
   private clusterIdx = -1;
+  // The selected system's aggregated economy, pushed by StarmapScene on select
+  // and after each turn. Null when nothing is selected / hosts no facility.
+  private economy: SystemEconomyView | null = null;
   private hovered: Control = null;
   private viewRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
   private focusRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
@@ -59,6 +70,12 @@ export class GalaxyContext implements SidebarContext {
     if (this.clusterIdx === idx) return;
     this.clusterIdx = idx;
     this.hovered = null;
+  }
+
+  // The selected system's economy summary, pushed alongside setCluster and after
+  // each turn so the galaxy info-card's net balances stay current.
+  setEconomy(view: SystemEconomyView | null): void {
+    this.economy = view;
   }
 
   paint(g: CanvasRenderingContext2D, region: Region): void {
@@ -99,6 +116,24 @@ export class GalaxyContext implements SidebarContext {
       for (const row of bodyForStar(memIdx)) {
         drawPixelText(g, row.key, x0, y, colors.textKey, fonts.body);
         drawPixelText(g, row.val, x0 + measurePixelText(row.key), y, colors.textBody, fonts.body);
+        y += bodyH;
+      }
+    }
+
+    // --- System economy ---
+    // Net balance per resource across the system's stars (surplus green / deficit
+    // red), right-aligned like the civ tallies. Absent until a facility here
+    // projects into the economy.
+    if (this.economy) {
+      y += sizes.cardActionGap;
+      drawPixelText(g, 'ECONOMY', x0, y, colors.textKey, fonts.body);
+      y += bodyH + sizes.cardNameGap;
+      for (const rl of this.economy.resources) {
+        drawPixelText(g, rl.name, x0, y, colors.textBody, fonts.body);
+        const up = rl.netMilli >= 0;
+        const valStr = (up ? '+' : '') + fmtMilli(rl.netMilli);
+        drawPixelText(g, valStr, x0 + region.w - measurePixelText(valStr), y,
+          up ? colors.econSurplus : colors.econDeficit, fonts.body);
         y += bodyH;
       }
     }

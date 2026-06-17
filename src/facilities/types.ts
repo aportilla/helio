@@ -14,11 +14,13 @@ import type { Body } from '../data/stars.ts';
 // in plans/4x-facility-definitions-modularity-plan.md §8/§11.
 export type FacilityType = 'colony' | 'mining-base';
 
-// Body → its own dense sim-geometry node id. The economic node is the BODY
-// (not the star): every facility-bearing body is a node in one connected jump
-// graph, same-system neighbours near, other systems routed over the existing
-// range-limited graph (plan §9.1). The resolver itself is supplied by the
-// future geometry adapter; the projector only needs its signature.
+// Body → its transport-graph node (the value that becomes PlanetSpec.star). In
+// the shipped model that node is the body's CLUSTER — one node per cluster, a
+// system with a shared pool of bodies: every facility-bearing body resolves to
+// its cluster's node, so all bodies in a cluster share it and trade freely, and
+// only crossing between clusters costs jump range. The projector needs only the
+// signature; economy-bridge.ts supplies the resolver (clusterNodeOfBody) and the
+// matching one-node-per-cluster geometry.
 export type SimStarResolver = (body: Body) => number;
 
 // Everything the projector hands a def's contribute(). Carries the resource

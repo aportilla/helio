@@ -36,7 +36,7 @@ Helio runs as three layers:
 
 1. **Catalog (skeleton)** — a precomputed snapshot of ~1500 nearby star systems and 8000+ bodies (`src/data/catalog.generated.json`, gitignored), built from hand-authored CSVs by `scripts/build-catalog.mjs` plus a deterministic procgen pipeline. Static content, regenerated from source, never a save. Build pipeline: [scripts/README.md](scripts/README.md); runtime API: [src/data/README.md](src/data/README.md).
 2. **Browser app** — the Three.js galaxy + system views and their pixel-art HUDs (`src/scene/`, `src/ui/`). What the player sees. [src/scene/README.md](src/scene/README.md), [src/ui/README.md](src/ui/README.md).
-3. **Economy sim** — a standalone, deterministic, integer-only logistics core (`sim/`), built and tested in isolation, not yet wired into the app. [sim/README.md](sim/README.md).
+3. **Economy sim** — a standalone, deterministic, integer-only logistics core (`sim/`), built and tested in isolation, then driven by the app through `src/facilities/economy-bridge.ts` (a placed facility projects into it; Next Turn steps it; surplus/deficit reads back into the sidebar). [sim/README.md](sim/README.md).
 
 **Game state** — what the player has done — is a fourth, separate concern: a versioned `localStorage` JSON save (`src/game-state.ts`, key `helio.game`) that today holds placed facilities keyed by stable `Body.id`. It's deliberately kept apart from both the static catalog and the sim's deterministic binary save; the three never contain each other. The save-state layering and the game-mechanics roadmap live in [docs/game-systems.md](docs/game-systems.md).
 
@@ -60,7 +60,7 @@ One deep doc per subsystem. Start in the root for orientation, then open the doc
 | `src/scene/` | Three.js galaxy + system scenes, rendering, shaders, camera, input, selection | [src/scene/README.md](src/scene/README.md) |
 | `src/ui/` | Pixel-art widget toolkit (`Widget`/`BasePanel`/painter/theme) + per-screen HUDs | [src/ui/README.md](src/ui/README.md) |
 | `src/data/` | Runtime catalog API + types, cluster/naming model, bundled bitmap fonts | [src/data/README.md](src/data/README.md) |
-| `src/facilities/` | Facility registry (one object per type) + the dormant economy-sim projection seam | [src/facilities/README.md](src/facilities/README.md) |
+| `src/facilities/` | Facility registry (one object per type) + the economy-sim projection seam + the live engine bridge | [src/facilities/README.md](src/facilities/README.md) |
 | `scripts/` | Star-data tooling + the catalog/procgen **build pipeline** that emits the JSON | [scripts/README.md](scripts/README.md) |
 | `sim/` | Standalone deterministic economy/logistics sim | [sim/README.md](sim/README.md) |
 | `docs/` | Game-systems status, save-state model, roadmap | [docs/game-systems.md](docs/game-systems.md) |

@@ -19,6 +19,7 @@ import { SystemScene } from './system-scene';
 import { TestScene } from './test-view/test-scene';
 import { warmPlanetShaders } from './warm-shaders';
 import { Sidebar } from '../ui/sidebar/sidebar';
+import { EconomyBridge } from '../facilities/economy-bridge';
 import { advanceTurn, getGameState } from '../game-state';
 
 // Opt out of Three.js color management. Without this, hex values in shader
@@ -37,6 +38,10 @@ export class AppController {
   // whichever scene is active to render + route input. Disposed only at app
   // teardown (stop()), never on a view swap.
   private readonly sidebar = new Sidebar();
+  // The live economy sim, owned here so it persists across the galaxy↔system
+  // switch. Built once (restored from the sim save or cold-started); stepped on
+  // Next Turn, reconciled by the system view after a facility edit.
+  private readonly bridge = new EconomyBridge();
   private readonly starmap: StarmapScene;
   private system?: SystemScene;
   private test?: TestScene;
@@ -52,14 +57,19 @@ export class AppController {
     // Match the disabled ColorManagement above — raw sRGB in, raw sRGB out.
     this.renderer.outputColorSpace = LinearSRGBColorSpace;
 
-    // Next Turn lives on the persistent sidebar; advanceTurn() bumps the saved
-    // turn scalar and we re-push it so the header repaints (no notify primitive —
-    // the repo's mutate-then-re-pull convention). setTurn here seeds the header
-    // from the loaded save.
-    this.sidebar.onNextTurn = () => this.sidebar.setTurn(advanceTurn());
+    // Next Turn lives on the persistent sidebar: step the economy, bump the saved
+    // turn scalar, re-push it so the header repaints (no notify primitive — the
+    // repo's mutate-then-re-pull convention), and refresh the system view's
+    // economy read-out if it's up. setTurn here seeds the header from the save.
+    this.sidebar.onNextTurn = () => {
+      this.bridge.step();
+      this.sidebar.setTurn(advanceTurn());
+      // Refresh whichever view is live so its economy read-out reflects the turn.
+      (this.system ?? this.starmap).afterTurnAdvance();
+    };
     this.sidebar.setTurn(getGameState().turn);
 
-    this.starmap = new StarmapScene(canvas, this.renderer, this.sidebar);
+    this.starmap = new StarmapScene(canvas, this.renderer, this.sidebar, this.bridge);
     this.starmap.onViewSystem = (idx) => this.enterSystem(idx);
     this.starmap.onViewTest = () => this.enterTest();
   }
@@ -107,7 +117,7 @@ export class AppController {
   enterSystem(clusterIdx: number): void {
     if (this.system) return;
     this.starmap.stop();
-    this.system = new SystemScene(this.canvas, this.renderer, clusterIdx, this.sidebar);
+    this.system = new SystemScene(this.canvas, this.renderer, clusterIdx, this.sidebar, this.bridge);
     this.system.onExit = () => this.exitSystem();
     this.system.start();
   }

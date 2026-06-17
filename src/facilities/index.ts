@@ -24,7 +24,7 @@ export {
 
 export { addableTypesFor } from './eligibility.ts';
 
-// — Projection seam (dormant: nothing in the running app calls these yet) —
+// — Projection seam (live: economy-bridge.ts folds these into the running sim) —
 export { EconResource, appResourceTable } from './resource-vocab.ts';
 export { abundanceMilli, scaleByRichness } from './abundance.ts';
 export { projectBody, projectWorld, type ProjectedWorld } from './project.ts';

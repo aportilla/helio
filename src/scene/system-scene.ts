@@ -8,6 +8,7 @@
 import { type WebGLRenderer } from 'three';
 import { BODIES, clusterDisplayName } from '../data/stars';
 import { addableTypesFor } from '../facilities';
+import type { EconomyBridge } from '../facilities/economy-bridge';
 import { addFacility, facilitiesOnBody, removeFacility } from '../game-state';
 import { SystemHud } from '../ui/system-hud';
 import { Sidebar } from '../ui/sidebar/sidebar';
@@ -26,6 +27,9 @@ export class SystemScene {
   // Persistent sidebar, owned by AppController (shared with the galaxy view).
   // Rendered + input-routed here, but not owned. Consulted before the HUD.
   private readonly sidebar: Sidebar;
+  // The live economy, owned by AppController. We reconcile it after a facility
+  // edit and read each selected body's standing from it for the sidebar.
+  private readonly bridge: EconomyBridge;
   // The system view's contextual region inside the sidebar (selected body's
   // facilities). Set as the sidebar's active context on start, cleared on dispose.
   private readonly context: SystemContext;
@@ -59,10 +63,17 @@ export class SystemScene {
   // button click).
   onExit: () => void = () => {};
 
-  constructor(canvas: HTMLCanvasElement, renderer: WebGLRenderer, clusterIdx: number, sidebar: Sidebar) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    renderer: WebGLRenderer,
+    clusterIdx: number,
+    sidebar: Sidebar,
+    bridge: EconomyBridge,
+  ) {
     this.canvas = canvas;
     this.renderer = renderer;
     this.sidebar = sidebar;
+    this.bridge = bridge;
 
     this.diagram = new SystemDiagram(clusterIdx);
     this.hud = new SystemHud();
@@ -74,10 +85,12 @@ export class SystemScene {
     this.context = new SystemContext(clusterDisplayName(clusterIdx));
     this.context.onAddFacility = (bodyId, type) => {
       addFacility(bodyId, type);
+      this.bridge.syncFacilities();
       this.pushSelectionToSidebar();
     };
     this.context.onRemoveFacility = (facilityId) => {
       removeFacility(facilityId);
+      this.bridge.syncFacilities();
       this.pushSelectionToSidebar();
     };
 
@@ -198,8 +211,15 @@ export class SystemScene {
       kind: body.kind,
       facilities,
       addableTypes: addableTypesFor(body, facilities),
+      economy: this.bridge.bodyEconomy(body.id),
     });
     this.sidebar.refreshContent();
+  }
+
+  // Re-read the selected body's economy after the sim steps (Next Turn), so the
+  // sidebar's stock/flow numbers reflect the turn just processed.
+  afterTurnAdvance(): void {
+    this.pushSelectionToSidebar();
   }
 
   private onPointerMove(e: PointerEvent): void {

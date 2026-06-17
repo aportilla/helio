@@ -22,6 +22,7 @@ import { ViewportSizer } from './viewport-sizer';
 import { MapHud } from '../ui/map-hud';
 import { Sidebar } from '../ui/sidebar/sidebar';
 import { GalaxyContext } from '../ui/sidebar/galaxy-context';
+import type { EconomyBridge } from '../facilities/economy-bridge';
 import { sizes } from '../ui/theme';
 import { STARS, STAR_CLUSTERS, clusterIndexFor, nearestClusterIdxTo } from '../data/stars';
 import { getSettings } from '../settings';
@@ -87,6 +88,9 @@ export class StarmapScene {
   // view. The scene renders + resizes + input-routes it but does not own its
   // lifecycle. Consulted before the HUD so it intercepts clicks in its strip.
   private readonly sidebar: Sidebar;
+  // The live economy, owned by AppController. Read for the selected system's
+  // aggregate balance shown in the galaxy info-card.
+  private readonly bridge: EconomyBridge;
   // The galaxy view's contextual region inside the sidebar (civ summary +
   // selected-system info + View System/Focus). Set as the sidebar's context on
   // start(); fed selection via setCluster.
@@ -173,9 +177,10 @@ export class StarmapScene {
   // Pixel ratio + size are still driven from this scene's resize() (see
   // resize() for the integer-multiple-of-N rounding that guarantees a
   // clean nearest-neighbor upscale).
-  constructor(canvas: HTMLCanvasElement, renderer: WebGLRenderer, sidebar: Sidebar) {
+  constructor(canvas: HTMLCanvasElement, renderer: WebGLRenderer, sidebar: Sidebar, bridge: EconomyBridge) {
     this.renderer = renderer;
     this.sidebar = sidebar;
+    this.bridge = bridge;
     const sun = STARS.find(s => s.id === 'sol')!;
     this.view = {
       target: new Vector3(sun.x, sun.y, sun.z),
@@ -275,6 +280,7 @@ export class StarmapScene {
     // Show the galaxy context on the persistent sidebar (turn header stays); the
     // current selection survives a system-view round-trip on the singleton scene.
     this.galaxyContext.setCluster(this.selectedClusterIdx);
+    this.setSystemEconomy();
     this.sidebar.setContext(this.galaxyContext);
     // The sidebar's settings glyph opens this view's settings panel.
     this.sidebar.onSettings = () => this.hud.toggleSettings();
@@ -415,6 +421,7 @@ export class StarmapScene {
     this.starPoints.setSelectedCluster(clusterIdx);
     this.selectionBrackets.setCluster(clusterIdx);
     this.galaxyContext.setCluster(clusterIdx);
+    this.setSystemEconomy();
     this.sidebar.refreshContent();
     const com = STAR_CLUSTERS[clusterIdx]!.com;
     // Grid runs its own sequential expand/collapse off this call.
@@ -425,6 +432,21 @@ export class StarmapScene {
     this.droplines.setFade(1);
     this.focusMarker.setSelectedCluster(clusterIdx);
     this.animateFocusTo(com.x, com.y, com.z);
+  }
+
+  // Re-read the selected system's economy after a turn and repaint the sidebar
+  // (the galaxy info-card's net balances). Called by AppController on Next Turn.
+  afterTurnAdvance(): void {
+    this.setSystemEconomy();
+    this.sidebar.refreshContent();
+  }
+
+  // Push the selected system's (cluster's) aggregate balance into the galaxy
+  // info-card, or clear it when nothing is selected. Data only — callers repaint.
+  private setSystemEconomy(): void {
+    this.galaxyContext.setEconomy(
+      this.selectedClusterIdx >= 0 ? this.bridge.systemEconomy(this.selectedClusterIdx) : null,
+    );
   }
 
   // Touch-pan: midpoint translation drives view.target along the
@@ -501,6 +523,7 @@ export class StarmapScene {
     this.starPoints.setSelectedCluster(-1);
     this.selectionBrackets.setCluster(-1);
     this.galaxyContext.setCluster(-1);
+    this.setSystemEconomy();
     this.sidebar.refreshContent();
     this.grid.setSelection(null);
     this.droplines.setSelectedCluster(-1);

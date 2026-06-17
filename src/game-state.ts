@@ -121,11 +121,11 @@ export function removeFacility(id: string): void {
   writeToStorage(current);
 }
 
-// Advance the game by one turn and persist. v1 is an honest no-op-but-real advance
-// — it bumps the counter and nothing else, because the economy sim is still
-// standalone. The eventual seam (project facilities → EconomyEngine.step, then read
-// per-body surplus back) hooks HERE; deliberately not built yet, so the save shape
-// and the sim's isolation both stay put. Returns the new turn.
+// Advance the game's turn counter by one and persist. This is the turn-state half
+// only — bumping the saved scalar; the economy sim is stepped alongside it in
+// AppController.onNextTurn (EconomyBridge.step, then the sidebar re-reads its
+// balances). Kept separate so this save's shape and the sim's own save stay
+// independent. Returns the new turn.
 export function advanceTurn(): number {
   current = { ...current, turn: current.turn + 1 };
   writeToStorage(current);
