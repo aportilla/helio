@@ -61,7 +61,7 @@ Mapped to the plan's `v1 / deferred / deleted` banner.
 **Built (the transport core, end-to-end):**
 - One-tier flow records, count ⊥ quantity; durable cargo; exact-integer
   conservation with no loss terms (§3.1, §3.6).
-- Multi-leg routing over the jump graph: `legCandidates`/`routeBetween`, the
+- Multi-leg routing over the jump graph: `rankCandidates`/`routeBetween`, the
   inline route table (`routeRef`/`hopIndex`/`finalArrival`), advance-in-place at
   each star, stable `EdgeId`s, route-cache invalidation on rebuild (§3.7, §11.4).
 - Re-home at each star — the *necessary* case (destination gone / onward path

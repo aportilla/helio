@@ -100,6 +100,7 @@ export function buildReadDigest(
  *  A leg is `through` when it neither leaves the source star nor enters the final
  *  star — a relay reads as a waypoint, not a producer (§4.2). */
 function buildEdgeFlows(world: World): EdgeFlowRead[] {
+  // String key is a small-int concat (edge:res); repack to a packed int at WASM-port time.
   const agg = new Map<string, { e: EdgeId; from: SystemId; to: SystemId; res: ResourceId; units: number; through: boolean }>();
   world.ring.forEachLive((slot) => {
     const v = world.ring.view(slot);

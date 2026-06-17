@@ -122,7 +122,7 @@ export class GalaxyContext implements SidebarContext {
         const up = rl.netMilli >= 0;
         const valStr = (up ? '+' : '') + fmtMilli(rl.netMilli);
         drawPixelText(g, valStr, x0 + region.w - measurePixelText(valStr), y,
-          up ? colors.econSurplus : colors.econDeficit, fonts.body);
+          up ? colors.signalPositive : colors.signalNegative, fonts.body);
         y += bodyH;
       }
     }

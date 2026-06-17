@@ -133,25 +133,33 @@ import { MAX_LIGHTS, BAYER4_GLSL, HASH_GLSL, RIM_GLOW_FOCUS, STAR_CRESCENT_LIGHT
 // reads as gently banded foundation under its real cloud chemistry,
 // instead of a flat fill underneath sparse decks.
 export const MAX_CLOUD_LAYERS = 4;
+// Per-body DataTexture row layout. Each offset = its PREDECESSOR + that field's
+// texel width (and BODY_TEXTURE_WIDTH = the last offset + 1), so inserting a new
+// per-body signal is a one-line local edit — an absolute `+1` chain would force
+// re-counting every downstream constant, and a miscount silently corrupts every
+// sample past the insertion (no type error). body-disc.ts reads these symbols, so
+// this ordered block is the single place the layout lives. Texels
+// 0..MAX_CLOUD_LAYERS-1 are the cloud-deck block ATM_COLUMN follows; DECK_COLOR_BASE
+// opens a second MAX_CLOUD_LAYERS block that OCEAN follows.
 export const ATM_COLUMN_TEXEL_OFFSET = MAX_CLOUD_LAYERS;
-export const DECK_COLOR_BASE_OFFSET = MAX_CLOUD_LAYERS + 1;
-export const OCEAN_COLOR_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS;
+export const DECK_COLOR_BASE_OFFSET = ATM_COLUMN_TEXEL_OFFSET + 1;
+export const OCEAN_COLOR_TEXEL_OFFSET = DECK_COLOR_BASE_OFFSET + MAX_CLOUD_LAYERS;
 // Per-body limb Rayleigh scatter color (rgb; .a unused) — the gas-specific
 // hue the rim halo's depth-graded Rayleigh shift targets. Strength rides
 // on aWeights.w, so only the color needs a texel here.
-export const SCATTER_COLOR_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1;
+export const SCATTER_COLOR_TEXEL_OFFSET = OCEAN_COLOR_TEXEL_OFFSET + 1;
 // Per-body lava composition signal — .r = abiotic surface-sulfur fraction
 // (shifts the molten ember yellower, see lavaSulfurFrac); .gba = cooled-crust
 // RGB (neutral basalt leaned toward the body's rock mineralogy, see
 // lavaCrustColor in disc-palette/lava.ts). The molten sub-pass tints its
 // Tier-1 crust backdrop toward .gba so co-orbiting lava worlds keep distinct
 // crust hues rather than one shared constant brown.
-export const LAVA_TINT_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1 + 1;
+export const LAVA_TINT_TEXEL_OFFSET = SCATTER_COLOR_TEXEL_OFFSET + 1;
 // Per-body ember tint — rgb multiplicative chromophore filter the molten
 // sub-pass bends the blackbody ember by, so the glow signals composition
 // (radioactives → sickly green, metals → whiter-orange; see emberTint in
 // disc-palette/lava.ts). .a unused.
-export const EMBER_TINT_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1 + 1 + 1;
+export const EMBER_TINT_TEXEL_OFFSET = LAVA_TINT_TEXEL_OFFSET + 1;
 // Per-body surface-terrain scalars — .r = reliefBands (the count of discrete
 // elevation terraces the surface shades into, 1 ≈ flat → 6 ≈ rugged); .g =
 // granularity (feature fineness 0 = coarse provinces → 1 = fine grain); .b =
@@ -159,9 +167,8 @@ export const EMBER_TINT_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS +
 // ages via a dust mantle, 0 = rocky snowball, between = a continuous blend).
 // All derived read-side in disc-palette (terrainRoughnessFor / shellFraction)
 // from stored physics, not stored fields. .a unused.
-export const TERRAIN_TEXEL_OFFSET = MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1 + 1 + 1 + 1;
-export const BODY_TEXTURE_WIDTH =
-  MAX_CLOUD_LAYERS + 1 + MAX_CLOUD_LAYERS + 1 + 1 + 1 + 1 + 1;
+export const TERRAIN_TEXEL_OFFSET = EMBER_TINT_TEXEL_OFFSET + 1;
+export const BODY_TEXTURE_WIDTH = TERRAIN_TEXEL_OFFSET + 1;
 
 // mode='all' renders disc + halo (moons; keeps the original single-pass
 // behavior). mode='disc' or 'halo' splits the disc-interior and the
@@ -624,7 +631,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       const float STAIN_FLOOD_MAX  = 0.7;
       const float STAIN_EDGE_DITHER = 0.08;  // elev-unit width of the dithered fringe
 
-      // Phase 1.5c — discrete crater features + ejecta rays. Crater
+      // Discrete crater features + ejecta rays. Crater
       // seed cells are CRATER_PATCH_FACTOR × the fine worley cell
       // pitch in the same sphere-projected (lon, lat) frame as 1.5a/b.
       // Each cell may contain one impact crater whose existence
@@ -757,7 +764,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
       const float RAY_MIN_DISC_RADIUS = 12.0;
       const float TWO_PI              = 6.28318530;
 
-      // Phase 1.5d — linea (Europa-style cracks). Paints subsurface
+      // Linea (Europa-style cracks). Paints subsurface
       // resource color along Voronoi cell boundaries (F2 − F1 worley
       // distance) where the body has young icy crust. Same layered
       // resource model as craters; only the geometry differs (line
@@ -1628,7 +1635,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         icyHere = t > dither;
       }
 
-      // Phase 1.5c — discrete crater features + ejecta rays.
+      // Discrete crater features + ejecta rays.
       // Crater seed cells aggregate CRATER_PATCH_FACTOR² fine
       // cells in the same sphere-projected frame as 1.5a/b. Scan
       // the 7×7 neighborhood: existence hash against
@@ -1871,7 +1878,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
                      vSeed * SALT_SURFACE_JITTER_A, vSeed * SALT_SURFACE_JITTER_B,
                      winnerCell, secondCell, minDist2, secondMinDist2);
 
-          // Phase 1.6 — ice is a contextual surface state composed onto
+          // Ice is a contextual surface state composed onto
           // the body's bulk surface, not its own latitude-band override.
           // Three things drive the per-fragment composition:
           //   icyHere           — does ice cover this fragment? Decided
@@ -2073,7 +2080,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
             col = resourceSurface;
           }
 
-          // Phase 1.5c — discrete crater features + ejecta rays (see
+          // Discrete crater features + ejecta rays (see
           // craterRayPass): the closest containing crater paints its
           // excavated subsurface palette into the bowl, and any crater
           // whose rays reach this fragment throws the same material
@@ -2091,7 +2098,7 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
             col = craterRayPass(col, cellPos, icyHere, shellFraction, reliefBands);
           }
 
-          // Phase 1.5d — linea. Voronoi cell-boundary cracks painted
+          // Linea. Voronoi cell-boundary cracks painted
           // with the body's subsurface palette. Fires where the body
           // has young icy crust (Europa, Enceladus). Crack DENSITY scales with
           // shellFraction — linea is ice-shell tectonics (a cracked-open global

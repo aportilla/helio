@@ -17,8 +17,9 @@ import { colors, fonts, sizes } from './theme';
 export const PILL_PAD_X = 6;
 export const PILL_PAD_Y = 3;
 
-// 4-strip 1-px border. No fill. Use paintSurface() if you also want a bg.
-export function paintBorder(
+// 4-strip 1-px border. No fill. Module-private — paintSurface() composes it; use
+// that if you want a bg too.
+function paintBorder(
   g: CanvasRenderingContext2D,
   x: number,
   y: number,

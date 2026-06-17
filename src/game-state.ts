@@ -14,80 +14,39 @@
 // seam (the standalone sim under sim/), never baked into this blob. So adding
 // the economy won't reshape this file.
 //
-// MULTI-SLOT SEAM: STORAGE_KEY is the single point where the active save's
-// storage location is resolved. Multiple save slots (with a new-game /
-// load-game splash) become "make the key slot-scoped + add a slot index"
-// here — the GameState shape and the API below stay put.
+// MULTI-SLOT SEAM: the active save's storage location resolves through
+// storage.slotKey('game'). Multiple save slots (with a new-game / load-game
+// splash) become slotKey('game', activeSlot) — the GameState shape and the API
+// below stay put. The game + sim saves cross-reference by Body.id, so a slot
+// switch scopes both from that one resolver (see ./storage).
 
 import { indexOfBodyId } from './data/stars';
-import { ADD_ORDER, FACILITY_BY_TYPE, FACILITY_TYPES, type FacilityType } from './facilities';
+import { ADD_ORDER, FACILITY_BY_TYPE, type FacilityType } from './facilities';
+import { parseGameState, type Facility, type GameState } from './game-state-codec';
+import { slotKey, readRaw, writeRaw } from './storage';
+import { recordsOnBody } from './world-overlay';
 
-// FacilityType + its validation set now live in the facilities registry (the
-// single source of truth for everything about a facility). game-state owns only
-// the SAVE shape — what persists in 'helio.game'.
+// The save SHAPE (Facility / GameState) and the pure parse/validate-and-merge
+// reader live in ./game-state-codec (node-testable, no globals); this module owns
+// the live in-memory state, the localStorage I/O, and the mutators. Re-export the
+// shape so existing `import type { Facility } from './game-state'` callers hold.
+export type { Facility, GameState } from './game-state-codec';
 
-export interface Facility {
-  // Unique within this save (allocated from GameState.seq).
-  readonly id: string;
-  // The catalog Body.id this facility sits on — stable, serializable.
-  readonly bodyId: string;
-  readonly type: FacilityType;
-}
-
-export interface GameState {
-  version: 1;
-  // The player's current turn, 1-based. Advanced by advanceTurn() and persisted so
-  // a reload resumes the same turn. A plain integer — no Math.random/Date (this is
-  // not the deterministic sim).
-  turn: number;
-  // Monotonic counter backing Facility.id allocation — stable across reloads,
-  // trivially unique, no Math.random/Date (this isn't the deterministic sim).
-  seq: number;
-  facilities: readonly Facility[];
-}
-
-const STORAGE_KEY = 'helio.game';
-const DEFAULTS: GameState = { version: 1, turn: 1, seq: 0, facilities: [] };
-
-function isValidFacility(f: unknown): f is Facility {
-  if (!f || typeof f !== 'object') return false;
-  const o = f as Record<string, unknown>;
-  return typeof o.id === 'string'
-    && typeof o.bodyId === 'string'
-    && typeof o.type === 'string' && FACILITY_TYPES.has(o.type);
-}
+const STORAGE_KEY = slotKey('game');
 
 function readFromStorage(): GameState {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...DEFAULTS };
-    const parsed = JSON.parse(raw) as Partial<GameState>;
-    const rawFacilities = Array.isArray(parsed.facilities) ? parsed.facilities : [];
-    // Skip-on-missing: drop any facility that's malformed or whose body the
-    // rebuilt catalog no longer contains (a PROCGEN_VERSION bump / CSV id
-    // change). Never fatal — a placeholder colony is not worth crashing a load.
-    const facilities = rawFacilities.filter(isValidFacility).filter(f => indexOfBodyId(f.bodyId) >= 0);
-    const dropped = rawFacilities.length - facilities.length;
-    if (import.meta.env.DEV && dropped > 0) {
-      console.warn(`[game-state] dropped ${dropped} facilit${dropped === 1 ? 'y' : 'ies'} with an unknown/invalid body id`);
-    }
-    const seq = typeof parsed.seq === 'number' && parsed.seq >= 0 ? Math.floor(parsed.seq) : 0;
-    // Turns are 1-based; an old save (or a corrupt value) reads as turn 1. Adding
-    // this field needs no version bump — reads merge over DEFAULTS (validate-and-merge).
-    const turn = typeof parsed.turn === 'number' && parsed.turn >= 1 ? Math.floor(parsed.turn) : 1;
-    return { version: 1, turn, seq, facilities };
-  } catch {
-    return { ...DEFAULTS };
+  // parseGameState handles a null raw (absent key / disabled storage) → defaults,
+  // and applies the skip-on-missing gate: a facility whose body a catalog rebuild
+  // (PROCGEN_VERSION bump / CSV id change) no longer contains is dropped, never fatal.
+  const { state, droppedFacilities } = parseGameState(readRaw(STORAGE_KEY), (id) => indexOfBodyId(id) >= 0);
+  if (import.meta.env.DEV && droppedFacilities > 0) {
+    console.warn(`[game-state] dropped ${droppedFacilities} facilit${droppedFacilities === 1 ? 'y' : 'ies'} with an unknown/invalid body id`);
   }
+  return state;
 }
 
 function writeToStorage(s: GameState): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-  } catch {
-    // localStorage disabled or full — state still applies this session, it
-    // just won't persist. No recovery; swallow (mirrors settings.ts).
-  }
+  writeRaw(STORAGE_KEY, JSON.stringify(s));
 }
 
 let current: GameState = readFromStorage();
@@ -97,7 +56,7 @@ export function getGameState(): Readonly<GameState> {
 }
 
 export function facilitiesOnBody(bodyId: string): readonly Facility[] {
-  return current.facilities.filter(f => f.bodyId === bodyId);
+  return recordsOnBody(current.facilities, bodyId);
 }
 
 // Place a facility, or return null if the body is already at the per-(body, type)

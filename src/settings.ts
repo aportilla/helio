@@ -1,14 +1,15 @@
-// Persisted user preferences. Single namespaced localStorage key, JSON
-// blob with a version field so we can migrate the shape later without
-// blowing up old saves. Reads are robust against localStorage being
-// disabled (private browsing, quota errors) and against corrupt or
-// older-version blobs — fall back to defaults rather than crash.
+// Persisted user preferences — a JSON blob under the `helio.settings` key (the
+// keyspace + safe I/O live in ./storage). Settings are GLOBAL, not per-save-slot.
+// Reads validate-and-merge over defaults: an additive field needs no version bump,
+// a corrupt/disabled/absent blob falls back to defaults rather than crash, and the
+// `version` field is reserved for a future breaking migration (see ./storage).
 //
-// The module exposes a tiny pull-on-read API: callers `getSettings()`
-// each frame (or each gesture) and read whichever fields they care
-// about; mutations go through `setSetting()` which updates the
-// in-memory value and persists. No reactive store needed for this
-// scale of preferences.
+// The module exposes a tiny pull-on-read API: callers `getSettings()` each frame
+// (or each gesture) and read whichever fields they care about; mutations go
+// through `setSetting()` which updates the in-memory value and persists. No
+// reactive store needed for this scale of preferences.
+
+import { slotKey, readRaw, writeRaw, removeRaw } from './storage';
 
 export type SingleTouchAction = 'orbit' | 'pan';
 // Resolution preference: a bias applied to the auto-computed render scale
@@ -37,7 +38,10 @@ export interface Settings {
   resolutionPreference: ResolutionPreference;
 }
 
-const STORAGE_KEY = 'starmap.settings';
+const STORAGE_KEY = slotKey('settings');
+// Pre-Helio-rename key. Read once and migrated forward (then dropped) so a
+// returning user keeps their prefs across the namespace change.
+const LEGACY_KEY = 'starmap.settings';
 const DEFAULTS: Settings = {
   version: 2,
   singleTouchAction: 'orbit',
@@ -46,15 +50,14 @@ const DEFAULTS: Settings = {
   resolutionPreference: 'medium',
 };
 
-function readFromStorage(): Settings {
+// Validate each field individually and merge over defaults so adding new fields
+// later doesn't break old saves. Reject any value that isn't a known enum literal;
+// for booleans, fall back to the default unless the stored value is exactly
+// true/false. A null or corrupt blob yields fresh defaults.
+function parse(raw: string | null): Settings {
+  if (!raw) return { ...DEFAULTS };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...DEFAULTS };
     const parsed = JSON.parse(raw) as Partial<Settings>;
-    // Validate each field individually and merge over defaults so adding
-    // new fields later doesn't break old saves. Reject any value that
-    // isn't one of the known enum literals; for booleans, fall back to
-    // the default unless the stored value is exactly `true` or `false`.
     const pref = parsed.resolutionPreference;
     return {
       ...DEFAULTS,
@@ -68,13 +71,21 @@ function readFromStorage(): Settings {
   }
 }
 
+function readFromStorage(): Settings {
+  const raw = readRaw(STORAGE_KEY);
+  if (raw !== null) return parse(raw);
+  // First run after the Helio rename: migrate the old `starmap.settings` blob
+  // forward, then drop it, so prefs survive the namespace change.
+  const legacy = readRaw(LEGACY_KEY);
+  if (legacy === null) return { ...DEFAULTS };
+  const migrated = parse(legacy);
+  writeRaw(STORAGE_KEY, JSON.stringify(migrated));
+  removeRaw(LEGACY_KEY);
+  return migrated;
+}
+
 function writeToStorage(s: Settings): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-  } catch {
-    // localStorage disabled or full — settings still apply for this
-    // session, they just won't persist. No way to recover; swallow.
-  }
+  writeRaw(STORAGE_KEY, JSON.stringify(s));
 }
 
 let current: Settings = readFromStorage();

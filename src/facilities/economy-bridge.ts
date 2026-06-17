@@ -41,8 +41,10 @@ import { projectWorld } from './project.ts';
 import type { SimStarResolver } from './types.ts';
 import { buildGeometry, LY_TO_SIM_UNITS } from './sim-geometry.ts';
 import { sameBodyIds, transplantLiveState } from './world-sync.ts';
+import { base64FromBytes, bytesFromBase64 } from './base64.ts';
+import { slotKey, readRaw, writeRaw } from '../storage.ts';
 
-const SIM_SAVE_KEY = 'helio.sim';
+const SIM_SAVE_KEY = slotKey('sim');
 
 // Pinned, non-zero seed (Prng.fromSeed(0) is degenerate). The economy's RNG
 // identity for a fresh game; a restored save's PRNG state takes over from here.
@@ -286,20 +288,15 @@ export class EconomyBridge {
         bodyIds: this.bodyIdByPlanet,
         bytes: base64FromBytes(bytes),
       });
-      localStorage.setItem(SIM_SAVE_KEY, payload);
+      writeRaw(SIM_SAVE_KEY, payload);
     } catch {
-      // localStorage full/disabled (mirrors game-state/settings) — the session
-      // still runs, it just won't persist.
+      // serialize threw (a tripped DEV invariant) — skip this persist. Storage
+      // errors are already swallowed inside writeRaw.
     }
   }
 
   private restore(): Restored | null {
-    let raw: string | null;
-    try {
-      raw = localStorage.getItem(SIM_SAVE_KEY);
-    } catch {
-      return null;
-    }
+    const raw = readRaw(SIM_SAVE_KEY);
     if (!raw) return null;
     try {
       const parsed = JSON.parse(raw) as { v?: number; bodyIds?: unknown; bytes?: unknown };
@@ -344,7 +341,17 @@ function clusterNodeOfBody(body: Body): number {
   while (b.hostStarIdx === null && b.hostBodyIdx !== null && guard++ < 8) {
     b = BODIES[b.hostBodyIdx]!;
   }
-  return clusterIndexFor(b.hostStarIdx ?? 0);
+  if (b.hostStarIdx === null) {
+    // The walk bottomed out without a star-hosted parent — a malformed host chain
+    // or one deeper than the guard. Falling back to cluster 0 keeps prod resilient,
+    // but it silently mislocates the body's economy into that node's pool, so make
+    // it observable in DEV (mirroring the catalog/registry drift warnings).
+    if (import.meta.env.DEV) {
+      console.warn(`[economy] body '${body.id}' resolved to no host star (guard ${guard}); economy mapped to cluster 0`);
+    }
+    return clusterIndexFor(0);
+  }
+  return clusterIndexFor(b.hostStarIdx);
 }
 
 // Make a world use the current build's jump reach. A fresh world already does
@@ -359,20 +366,3 @@ function enforceReach(world: World): void {
   world.topology.rebuild(world.cfg);
 }
 
-// Browser-safe base64 of the sim's binary save (chunked so a large byte array
-// can't overflow the String.fromCharCode argument stack).
-function base64FromBytes(bytes: Uint8Array): string {
-  let bin = '';
-  const CHUNK = 0x8000;
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-  }
-  return btoa(bin);
-}
-
-function bytesFromBase64(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}

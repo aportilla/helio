@@ -13,12 +13,6 @@ interface Vec3Like {
   readonly z: number;
 }
 
-// Squared-distance epsilon (ly²) used to decide whether view.target is "on"
-// the selected cluster's COM — drives the Focus button's enabled state.
-// 0.01 ly = ~38 AU; well below any visually significant offset and far
-// above FP jitter from the focus lerp's terminal copy().
-export const FOCUS_EPSILON_SQ = 0.01 * 0.01;
-
 // The candidate cluster is the one the dot-brackets + yellow label mark and
 // the one spacebar advances the selection to — only ever one at a time.
 // Hover beats focus-proximity: when the user is pointing at a star, that's
@@ -58,15 +52,6 @@ export function resolveCandidateCluster(
     }
   }
   return -1;
-}
-
-// True when view.target sits on a cluster's COM (within FOCUS_EPSILON_SQ) —
-// i.e. the camera is already focused on it, so the Focus button disables.
-export function isTargetFocusedOnCom(target: Vec3Like, com: Vec3Like): boolean {
-  const dx = target.x - com.x;
-  const dy = target.y - com.y;
-  const dz = target.z - com.z;
-  return (dx * dx + dy * dy + dz * dz) < FOCUS_EPSILON_SQ;
 }
 
 // Local-focus dim strength as a function of orbit distance (camera-to-pivot

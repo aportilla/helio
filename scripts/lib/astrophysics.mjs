@@ -1,8 +1,8 @@
 // Shared physical-relation approximations used by the procgen Architect
 // and Filler. Kept as one module so the two layers agree on derived
-// quantities (insolation, luminosity); divergence here would mean the
-// Architect's slot-zone choice doesn't match what the Filler reads when
-// classifying world_class later.
+// insolation / luminosity; divergence here would mean the Architect's
+// formation-zone choice doesn't match what the Filler reads when settling
+// surface state.
 
 import { SNOW_LINE_TEMPERATURES } from './procgen-priors.mjs';
 

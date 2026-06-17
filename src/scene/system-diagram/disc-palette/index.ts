@@ -184,8 +184,8 @@ const TEMP_NEUTRAL_K = 280;
 const TEMP_COLD_K    = 100;
 const TEMP_HOT_K     = 700;
 
-// BARREN_ROCK_COLOR (imported from data/stars) backstops the no-resource
-// flat-fill fallback (a body whose entire resource grid is empty).
+// BARREN_ROCK_COLOR backstops the no-resource flat-fill fallback (a body whose
+// entire resource grid is empty).
 
 // Surface AREA model — primary abundance (a0) splits the disc into Uplands (the
 // resource patch, area a0) and Lowlands (regolith, 1 − a0); that split biases
@@ -224,7 +224,7 @@ const BASE_DECK_WIND_DEFAULT = 200;
 // Gas-giant self-emission window. A hot/ultra-hot giant glows from its own
 // heat — the deep dull red-orange of an incandescent atmosphere — keyed on the
 // combined effective temperature (avgSurfaceTempK, which folds intrinsic
-// Kelvin-Helmholtz heat into irradiation since Phase 1). Maps T → an
+// Kelvin-Helmholtz heat into irradiation). Maps T → an
 // emissionTempNorm the shader feeds to emberRamp. The window floor is the
 // visible-glow onset; RAMP_CAP holds even the hottest giant at vivid orange
 // rather than the gold-white top of the ramp — the convo's "deep, dull
@@ -492,7 +492,7 @@ export interface DiscPalette {
   // the rim at its Mie color.
   readonly scatterColor: readonly [number, number, number];
   readonly scatterStrength: number;
-  // Phase 1.4 surface age [0..1]. 1 = perpetually refreshed (Io's lava,
+  // Surface age [0..1]. 1 = perpetually refreshed (Io's lava,
   // Enceladus's plumes); 0 = ancient unmodified (Mercury, Luna,
   // Callisto). Drives crater density and the ice-on-top-vs-buried mix.
   // Forced to 0.5 on no-surface bodies and tiny discs (the surface

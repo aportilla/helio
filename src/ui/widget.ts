@@ -45,9 +45,9 @@ const ZERO_BOUNDS: Bounds = makeBounds(0, 0, 0, 0);
 // pool outside the standard owned-texture path.
 //
 // colorSpace intentionally left at default. With ColorManagement disabled
-// and outputColorSpace = LinearSRGBColorSpace (set in scene.ts), the whole
-// pipeline is raw sRGB end-to-end, so we want the sampler to return the
-// canvas pixels untouched.
+// and outputColorSpace = LinearSRGBColorSpace (set in app-controller.ts),
+// the whole pipeline is raw sRGB end-to-end, so we want the sampler to
+// return the canvas pixels untouched.
 export function paintToTexture(canvas: HTMLCanvasElement): CanvasTexture {
   const t = new CanvasTexture(canvas);
   t.minFilter = NearestFilter;

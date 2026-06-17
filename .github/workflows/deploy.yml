@@ -21,9 +21,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          # Single source of the CI Node version (engines in package.json is the floor).
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      # Gate the deploy on the full check umbrella (boundary wall + audits + every
+      # unit suite) before the build — a broken sim wall or failing test must not ship.
+      - run: npm run check
       - run: npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

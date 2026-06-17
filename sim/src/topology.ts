@@ -49,7 +49,7 @@ export class Topology {
 
   // Append-only route table (serialized; transfers hold indices into it).
   private readonly routes: Route[] = [];
-  private readonly routeIntern = new Map<string, number>(); // hopKey -> routeRef
+  private readonly routeIntern = new Map<string, number>(); // hopKey -> routeRef (string key is variable-length: the one to repack with care at WASM-port time)
 
   // Per-version derived caches (cleared on rebuild).
   private treeCache = new Map<number, ShortestTree>(); // dstStar -> tree

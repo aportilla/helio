@@ -14,7 +14,7 @@
 //    there silently swaps which neighbor occludes which. bandZ is the
 //    single formula all pools share.
 
-import { Z_STRIDE } from '../layout/constants';
+import { Z_STRIDE } from '../layout/constants.ts';
 
 // Round-to-nearest-integer pixel snap. The plain idiom for pools whose
 // disc is a Points sprite (moons) or a baked chunk cluster (belts):

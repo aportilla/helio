@@ -1,0 +1,13 @@
+{
+  // Type-checks the standalone dev scripts the app/test/sim configs don't cover —
+  // today scripts/inspect-economy.ts, which imports the sim + facilities adapters
+  // and must stay typed as those APIs evolve. Extends the app config (bundler
+  // resolution + allowImportingTsExtensions, so the .ts sim imports resolve).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["scripts/inspect-economy.ts", "src/vite-env.d.ts"],
+  "exclude": ["node_modules", "dist"]
+}

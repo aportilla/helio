@@ -25,12 +25,12 @@ export function sameBodyIds(a: readonly string[], b: readonly string[]): boolean
 }
 
 // Carry accumulated live state from `prev` into the freshly projected `next`,
-// matched by Body.id. Only stock and the per-(planet,resource) state the demand
-// signal depends on (EMA consumption, the hysteresis ordering flag, the
-// starvation counter) cross over; production/consumption/storageCeiling stay as
-// the new projection set them, so a facility edit changes rates without resetting
-// the economy. A body absent from `prev` (newly built) keeps its projected
-// cold-start values. The sim clock and PRNG stream are kept continuous.
+// matched by Body.id, so a facility edit changes rates without resetting the
+// economy. WHICH columns cross over (the live accumulators) vs. stay fresh (the
+// re-derived projection) is the sim's call — World.copyAccumulators owns the
+// partition (World.ACCUMULATOR_COLUMNS), so a new sim column can't silently drop
+// out of the carry here. A body absent from `prev` (newly built) keeps its
+// projected cold-start values. The sim clock and PRNG stream are kept continuous.
 export function transplantLiveState(
   next: World,
   nextBodyIds: readonly string[],
@@ -40,18 +40,10 @@ export function transplantLiveState(
   const prevPlanetByBody = new Map<string, number>();
   prevBodyIds.forEach((id, p) => prevPlanetByBody.set(id, p));
 
-  const R = next.R;
   for (let np = 0; np < nextBodyIds.length; np++) {
     const pp = prevPlanetByBody.get(nextBodyIds[np]!);
     if (pp === undefined) continue; // a body new since `prev` → keep its cold start
-    for (let r = 0; r < R; r++) {
-      const ni = np * R + r;
-      const pi = pp * R + r;
-      next.stock[ni] = prev.stock[pi]!;
-      next.emaConsume[ni] = prev.emaConsume[pi]!;
-      next.ordering[ni] = prev.ordering[pi]!;
-      next.starveTurns[ni] = prev.starveTurns[pi]!;
-    }
+    next.copyAccumulators(np, prev, pp);
   }
 
   next.turn = prev.turn;

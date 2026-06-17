@@ -17,8 +17,9 @@ import { sizes } from '../ui/theme';
 import { SystemDiagram, type DiagramPick } from './system-diagram';
 import { picksEqual } from './system-diagram/types';
 import { ViewportSizer } from './viewport-sizer';
+import type { Screen } from './screen';
 
-export class SystemScene {
+export class SystemScene implements Screen {
   private readonly canvas: HTMLCanvasElement;
   private readonly renderer: WebGLRenderer;
 

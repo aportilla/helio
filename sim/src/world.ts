@@ -38,6 +38,24 @@ export interface WorldSpec {
   readonly planets: readonly PlanetSpec[];
 }
 
+// The per-(planet, resource) columns, partitioned by how a mid-game reproject (a
+// facility build/remove → a fresh PlanetSpec[]) must treat each one. ACCUMULATOR
+// columns hold live state that must SURVIVE the edit — carried across by Body.id
+// (facilities/world-sync.transplantLiveState, via copyAccumulators below).
+// PROJECTION columns are re-derived from the new specs and must NOT be carried
+// (freezing the old production/consumption rates or re-summing two uncapped
+// storageCeilings would corrupt the economy). Every per-(planet, resource) column
+// MUST appear in exactly one list; `world-columns.test.ts` reflects over a World
+// and fails if any column is unpartitioned — so adding a column is a forcing
+// function for a carry/re-derive decision rather than a silent reset.
+export type PlanetResourceColumn =
+  | 'stock' | 'production' | 'consumption' | 'storageCeiling'
+  | 'emaConsume' | 'ordering' | 'starveTurns';
+
+export const ACCUMULATOR_COLUMNS = ['stock', 'emaConsume', 'ordering', 'starveTurns'] as const satisfies readonly PlanetResourceColumn[];
+
+export const PROJECTION_COLUMNS = ['production', 'consumption', 'storageCeiling'] as const satisfies readonly PlanetResourceColumn[];
+
 export class World {
   /** Mutable so reach/speed tech intents can retune topology mid-game; quantify
    *  and allocate read it live, and topology rebuilds off it (§6). */
@@ -122,6 +140,21 @@ export class World {
   /** Flat index into a per-(planet, resource) column. */
   pr(p: PlanetId, r: number): number {
     return (p as number) * this.R + r;
+  }
+
+  /** Carry this world's ACCUMULATOR columns for planet `dst` from `src`'s planet
+   *  `srcPlanet` — the live state (stock + the demand-signal memory) a facility
+   *  edit must preserve, matched on Body.id by the caller. Projection columns are
+   *  deliberately left at this world's fresh values. Iterating ACCUMULATOR_COLUMNS
+   *  (not a hand-list at the call site) is what makes a new sim column a
+   *  partition decision instead of a silent reset. */
+  copyAccumulators(dst: number, src: World, srcPlanet: number): void {
+    const R = this.R;
+    for (const col of ACCUMULATOR_COLUMNS) {
+      const to = this[col];
+      const from = src[col];
+      for (let r = 0; r < R; r++) to[dst * R + r] = from[srcPlanet * R + r]!;
+    }
   }
 
   starOf(p: PlanetId): StarId {

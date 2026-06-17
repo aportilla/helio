@@ -485,73 +485,11 @@ const ROCK_ARCHETYPE_PAIR: Record<string, Color> = {
 // archetype's identity dominates the visual.
 const ROCK_ARCHETYPE_SHADE_AMOUNT = 0.3;
 
-// Neutral barren rock — the base regolith color before any per-body
-// resource tinting. Muted warm grey: readable as "weathered surface"
-// without leaning toward any of the six resource archetypes. Used by
-// the disc-palette grey-lerp on the archetype slots (low-abundance
-// resources fade toward this) AND by barrenTintFor below as the base
-// the body's mineralogy nudges away from. Exported so disc-palette/index.ts
-// can share one source of truth.
+// Neutral barren rock — the muted warm grey regolith the no-resource flat-fill
+// backstop falls back to (disc-palette/index.ts), readable as "weathered surface"
+// without leaning toward any of the six resource archetypes. Exported so the
+// disc-palette shares one source of truth.
 export const BARREN_ROCK_COLOR = new Color(0x6c6864);
-
-// Body-tinted barren regolith — ordered (k0|k1) so a metals-dominant
-// world's barren patches differ from a silicates-dominant one's. Only
-// the named pairs below get hand-tuned colors; everything else falls
-// through to the formula-weighted mix in `barrenTintFor`. Each entry is
-// a muted regolith hue with a clear hint of the body's top-2 mineralogy.
-//
-// Convention: `${dominant}|${secondary}` — keyA is the higher-abundance
-// resource. Reversing the order picks a different LUT entry, which is
-// the whole point of having an ordered table: Mars-dust over a metals
-// crust reads different from iron-stained silicate plains.
-const ROCK_ARCHETYPE_BARREN: Record<string, Color> = {
-  'resMetals|resSilicates':     new Color(0x847468), // iron-dominant tan regolith (Mars dust on a metals crust)
-  'resSilicates|resMetals':     new Color(0x8e7c68), // silicate-dominant rust dust (Luna-Mars warm)
-  'resMetals|resVolatiles':     new Color(0x747880), // cold iron grey (asteroid surface)
-  'resVolatiles|resMetals':     new Color(0x8c9498), // dusty frozen grey (Callisto regolith)
-  'resSilicates|resVolatiles':  new Color(0x8c8478), // permafrost tan (Mars high lat.)
-  'resVolatiles|resSilicates':  new Color(0x94948c), // dirty ice grey (rocky inclusions in ice)
-  'resSilicates|resRareEarths': new Color(0xa07a54), // ferric desert regolith (Mars rust over silicate crust)
-};
-
-// Formula weights for the barren-tint fallback. `BARREN` carries the
-// neutral regolith base; `PRIMARY` and `SECONDARY` add the resource hue.
-// Order matters because PRIMARY > SECONDARY — a metals|silicates body
-// (metals primary) leans toward iron-grey; a silicates|metals body
-// (silicates primary) leans toward tan. Weights sum to 1 so the output
-// stays in the valid color range without further clamping.
-const BARREN_TINT_BASE_WEIGHT      = 0.55;
-const BARREN_TINT_PRIMARY_WEIGHT   = 0.30;
-const BARREN_TINT_SECONDARY_WEIGHT = 0.15;
-
-// Derive the body-tinted barren regolith color for a (k0, k1) pair. The
-// disc-palette renders this as the third paint slot alongside the two
-// archetype slots, so a Mars-class body's barren patches read as rust-
-// hinted regolith rather than a uniform neutral grey across every world.
-// Ordered: k0 is the higher-abundance resource. The LUT short-circuits
-// for curated pairs; the formula handles the rest.
-export function barrenTintFor(
-  k0: ResourceKey,
-  k1: ResourceKey | null,
-): Color {
-  if (k1 !== null && k0 !== k1) {
-    const lutHit = ROCK_ARCHETYPE_BARREN[`${k0}|${k1}`];
-    if (lutHit) return lutHit;
-  }
-  const c0 = RESOURCE_COLOR[k0];
-  const c1 = (k1 !== null && k0 !== k1) ? RESOURCE_COLOR[k1] : c0;
-  return new Color(
-    BARREN_ROCK_COLOR.r * BARREN_TINT_BASE_WEIGHT
-      + c0.r * BARREN_TINT_PRIMARY_WEIGHT
-      + c1.r * BARREN_TINT_SECONDARY_WEIGHT,
-    BARREN_ROCK_COLOR.g * BARREN_TINT_BASE_WEIGHT
-      + c0.g * BARREN_TINT_PRIMARY_WEIGHT
-      + c1.g * BARREN_TINT_SECONDARY_WEIGHT,
-    BARREN_ROCK_COLOR.b * BARREN_TINT_BASE_WEIGHT
-      + c0.b * BARREN_TINT_PRIMARY_WEIGHT
-      + c1.b * BARREN_TINT_SECONDARY_WEIGHT,
-  );
-}
 
 // Look up the rock archetype for one or two resources, applying shade-
 // by-balance for pair entries.

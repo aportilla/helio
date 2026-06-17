@@ -41,10 +41,12 @@ export const colors = {
   textKey:       '#2d7ab8',         // info card keys, panel section headers
   starName:      '#ffe98a',         // info card star name, panel title
 
-  // Economy signals — net producer vs. net consumer of a resource. Muted,
-  // literal-sRGB to sit in the cyan palette without breaking the pixel aesthetic.
-  econSurplus:   '#8ae89a',         // surplus / net production (soft green)
-  econDeficit:   '#e8896a',         // deficit / net consumption (soft red)
+  // Generic positive/negative signal — surplus vs. deficit today, reusable by any
+  // future screen's good/bad readout. Muted, literal-sRGB to sit in the cyan
+  // palette without breaking the pixel aesthetic. (Kept domain-neutral so the
+  // economy isn't the only thing that can tint a value green/red.)
+  signalPositive: '#8ae89a',        // positive: surplus / net production (soft green)
+  signalNegative: '#e8896a',        // negative: deficit / net consumption (soft red)
 } as const;
 
 export const sizes = {

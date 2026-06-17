@@ -36,7 +36,7 @@ For verification, headless economy inspection (`npm run inspect:economy`), and s
 
 Helio runs as three layers:
 
-1. **Catalog (skeleton)** — a precomputed snapshot of ~1500 nearby star systems and 8000+ bodies (`src/data/catalog.generated.json`, gitignored), built from hand-authored CSVs by `scripts/build-catalog.mjs` plus a deterministic procgen pipeline. Static content, regenerated from source, never a save. Build pipeline: [scripts/README.md](scripts/README.md); runtime API: [src/data/README.md](src/data/README.md).
+1. **Catalog (skeleton)** — a precomputed snapshot of ~1500 nearby stars (grouped into ~1200 systems) and 8000+ bodies (`src/data/catalog.generated.json`, gitignored), built from hand-authored CSVs by `scripts/build-catalog.mjs` plus a deterministic procgen pipeline. Static content, regenerated from source, never a save. Build pipeline: [scripts/README.md](scripts/README.md); runtime API: [src/data/README.md](src/data/README.md).
 2. **Browser app** — the Three.js galaxy + system views and their pixel-art HUDs (`src/scene/`, `src/ui/`). What the player sees. [src/scene/README.md](src/scene/README.md), [src/ui/README.md](src/ui/README.md).
 3. **Economy sim** — a standalone, deterministic, integer-only logistics core (`sim/`), built and tested in isolation, then driven by the app through `src/facilities/economy-bridge.ts` (a placed facility projects into it; Next Turn steps it; surplus/deficit reads back into the sidebar). [sim/README.md](sim/README.md).
 

@@ -5,6 +5,12 @@
 // needs bit-stable save/replay, so it carries an integer generator whose entire
 // state is four uint32 words that serialize verbatim. All ops go through
 // Math.imul / `>>> 0` so they stay in 32-bit lanes regardless of platform.
+//
+// v1 NOTE: no sim phase steps this generator yet — the matcher is fully
+// deterministic by sort order — so it is carried purely as forward infrastructure
+// for stochastic mechanics. The FIRST consumer must draw at a fixed point in the
+// phase order so same-seed replay stays bit-stable; until then the serialized
+// state is inert.
 
 const U32 = 0x100000000;
 

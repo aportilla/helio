@@ -3,6 +3,7 @@ import { Vector2, type WebGLRenderer } from 'three';
 import { getSettings } from '../settings';
 import { setSnappedLineViewport } from './materials';
 import { RenderScaleObserver, effectiveScale, type RenderScale } from '../render-scale';
+import { snapPhysToMultiple, contentBufferWidth } from './viewport-math';
 
 // Owns the load-bearing pixel-snap math every scene's resize() needs: sizing
 // the render buffer to an integer multiple of N so the browser's
@@ -72,8 +73,8 @@ export class ViewportSizer {
   apply(renderer: WebGLRenderer): void {
     const dpr = window.devicePixelRatio;
     const N = effectiveScale(this.observer.scale, getSettings().resolutionPreference);
-    const physW = Math.floor(window.innerWidth  * dpr / N) * N;
-    const physH = Math.floor(window.innerHeight * dpr / N) * N;
+    const physW = snapPhysToMultiple(window.innerWidth, dpr, N);
+    const physH = snapPhysToMultiple(window.innerHeight, dpr, N);
     const cssW = physW / dpr;
     const cssH = physH / dpr;
     renderer.setPixelRatio(dpr / N);
@@ -86,7 +87,7 @@ export class ViewportSizer {
     // The 3D content rect is the buffer minus the reserved sidebar strip (left-
     // anchored at x=0). contentCssW scales by the same cssW/bufferW ratio the
     // renderer used, so the perspective aspect + raycast NDC stay consistent.
-    this.contentBufferW = Math.max(1, this.bufferW - this.reservedBuffer);
+    this.contentBufferW = contentBufferWidth(this.bufferW, this.reservedBuffer);
     this.contentCssW = this.bufferW > 0 ? this.contentBufferW * (this.cssW / this.bufferW) : this.cssW;
     // Pixel-snapped materials (galaxy stars/lines, the diagram's body discs) all
     // render into the CONTENT viewport, so their NDC→pixel snap must use the

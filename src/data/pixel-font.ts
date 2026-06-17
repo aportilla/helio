@@ -3,13 +3,10 @@ import { DEFAULT_FONT, getFont, type FontSpec } from './font-provider';
 
 // Re-export so callers don't need to know about the provider for simple uses.
 export {
-  DEFAULT_FONT,
-  FONT_MONACO_11,
   FONTS,
   getFont,
   initFonts,
   type FontSpec,
-  type FontFamily,
 } from './font-provider';
 
 export function measurePixelText(text: string, font: FontSpec = DEFAULT_FONT): number {
@@ -70,8 +67,7 @@ export interface LabelTextureResult {
 }
 
 export interface LabelTextureOptions {
-  box?: boolean;
-  // Font to render with (e.g. FONT_MONACO_11, FONTS.EspySans[15]). Defaults
+  // Font to render with (e.g. FONTS.Monaco[11], FONTS.EspySans[15]). Defaults
   // to DEFAULT_FONT when omitted.
   font?: FontSpec;
 }
@@ -101,13 +97,8 @@ export function makeLabelTexture(
   const font = getFont(opts?.font ?? DEFAULT_FONT);
   const lineH = font.lineHeight;
 
-  const box = !!opts?.box;
-  // Boxed labels get an extra px of horizontal breathing room (padX > padY)
-  // so glyphs don't crowd the side borders — vertically the cap-height +
-  // descender already leaves visible whitespace inside the frame, but
-  // horizontally the glyphs sit right against their cells.
-  const padX = box ? 5 : 3;
-  const padY = box ? 4 : 3;
+  const padX = 3;
+  const padY = 3;
   let maxTextW = 0;
   for (const line of lines) {
     let lineW = 0;
@@ -120,14 +111,6 @@ export function makeLabelTexture(
   c.width = w; c.height = h;
   const g = c.getContext('2d')!;
 
-  if (box) {
-    g.fillStyle = '#000814';
-    g.fillRect(0, 0, w, h);
-    g.fillStyle = '#3a8fe0';
-    g.fillRect(0, 0, w, 1); g.fillRect(0, h - 1, w, 1);
-    g.fillRect(0, 0, 1, h); g.fillRect(w - 1, 0, 1, h);
-  }
-
   lines.forEach((line, lineIdx) => {
     let cursor = padX;
     const cellY = padY + lineH * lineIdx;
@@ -137,8 +120,7 @@ export function makeLabelTexture(
     }
   });
 
-  // Halo only for non-boxed labels — the box bg already provides contrast.
-  if (!box) addDarkHalo(g, w, h);
+  addDarkHalo(g, w, h);
 
   const tex = new CanvasTexture(c);
   tex.minFilter = NearestFilter;
@@ -147,8 +129,8 @@ export function makeLabelTexture(
   tex.wrapT = ClampToEdgeWrapping;
   tex.generateMipmaps = false;
   // colorSpace intentionally left at default. With ColorManagement disabled
-  // and outputColorSpace = LinearSRGBColorSpace (set in scene.ts), the whole
-  // pipeline is raw sRGB end-to-end, so we want the sampler to return the
+  // and outputColorSpace = LinearSRGBColorSpace (set in app-controller.ts), the
+  // whole pipeline is raw sRGB end-to-end, so we want the sampler to return the
   // canvas pixels untouched.
   return { tex, w, h };
 }

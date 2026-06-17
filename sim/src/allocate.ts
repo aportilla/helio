@@ -146,7 +146,7 @@ export function allocate(world: World, q: Quantified): DispatchPlan {
 }
 
 /** Sources that reach (p, r) with surplus, cheapest-latency-first, capped at K
- *  (§5: legCandidates + fan-in breadth). Reachability is route existence
+ *  (§5: rankCandidates + fan-in breadth). Reachability is route existence
  *  (§11 rule 5) — never a stored flag. */
 function rankCandidates(
   world: World, p: PlanetId, r: ResourceId, k: number, exportable: Int32Array,

@@ -11,8 +11,9 @@ import { type WebGLRenderer } from 'three';
 import { PlanetGridDiagram } from './planet-grid-diagram';
 import { TestHud } from './test-hud';
 import { ViewportSizer } from '../viewport-sizer';
+import type { Screen } from '../screen';
 
-export class TestScene {
+export class TestScene implements Screen {
   private readonly canvas: HTMLCanvasElement;
   private readonly renderer: WebGLRenderer;
 

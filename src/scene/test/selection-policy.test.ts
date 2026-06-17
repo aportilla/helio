@@ -7,9 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   resolveCandidateCluster,
-  isTargetFocusedOnCom,
   dimAmountForOrbit,
-  FOCUS_EPSILON_SQ,
 } from '../selection-policy.ts';
 import { FOCUS_MARKER_NEAR, STAR_DIM_FULL_BELOW, STAR_DIM_OFF_ABOVE } from '../cluster-fade.ts';
 
@@ -45,13 +43,6 @@ test('focus-proximity never re-targets the selected cluster', () => {
 
 test('no candidate when nothing is hovered and no COM is supplied', () => {
   assert.equal(resolveCandidateCluster(-1, 2, null, -1, offPivot, false), -1);
-});
-
-test('isTargetFocusedOnCom: true on the COM within epsilon, false beyond it', () => {
-  const com = { x: 1, y: 2, z: 3 };
-  assert.equal(isTargetFocusedOnCom({ x: 1, y: 2, z: 3 }, com), true);
-  const eps = Math.sqrt(FOCUS_EPSILON_SQ);
-  assert.equal(isTargetFocusedOnCom({ x: 1 + eps * 2, y: 2, z: 3 }, com), false);
 });
 
 test('dimAmountForOrbit: full dim zoomed in, off zoomed out, lerp between', () => {

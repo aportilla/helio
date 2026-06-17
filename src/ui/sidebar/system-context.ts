@@ -153,7 +153,7 @@ export class SystemContext implements SidebarContext {
         if (signed !== 0) {
           const up = signed > 0;
           const balTxt = (up ? '+' : '') + fmtMilli(signed);
-          drawPixelText(g, balTxt, lx, y, up ? colors.econSurplus : colors.econDeficit);
+          drawPixelText(g, balTxt, lx, y, up ? colors.signalPositive : colors.signalNegative);
           lx += measurePixelText(balTxt) + ECON_COL_GAP;
         }
         // Glut: production capped because storage is full.
@@ -163,7 +163,7 @@ export class SystemContext implements SidebarContext {
         // Shortfall: the binding reason for an unmet demand, indented under the
         // row in deficit red — the player's cue to build/route a fix.
         if (rl.shortfall) {
-          drawPixelText(g, rl.shortfall.label, x0 + ECON_SUB_INDENT, y, colors.econDeficit);
+          drawPixelText(g, rl.shortfall.label, x0 + ECON_SUB_INDENT, y, colors.signalNegative);
           y += econLineH + ROW_GAP;
         }
       }

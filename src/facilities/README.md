@@ -43,11 +43,11 @@ facility identity.
 | `types.ts` | `FacilityDef`, `FacilityType` (the frozen save union), `Contribution`, `ProjectionCtx`, `PlacedFacility`, and the `ContributionBuilder` / `emptyContribution` helpers. No sim, no DOM. |
 | `tuning.ts` | Hoisted economic tunables (richness ramp, per-facility base rates). Symbol-named — referenced by name, never by value. |
 | `resource-vocab.ts` | `EconResource` (const-object + derived union) and `appResourceTable()`, built via the sim's own `makeResourceTable`. The sim owns the table *type*; the app owns the *instance*. |
-| `abundance.ts` | `abundanceMilli(body, res)` — integer-milli "site richness" from the catalog's 0..10 indices + 0..1 biotic scalars. The **single float→int floor** in the seam. |
+| `abundance.ts` | `abundanceMilli(body, res)` — integer-milli "site richness" from the catalog's 0..10 indices + 0..1 biotic scalars. The **richness float→int floor** in the seam. |
 | `registry.ts` | `FACILITY_DEFS` + derived lookups (`FACILITY_BY_TYPE`, `FACILITY_TYPES`, `ADD_ORDER`, `facilityLabel`), `FROZEN_FACILITY_IDS`, and a DEV module-load invariant. |
 | `eligibility.ts` | `addableTypesFor(body, current)` — which Add buttons a body shows, gated by predicate **and** build cap. |
 | `project.ts` | `projectBody` / `projectWorld` — THE projection adapter (body intent → `PlanetSpec`). Sim-importing, node-pure (catalog is type-only). |
-| `sim-geometry.ts` | `buildGeometry` — catalog coords → the sim's integer geometry (the single float→int floor for transport). Sim-importing, node-pure. |
+| `sim-geometry.ts` | `buildGeometry` — catalog coords → the sim's integer geometry (the float→int round for transport — `Math.round`, for symmetric error). Sim-importing, node-pure. |
 | `world-sync.ts` | `transplantLiveState` / `sameBodyIds` — the reconcile mechanics that preserve stock across a facility edit. Sim-importing, node-pure. |
 | `economy-bridge.ts` | `EconomyBridge` — the live engine owner: build/restore/reconcile the world, step, persist (`helio.sim`), read back. The **app-glue** module: imports the sim AND the catalog (`BODIES`/`STAR_CLUSTERS`) + `localStorage`, so it is NOT node-testable (its pure parts live in the modules above). |
 | `index.ts` | Public barrel. |
@@ -119,9 +119,11 @@ in-flight cargo *through* an edit, not just a reload) stays a later refinement.
 - **Frozen save keys:** `FROZEN_FACILITY_IDS` is the localStorage contract; a
   test asserts the live key set is a superset, so renaming/removing a *shipped*
   id fails CI. A retired type stays as a `retired: true` tombstone def.
-- **Determinism:** every float→int crossing in the seam is an explicit `Math.floor`
-  in `abundance.ts`, so every value crossing into a `Contribution` is integer milli;
-  `projectBody` only adds/combines integers.
+- **Determinism:** the seam has exactly two float→int crossings, each an explicit
+  rounding op — the richness floor (`Math.floor`) in `abundance.ts`, so every value
+  crossing into a `Contribution` is integer milli, and the geometry round
+  (`Math.round`) in `sim-geometry.ts` for symmetric coordinate error. `projectBody`
+  itself only adds/combines integers.
 
 Tests: `npm run test:facilities` (`src/facilities/test/`). Source is type-checked
 by the app's `npm run typecheck`; the test files run under `node --test`

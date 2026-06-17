@@ -24,6 +24,7 @@ sidebar/
   context.ts            SidebarContext: the interface for the contextual region below the header (paint + hit-test against absolute canvas coords)
   galaxy-context.ts     GalaxyContext: the galaxy view's region — civ summary (per-type facility tallies) + selected-system rows (relocated info-card content) + View System / Focus pills
   system-context.ts     SystemContext: the system view's region — system name + the selected body's facilities list + Add pills (a vertical facilities list; owns SelectedBodyInfo)
+  shared.ts             Cross-painter helpers shared by the sidebar + both contexts: Rect, inRect, fmtMilli (rect hit-test + milli-unit formatting)
 ```
 
 ## UI subsystem

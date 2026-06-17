@@ -26,6 +26,7 @@ import type { EconomyBridge } from '../facilities/economy-bridge';
 import { sizes } from '../ui/theme';
 import { STARS, STAR_CLUSTERS, clusterIndexFor, nearestClusterIdxTo } from '../data/stars';
 import { getSettings } from '../settings';
+import type { Screen } from './screen';
 
 // Orbit radius bounds (camera-to-target ly). Replaces the old ortho frustum
 // height; under perspective, distance directly drives apparent size of
@@ -65,7 +66,7 @@ interface ViewState {
   spin: boolean;
 }
 
-export class StarmapScene {
+export class StarmapScene implements Screen {
   private readonly renderer: WebGLRenderer;
   private readonly camera: PerspectiveCamera;
   private readonly scene = new Scene();
@@ -658,9 +659,9 @@ export class StarmapScene {
     this.starPoints.setDimAmount(dimAmountForOrbit(this.view.distance));
 
     // Nearest cluster to the orbit pivot — computed once per tick and shared
-    // by the focus marker (anchor when nothing selected) and (next commit)
-    // the candidate-selection brackets. Centralizing avoids two scans per
-    // frame for the same query.
+    // by the focus marker (anchor when nothing selected) and the candidate-
+    // bracket gating below. Centralizing avoids two scans per frame for the
+    // same query.
     const nearestClusterIdx = nearestClusterIdxTo(
       this.view.target.x, this.view.target.y, this.view.target.z,
     );

@@ -430,13 +430,13 @@ export interface StarCluster {
 // =============================================================================
 
 // All gases the procgen vocabulary can emit. Mirrors the keys of
-// ATMOSPHERE_GASES_BY_CLASS in scripts/lib/procgen-priors.mjs; any new
+// ATMOSPHERE_GASES_BY_REGIME in scripts/lib/procgen-priors.mjs; any new
 // gas added there needs a hue here or planet rendering silently drops
 // it from the palette.
 //
 // SILICATE, DUST, THOLIN, and NH4SH are condensable aerosols / reaction
 // products rather than gas-phase species. They never appear in
-// ATMOSPHERE_GASES_BY_CLASS — only via the cloud or haze layer paths,
+// ATMOSPHERE_GASES_BY_REGIME — only via the cloud or haze layer paths,
 // emitted by procgen when chemistry gates support them. They share the
 // AtmGas type so the cloud / haze gas fields don't need a separate
 // vocabulary.

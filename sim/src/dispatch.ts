@@ -25,7 +25,7 @@ export function dispatch(world: World, plan: DispatchPlan): DispatchResult {
   // Merge-on-dispatch dedup, scoped to this turn's chokepoint (§3.2). Keyed on
   // dstPlanet (never destination star) so multi-planet systems don't fan-in
   // wrongly.
-  const mergeIndex = new Map<string, number>(); // key -> ring slot
+  const mergeIndex = new Map<string, number>(); // key -> ring slot (string key is a small-int concat: repack to a packed int at WASM-port time)
 
   for (const o of plan.orders) {
     const grain = world.resources.metas[o.res as number]!.transferChunkMilli;
