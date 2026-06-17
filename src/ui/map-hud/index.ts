@@ -23,7 +23,7 @@ import {
   Scene,
 } from 'three';
 import { getSettings, setSetting, type ResolutionPreference } from '../../settings';
-import { effectiveScale, type RenderScale } from '../../scene/render-scale';
+import { effectiveScale, type RenderScale } from '../../render-scale';
 import {
   paintCloseX,
   paintGrid,

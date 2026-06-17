@@ -19,7 +19,7 @@
 // minor jitter (e.g. 2 → 2.5 from a Chrome zoom step) is a no-op since both
 // resolve to N=3.
 
-import type { ResolutionPreference } from '../settings';
+import type { ResolutionPreference } from './settings';
 
 export type RenderScale = 1 | 2 | 3 | 4;
 

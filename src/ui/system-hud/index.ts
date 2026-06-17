@@ -8,7 +8,7 @@
 // area beneath this HUD.
 
 import { CanvasTexture, OrthographicCamera, Scene } from 'three';
-import type { DiagramPick } from '../../scene/system-diagram';
+import type { DiagramPick } from '../../diagram-pick';
 import { type HitResult } from '../hit-test';
 import { paintLeftArrow, paintSurface } from '../painter';
 import { colors, sizes } from '../theme';

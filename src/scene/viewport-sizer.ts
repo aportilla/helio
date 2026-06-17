@@ -2,7 +2,7 @@ import { Vector2, type WebGLRenderer } from 'three';
 
 import { getSettings } from '../settings';
 import { setSnappedLineViewport } from './materials';
-import { RenderScaleObserver, effectiveScale, type RenderScale } from './render-scale';
+import { RenderScaleObserver, effectiveScale, type RenderScale } from '../render-scale';
 
 // Owns the load-bearing pixel-snap math every scene's resize() needs: sizing
 // the render buffer to an integer multiple of N so the browser's

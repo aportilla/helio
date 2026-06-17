@@ -9,8 +9,10 @@ html, body {
   user-select: none;
 }
 
+/* Resting cursor for the draggable scene; the drag state (grabbing) and the
+   interactive-element state (pointer) are set inline on the canvas by the
+   input controller — see scene/input-controller.ts. */
 body { cursor: grab; }
-body.grabbing { cursor: grabbing; }
 
 canvas {
   position: fixed;

@@ -2,13 +2,13 @@
 // individual layers under layers/. Lives in its own file to avoid
 // circular imports — index.ts imports layers, layers import types.
 
-// Picker result. Discriminated by `kind`: star vs. body (planet / moon /
-// belt / ring). Returned by SystemDiagram.pickAt and consumed by
-// setHovered + the HUD body info card. starIdx indexes STARS; bodyIdx
-// indexes BODIES.
-export type DiagramPick =
-  | { readonly kind: 'star'; readonly starIdx: number }
-  | { readonly kind: 'planet' | 'moon' | 'belt' | 'ring'; readonly bodyIdx: number };
+// The pick contract — DiagramPick + picksEqual — lives at the repo root
+// (src/diagram-pick.ts) so the ui HUD can consume it without importing scene.
+// Re-exported here so the diagram's own layers still import everything they
+// need from this one local module.
+import type { DiagramPick } from '../../diagram-pick';
+export type { DiagramPick };
+export { picksEqual } from '../../diagram-pick';
 
 // A pick paired with the world-z it was rendered at (bandZ — see
 // geom/snap.ts). The diagram's depth test resolves overlaps by largest
@@ -19,15 +19,6 @@ export type DiagramPick =
 export interface DiagramHit {
   readonly pick: DiagramPick;
   readonly z: number;
-}
-
-export function picksEqual(a: DiagramPick | null, b: DiagramPick | null): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  if (a.kind !== b.kind) return false;
-  if (a.kind === 'star' && b.kind === 'star') return a.starIdx === b.starIdx;
-  if (a.kind !== 'star' && b.kind !== 'star') return a.bodyIdx === b.bodyIdx;
-  return false;
 }
 
 // PlanetsLayer publishes one entry per planet after its layout pass;

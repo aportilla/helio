@@ -291,7 +291,7 @@ export class InputController {
       // keep yawing/pitching the camera while the pinch is zooming.
       this.cancelLongPress();
       this.dragging = false;
-      document.body.classList.remove('grabbing');
+      this.canvas.style.cursor = '';
       this.pinching = true;
       this.pinchMode = 'undecided';
       this.snapshotPinchAnchors();
@@ -302,7 +302,7 @@ export class InputController {
     this.dragButton = e.button;
     this.lastX = e.clientX; this.lastY = e.clientY;
     this.downX = e.clientX; this.downY = e.clientY;
-    document.body.classList.add('grabbing');
+    this.canvas.style.cursor = 'grabbing';
 
     // Touch-only long-press hook: hold a finger still on a star for
     // LONG_PRESS_MS and onLongPressStar fires. Mouse and pen are excluded
@@ -344,7 +344,7 @@ export class InputController {
     if (this.longPressFired) {
       this.longPressFired = false;
       this.dragging = false;
-      document.body.classList.remove('grabbing');
+      this.canvas.style.cursor = '';
       return;
     }
 
@@ -352,7 +352,7 @@ export class InputController {
     const moved = Math.hypot(e.clientX - this.downX, e.clientY - this.downY);
     const isClick = moved < CLICK_DRAG_PX;
     this.dragging = false;
-    document.body.classList.remove('grabbing');
+    this.canvas.style.cursor = '';
 
     if (!isClick) return;
     const hit = this.handlers.pickStar(e.clientX, e.clientY);
@@ -391,7 +391,7 @@ export class InputController {
       this.pinching = false;
       this.pinchMode = 'undecided';
       this.dragging = false;
-      document.body.classList.remove('grabbing');
+      this.canvas.style.cursor = '';
     } else if (this.pointers.size >= 2 && this.pinchMode === 'undecided') {
       // Palm/extra finger cancelled mid-gesture, dropping 3+ → 2 before it
       // committed — re-baseline the anchors off the surviving pair (the palm-
