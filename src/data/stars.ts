@@ -6,9 +6,11 @@
 // pretypecheck) keep it in sync with the CSVs.
 //
 // This module:
-//   - Re-exports the precomputed STARS and STAR_CLUSTERS as immutable arrays.
-//   - Owns the runtime k-d trees over both (rebuilt fresh on each module
-//     load — the trees are mutable index instances, not catalog data).
+//   - Re-exports the precomputed STARS, STAR_CLUSTERS, and BODIES as
+//     immutable arrays.
+//   - Owns the single runtime k-d tree over STAR_CLUSTERS (keyed by COM),
+//     rebuilt fresh on each module load — a mutable index instance, not
+//     catalog data.
 //   - Owns the type definitions other modules consume (including the
 //     AtmGas / ResourceKey field vocabularies).
 //   - Owns runtime-only constants (CLASS_COLOR for the stars shader,
@@ -18,9 +20,11 @@
 // resource palettes) is NOT here — it lives in
 // scene/system-diagram/color-science.ts, which imports the types below.
 //
-// Adding a new CSV column? Update parseCsvCatalog in build-catalog.mjs
-// and add the field to the Star interface here. The two have to agree —
-// there's no type bridge between the build script and the runtime.
+// Adding a new CSV column? A star field goes in parseCsvCatalog (in
+// build-catalog.mjs) and the Star interface here; a body field goes in
+// parseCsvBodies (atmospheric-layer columns in parseCsvBodyLayers) and
+// the Body interface here. The two have to agree — there's no type bridge
+// between the build script and the runtime.
 
 import { Color } from 'three';
 import { KDTree3 } from './kdtree';

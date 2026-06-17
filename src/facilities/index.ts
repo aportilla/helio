@@ -1,7 +1,8 @@
 // Public barrel for the facilities package. Callers import from '../facilities'
-// (or '../../facilities'); the internal module layout stays private. The sim is
-// reached only through project.ts + resource-vocab.ts — never re-export raw sim
-// symbols here.
+// (or '../../facilities') for the registry + projection surface; never re-export
+// raw sim symbols here. The live engine (economy-bridge.ts) is imported directly
+// and deliberately kept OUT of this barrel, so light/type-only consumers don't
+// drag in its catalog + localStorage dependencies.
 
 export type {
   FacilityType,

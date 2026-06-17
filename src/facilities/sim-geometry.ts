@@ -1,7 +1,7 @@
-// Catalog → sim geometry adapter. Scales each star's float light-year position
-// into the sim's integer coordinate space and rounds — THE single float→int
-// crossing for transport geometry, the geometry-side analogue of abundance.ts's
-// role for richness.
+// Catalog → sim geometry adapter. Scales each cluster centre-of-mass's float
+// light-year position into the sim's integer coordinate space and rounds — THE
+// single float→int crossing for transport geometry, the geometry-side analogue
+// of abundance.ts's role for richness.
 //
 // Why integer at all: the sim is integer-only so it stays bit-identical across
 // re-implementations (the planned WASM port, sim/README.md), and everything a
@@ -27,9 +27,10 @@ export interface StarCoord {
   readonly z: number;
 }
 
-// One geometry node per star, in the caller's order — the bridge passes the
-// catalog's STARS, so geometry index === STARS index === the value a
-// SimStarResolver returns for a body. Round (not floor) for symmetric error.
+// One geometry node per cluster, in the caller's order — the bridge passes the
+// cluster centres-of-mass, so geometry index === STAR_CLUSTERS index === the
+// value a SimStarResolver returns for a body. Round (not floor) for symmetric
+// error.
 export function buildGeometry(stars: readonly StarCoord[]): StarGeometry {
   return makeGeometry(
     stars.map((s) => [

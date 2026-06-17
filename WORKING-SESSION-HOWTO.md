@@ -189,7 +189,7 @@ A fix is `VERIFIED` only when **all** hold:
   - `npm run typecheck` for any `src/**.ts` change.
   - `npm run build:catalog` for any `scripts/**` change (note star/cluster/body counts so a count
     regression is visible).
-  - `npm run check` — umbrella (build:catalog + tsc + audit-procgen) after procgen changes.
+  - `npm run check` — the validation umbrella, after procgen changes (its canonical step sequence lives in [scripts/README.md](scripts/README.md) / [docs/dev-tooling.md](docs/dev-tooling.md)).
   - `npm run audit:procgen` / `npm run check:disk-physics` for distribution / disk-physics changes.
 - **No collateral drift** — the change didn't introduce a new copy of something being removed,
   didn't leave a dangling comment, and (for refactors) **grep confirms every old inline copy is
@@ -232,7 +232,7 @@ item.
 ```
 npm run typecheck          # tsc --noEmit (runs build:catalog first via pretypecheck)
 npm run build:catalog      # regenerate src/data/catalog.generated.json (gitignored)
-npm run check              # umbrella: build:catalog + tsc + audit-procgen
+npm run check              # the validation umbrella (canonical step sequence: scripts/README.md / docs/dev-tooling.md)
 npm run audit:procgen      # observed-vs-priors distribution audit (z-scores)
 npm run check:disk-physics # disk-physics anchor regression gate
 npm run inspect:body <id>  # pretty-print one body's post-procgen record (spot-checks)

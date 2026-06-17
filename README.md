@@ -14,7 +14,7 @@ Think 1980s starbase HUD: inline bitmap-font labels, cyan-on-near-black palette,
 - **TypeScript 6** — strict mode, `noUncheckedIndexedAccess`, `noUnusedLocals`/`noUnusedParameters`, `noEmit` (Vite handles emit)
 - **Three.js r184** — WebGL renderer, scene graph, shaders
 
-No CSS framework, no state library, no testing framework yet.
+No CSS framework, no state library, no third-party test framework — the test suites run on Node's built-in `node --test`.
 
 ## Scripts
 
@@ -28,7 +28,7 @@ npm run build:catalog  # regenerate src/data/catalog.generated.json from src/dat
 
 `build:catalog` is auto-run by `predev` / `prebuild` / `pretypecheck` hooks, so you only invoke it directly when iterating on a CSV mid-session and want to refresh the runtime without restarting the dev server.
 
-The standalone economy sim has its own scripts — `npm run test:sim` and `npm run typecheck:sim` — see [sim/README.md](sim/README.md). The facility registry + sim-projection seam adds `npm run test:facilities` and `npm run check:boundaries` (the latter guards the standalone-sim import wall and is also part of `npm run check`) — see [src/facilities/README.md](src/facilities/README.md). `npm test` runs both test suites.
+The standalone economy sim has its own scripts — `npm run test:sim` and `npm run typecheck:sim` — see [sim/README.md](sim/README.md). The facility registry + sim-projection seam adds `npm run test:facilities` and `npm run check:boundaries` (the latter guards the standalone-sim import wall and is also part of `npm run check`) — see [src/facilities/README.md](src/facilities/README.md). `npm test` runs every unit suite.
 
 For verification, headless economy inspection (`npm run inspect:economy`), and screenshots (`npm run screenshot`), see [docs/dev-tooling.md](docs/dev-tooling.md).
 
@@ -49,7 +49,7 @@ Rules that hold across the whole codebase — know these before touching anythin
 - **Pixel-crisp is the committed visual identity.** 1-px borders, bitmap fonts, dithering — no anti-aliasing, gradients, sub-pixel positioning, or DOM-rendered text inside the canvas. Find a pixel-crisp way to express an intent rather than softening the rules. Detail: [src/scene/README.md](src/scene/README.md) → "Pixel-perfect rendering".
 - **`ColorManagement` is OFF.** Every hex value renders at exactly its sRGB value end-to-end; don't re-enable it without auditing every shader-vs-canvas color call site. Detail: [src/scene/README.md](src/scene/README.md) → "Color management is OFF".
 - **Determinism in the data + sim layers.** Catalog procgen is byte-reproducible across builds (seeded PRNG + `PROCGEN_VERSION`); the sim is integer-only and bit-stable for same-machine save/replay. Keep float math out of those load-bearing paths.
-- **`scene/` knows nothing about the DOM** beyond the `HTMLCanvasElement` it renders into and `window` for size/input listeners — route data through callbacks, not DOM queries.
+- **`scene/` barely touches the DOM** — only the `HTMLCanvasElement` it renders into, `window` (size/input), and detached offscreen `<canvas>` surfaces for textures. No DOM queries, no `document.body` (cursor state is set inline on the render canvas); route data through callbacks.
 - **UI is a peer of the scene, not chrome.** `src/ui/` houses *generic* primitives meant to serve the next five screens, not map-specific decoration. Detail: [src/ui/README.md](src/ui/README.md) → "UI subsystem".
 
 ## Map of the codebase
@@ -58,12 +58,12 @@ One deep doc per subsystem. Start in the root for orientation, then open the doc
 
 | Area | What's there | Deep doc |
 |---|---|---|
-| `src/` (root) | Bootstrap (`main.ts`), `settings.ts` (user prefs), `game-state.ts` (the game save) | — (this README + [docs/game-systems.md](docs/game-systems.md)) |
+| `src/` (root) | Bootstrap (`main.ts`), `settings.ts` (user prefs), `game-state.ts` (the game save), `render-scale.ts` + `diagram-pick.ts` (shared scene/ui concerns) | — (this README + [docs/game-systems.md](docs/game-systems.md)) |
 | `src/scene/` | Three.js galaxy + system scenes, rendering, shaders, camera, input, selection | [src/scene/README.md](src/scene/README.md) |
 | `src/ui/` | Pixel-art widget toolkit (`Widget`/`BasePanel`/painter/theme) + per-screen HUDs | [src/ui/README.md](src/ui/README.md) |
 | `src/data/` | Runtime catalog API + types, cluster/naming model, bundled bitmap fonts | [src/data/README.md](src/data/README.md) |
 | `src/facilities/` | Facility registry (one object per type) + the economy-sim projection seam + the live engine bridge | [src/facilities/README.md](src/facilities/README.md) |
-| `scripts/` | Star-data tooling + the catalog/procgen **build pipeline** that emits the JSON | [scripts/README.md](scripts/README.md) |
+| `scripts/` | Star-data tooling + the catalog/procgen **build pipeline** that emits the JSON; `scripts/lib/` is also a shared kernel the runtime consumes (body-traits / PRNG / gas-potency), so it isn't build-only | [scripts/README.md](scripts/README.md) |
 | `sim/` | Standalone deterministic economy/logistics sim | [sim/README.md](sim/README.md) |
 | `docs/` | Game-systems status + roadmap; dev/verification tooling | [docs/game-systems.md](docs/game-systems.md), [docs/dev-tooling.md](docs/dev-tooling.md) |
 | `plans/` | Detailed design docs (gitignored, ephemeral) | — |
@@ -77,4 +77,5 @@ Forward-looking, not yet built: a WASM port of the sim and desktop (Electron) di
 - TypeScript strict mode is on. Don't disable rules per-file; fix the type instead.
 - The scene code uses **scratch `Vector3`/`Vector2` instances on `this`** to avoid per-frame allocations in the tick loop. When you add new per-frame math, reuse an existing scratch or add a new private one — don't `new Vector3()` inside `tick()`.
 - Comments explain **why** (the load-bearing constraint, the surprising trade-off, the bug it works around). They don't restate what the code does. Match this style — a wall of comments above obvious code is noise; a one-line "uses floor not round because FP jitter at exact half-pixels would twitch" earns its keep.
+- Documentation follows a drift-resistant style — see [docs/documentation-style.md](docs/documentation-style.md).
 - HUD sizes are in **env pixels** (1 env pixel = N physical pixels after the nearest-neighbor upscale, where N is the runtime-chosen scale — typically 3 on retina). When tweaking visual sizes, think in env pixels — e.g. a 9-physical-pixel-tall tick on retina is `SCALE_TICK_H = 3`. The token visually scales with the user's resolution preference and the underlying display, but its env-pixel value is fixed.

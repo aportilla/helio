@@ -1,7 +1,7 @@
 // SidebarContext — the swappable contextual region below the turn header. The
 // Sidebar paints the header itself and delegates this region to the active
-// context (system view: the selected body's facilities; galaxy view, later: the
-// civ summary + selected system). The active context is set by the live scene via
+// context (system view: the selected body's facilities; galaxy view: the civ
+// summary + selected system). The active context is set by the live scene via
 // Sidebar.setContext().
 //
 // A context caches its hit-rects in ABSOLUTE canvas coords during paint() (the

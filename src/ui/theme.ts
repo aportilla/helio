@@ -6,6 +6,8 @@
 // browser's nearest-neighbor upscale, where N is chosen at runtime by
 // RenderScaleObserver to land closest to a 72-DPI visual size for the
 // current devicePixelRatio (typically 3 on retina, 1 on a 1080p desktop).
+// "Env pixel" is the same post-downscale authoring grid that widget.ts and
+// the sidebar call the "HUD buffer pixel" (1 unit = 1 buffer pixel).
 //
 // Color values are literal sRGB. Three.js ColorManagement is disabled
 // (see app-controller.ts) so every hex string and numeric color renders

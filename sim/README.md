@@ -18,7 +18,7 @@ built-in test runner needs **zero runtime dependencies** — only the dev-only
 `@types/node` for typing the runner.
 
 ```
-npm run test:sim         # node --test over sim/test/**/*.test.ts  (90 tests)
+npm run test:sim         # node --test over sim/test/**/*.test.ts
 npm run typecheck:sim    # tsc -p sim/tsconfig.json  (src + tests, strict)
 node --test sim/test/quantify.test.ts   # one file
 ```
@@ -43,7 +43,8 @@ src/
   world.ts          The SoA world (planets as v1 node-contributors) + builder
   produce.ts        P3 produce/consume flux + output-room clamp (glut throttle)
   quantify.ts       P4 single authority: netDemand/exportable/signed cover, hysteresis, inbound-within-H
-  allocate.ts       P6 greedy matcher: fan-in, source fair-share, CFL clamp, starvation escalation, shortfall reasons
+  shortfall.ts      ShortfallReason codes + SHORTFALL_FIX + shortfallName (the unmet-demand taxonomy)
+  allocate.ts       P6 greedy matcher: fan-in, source fair-share, CFL clamp, starvation escalation, resolves shortfall reasons
   dispatch.ts       P7 conservation chokepoint: merge-on-dispatch, stock→transit, ledger reserve
   arrivals.ts       P2 arrivals-first: deliver / continue / re-route at each star
   read-surface.ts   §4 ReadDigest (signed cover + edge flows) + getInTransitTo / explainShortfall

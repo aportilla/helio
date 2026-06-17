@@ -7,11 +7,12 @@ the hub; the deep docs for each area are linked at the bottom.
 
 | Command | What it does |
 |---|---|
-| `npm run check` | The umbrella gate: `lint-star-csv` → `build:catalog --strict` → `tsc --noEmit` → `check-sim-boundary` → `audit-procgen`. Run after any data / schema / runtime change. |
-| `npm test` | Both unit suites — `test:sim` (the standalone economy sim) + `test:facilities` (registry, projection, geometry, reconcile/persistence). Run either alone with `npm run test:sim` / `npm run test:facilities`. |
+| `npm run check` | The umbrella gate — lint, build, type-check (app + tests), sim-boundary, and procgen-audit in sequence (see `scripts/check.mjs` for the authoritative order). Run after any data / schema / runtime change. |
+| `npm test` | All unit suites — `test:sim` (the standalone economy sim) plus the app-side `test:facilities` / `test:data` / `test:scene`. Run any one alone, e.g. `npm run test:sim`. |
 | `npm run typecheck` | `tsc --noEmit` over `src/`. `npm run typecheck:sim` type-checks the standalone sim against its own stricter `tsconfig`. |
 | `npm run build` | Full production build (`tsc && vite build`) — the strongest "does it bundle" signal. |
 | `npm run check:boundaries` | Just the standalone-sim import wall (only `src/facilities/` may import `sim/`). Also part of `check`. |
+| `npm run check:disk-physics` | Disk-physics anchor regression gate — exits non-zero if a frost-line / surface-density / isolation-mass anchor falls out of band. No catalog dependency. Run after touching the disk-physics priors. |
 
 Catalog-specific inspectors and audits (`inspect:body`, `inspect:csv`,
 `audit:procgen`, …) live in [scripts/README.md](../scripts/README.md).

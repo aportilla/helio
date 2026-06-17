@@ -16,7 +16,8 @@ map-hud/
   index.ts              MapHud: the settings popover (opened from the sidebar header via toggleSettings) + the planet-test trigger
 system-hud/
   index.ts              SystemHud: floating back button (top-left) + the on-hover body tooltip; the selected body's facilities + the system name now live in the sidebar's contextual region
-  body-info-card.ts     BodyInfoCard: transient on-hover tooltip panel (class / temp / pressure / life / gases / resources per body kind)
+  body-info-card.ts     BodyInfoCard: thin BasePanel that measures + lays out the on-hover tooltip
+  body-rows.ts          Body → title / subtitle / key-value row projection for the card (label tables + per-kind builders)
   body-label.ts         Generative biome name for the BodyInfoCard subtitle — `[lead] [terrain]` composed from per-family word pools (surface worlds wear a landscape, gaseous worlds a skyscape), family chosen by a precedence cascade over body-traits predicates + raw fields; a notable condition replaces the family's signature lead (never stacks), always 2–3 words, no single body type
 sidebar/
   sidebar.ts            Sidebar: persistent full-height right-edge panel — AppController-owned, rendered by the active scene. Turn header (count + Next Turn) over a swappable contextual region

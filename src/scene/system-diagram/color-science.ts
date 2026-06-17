@@ -294,7 +294,8 @@ export const CLEAR_GAS_OPACITY = 0.1;
 // Per-gas clear-air scattering color — the visible tint of an
 // atmosphere viewed edge-on through a long column with no haze layer
 // to obscure it. Used by the disc rim's clear-air branch in
-// disc-palette/atmosphere.ts (formerly a fixed THEME_RAYLEIGH_COLOR token).
+// disc-palette/atmosphere.ts, keyed per gas so each column tints by its
+// own dominant species.
 //
 // Rayleigh-blue is the canonical case (N2/O2/Ar bulk atmospheres),
 // but CH4-absorbing columns tint cyan-blue (the Uranus/Neptune signal,

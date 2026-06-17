@@ -4,9 +4,9 @@
 // the node and each facility is a contributor: a body's facilities' contributions
 // SUM into one PlanetSpec, and the kernel never sees facility identity.
 //
-// This file (with resource-vocab.ts) is the facilities package's only window
-// onto the sim's runtime; the boundary guard (scripts/check-sim-boundary.mjs)
-// forbids sim imports anywhere else in src/.
+// This file imports the sim's runtime; the boundary guard
+// (scripts/check-sim-boundary.mjs) forbids sim imports outside this package. The
+// package README lists which modules here reach the sim.
 
 import { STORAGE_UNCAPPED, type PlanetSpec } from '../../sim/src/index.ts';
 import type { Body } from '../data/stars.ts';

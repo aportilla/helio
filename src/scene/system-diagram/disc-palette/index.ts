@@ -135,8 +135,8 @@
 //                      H2O ice). Falls back to GAS_COLOR when the
 //                      species isn't a condensable.
 //
-// `WORLD_CLASS_TINT` applies a small warm/cool shift to surface palette
-// entries — `gas_giant` lerps toward amber so Jupiter reads ruddier
+// `GAS_GIANT_TINT` applies a small warm shift to surface palette
+// entries — a gas giant lerps toward amber so Jupiter reads ruddier
 // than Saturn. Cloud palette entries skip the tint so cloud colors
 // stay aligned with their gas species.
 
@@ -197,11 +197,10 @@ const TEMP_HOT_K     = 700;
 // Regolith base — the barren-rock colour the primary surface colour dilutes
 // toward by the regolith share (1 − a0), so a resource-poor world reads as mostly
 // regolith and a rich one mostly its resource hue. A neutral, faintly-warm mid
-// grey (per-body tinted for sibling variety): it is now the colour the WHOLE
+// grey (per-body tinted for sibling variety): it is the colour the WHOLE
 // disc blends toward on poor worlds — the master "barren darkness" lever — so it
-// sits at mid lightness rather than the near-black the old stained-substrate
-// model used (that model needed the base darker than the patches; there are no
-// separate patches now).
+// sits at mid lightness, dark enough to read as barren without crushing a poor
+// world to near-black.
 const REGOLITH_BASE_COLOR = new Color(0x4a4742);
 
 // Minimum disc fraction each big area (Uplands / Lowlands) always keeps, so
@@ -420,8 +419,8 @@ export interface DiscPalette {
   // Forced to 0 on no-surface bodies and on tiny discs
   // (PROCEDURAL_TEXTURE_MIN_PX gate).
   readonly liquidFrac: number;
-  // Per-body ocean color [0..1]^3 — replaces the shader's hard-coded
-  // OCEAN_COLOR constant for surface-liquid cells. Derived through five
+  // Per-body ocean color [0..1]^3 — the fill the shader paints in
+  // surface-liquid cells. Derived through five
   // physical pathways (stellar SED × sky reflection + solvent base ×
   // CDOM × pigment × sediment) so close-analog bodies get distinguishable
   // hues — `oceanColorFor` receives the full body, so species/salinity
@@ -547,8 +546,8 @@ export interface DiscPalette {
   // The shader's Tier-1 molten crust backdrop tints toward this, so
   // co-orbiting lava worlds keep distinct between-feature crust hues rather
   // than one shared global brown. Neutral base on bodies with no molten
-  // surface (the channel is unread there). NOT run through the per-class
-  // applyTint/WORLD_CLASS_TINT — this is cooled rock, not surface palette.
+  // surface (the channel is unread there). NOT run through the
+  // applyTint/GAS_GIANT_TINT path — this is cooled rock, not surface palette.
   readonly lavaCrustColor: readonly [number, number, number];
   // Per-body ember chromophore filter RGB (each ~[0.55..1]) — the dominant-
   // resource blend of RESOURCE_EMBER_TINT (see lavaDrivesFor). The shader

@@ -52,6 +52,13 @@ function specifiersOf(file) {
 
 // Resolve a relative specifier (extension or not) to an absolute path prefix —
 // we only need the directory/file location, not the exact resolved file.
+//
+// Scope limits, both deliberate: the guard reasons only about relative
+// specifiers, so a tsconfig/Vite path alias to the sim would slip past it (add
+// such an alias to the resolver here if one is ever introduced). And it scans
+// only sim/src and src/ — build/tooling scripts under scripts/ are out of
+// scope because they never enter the shipped bundle, so a sim import there
+// can't couple the app to the standalone core.
 function resolveRelative(fromFile, spec) {
   return resolve(dirname(fromFile), spec);
 }

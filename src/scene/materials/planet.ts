@@ -169,7 +169,7 @@ export const BODY_TEXTURE_WIDTH =
 // halos AFTER front rings/moons — the halo otherwise blends against
 // background (and depth-rejects the front-ring) when a right neighbor's
 // halo extends over a left neighbor's front-ring/moon. See src/scene/README.md's
-// "Per-row-item depth" section + RENDER_ORDER_PLANET_HALO.
+// "Hover info card" section + RENDER_ORDER_PLANET_HALO.
 export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc' | 'halo' = 'all'): ShaderMaterial {
   const defines: Record<string, string> = {};
   if (mode === 'disc') defines.DISC_ONLY = '1';
@@ -2557,8 +2557,8 @@ export function makePlanetMaterial(initialDiscScale: number, mode: 'all' | 'disc
         // Per-body ocean color — derived from solvent species, biotic
         // pigment mix, suspended mineral sediment, CDOM yellow substance,
         // host-star SED, and sky reflection (see oceanColorFor in
-        // disc-palette/ocean.ts). Replaces the old hard-coded OCEAN_COLOR
-        // constant so two close-analog bodies get distinguishable hues.
+        // disc-palette/ocean.ts). Per-body so two close-analog bodies get
+        // distinguishable surface-liquid hues.
         float oceanColU = (float(${OCEAN_COLOR_TEXEL_OFFSET}) + 0.5) / float(${BODY_TEXTURE_WIDTH});
         vec3 vOceanColor = texture2D(uCloudLayerData, vec2(oceanColU, vBodyV)).rgb;
         // Lava composition texel — sampled here beside the ocean / atm-column
