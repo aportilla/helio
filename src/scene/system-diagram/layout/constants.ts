@@ -393,16 +393,17 @@ export const SHIP_POOL_CAP = 512;
 // palette). Per-resource tinting is a documented follow-up.
 export const SHIP_COLOR = 0x8fd3ff;
 
-// Dot size in env-px (a chunky square — odd size centers crisply on the grid).
-// 1 px reads as noise among the bodies; a few px makes each ship legible.
-export const SHIP_SIZE_PX = 3;
+// Dot size in env-px. 1 px = a single crisp pixel per ship — an odd size centers
+// on the pixel grid via snappedDotsMat's parity snap — reading as fine-grained
+// traffic rather than chunky markers.
+export const SHIP_SIZE_PX = 1;
 
 // Constant travel speed (env-px/sec). Transit time = segment length / speed,
 // so long and short lanes stay equally legible (a long haul just shows more
 // dots in flight, not faster ones). Deliberately slow so dots LINGER in flight
 // — at a given spawn rate, slower travel keeps more dots on screen at once, so
 // even a small flow reads as a continuous trickle rather than a lone blip.
-export const SHIP_SPEED_PX_PER_SEC = 40;
+export const SHIP_SPEED_PX_PER_SEC = 10;
 
 // Emission rate mapping: dots/sec per milli-unit shipped on a lane this turn,
 // clamped so a small flow still reads as a steady trickle and a glut can't swamp
@@ -439,3 +440,13 @@ export const SHIP_MAX_TICK_DT_MS = 100;
 // state — not procedurally stable, just stable within a session).
 export const SHIP_ARC_BOW_MIN = 0.18;
 export const SHIP_ARC_BOW_MAX = 0.42;
+
+// Trapezoidal velocity profile along a lane: a dot eases in from SHIP_EASE_FLOOR
+// of cruise speed up to full speed over the first SHIP_EASE_RAMP of the path,
+// holds cruise (SHIP_SPEED_PX_PER_SEC) through the middle, then eases back down
+// to the floor over the last SHIP_EASE_RAMP — so it accelerates out of the source
+// and settles into the destination rather than moving flat-out end to end. RAMP
+// is a path FRACTION (self-scales to lane length); FLOOR > 0 keeps the ends
+// crawling, not stopped. smoothstep shapes each ramp so velocity has no corner.
+export const SHIP_EASE_RAMP = 0.2;
+export const SHIP_EASE_FLOOR = 0.15;

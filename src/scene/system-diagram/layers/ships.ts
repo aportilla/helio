@@ -25,9 +25,10 @@ import { snappedDotsMat, unregisterSnappedMaterial } from '../../materials';
 import { disableCulling } from '../geom/cull';
 import { snapPx } from '../geom/snap';
 import {
-  RENDER_ORDER_SHIP, SHIP_ARC_BOW_MAX, SHIP_ARC_BOW_MIN, SHIP_COLOR, SHIP_MAX_TICK_DT_MS,
-  SHIP_OFFSCREEN_MARGIN, SHIP_POOL_CAP, SHIP_RATE_MAX_PER_LANE, SHIP_RATE_MIN_PER_LANE,
-  SHIP_RATE_PER_MILLI, SHIP_SIZE_PX, SHIP_SPEED_PX_PER_SEC, SHIP_TRANSIT_FROM_TOP, Z_SHIP,
+  RENDER_ORDER_SHIP, SHIP_ARC_BOW_MAX, SHIP_ARC_BOW_MIN, SHIP_COLOR, SHIP_EASE_FLOOR,
+  SHIP_EASE_RAMP, SHIP_MAX_TICK_DT_MS, SHIP_OFFSCREEN_MARGIN, SHIP_POOL_CAP,
+  SHIP_RATE_MAX_PER_LANE, SHIP_RATE_MIN_PER_LANE, SHIP_RATE_PER_MILLI, SHIP_SIZE_PX,
+  SHIP_SPEED_PX_PER_SEC, SHIP_TRANSIT_FROM_TOP, Z_SHIP,
 } from '../layout/constants';
 import type { BodyCenter, BodyCenterIndex } from '../types';
 import type { ShipLane } from '../../../facilities/economy-bridge';
@@ -283,7 +284,9 @@ export class ShipsLayer {
       this.pos[i * 3 + 0] = snapPx(w0 * this.dAx[i]! + w1 * this.dCx[i]! + w2 * this.dBx[i]!);
       this.pos[i * 3 + 1] = snapPx(w0 * this.dAy[i]! + w1 * this.dCy[i]! + w2 * this.dBy[i]!);
       this.pos[i * 3 + 2] = Z_SHIP;
-      this.dT[i] = t + step / this.dLen[i]!;
+      // Scale the per-frame advance by the ease profile so the dot crawls out of
+      // the source, cruises the middle at full speed, and settles into the dest.
+      this.dT[i] = t + step * easeSpeed(t) / this.dLen[i]!;
       i++;
     }
 
@@ -307,4 +310,18 @@ export class ShipsLayer {
 
 function clamp(x: number, lo: number, hi: number): number {
   return x < lo ? lo : x > hi ? hi : x;
+}
+
+// Speed multiplier at path-fraction t — the trapezoidal velocity profile (see
+// SHIP_EASE_* in constants). FLOOR..1 over the first RAMP (accelerate), flat 1
+// through the cruise middle, 1..FLOOR over the last RAMP (decelerate), each ramp
+// smoothstep-shaped. Floored above 0 so a dot near the ends keeps inching toward
+// the despawn at t≥1 rather than stalling.
+function easeSpeed(t: number): number {
+  let ramp: number;
+  if (t < SHIP_EASE_RAMP) ramp = t / SHIP_EASE_RAMP;
+  else if (t > 1 - SHIP_EASE_RAMP) ramp = (1 - t) / SHIP_EASE_RAMP;
+  else return 1;
+  const s = ramp * ramp * (3 - 2 * ramp); // smoothstep
+  return SHIP_EASE_FLOOR + (1 - SHIP_EASE_FLOOR) * s;
 }
