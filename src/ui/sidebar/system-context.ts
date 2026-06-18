@@ -1,9 +1,11 @@
 // SystemContext — the sidebar's contextual region while the system view is up.
 // Shows the system name, then the selected body's name + its placed-facility list
-// (each with a remove ✕) + one "Add <type>" pill per buildable facility type,
-// stacked vertically down the narrow column. SystemScene drives it through
-// setBody() (selection changed / facilities mutated) and routes the clicked
-// controls back through onAddFacility / onRemoveFacility.
+// (each with a remove ✕), its economy rows (stock + signed balance, with a dim
+// next-turn forecast cue when inbound cargo is set to relieve a deficit), and one
+// "Add <type>" pill per buildable facility type, stacked vertically down the
+// narrow column. SystemScene drives it through setBody() (selection changed /
+// facilities mutated) and routes the clicked controls back through
+// onAddFacility / onRemoveFacility.
 //
 // The data path is the registry-driven one — `SelectedBodyInfo` + `addableTypes` +
 // the add/remove loop, shared with `game-state` / `src/facilities`; this file owns

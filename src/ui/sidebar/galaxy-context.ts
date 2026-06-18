@@ -1,9 +1,11 @@
 // GalaxyContext — the sidebar's contextual region while the galaxy view is up.
-// Two stacked blocks:
-//   - Civilization summary (always): per-type facility tallies from the save. The
-//     only honest civ-level data that exists today — no economy is implied.
+// Stacked blocks:
+//   - Civilization summary (always): per-type facility tallies from the save.
 //   - Selected system (when a cluster is selected): the cluster + its members'
 //     key/value rows (class / distance / mass / radius) + View System / Focus pills.
+//   - System economy (when the selected system hosts a facility): per-resource net
+//     balances, with a dim speculative next-turn forecast cue under a deficit the
+//     next turn is set to relieve.
 //
 // StarmapScene owns one of these, sets it as the sidebar's context on start, feeds
 // it the selection via setCluster, and routes View System / Focus back through the

@@ -373,10 +373,10 @@ export const RENDER_ORDER_SHIP_THRUST = 29;
 
 // --- Cargo ships (economy traffic) ---
 //
-// Animated dots representing in-flight cargo while a system is open. A lane's live
-// volume is rendered as a continuous emission RATE; dots ride a quadratic Bézier
-// (body→body lanes arc) from a scattered source point to a scattered destination
-// point — easing out of the source and into the destination — and despawn at B.
+// Animated dots representing the cluster's cargo lanes while a system is open. A
+// lane's volume is rendered as a continuous emission RATE; dots ride a quadratic
+// Bézier (body→body lanes arc) from a scattered source point to a scattered
+// destination point — accelerating out of / braking into a body end — and despawn at B.
 // All values are the "edit a number, reload, eyeball" tuning surface.
 
 // Fixed world-z for the whole ship pool. The diagram's ortho camera maps world
@@ -405,8 +405,9 @@ export const SHIP_SIZE_PX = 2;
 // Cruise pace, expressed as the wall-clock SECONDS for a dot to traverse the full
 // content width; a chord shorter than the screen scales down in proportion, so
 // every dot's journey takes the same TIME on any window size (px/sec auto-scales
-// with the viewport instead of being fixed). The trapezoidal ease (SHIP_EASE_*)
-// ramps in and out around this cruise. Deliberately slow so dots LINGER in flight
+// with the viewport instead of being fixed). The constant-acceleration ramps
+// (SHIP_ACCEL_SEC) bring a dot up to and down from this cruise. Deliberately slow
+// so dots LINGER in flight
 // — more stay on screen at once, so even a small flow reads as a continuous
 // trickle rather than a lone blip. Raise to slow traffic down, lower to speed up.
 export const SHIP_CROSS_SCREEN_SEC = 65;

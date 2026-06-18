@@ -1,8 +1,7 @@
 // EconomyBridge — the live wiring from placed facilities to a running economy
-// sim, plus the read-back the system view draws. This (with project.ts,
-// resource-vocab.ts, and sim-geometry.ts) is the app's only window onto the sim
-// runtime; the boundary guard (scripts/check-sim-boundary.mjs) keeps every other
-// importer out.
+// sim, plus the read-back the system view draws. The src/facilities/ package is
+// the app's only window onto the sim runtime; the boundary guard
+// (scripts/check-sim-boundary.mjs) keeps every other importer out.
 //
 // Lifecycle (AppController owns one): built once at startup — restored from the
 // sim save when it still matches the current facilities, else cold-started.
@@ -245,7 +244,7 @@ export class EconomyBridge {
     const pr = this.stepped ? (this.engine.getReadDigest().planets.get(asPlanet(p)) ?? null) : null;
     // The forward-looking read off the speculative next-turn world. Always has a
     // digest (the clone is stepped), so predicted cover can exist even before the
-    // first real step — the §6 baseline fallback.
+    // session's first real step — the turn-0 / post-reload baseline.
     const specPr = this.specEngine ? (this.specEngine.getReadDigest().planets.get(asPlanet(p)) ?? null) : null;
 
     const out: ResourceLevel[] = [];

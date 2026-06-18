@@ -6,8 +6,8 @@
 // standard wall-clock duration, hold, ramp down — short hops peak below cruise; see
 // update()), and despawn at B. A ramp only anchors at a BODY end, so a ship bound
 // off-system accelerates the whole way out and an arriving one brakes the whole way
-// in. Emission RATE scales with the lane's live in-flight cargo volume, so a busy
-// lane reads as a denser stream.
+// in. Emission RATE scales with the lane's shipped volume (the speculative
+// next-turn lanes SystemScene feeds in), so a busy lane reads as a denser stream.
 // Through those two ease ramps a dot also trails a short yellow EXHAUST flame (a
 // second in-place snapped-line pool) — behind it while accelerating, out the front
 // while braking — dark through the cruise middle.
@@ -188,7 +188,7 @@ export class ShipsLayer {
     this.resolve();
   }
 
-  // Replace the per-turn lane schedule (from EconomyBridge.clusterFlows). Resets
+  // Replace the per-turn lane schedule (from EconomyBridge.predictedClusterFlows). Resets
   // emission accumulators; in-flight dots keep their progress + endpoints and
   // finish their journey.
   setFlows(lanes: readonly ShipLane[]): void {
@@ -470,7 +470,7 @@ function clamp(x: number, lo: number, hi: number): number {
   return x < lo ? lo : x > hi ? hi : x;
 }
 
-// A lane's emission rate (dots/sec) from its live shipped volume, clamped so a
+// A lane's emission rate (dots/sec) from its shipped volume, clamped so a
 // small flow still reads as a steady trickle and a glut can't swamp the pool.
 function rateFor(amountMilli: number): number {
   return clamp(amountMilli * SHIP_RATE_PER_MILLI, SHIP_RATE_MIN_PER_LANE, SHIP_RATE_MAX_PER_LANE);

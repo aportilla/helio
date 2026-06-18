@@ -22,8 +22,8 @@ system-hud/
 sidebar/
   sidebar.ts            Sidebar: persistent full-height right-edge panel — AppController-owned, rendered by the active scene. Turn header (count + Next Turn) over a swappable contextual region
   context.ts            SidebarContext: the interface for the contextual region below the header (paint + hit-test against absolute canvas coords)
-  galaxy-context.ts     GalaxyContext: the galaxy view's region — civ summary (per-type facility tallies) + selected-system rows (relocated info-card content) + View System / Focus pills
-  system-context.ts     SystemContext: the system view's region — system name + the selected body's facilities list + Add pills (a vertical facilities list; owns SelectedBodyInfo)
+  galaxy-context.ts     GalaxyContext: the galaxy view's region — civ summary (per-type facility tallies) + selected-system rows (relocated info-card content) + per-system economy nets with a next-turn forecast cue + View System / Focus pills
+  system-context.ts     SystemContext: the system view's region — system name + the selected body's facilities list + economy rows (with a next-turn inbound forecast cue) + Add pills (a vertical stack; owns SelectedBodyInfo)
   shared.ts             Cross-painter helpers shared by the sidebar + both contexts: Rect, inRect, fmtMilli (rect hit-test + milli-unit formatting)
 ```
 

@@ -51,6 +51,7 @@ facility identity.
 | `world-sync.ts` | `transplantLiveState` / `sameBodyIds` — the reconcile mechanics that preserve stock across a facility edit. Sim-importing, node-pure. |
 | `speculation.ts` | `cloneWorldForSpeculation` — deep-clone the live world via the save round-trip and step it once: the throwaway next-turn world that drives the predictive viz. Sim-importing, node-pure. |
 | `flow-class.ts` | `classifyFlow` — pure within / from / to / through classification of one in-flight transfer relative to the viewed cluster (the 2×2 of src/dst-in-cluster, plus the relay-through case). No sim, no DOM — unit-tested without a world. |
+| `base64.ts` | `base64FromBytes` / `bytesFromBase64` — the byte↔base64 codec for the persisted sim-save blob. No sim, no DOM. |
 | `economy-bridge.ts` | `EconomyBridge` — the live engine owner: build/restore/reconcile the world, step, persist (`helio.sim`), read back. The **app-glue** module: imports the sim AND the catalog (`BODIES`/`STAR_CLUSTERS`) + `localStorage`, so it is NOT node-testable (its pure parts live in the modules above). |
 | `index.ts` | Public barrel. |
 
