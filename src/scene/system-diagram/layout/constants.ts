@@ -393,10 +393,11 @@ export const SHIP_POOL_CAP = 512;
 // palette). Per-resource tinting is a documented follow-up.
 export const SHIP_COLOR = 0x8fd3ff;
 
-// Dot size in env-px. A single crisp pixel per ship — an odd size centers on the
-// pixel grid via snappedDotsMat's parity snap — reading as fine-grained traffic
-// rather than chunky markers.
-export const SHIP_SIZE_PX = 1;
+// Dot size in env-px. 2 px reads as visible cargo traffic without going chunky —
+// a single pixel proved too faint to register against the bodies. An even size
+// centers on a pixel boundary via snappedDotsMat's parity snap, so the square
+// stays crisp.
+export const SHIP_SIZE_PX = 2;
 
 // Mid-lane cruise speed (env-px/sec); the trapezoidal ease (SHIP_EASE_*) ramps
 // in and out around it. Transit time ≈ segment length / cruise, so long and short
