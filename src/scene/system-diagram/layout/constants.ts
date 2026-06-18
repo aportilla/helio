@@ -399,13 +399,20 @@ export const SHIP_COLOR = 0x8fd3ff;
 // stays crisp.
 export const SHIP_SIZE_PX = 2;
 
-// Mid-lane cruise speed (env-px/sec); the trapezoidal ease (SHIP_EASE_*) ramps
-// in and out around it. Transit time ≈ segment length / cruise, so long and short
-// lanes stay equally legible (a long haul just shows more dots in flight, not
-// faster ones). Deliberately slow so dots LINGER in flight — at a given spawn
-// rate, slower travel keeps more dots on screen at once, so even a small flow
-// reads as a continuous trickle rather than a lone blip.
-export const SHIP_SPEED_PX_PER_SEC = 10;
+// Cruise pace, expressed as the wall-clock SECONDS for a dot to traverse the full
+// content width; a chord shorter than the screen scales down in proportion, so
+// every dot's journey takes the same TIME on any window size (px/sec auto-scales
+// with the viewport instead of being fixed). The trapezoidal ease (SHIP_EASE_*)
+// ramps in and out around this cruise. Deliberately slow so dots LINGER in flight
+// — more stay on screen at once, so even a small flow reads as a continuous
+// trickle rather than a lone blip. Raise to slow traffic down, lower to speed up.
+export const SHIP_CROSS_SCREEN_SEC = 65;
+
+// Per-ship speed variance. Each dot's cruise pace is multiplied by a random factor
+// in [1 − V/2, 1 + V/2], fixed for its whole journey, so ships spread across a
+// V-wide band (here 30%) instead of moving in lockstep — a livelier stream. The
+// band is centered on 1, so the mean pace stays SHIP_CROSS_SCREEN_SEC.
+export const SHIP_SPEED_VARIANCE = 0.3;
 
 // Emission rate mapping: dots/sec per milli-unit shipped on a lane this turn,
 // clamped so a small flow still reads as a steady trickle and a glut can't swamp
@@ -445,7 +452,7 @@ export const SHIP_ARC_BOW_MAX = 0.42;
 
 // Trapezoidal velocity profile along a lane: a dot eases in from SHIP_EASE_FLOOR
 // of cruise speed up to full speed over the first SHIP_EASE_RAMP of the path,
-// holds cruise (SHIP_SPEED_PX_PER_SEC) through the middle, then eases back down
+// holds cruise (the SHIP_CROSS_SCREEN_SEC pace) through the middle, then eases back down
 // to the floor over the last SHIP_EASE_RAMP — so it accelerates out of the source
 // and settles into the destination rather than moving flat-out end to end. RAMP
 // is a path FRACTION (self-scales to lane length); FLOOR > 0 keeps the ends
