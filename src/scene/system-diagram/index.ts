@@ -132,6 +132,12 @@ export class SystemDiagram {
     this.ships.setFlows(lanes);
   }
 
+  // Open the cargo overlay already at steady state (one-shot). Call once, after the
+  // layout + lanes have resolved and before the first frame — see ShipsLayer.prime.
+  prime(): void {
+    this.ships.prime();
+  }
+
   // Hit-test the rendered discs at (x, y) in buffer-pixel coords and
   // return the topmost body — the one the depth test would have left
   // visible at that pixel, so the cursor and the eye always agree.

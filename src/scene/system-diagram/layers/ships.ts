@@ -3,12 +3,12 @@
 // EconomyBridge reports (internal / outgoing / incoming / through) becomes a
 // steady emitter: dots spawn at the lane's A end, march to B along a quadratic
 // Bézier under a constant-acceleration motion profile (ramp up to cruise over a
-// standard wall-clock duration, hold, ramp down — short hops peak below cruise; see
-// update()), and despawn at B. A ramp only anchors at a BODY end, so a ship bound
-// off-system accelerates the whole way out and an arriving one brakes the whole way
-// in. INTERNAL (body→body) lanes are the intra-system reallocation the economy
-// resolves instantly on Next Turn — sourced from the speculative dispatch plan's
-// same-cluster moves, not the in-flight transfer ring (which carries only the
+// standard wall-clock duration, hold, ramp down — short hops peak below cruise; the
+// profile lives in ship-profile.ts), and despawn at B. A ramp only anchors at a BODY
+// end, so a ship bound off-system accelerates the whole way out and an arriving one
+// brakes the whole way in. INTERNAL (body→body) lanes are the intra-system reallocation
+// the economy resolves instantly on Next Turn — sourced from the speculative dispatch
+// plan's same-cluster moves, not the in-flight transfer ring (which carries only the
 // inter-cluster outgoing/incoming/through cargo). Emission RATE scales with the
 // lane's shipped volume (the speculative next-turn lanes SystemScene feeds in), so
 // a busy lane reads as a denser stream.
@@ -23,17 +23,19 @@
 // destination disc to arrive at, so no two ships trace quite the same arc (the
 // off-screen ends of outgoing/incoming/through have no disc and stay put).
 //
-// Positions are integrated on the CPU and rewritten in place into one
-// pre-allocated DynamicDrawUsage pool (the droplines.ts zero-alloc pattern) — no
-// per-frame allocation, no GPU clock. A live dot stores only its journey PROGRESS
-// (t ∈ [0,1]) and its endpoint IDENTITIES (which bodies / which screen edges) plus
-// its per-end scatter as a fraction of the disc radius — never absolute
-// coordinates. Every frame it RE-DERIVES its arc from the live body layout, so a
-// resize moves the bodies and the dots follow automatically (each keeping its own
-// scattered endpoints), and a mid-turn setFlows() never re-aims a dot already in
-// flight (its t + endpoints are untouched). Travel is screen-normalized: crossing
-// the full content width always takes SHIP_CROSS_SCREEN_SEC, so a dot's wall-clock
-// journey time is the same on any window size (px/sec auto-scales with the
+// Positions are computed on the CPU and rewritten in place into one pre-allocated
+// DynamicDrawUsage pool (the droplines.ts zero-alloc pattern) — no per-frame
+// allocation, no GPU clock. A live dot stores only its NORMALIZED JOURNEY TIME
+// (τ ∈ [0,1]) and its endpoint IDENTITIES (which bodies / which screen edges) plus
+// its per-end scatter as a fraction of the disc radius — never absolute coordinates.
+// Each frame it maps τ → arc position through the shared motion profile (ship-profile.ts)
+// and RE-DERIVES the arc from the live body layout, so a resize moves the bodies and the
+// dots follow automatically (each keeping its own scattered endpoints), and a mid-turn
+// setFlows() never re-aims a dot already in flight (its τ + endpoints are untouched).
+// Storing TIME (not arc position) is what lets prime() open the view already at steady
+// state from a uniform random τ spread (see prime()). Travel is screen-normalized:
+// crossing the full content width always takes SHIP_CROSS_SCREEN_SEC, so a dot's
+// wall-clock journey time is the same on any window size (px/sec auto-scales with the
 // viewport).
 
 import { BufferAttribute, BufferGeometry, DynamicDrawUsage, LineSegments, Points } from 'three';
@@ -43,30 +45,24 @@ import { snappedDotsMat, snappedLineMat, unregisterSnappedMaterial } from '../..
 import { disableCulling } from '../geom/cull';
 import { snapPx } from '../geom/snap';
 import {
-  RENDER_ORDER_SHIP, RENDER_ORDER_SHIP_THRUST, SHIP_ACCEL_SEC, SHIP_ARC_BOW_MAX, SHIP_ARC_BOW_MIN,
-  SHIP_COLOR, SHIP_CROSS_SCREEN_SEC, SHIP_EASE_FLOOR, SHIP_MAX_TICK_DT_MS, SHIP_OFFSCREEN_MARGIN,
+  RENDER_ORDER_SHIP, RENDER_ORDER_SHIP_THRUST, SHIP_ARC_BOW_MAX, SHIP_ARC_BOW_MIN,
+  SHIP_COLOR, SHIP_CROSS_SCREEN_SEC, SHIP_MAX_TICK_DT_MS, SHIP_OFFSCREEN_MARGIN,
   SHIP_POOL_CAP, SHIP_RATE_MAX_PER_LANE, SHIP_RATE_MIN_PER_LANE, SHIP_RATE_PER_MILLI, SHIP_SIZE_PX,
   SHIP_SPEED_VARIANCE, SHIP_THRUST_COLOR, SHIP_THRUST_LEN_PX, SHIP_TRANSIT_FROM_TOP, Z_SHIP,
 } from '../layout/constants';
+import {
+  journeyTime, sampleProfile,
+  KIND_INTERNAL, KIND_OUTGOING, KIND_INCOMING, KIND_THROUGH_LTR, KIND_THROUGH_RTL,
+} from './ship-profile';
+import type { ProfileSample } from './ship-profile';
 import type { BodyCenterIndex } from '../types';
 import type { ShipLane } from '../../../facilities/economy-bridge';
 
 const TAU = Math.PI * 2;
 
-// How a dot sources its two endpoints from the live layout (stored per dot in
-// dKind). INTERNAL rides between two bodies; OUTGOING / INCOMING pair one body
-// end with an off-the-top point whose X tracks that body; THROUGH_* sweep
-// edge-to-edge across the transit band. Plain int consts (not an enum) so the
-// hot loop compares integers and the values store straight into an Int8Array.
-const KIND_INTERNAL = 0;
-const KIND_OUTGOING = 1;
-const KIND_INCOMING = 2;
-const KIND_THROUGH_LTR = 3;
-const KIND_THROUGH_RTL = 4;
-
 // A lane resolved to its endpoint IDENTITIES + emission rate, ready to spawn dots.
 // No screen coordinates live here — they're re-derived per frame from the live
-// layout (see update), so one ResolvedLane stays correct across a resize. srcIdx /
+// layout (see renderFrame), so one ResolvedLane stays correct across a resize. srcIdx /
 // dstIdx are catalog body indices (−1 for an off-screen end). bow is the signed
 // arc offset shared by the lane's dots (0 for straight lanes). emitAccum carries
 // the fractional dot between frames.
@@ -104,9 +100,9 @@ export class ShipsLayer {
   private lastThrustSegs = 0;
 
   // Per-live-dot SoA, parallel to pool slots [0, liveCount). A dot stores its
-  // journey progress + the IDENTITY of its endpoints (a kind, plus a body catalog
-  // index per body end) + its per-end scatter + its arc bow — NEVER absolute
-  // coordinates. update() re-derives the arc from the live layout each frame, so
+  // normalized journey TIME + the IDENTITY of its endpoints (a kind, plus a body
+  // catalog index per body end) + its per-end scatter + its arc bow — NEVER absolute
+  // coordinates. renderFrame() re-derives the arc from the live layout each frame, so
   // dots track moving bodies across a resize.
   private readonly dKind = new Int8Array(SHIP_POOL_CAP);
   private readonly dSrc = new Int32Array(SHIP_POOL_CAP);
@@ -123,8 +119,17 @@ export class ShipsLayer {
   // Per-ship cruise multiplier, rolled once at spawn (see SHIP_SPEED_VARIANCE), so
   // ships travel at slightly different speeds rather than in lockstep.
   private readonly dSpeed = new Float32Array(SHIP_POOL_CAP);
-  private readonly dT = new Float32Array(SHIP_POOL_CAP);
+  // Per-ship NORMALIZED JOURNEY TIME (τ ∈ [0,1]); the arc position is derived from it
+  // each frame via the shared motion profile (ship-profile.ts).
+  private readonly dTau = new Float32Array(SHIP_POOL_CAP);
   private liveCount = 0;
+
+  // Reused profile sample, so the per-frame loop allocates nothing (the scratch-on-this
+  // discipline; sampleProfile mutates it in place).
+  private readonly profileOut: ProfileSample = { s: 0, phase: 0, t: 0 };
+  // One-shot guard for prime(): the steady-state seed runs exactly once per view, never
+  // re-applied on a resize or turn boundary (which re-resolve lanes but keep live dots).
+  private primed = false;
 
   // Per ordered body-pair arc bow (signed control-offset fraction of the chord),
   // cached so every dot between two bodies shares one curvature. Ephemeral render
@@ -193,8 +198,8 @@ export class ShipsLayer {
   }
 
   // Replace the per-turn lane schedule (from EconomyBridge.predictedClusterFlows). Resets
-  // emission accumulators; in-flight dots keep their progress + endpoints and
-  // finish their journey.
+  // emission accumulators; in-flight dots keep their τ + endpoints and finish their
+  // journey.
   setFlows(lanes: readonly ShipLane[]): void {
     this.rawLanes = lanes;
     this.resolve();
@@ -204,7 +209,7 @@ export class ShipsLayer {
   // current layout. A lane whose in-system body has no published center is
   // dropped. emitAccum restarts at 0 — a re-resolve is rare (turn boundary or
   // resize), so the sub-one-dot priming delay is imperceptible. No coordinates are
-  // computed here; update() derives them per frame from the live centers.
+  // computed here; renderFrame() derives them per frame from the live centers.
   private resolve(): void {
     this.resolved = [];
     const centers = this.centers;
@@ -269,15 +274,14 @@ export class ShipsLayer {
     const dt = this.lastNow < 0 ? 0 : Math.min(now - this.lastNow, SHIP_MAX_TICK_DT_MS) / 1000;
     this.lastNow = now;
     if (this.liveCount === 0 && this.resolved.length === 0) return;
-    // Nothing moves on a zero-dt frame (the first frame, or a duplicate
-    // timestamp) and the buffer is already current — skip the work so this
-    // formerly-static view pays no idle per-frame GPU re-upload.
+    // Nothing moves on a zero-dt frame (the first frame, or a duplicate timestamp) and
+    // the buffer is already current — skip the work so this formerly-static view pays no
+    // idle per-frame GPU re-upload. After prime() this first frame is also where the
+    // seeded pool is left standing (prime() already flushed it to the buffer).
     if (dt <= 0) return;
 
-    const startCount = this.liveCount;
-
-    // Spawn at each lane's rate. A dot captures only its lane's identity + a
-    // random per-end scatter; its screen position is derived below, never stored.
+    // Spawn at each lane's rate. A dot captures only its lane's identity + a random
+    // per-end scatter (set in spawn); its screen position is derived in renderFrame.
     for (const lane of this.resolved) {
       lane.emitAccum += lane.ratePerSec * dt;
       while (lane.emitAccum >= 1) {
@@ -286,23 +290,118 @@ export class ShipsLayer {
         // it from scratch and bias the busiest traffic's density DOWN.
         if (this.liveCount >= SHIP_POOL_CAP) { lane.emitAccum = Math.min(lane.emitAccum, 1); break; }
         lane.emitAccum -= 1;
-        const s = this.liveCount++;
-        this.dKind[s] = lane.kind;
-        this.dSrc[s] = lane.srcIdx;
-        this.dDst[s] = lane.dstIdx;
-        this.dBow[s] = lane.bow;
-        // This ship's own emit/arrive points: uniform-in-area scatter (r = R·√u),
-        // stored as a fraction-of-radius vector so each ship's arc differs AND the
-        // points track the disc if it resizes.
-        const aFrac = Math.sqrt(Math.random()), aAng = Math.random() * TAU;
-        this.dAux[s] = aFrac * Math.cos(aAng); this.dAuy[s] = aFrac * Math.sin(aAng);
-        const bFrac = Math.sqrt(Math.random()), bAng = Math.random() * TAU;
-        this.dBux[s] = bFrac * Math.cos(bAng); this.dBuy[s] = bFrac * Math.sin(bAng);
-        // Fixed random cruise multiplier in [1 − V/2, 1 + V/2], centered on 1.
-        this.dSpeed[s] = 1 + (Math.random() - 0.5) * SHIP_SPEED_VARIANCE;
-        this.dT[s] = 0;
+        this.spawn(lane.kind, lane.srcIdx, lane.dstIdx, lane.bow, 0); // live emitter enters at τ=0
       }
     }
+
+    this.renderFrame(dt);
+  }
+
+  // Open the view already at STEADY STATE: seed every lane with the in-flight traffic it
+  // would carry once running, instead of filling from empty over a full transit time. A
+  // lane that emits at `ratePerSec` and takes `T` seconds to cross carries N = ratePerSec·T
+  // dots at once; at steady state their journey-time fractions are uniform, so each seeded
+  // dot gets τ = random(). Counts scale down proportionally if the steady-state fleet
+  // would overflow the pool (vs. spawn-order starvation). One-shot (guarded) — called once
+  // from SystemScene.start after the layout + lanes resolve and BEFORE the first frame; it
+  // flushes the buffer itself because update()'s first frame (dt=0) early-returns before
+  // drawing.
+  prime(): void {
+    if (this.primed) return;
+    this.primed = true;
+    const centers = this.centers;
+    if (!centers || this.contentW <= 0 || this.bufferH <= 0 || this.resolved.length === 0) return;
+
+    const offTop = this.bufferH + SHIP_OFFSCREEN_MARGIN;
+    const leftX = -SHIP_OFFSCREEN_MARGIN;
+    const rightX = this.contentW + SHIP_OFFSCREEN_MARGIN;
+    const vcMean = 1 / SHIP_CROSS_SCREEN_SEC; // cruise at the mean (dSpeed = 1)
+
+    // Steady-state occupancy per lane (N = rate · journeyTime), using the lane's CENTER
+    // chord and mean cruise. Each dot still derives its own scattered chord + speed per
+    // frame; only the integer count uses the lane mean.
+    const ns: number[] = [];
+    let total = 0;
+    for (const lane of this.resolved) {
+      const chord = this.centerChord(lane, centers, offTop, leftX, rightX);
+      const n = chord > 0 ? lane.ratePerSec * journeyTime(chord / this.contentW, vcMean, lane.kind) : 0;
+      ns.push(n);
+      total += n;
+    }
+    // Cap: if the steady-state fleet would overflow the pool, scale every lane down in
+    // proportion so the densest lanes keep their share.
+    const scale = total > SHIP_POOL_CAP ? SHIP_POOL_CAP / total : 1;
+
+    for (let li = 0; li < this.resolved.length; li++) {
+      const lane = this.resolved[li]!;
+      const n = ns[li]! * scale;
+      let count = Math.floor(n);
+      if (Math.random() < n - count) count++; // stochastic remainder — the fractional ship
+      for (let k = 0; k < count; k++) {
+        if (this.liveCount >= SHIP_POOL_CAP) break;
+        this.spawn(lane.kind, lane.srcIdx, lane.dstIdx, lane.bow, Math.random()); // uniform τ
+      }
+    }
+
+    // Draw the seeded pool now: the first real frame (dt=0) early-returns before rendering.
+    this.renderFrame(0);
+  }
+
+  // Center-to-center chord (px) for a lane's two endpoints, off-screen ends pinned to the
+  // same anchors renderFrame() uses. Returns 0 if an in-system body's center is missing
+  // (so prime() skips it). Used only for the steady-state COUNT — per-dot motion uses the
+  // scattered chord.
+  private centerChord(lane: ResolvedLane, centers: BodyCenterIndex, offTop: number, leftX: number, rightX: number): number {
+    switch (lane.kind) {
+      case KIND_INTERNAL: {
+        const A = centers.get(lane.srcIdx);
+        const B = centers.get(lane.dstIdx);
+        if (!A || !B) return 0;
+        return Math.hypot(B.cx - A.cx, B.cy - A.cy);
+      }
+      case KIND_OUTGOING: {
+        const A = centers.get(lane.srcIdx);
+        return A ? Math.abs(offTop - A.cy) : 0;
+      }
+      case KIND_INCOMING: {
+        const B = centers.get(lane.dstIdx);
+        return B ? Math.abs(offTop - B.cy) : 0;
+      }
+      default: // through (LTR / RTL): full-width transit
+        return rightX - leftX;
+    }
+  }
+
+  // Allocate a pool slot for a new dot on a lane, entering at normalized journey time
+  // `tau` (0 for the live emitter; a uniform random value for prime()'s steady-state
+  // seed). Rolls the dot's own per-end scatter (uniform-in-area, r = R·√u) and cruise
+  // variance. Caller MUST ensure liveCount < SHIP_POOL_CAP.
+  private spawn(kind: number, srcIdx: number, dstIdx: number, bow: number, tau: number): void {
+    const s = this.liveCount++;
+    this.dKind[s] = kind;
+    this.dSrc[s] = srcIdx;
+    this.dDst[s] = dstIdx;
+    this.dBow[s] = bow;
+    // This ship's own emit/arrive points: uniform-in-area scatter (r = R·√u), stored as a
+    // fraction-of-radius vector so each ship's arc differs AND the points track the disc
+    // if it resizes.
+    const aFrac = Math.sqrt(Math.random()), aAng = Math.random() * TAU;
+    this.dAux[s] = aFrac * Math.cos(aAng); this.dAuy[s] = aFrac * Math.sin(aAng);
+    const bFrac = Math.sqrt(Math.random()), bAng = Math.random() * TAU;
+    this.dBux[s] = bFrac * Math.cos(bAng); this.dBuy[s] = bFrac * Math.sin(bAng);
+    // Fixed random cruise multiplier in [1 − V/2, 1 + V/2], centered on 1.
+    this.dSpeed[s] = 1 + (Math.random() - 0.5) * SHIP_SPEED_VARIANCE;
+    this.dTau[s] = tau;
+  }
+
+  // Render-then-advance every live dot for a `dt`-second step (dt = 0 just redraws — used
+  // by prime() to flush the seeded pool into the buffer before the first real frame). Each
+  // dot re-derives its endpoints from the live layout, maps its τ → arc position through
+  // the shared motion profile, places + lights it, then advances τ. Despawn fires once τ
+  // reaches 1 (swap-remove), so a dot's last drawn position is a fraction short of B,
+  // hidden inside the destination disc (internal/incoming) or off-screen past the margin.
+  private renderFrame(dt: number): void {
+    const startCount = this.liveCount;
 
     // Live screen bounds for the off-body endpoints (re-read every frame so a
     // resize moves them with the viewport).
@@ -312,16 +411,11 @@ export class ShipsLayer {
     const leftX = -SHIP_OFFSCREEN_MARGIN;
     const rightX = this.contentW + SHIP_OFFSCREEN_MARGIN;
 
-    // Render-then-advance: draw each dot at its CURRENT t (re-derived from the live
-    // layout), then advance it for the next frame — so a freshly spawned dot (t=0)
-    // renders at A before moving. Despawn fires once t reaches B (swap-remove), so
-    // a dot's last drawn position is a fraction short of B, hidden inside the
-    // destination disc (internal/incoming) or off-screen past the margin.
     let i = 0;
     let thrustSegs = 0; // burn segments written this frame (2 vertices each)
     while (i < this.liveCount) {
-      const t = this.dT[i]!;
-      if (t >= 1) { this.swapRemove(i); continue; }
+      const tau = this.dTau[i]!;
+      if (tau >= 1) { this.swapRemove(i); continue; }
 
       // Re-derive this frame's endpoints from the live layout. A body end whose
       // center has vanished (shouldn't happen for an in-cluster body) drops the
@@ -358,58 +452,33 @@ export class ShipsLayer {
       if (bow !== 0) { cx += -(by - ay) * bow; cy += (bx - ax) * bow; }
       cx += (adx + bdx) * 0.5; cy += (ady + bdy) * 0.5;
 
-      // Quadratic Bézier P(t) = u²·A + 2ut·C + t²·B (u = 1−t).
-      const u = 1 - t;
-      const w0 = u * u, w1 = 2 * u * t, w2 = t * t;
+      // Map normalized journey TIME τ → arc position f via the shared motion profile, then
+      // place the dot on the quadratic Bézier P(f) = u²·A + 2uf·C + f²·B (u = 1−f). The
+      // profile also reports the journey time (to advance τ) and the thrust phase. Distances
+      // are normalized by content width so the pace stays window-size-independent; dSpeed
+      // carries the per-ship ±variance. Chord floored at 1px so a near-coincident pair
+      // can't divide-by-tiny.
+      const chord = Math.max(Math.hypot(p2x - p0x, p2y - p0y), 1);
+      const dn = chord / this.contentW;
+      const vc = this.dSpeed[i]! / SHIP_CROSS_SCREEN_SEC;
+      sampleProfile(tau, dn, vc, kind, this.profileOut);
+      const f = this.profileOut.s;
+
+      const u = 1 - f;
+      const w0 = u * u, w1 = 2 * u * f, w2 = f * f;
       const sx = snapPx(w0 * p0x + w1 * cx + w2 * p2x);
       const sy = snapPx(w0 * p0y + w1 * cy + w2 * p2y);
       this.pos[i * 3 + 0] = sx;
       this.pos[i * 3 + 1] = sy;
       this.pos[i * 3 + 2] = Z_SHIP;
 
-      // Motion profile: constant-acceleration ramps of a STANDARD DURATION (time,
-      // not a path fraction), so reaching cruise always takes SHIP_ACCEL_SEC and a
-      // short hop just peaks at its midpoint rather than snapping to full speed. A
-      // ramp anchored at a BODY end pulls the speed to ~rest there; an OFF-SCREEN
-      // end imposes none — so a ship LEAVING the system accelerates the whole way
-      // out and one ARRIVING decelerates the whole way in (no brake/launch against
-      // a virtual point at the screen edge). Distances normalized by content width
-      // keep the pace window-size-independent; dSpeed carries the per-ship
-      // ±variance. Chord floored at 1px so a near-coincident pair can't divide-by-tiny.
-      const chord = Math.max(Math.hypot(p2x - p0x, p2y - p0y), 1);
-      const dn = chord / this.contentW;                   // journey length, screen widths
-      const vc = this.dSpeed[i]! / SHIP_CROSS_SCREEN_SEC;  // cruise speed, widths/sec
-      const accel = vc / SHIP_ACCEL_SEC;                   // a = cruise / T_accel
-      const dist = t * dn;                                 // distance covered so far
-      const vAccel = Math.sqrt(2 * accel * dist);                    // ramp up from the source body
-      const vDecel = Math.sqrt(2 * accel * Math.max(dn - dist, 0));  // ramp down into the dest body
-      // Pick the speed + exhaust direction by lane kind. dir is the burn: −1 trails
-      // behind (accelerating), +1 streams out the front (braking), 0 = dark (cruise).
-      let v: number;
-      let dir: number;
-      switch (kind) {
-        case KIND_OUTGOING:                  // body → deep space: accelerate the whole way out
-          v = vAccel; dir = -1; break;
-        case KIND_INCOMING:                  // deep space → body: decelerate the whole way in
-          v = vDecel; dir = 1; break;
-        case KIND_THROUGH_LTR:
-        case KIND_THROUGH_RTL:               // relay traffic: cruise straight across, no burn
-          v = vc; dir = 0; break;
-        default: {                           // internal body → body: accel · cruise · decel
-          v = Math.min(vc, vAccel, vDecel);
-          const accelDist = Math.min(vc * SHIP_ACCEL_SEC * 0.5, dn * 0.5);
-          dir = dist < accelDist ? -1 : dist > dn - accelDist ? 1 : 0;
-        }
-      }
-      const vFloor = vc * SHIP_EASE_FLOOR;                 // crawl floor — never a dead stop
-      if (v < vFloor) v = vFloor;
-
       // Exhaust burn: a short line off the dot along ±the unit Bézier tangent
-      // P'(t) = 2(1−t)(C−A) + 2t(B−C), signed by dir above — trailing behind while
+      // P'(f) = 2(1−f)(C−A) + 2f(B−C), signed by the profile phase — trailing behind while
       // accelerating, out the front while braking, dark at cruise.
+      const dir = this.profileOut.phase;
       if (dir !== 0) {
-        const gx = 2 * (1 - t) * (cx - p0x) + 2 * t * (p2x - cx);
-        const gy = 2 * (1 - t) * (cy - p0y) + 2 * t * (p2y - cy);
+        const gx = 2 * (1 - f) * (cx - p0x) + 2 * f * (p2x - cx);
+        const gy = 2 * (1 - f) * (cy - p0y) + 2 * f * (p2y - cy);
         const gl = Math.hypot(gx, gy);
         if (gl > 1e-4) {
           const k = (dir * SHIP_THRUST_LEN_PX) / gl; // scale tangent to the burn length
@@ -420,9 +489,9 @@ export class ShipsLayer {
         }
       }
 
-      // Advance the path fraction by the profiled speed: the normalized distance
-      // step v·dt equals dn·Δt, so Δt = v·dt / dn.
-      this.dT[i] = t + (v / dn) * dt;
+      // Advance the normalized journey time: τ goes 0→1 over the journey time the profile
+      // reported. A dt = 0 flush leaves τ untouched (just redraws).
+      this.dTau[i] = tau + dt / this.profileOut.t;
       i++;
     }
 
@@ -455,7 +524,7 @@ export class ShipsLayer {
     this.dBux[i] = this.dBux[last]!; this.dBuy[i] = this.dBuy[last]!;
     this.dBow[i] = this.dBow[last]!;
     this.dSpeed[i] = this.dSpeed[last]!;
-    this.dT[i] = this.dT[last]!;
+    this.dTau[i] = this.dTau[last]!;
   }
 
   dispose(): void {

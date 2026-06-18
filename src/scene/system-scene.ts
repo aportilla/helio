@@ -122,6 +122,10 @@ export class SystemScene implements Screen {
     // resize() has laid out the diagram (the ships layer has anchors + bounds),
     // so seed the cargo lanes before the first frame.
     this.refreshFlows();
+    // Lanes + layout are now resolved but the pool is empty — prime it to steady-state
+    // occupancy so the view opens with traffic already in flight (one-shot; never
+    // re-applied on the resizes/turns that re-resolve lanes).
+    this.diagram.prime();
     this.tick();
   }
 
