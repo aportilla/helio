@@ -370,18 +370,18 @@ export const RENDER_ORDER_SHIP = 30;
 
 // --- Cargo ships (economy traffic) ---
 //
-// Animated dots representing in-flight cargo while a system is open. A per-turn
-// shipped amount is rendered as a continuous emission RATE; dots ride a quadratic
-// Bézier (body→body lanes arc) from a scattered source point to a scattered
-// destination point at constant pixel speed and despawn at B. All values are the
-// "edit a number, reload, eyeball" tuning surface.
+// Animated dots representing in-flight cargo while a system is open. A lane's live
+// volume is rendered as a continuous emission RATE; dots ride a quadratic Bézier
+// (body→body lanes arc) from a scattered source point to a scattered destination
+// point — easing out of the source and into the destination — and despawn at B.
+// All values are the "edit a number, reload, eyeball" tuning surface.
 
 // Fixed world-z for the whole ship pool. The diagram's ortho camera maps world
-// z linearly to NDC over [-1, 1] (near -1 / far 1), so any small z renders fine;
-// 0.005 sits at the front of the body-band span but not strictly ahead of the
-// deepest row (rowIdx·Z_STRIDE + Z_FRONT_MOON, ~0.01 for a busy system). Ships
-// don't rely on z for layering: the material runs depthTest:false + a high
-// renderOrder, so they always paint over every body regardless of the exact z.
+// z linearly to NDC over [-1, 1] (near -1 / far 1), so any small z renders fine.
+// Z_SHIP sits within the body-band span (rowIdx·Z_STRIDE + Z_FRONT_MOON) but not
+// strictly ahead of the deepest row. Ships don't rely on z for layering: the
+// material runs depthTest:false + a high renderOrder, so they always paint over
+// every body regardless of the exact z.
 export const Z_SHIP = 0.005;
 
 // Pre-allocated dot pool size. A hard ceiling on simultaneously-visible
@@ -393,16 +393,17 @@ export const SHIP_POOL_CAP = 512;
 // palette). Per-resource tinting is a documented follow-up.
 export const SHIP_COLOR = 0x8fd3ff;
 
-// Dot size in env-px. 1 px = a single crisp pixel per ship — an odd size centers
-// on the pixel grid via snappedDotsMat's parity snap — reading as fine-grained
-// traffic rather than chunky markers.
+// Dot size in env-px. A single crisp pixel per ship — an odd size centers on the
+// pixel grid via snappedDotsMat's parity snap — reading as fine-grained traffic
+// rather than chunky markers.
 export const SHIP_SIZE_PX = 1;
 
-// Constant travel speed (env-px/sec). Transit time = segment length / speed,
-// so long and short lanes stay equally legible (a long haul just shows more
-// dots in flight, not faster ones). Deliberately slow so dots LINGER in flight
-// — at a given spawn rate, slower travel keeps more dots on screen at once, so
-// even a small flow reads as a continuous trickle rather than a lone blip.
+// Mid-lane cruise speed (env-px/sec); the trapezoidal ease (SHIP_EASE_*) ramps
+// in and out around it. Transit time ≈ segment length / cruise, so long and short
+// lanes stay equally legible (a long haul just shows more dots in flight, not
+// faster ones). Deliberately slow so dots LINGER in flight — at a given spawn
+// rate, slower travel keeps more dots on screen at once, so even a small flow
+// reads as a continuous trickle rather than a lone blip.
 export const SHIP_SPEED_PX_PER_SEC = 10;
 
 // Emission rate mapping: dots/sec per milli-unit shipped on a lane this turn,

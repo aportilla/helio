@@ -57,8 +57,8 @@ interface MoonPool {
 export class MoonsLayer {
   private readonly backPool:  MoonPool | null;
   private readonly frontPool: MoonPool | null;
-  // Per-moon on-screen anchor (bodyIdx → {cx,cy}), rebuilt each layout so the
-  // ships layer can spawn/aim cargo at a moon, not just its host planet.
+  // Per-moon on-screen anchor (center + disc radius), rebuilt each layout so the
+  // ships layer can scatter cargo across a moon's face, not just its host planet.
   private readonly centerIndex = new Map<number, { cx: number; cy: number; r: number }>();
 
   constructor(scene: Scene, rowSlots: readonly RowSlot[]) {

@@ -62,8 +62,8 @@ export class BeltsLayer {
   // bodyIdx → BeltSlot ref, so setHovered can iterate the slot's vertex
   // range without scanning pool.slots.
   private readonly slotByBodyIdx: ReadonlyMap<number, BeltSlot>;
-  // Per-belt on-screen anchor (bodyIdx → slot center), rebuilt each layout so
-  // the ships layer can spawn/aim cargo at a belt.
+  // Per-belt on-screen anchor (slot center + scatter radius), rebuilt each layout
+  // so the ships layer can scatter cargo around a belt, not just its center.
   private readonly centerIndex = new Map<number, { cx: number; cy: number; r: number }>();
 
   constructor(scene: Scene, rowSlots: readonly RowSlot[]) {

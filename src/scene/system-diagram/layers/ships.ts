@@ -2,8 +2,9 @@
 // diagram, the FIRST time-driven element in this otherwise-static view. Each lane the
 // EconomyBridge reports (internal / outgoing / incoming / through) becomes a
 // steady emitter: dots spawn at the lane's A end, march to B along a quadratic
-// Bézier at constant pixel speed, and despawn at B. Emission RATE is proportional
-// to the lane's per-turn shipped amount, so a busy lane reads as a denser stream.
+// Bézier on a trapezoidal ease (accelerate out of the source, cruise, settle into
+// the destination — see easeSpeed), and despawn at B. Emission RATE scales with the
+// lane's live in-flight cargo volume, so a busy lane reads as a denser stream.
 //
 // Body-to-body (internal) lanes bow into an ARC — the control point is offset
 // perpendicular to the chord, signed-random per ordered body-pair and cached so

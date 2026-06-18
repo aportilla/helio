@@ -1,6 +1,7 @@
-// Galaxy-view materials: the perspective stars shader plus the pixel-
-// snapped line / dot materials used by droplines, range rings, the
-// focus marker, and the bracket arms.
+// Galaxy-view materials: the perspective stars shader plus the pixel-snapped
+// line / dot materials used across the galaxy chrome (droplines, range rings,
+// focus marker, bracket arms). The size-capable dot variant (snappedDotsMat)
+// is also consumed by the system-view cargo-ship overlay.
 
 import { Color, ShaderMaterial, Vector2, Vector3 } from 'three';
 import { PIVOT_FADE_FAR, PIVOT_FADE_NEAR } from '../cluster-fade';
@@ -117,11 +118,13 @@ export function snappedLineMat(opts: SnappedLineOptions): ShaderMaterial {
   return m;
 }
 
-// 1-pixel pixel-snapped points. Each vertex renders as exactly one buffer
-// pixel by snapping the projected center to an integer + 0.5 (pixel center)
-// and setting gl_PointSize = 1. Used by droplines for the dotted (far-side
-// of the galactic plane) variant — far simpler than baking dash segments
-// into LineSegments geometry, since each dot is a single vertex.
+// Pixel-snapped square points. Each vertex's projected center is snapped to the
+// pixel grid, parity-matched to the point size (an odd size lands on a pixel
+// center, an even size on a boundary) so a size-N point rasterizes crisply rather
+// than straddling. The default size is the crisp single-pixel dot the dotted
+// droplines (far-side-of-the-galactic-plane variant) need; a larger size drives
+// the system-view cargo-ship dots. Cheaper than baking dash segments into
+// LineSegments geometry — each dot is a single vertex.
 export function snappedDotsMat(opts: { color: number; opacity?: number; size?: number }): ShaderMaterial {
   const size = opts.size ?? 1.0;
   // Parity-match the center snap to the point size: an ODD size centers on a

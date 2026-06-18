@@ -49,6 +49,7 @@ facility identity.
 | `project.ts` | `projectBody` / `projectWorld` — THE projection adapter (body intent → `PlanetSpec`). Sim-importing, node-pure (catalog is type-only). |
 | `sim-geometry.ts` | `buildGeometry` — catalog coords → the sim's integer geometry (the float→int round for transport — `Math.round`, for symmetric error). Sim-importing, node-pure. |
 | `world-sync.ts` | `transplantLiveState` / `sameBodyIds` — the reconcile mechanics that preserve stock across a facility edit. Sim-importing, node-pure. |
+| `flow-class.ts` | `classifyFlow` — pure within / from / to / through classification of one in-flight transfer relative to the viewed cluster (the 2×2 of src/dst-in-cluster, plus the relay-through case). No sim, no DOM — unit-tested without a world. |
 | `economy-bridge.ts` | `EconomyBridge` — the live engine owner: build/restore/reconcile the world, step, persist (`helio.sim`), read back. The **app-glue** module: imports the sim AND the catalog (`BODIES`/`STAR_CLUSTERS`) + `localStorage`, so it is NOT node-testable (its pure parts live in the modules above). |
 | `index.ts` | Public barrel. |
 
@@ -75,7 +76,7 @@ wrap an `Int32Array` negative; see `combineCeiling`). A facility expresses
 sentinel, so the registry never imports a sim value.
 
 `projectWorld` allocates dense `PlanetId`s in the order of the `bodies` it's
-given and returns the `bodyIdByPlanet[]` side-table the future flow visualization
+given and returns the `bodyIdByPlanet[]` side-table the flow visualization
 resolves edges through. It **preserves** the caller's order rather than imposing
 it — so callers **must** pass `BODIES` in canonical order (never a Map-derived
 array), or the sim's seeded PRNG / replay would diverge.
@@ -97,7 +98,9 @@ in-flight cargo *through* an edit, not just a reload) stays a later refinement.
   `economy-bridge.ts` instantiates a real `EconomyEngine`, steps it on Next Turn,
   reconciles it after a facility edit (by `Body.id`, preserving stock), persists
   its full state to `localStorage` (`helio.sim`, `configHash`-guarded), and reads
-  per-body / per-system balances back into the sidebar. Eligibility, build caps,
+  per-body / per-system balances back into the sidebar — plus the live cargo lanes
+  touching a cluster (`clusterFlows` → `ShipLane[]`, classified by `flow-class.ts`)
+  that drive the system-view ship-dot overlay. Eligibility, build caps,
   and the body-derived Add pills are live.
 - **Transport model:** a geometry node is a **cluster** — one system with a
   shared pool of bodies (`sim-geometry.ts` builds one node per cluster at its
@@ -108,8 +111,9 @@ in-flight cargo *through* an edit, not just a reload) stays a later refinement.
 - **Provisional:** the `contribute` rates and the `EconResource` roster — both
   app-internal and never serialized into `helio.game`, so freely re-mappable.
 - **Deferred:** build cost / time, ownership, depot nodes, and the galaxy-view
-  edge-flow overlay (the `digest.edgeFlows` read surface is ready; the 3D line
-  layer is not built).
+  (3D) edge-flow overlay (the `digest.edgeFlows` read surface is ready; the 3D
+  line layer is not built — distinct from the shipped system-view ship-dot overlay,
+  which rides the live transfer ring, not the read digest).
 
 ## Invariants & how they're enforced
 
