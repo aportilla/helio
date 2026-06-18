@@ -59,7 +59,7 @@ export class MoonsLayer {
   private readonly frontPool: MoonPool | null;
   // Per-moon on-screen anchor (bodyIdx → {cx,cy}), rebuilt each layout so the
   // ships layer can spawn/aim cargo at a moon, not just its host planet.
-  private readonly centerIndex = new Map<number, { cx: number; cy: number }>();
+  private readonly centerIndex = new Map<number, { cx: number; cy: number; r: number }>();
 
   constructor(scene: Scene, rowSlots: readonly RowSlot[]) {
     const planetItems = rowSlots.filter(r => r.kind === 'planet');
@@ -170,7 +170,7 @@ function writePoolPositions(
   pool: MoonPool | null,
   centers: PlanetCenterIndex,
   layerZ: number,
-  centerOut: Map<number, { cx: number; cy: number }>,
+  centerOut: Map<number, { cx: number; cy: number; r: number }>,
 ): void {
   if (!pool) return;
   const pos = pool.geometry.attributes.position!.array as Float32Array;
@@ -183,7 +183,7 @@ function writePoolPositions(
     pos[i * 3 + 0] = cx;
     pos[i * 3 + 1] = cy;
     pos[i * 3 + 2] = bandZ(parent.rowIdx, layerZ);
-    centerOut.set(slot.bodyIdx, { cx, cy });
+    centerOut.set(slot.bodyIdx, { cx, cy, r: slot.discPx / 2 });
   });
   pool.geometry.attributes.position!.needsUpdate = true;
 }

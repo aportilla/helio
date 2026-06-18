@@ -64,7 +64,7 @@ export class BeltsLayer {
   private readonly slotByBodyIdx: ReadonlyMap<number, BeltSlot>;
   // Per-belt on-screen anchor (bodyIdx → slot center), rebuilt each layout so
   // the ships layer can spawn/aim cargo at a belt.
-  private readonly centerIndex = new Map<number, { cx: number; cy: number }>();
+  private readonly centerIndex = new Map<number, { cx: number; cy: number; r: number }>();
 
   constructor(scene: Scene, rowSlots: readonly RowSlot[]) {
     const beltItems = rowSlots.filter(r => r.kind === 'belt');
@@ -100,7 +100,9 @@ export class BeltsLayer {
       const slot = this.pool.slots[bi]!;
       slot.cx = item.cx;
       slot.cy = item.cy;
-      this.centerIndex.set(slot.bodyIdx, { cx: item.cx, cy: item.cy });
+      // Belts aren't discs; use half the slot width as a representative scatter
+      // radius so cargo emits from around the band rather than a single point.
+      this.centerIndex.set(slot.bodyIdx, { cx: item.cx, cy: item.cy, r: BELT_SLOT_WIDTH / 2 });
       const z = bandZ(slot.rowIdx, Z_BELT);
       for (let v = slot.startVertex; v < slot.endVertex; v++) {
         const off    = slot.chunkOffsets[v - slot.startVertex]!;

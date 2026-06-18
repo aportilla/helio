@@ -44,7 +44,7 @@ export class PlanetsLayer {
 
   // Built fresh each layout pass. Stays empty when there are no
   // planets in the cluster.
-  private centerIndex: Map<number, { cx: number; cy: number; rowIdx: number }> = new Map();
+  private centerIndex: Map<number, { cx: number; cy: number; rowIdx: number; r: number }> = new Map();
 
   constructor(scene: Scene, rowSlots: readonly RowSlot[]) {
     const planetItems = rowSlots.filter(r => r.kind === 'planet');
@@ -104,7 +104,7 @@ export class PlanetsLayer {
       positions[pi * 3 + 0] = item.cx;
       positions[pi * 3 + 1] = item.cy;
       positions[pi * 3 + 2] = bandZ(item.rowIdx, Z_PLANET);
-      this.centerIndex.set(item.bodyIdx, { cx: item.cx, cy: item.cy, rowIdx: item.rowIdx });
+      this.centerIndex.set(item.bodyIdx, { cx: item.cx, cy: item.cy, rowIdx: item.rowIdx, r: item.widthPx / 2 });
       pi++;
     }
     this.geometry.attributes.position!.needsUpdate = true;

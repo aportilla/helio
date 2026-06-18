@@ -1,13 +1,21 @@
 // Ships layer — animated "cargo ship" dots (SHIP_SIZE_PX square) over the system
 // diagram, the FIRST time-driven element in this otherwise-static view. Each lane the
 // EconomyBridge reports (internal / outgoing / incoming / through) becomes a
-// steady emitter: dots spawn at the lane's A point, march a straight segment to
-// B at constant pixel speed, and despawn at B. Emission RATE is proportional to
-// the lane's per-turn shipped amount, so a busy lane reads as a denser stream.
+// steady emitter: dots spawn at the lane's A end, march to B along a quadratic
+// Bézier at constant pixel speed, and despawn at B. Emission RATE is proportional
+// to the lane's per-turn shipped amount, so a busy lane reads as a denser stream.
+//
+// Body-to-body (internal) lanes bow into an ARC — the control point is offset
+// perpendicular to the chord, signed-random per ordered body-pair and cached so
+// every dot on a lane traces the same curve. Endpoints SCATTER: each dot picks a
+// random point within the source disc to leave from and within the destination
+// disc to arrive at (the off-screen ends of outgoing/incoming/through stay put).
+// Off-body lanes leave the control at the chord midpoint, so the Bézier degrades
+// to the original straight segment.
 //
 // Positions are integrated on the CPU and rewritten in place into one
 // pre-allocated DynamicDrawUsage pool (the droplines.ts zero-alloc pattern) —
-// no per-frame allocation, no GPU clock. A live dot captures its own A/B at
+// no per-frame allocation, no GPU clock. A live dot captures its own curve at
 // spawn, so a mid-turn setFlows() never re-aims a dot already in flight.
 
 import { BufferAttribute, BufferGeometry, DynamicDrawUsage, Points } from 'three';
@@ -17,18 +25,24 @@ import { snappedDotsMat, unregisterSnappedMaterial } from '../../materials';
 import { disableCulling } from '../geom/cull';
 import { snapPx } from '../geom/snap';
 import {
-  RENDER_ORDER_SHIP, SHIP_COLOR, SHIP_MAX_TICK_DT_MS, SHIP_OFFSCREEN_MARGIN,
-  SHIP_POOL_CAP, SHIP_RATE_MAX_PER_LANE, SHIP_RATE_MIN_PER_LANE, SHIP_RATE_PER_MILLI,
-  SHIP_SIZE_PX, SHIP_SPEED_PX_PER_SEC, SHIP_TRANSIT_FROM_TOP, Z_SHIP,
+  RENDER_ORDER_SHIP, SHIP_ARC_BOW_MAX, SHIP_ARC_BOW_MIN, SHIP_COLOR, SHIP_MAX_TICK_DT_MS,
+  SHIP_OFFSCREEN_MARGIN, SHIP_POOL_CAP, SHIP_RATE_MAX_PER_LANE, SHIP_RATE_MIN_PER_LANE,
+  SHIP_RATE_PER_MILLI, SHIP_SIZE_PX, SHIP_SPEED_PX_PER_SEC, SHIP_TRANSIT_FROM_TOP, Z_SHIP,
 } from '../layout/constants';
-import type { BodyCenterIndex } from '../types';
+import type { BodyCenter, BodyCenterIndex } from '../types';
 import type { ShipLane } from '../../../facilities/economy-bridge';
 
+const TAU = Math.PI * 2;
+
 // A lane resolved to screen geometry + an emission rate, ready to spawn dots.
-// emitAccum carries the fractional dot between frames.
+// (ax,ay)→(bx,by) is the chord; (cx,cy) is the quadratic-Bézier control point
+// (chord midpoint for straight lanes, bowed off it for internal arcs). aR/bR are
+// the scatter radii of each end (0 for an off-screen end). emitAccum carries the
+// fractional dot between frames.
 interface ResolvedLane {
-  ax: number; ay: number;
-  bx: number; by: number;
+  ax: number; ay: number; aR: number;
+  bx: number; by: number; bR: number;
+  cx: number; cy: number;
   length: number;
   ratePerSec: number;
   emitAccum: number;
@@ -47,14 +61,22 @@ export class ShipsLayer {
   private readonly pos: Float32Array;
 
   // Per-live-dot SoA, parallel to pool slots [0, liveCount). Each dot owns its
-  // A/B/length so it finishes its captured path even if the schedule changes.
+  // whole Bézier (A control B) + chord length, so it finishes its captured curve
+  // even if the schedule changes mid-flight.
   private readonly dAx = new Float32Array(SHIP_POOL_CAP);
   private readonly dAy = new Float32Array(SHIP_POOL_CAP);
+  private readonly dCx = new Float32Array(SHIP_POOL_CAP);
+  private readonly dCy = new Float32Array(SHIP_POOL_CAP);
   private readonly dBx = new Float32Array(SHIP_POOL_CAP);
   private readonly dBy = new Float32Array(SHIP_POOL_CAP);
   private readonly dLen = new Float32Array(SHIP_POOL_CAP);
   private readonly dT = new Float32Array(SHIP_POOL_CAP);
   private liveCount = 0;
+
+  // Per ordered body-pair arc bow (signed control-offset fraction of the chord),
+  // cached so every dot between two bodies follows the same curve. Ephemeral
+  // render state — filled lazily with Math.random(), not procedurally stable.
+  private readonly arcBow = new Map<string, number>();
 
   // The per-turn schedule (raw lanes) + the current layout it resolves against.
   private rawLanes: readonly ShipLane[] = [];
@@ -97,7 +119,7 @@ export class ShipsLayer {
   }
 
   // Replace the per-turn lane schedule (from EconomyBridge.clusterFlows). Resets
-  // emission accumulators; in-flight dots keep their captured A/B and finish.
+  // emission accumulators; in-flight dots keep their captured curve and finish.
   setFlows(lanes: readonly ShipLane[]): void {
     this.rawLanes = lanes;
     this.resolve();
@@ -115,25 +137,30 @@ export class ShipsLayer {
     const leftX = -SHIP_OFFSCREEN_MARGIN;
     const rightX = this.contentW + SHIP_OFFSCREEN_MARGIN;
     for (const lane of this.rawLanes) {
-      let ax = 0, ay = 0, bx = 0, by = 0;
+      let ax = 0, ay = 0, aR = 0, bx = 0, by = 0, bR = 0;
+      // Internal lanes bow; everything else keeps the control at the midpoint
+      // (straight). bowKey is set only when a lane should arc.
+      let bowKey: string | null = null;
       switch (lane.kind) {
         case 'internal': {
           const a = this.anchor(lane.srcBodyId);
           const b = this.anchor(lane.dstBodyId);
           if (!a || !b) continue;
-          ax = a.cx; ay = a.cy; bx = b.cx; by = b.cy;
+          ax = a.cx; ay = a.cy; aR = a.r;
+          bx = b.cx; by = b.cy; bR = b.r;
+          bowKey = `${lane.srcBodyId}->${lane.dstBodyId}`;
           break;
         }
         case 'outgoing': {
           const a = this.anchor(lane.srcBodyId);
           if (!a) continue;
-          ax = a.cx; ay = a.cy; bx = a.cx; by = offTop;
+          ax = a.cx; ay = a.cy; aR = a.r; bx = a.cx; by = offTop;
           break;
         }
         case 'incoming': {
           const b = this.anchor(lane.dstBodyId);
           if (!b) continue;
-          ax = b.cx; ay = offTop; bx = b.cx; by = b.cy;
+          ax = b.cx; ay = offTop; bx = b.cx; by = b.cy; bR = b.r;
           break;
         }
         case 'through': {
@@ -148,12 +175,34 @@ export class ShipsLayer {
       }
       const length = Math.hypot(bx - ax, by - ay);
       if (length < 1) continue;
+      // Control point: chord midpoint, pushed perpendicular by the cached bow for
+      // arced lanes. perp(chord) = (-dy, dx); offsetting by f·perp lands the
+      // control at midpoint ± f·length away (the rendered apex is half of that).
+      let cx = (ax + bx) / 2, cy = (ay + by) / 2;
+      if (bowKey !== null) {
+        const f = this.bowFor(bowKey);
+        cx += -(by - ay) * f;
+        cy += (bx - ax) * f;
+      }
       const ratePerSec = clamp(lane.amountMilli * SHIP_RATE_PER_MILLI, SHIP_RATE_MIN_PER_LANE, SHIP_RATE_MAX_PER_LANE);
-      this.resolved.push({ ax, ay, bx, by, length, ratePerSec, emitAccum: 0 });
+      this.resolved.push({ ax, ay, aR, bx, by, bR, cx, cy, length, ratePerSec, emitAccum: 0 });
     }
   }
 
-  private anchor(bodyId: string): { cx: number; cy: number } | undefined {
+  // Signed bow fraction for an ordered body-pair, cached so all its dots share
+  // one arc. Magnitude in [MIN, MAX], sign a coin flip — opposite-direction
+  // lanes (which produce a different key) bow independently.
+  private bowFor(key: string): number {
+    let v = this.arcBow.get(key);
+    if (v === undefined) {
+      const mag = SHIP_ARC_BOW_MIN + Math.random() * (SHIP_ARC_BOW_MAX - SHIP_ARC_BOW_MIN);
+      v = Math.random() < 0.5 ? -mag : mag;
+      this.arcBow.set(key, v);
+    }
+    return v;
+  }
+
+  private anchor(bodyId: string): BodyCenter | undefined {
     if (!this.centers) return undefined;
     const idx = indexOfBodyId(bodyId);
     if (idx < 0) return undefined;
@@ -184,9 +233,27 @@ export class ShipsLayer {
         if (this.liveCount >= SHIP_POOL_CAP) { lane.emitAccum = Math.min(lane.emitAccum, 1); break; }
         lane.emitAccum -= 1;
         const s = this.liveCount++;
-        this.dAx[s] = lane.ax; this.dAy[s] = lane.ay;
-        this.dBx[s] = lane.bx; this.dBy[s] = lane.by;
-        this.dLen[s] = lane.length; this.dT[s] = 0;
+        // Scatter each end across its body disc (uniform-in-area: r = R·√u). An
+        // off-screen end has R=0, so it pins to the exact chord endpoint.
+        const aRad = lane.aR * Math.sqrt(Math.random());
+        const aAng = Math.random() * TAU;
+        const adx = aRad * Math.cos(aAng), ady = aRad * Math.sin(aAng);
+        const bRad = lane.bR * Math.sqrt(Math.random());
+        const bAng = Math.random() * TAU;
+        const bdx = bRad * Math.cos(bAng), bdy = bRad * Math.sin(bAng);
+        const p0x = lane.ax + adx, p0y = lane.ay + ady;
+        const p2x = lane.bx + bdx, p2y = lane.by + bdy;
+        this.dAx[s] = p0x; this.dAy[s] = p0y;
+        this.dBx[s] = p2x; this.dBy[s] = p2y;
+        // Translate the control by the average end-jitter so the whole curve
+        // shifts with its endpoints — every dot stays a near-parallel copy of the
+        // lane arc instead of fanning back to one shared apex.
+        this.dCx[s] = lane.cx + (adx + bdx) * 0.5;
+        this.dCy[s] = lane.cy + (ady + bdy) * 0.5;
+        // Chord length paces t (floored at 1px so a near-coincident pair can't
+        // divide-by-tiny and teleport); the arc is a touch longer, so bowed dots
+        // travel marginally faster than SHIP_SPEED — imperceptible.
+        this.dLen[s] = Math.max(Math.hypot(p2x - p0x, p2y - p0y), 1); this.dT[s] = 0;
       }
     }
 
@@ -203,13 +270,18 @@ export class ShipsLayer {
         const last = --this.liveCount;
         if (i !== last) {
           this.dAx[i] = this.dAx[last]!; this.dAy[i] = this.dAy[last]!;
+          this.dCx[i] = this.dCx[last]!; this.dCy[i] = this.dCy[last]!;
           this.dBx[i] = this.dBx[last]!; this.dBy[i] = this.dBy[last]!;
           this.dLen[i] = this.dLen[last]!; this.dT[i] = this.dT[last]!;
         }
         continue; // reprocess the swapped-in dot at slot i
       }
-      this.pos[i * 3 + 0] = snapPx(this.dAx[i]! + (this.dBx[i]! - this.dAx[i]!) * t);
-      this.pos[i * 3 + 1] = snapPx(this.dAy[i]! + (this.dBy[i]! - this.dAy[i]!) * t);
+      // Quadratic Bézier P(t) = u²·A + 2ut·C + t²·B (u = 1−t). C at the chord
+      // midpoint collapses this to the straight A→B segment.
+      const u = 1 - t;
+      const w0 = u * u, w1 = 2 * u * t, w2 = t * t;
+      this.pos[i * 3 + 0] = snapPx(w0 * this.dAx[i]! + w1 * this.dCx[i]! + w2 * this.dBx[i]!);
+      this.pos[i * 3 + 1] = snapPx(w0 * this.dAy[i]! + w1 * this.dCy[i]! + w2 * this.dBy[i]!);
       this.pos[i * 3 + 2] = Z_SHIP;
       this.dT[i] = t + step / this.dLen[i]!;
       i++;

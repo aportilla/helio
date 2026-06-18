@@ -370,10 +370,11 @@ export const RENDER_ORDER_SHIP = 30;
 
 // --- Cargo ships (economy traffic) ---
 //
-// Animated 1-px dots representing in-flight cargo while a system is open.
-// A per-turn shipped amount is rendered as a continuous emission RATE; dots
-// march a straight A→B segment at constant pixel speed and despawn at B.
-// All values are the "edit a number, reload, eyeball" tuning surface.
+// Animated dots representing in-flight cargo while a system is open. A per-turn
+// shipped amount is rendered as a continuous emission RATE; dots ride a quadratic
+// Bézier (body→body lanes arc) from a scattered source point to a scattered
+// destination point at constant pixel speed and despawn at B. All values are the
+// "edit a number, reload, eyeball" tuning surface.
 
 // Fixed world-z for the whole ship pool. The diagram's ortho camera maps world
 // z linearly to NDC over [-1, 1] (near -1 / far 1), so any small z renders fine;
@@ -427,3 +428,14 @@ export const SHIP_TRANSIT_FROM_TOP = 56;
 // backgrounded tab resuming doesn't dump a burst of spawns or teleport
 // in-flight dots.
 export const SHIP_MAX_TICK_DT_MS = 100;
+
+// Body-to-body (internal) lanes bow into an arc rather than a straight chord, so
+// crossing traffic streams read as distinct curved corridors. The control point
+// is offset perpendicular to the chord by a fraction of the chord length drawn
+// from [MIN, MAX]; the rendered apex deflection is HALF that (a quadratic Bézier
+// peaks at half its control offset). Sign is random per ordered body-pair so
+// opposite-direction lanes bow apart. Each pair's bow is cached for the layer's
+// lifetime so every dot on a lane follows the same curve (ephemeral render
+// state — not procedurally stable, just stable within a session).
+export const SHIP_ARC_BOW_MIN = 0.18;
+export const SHIP_ARC_BOW_MAX = 0.42;

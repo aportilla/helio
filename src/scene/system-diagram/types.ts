@@ -29,17 +29,22 @@ export interface PlanetCenter {
   cx: number;
   cy: number;
   rowIdx: number;
+  // On-screen disc radius (px). Carried so the ships layer can scatter cargo
+  // emission/arrival across the body's face rather than its exact center.
+  r: number;
 }
 export type PlanetCenterIndex = ReadonlyMap<number, PlanetCenter>;
 
 // A body's on-screen anchor in content-buffer-pixel coords. The unified
 // lookup the ships layer consumes: SystemDiagram.layout merges the per-kind
 // centers (planets publish the richer PlanetCenter; moons + belts publish
-// this) into one bodyIdx → {cx,cy} map, so a cargo dot can spawn at / aim for
-// any body kind, not just planets.
+// this) into one bodyIdx → {cx,cy,r} map, so a cargo dot can spawn at / aim for
+// a scattered point on any body kind, not just a planet center.
 export interface BodyCenter {
   cx: number;
   cy: number;
+  // On-screen radius (px) — the scatter radius for cargo emit/arrive points.
+  r: number;
 }
 export type BodyCenterIndex = ReadonlyMap<number, BodyCenter>;
 
