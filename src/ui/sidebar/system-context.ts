@@ -166,6 +166,18 @@ export class SystemContext implements SidebarContext {
           drawPixelText(g, rl.shortfall.label, x0 + ECON_SUB_INDENT, y, colors.signalNegative);
           y += econLineH + ROW_GAP;
         }
+
+        // Forecast: a deficit the next turn relieves with actual inbound cargo (a
+        // provider just built / came in range). Dim cue indented like the shortfall
+        // sub-line, sourced from the speculative next-turn read — so the player sees
+        // their action working before committing the turn. Gated on real inbound, not
+        // just an improving cover, so "inbound" never overstates.
+        const inboundQty = rl.inboundNextTurnMilli;
+        const improving = rl.predictedCoverMilli !== null && signed < 0 && rl.predictedCoverMilli > signed;
+        if (improving && inboundQty !== null && inboundQty > 0) {
+          drawPixelText(g, '++ inbound next turn', x0 + ECON_SUB_INDENT, y, colors.titleDim);
+          y += econLineH + ROW_GAP;
+        }
       }
     }
 

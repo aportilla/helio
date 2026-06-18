@@ -34,10 +34,12 @@ import {
   type StarGeometry,
   type ResourceTable,
   type BalanceConfig,
+  type WorldSkeleton,
 } from '../../sim/src/index.ts';
 import { getGameState, type Facility } from '../game-state.ts';
 import { appResourceTable, type EconResource } from './resource-vocab.ts';
 import { classifyFlow } from './flow-class.ts';
+import { cloneWorldForSpeculation } from './speculation.ts';
 import { projectWorld } from './project.ts';
 import type { SimStarResolver } from './types.ts';
 import { buildGeometry, LY_TO_SIM_UNITS } from './sim-geometry.ts';
@@ -81,6 +83,16 @@ const SHORTFALL_LABEL: Readonly<Record<ShortfallReason, string>> = {
 // has produced a read digest this session — the trade-aware signed cover
 // (+surplus / −deficit), a binding shortfall, and whether production is glutted
 // (storage full). Plain app values — no sim types cross this boundary.
+//
+// The `predicted*` fields are the FORWARD-LOOKING read off the speculative
+// next-turn world (§ speculation.ts): what this body's cover/inbound WILL be once
+// the player commits Next Turn, available even before the session's first real
+// step (the clone is always stepped). Null when no prediction exists (the clone
+// failed) or the resource is absent from the speculative digest (treat as the
+// neutral baseline — the two digests prune zero rows independently). The "deficit
+// now but improving" cue is the consumer's: realCover/netFlow < 0 yet
+// predictedCover above it. The sidebar owns that comparison; the bridge only
+// supplies the numbers.
 export interface ResourceLevel {
   readonly key: EconResource;
   readonly name: string;
@@ -89,6 +101,8 @@ export interface ResourceLevel {
   readonly coverMilli: number | null;
   readonly shortfall: ShortfallView | null;
   readonly glut: boolean;
+  readonly predictedCoverMilli: number | null;
+  readonly inboundNextTurnMilli: number | null;
 }
 
 export interface BodyEconomyView {
@@ -96,10 +110,13 @@ export interface BodyEconomyView {
 }
 
 // A whole system's (one cluster's) net standing per resource — the galaxy
-// info-card summary. Signed: + net exporter / − net importer.
+// info-card summary. Signed: + net exporter / − net importer. `predictedNetMilli`
+// is the same sum off the speculative next-turn world (the forward-looking net),
+// or null when no prediction exists.
 export interface SystemResourceLevel {
   readonly name: string;
   readonly netMilli: number;
+  readonly predictedNetMilli: number | null;
 }
 
 export interface SystemEconomyView {
@@ -115,9 +132,10 @@ export interface SystemEconomyView {
 //   outgoing — source here, destination elsewhere (body → off the top)
 //   incoming — destination here, source elsewhere (off the top → body)
 //   through  — neither here, but routed across this cluster (crosses sideways)
-// amountMilli is the live shipped volume on the lane (Σ qtyMilli over in-flight
-// transfers), an integer; bodyIds are stable Body.id strings. No sim types
-// cross this boundary.
+// amountMilli is the shipped volume on the lane (Σ qtyMilli over the transfers
+// on whichever ring the read method walked — the live ring for clusterFlows, the
+// speculative next-turn ring for predictedClusterFlows), an integer; bodyIds are
+// stable Body.id strings. No sim types cross this boundary.
 export type ShipLane =
   | { readonly kind: 'internal'; readonly srcBodyId: string; readonly dstBodyId: string; readonly resource: EconResource; readonly amountMilli: number }
   | { readonly kind: 'outgoing'; readonly srcBodyId: string; readonly resource: EconResource; readonly amountMilli: number }
@@ -140,6 +158,10 @@ export class EconomyBridge {
   private readonly resources: ResourceTable;
   private readonly cfg: BalanceConfig;
   private readonly starOf: SimStarResolver;
+  // The static inputs a clone (and a restored save) reconstructs against. The
+  // SAME instances must be re-passed to deserialize or its configHash assert
+  // throws — never rebuilt per clone.
+  private readonly skeleton: WorldSkeleton;
 
   private engine: EconomyEngine;
   private bodyIdByPlanet: readonly string[];
@@ -149,12 +171,20 @@ export class EconomyBridge {
   // including right after a reload. Until then the chip shows stock + intrinsic
   // flow only. Reset whenever the engine is rebuilt.
   private stepped = false;
+  // The speculative next-turn world: a throwaway clone of the live world, stepped
+  // once, that drives the predictive viz (predicted ship lanes + forward-looking
+  // sidebar hints). NEVER assigned to `this.engine`, never persisted. Recomputed
+  // only on real-world change (ctor / syncFacilities / step), so the
+  // serialize+deserialize+step cost stays off the per-frame path. Null when the
+  // clone or its step throws — the viz degrades to the live read.
+  private specEngine: EconomyEngine | null = null;
 
   constructor() {
     // One geometry node per cluster, at its center of mass.
     this.geometry = buildGeometry(STAR_CLUSTERS.map((c) => c.com));
     this.resources = appResourceTable();
     this.cfg = defaultBalance({ jumpRadius: REACH_UNITS });
+    this.skeleton = { geometry: this.geometry, resources: this.resources, cfg: this.cfg };
     this.starOf = (body) => clusterNodeOfBody(body);
 
     const built = this.build(facilitiesByBodyId(), this.restore());
@@ -163,6 +193,8 @@ export class EconomyBridge {
     this.planetByBodyId = built.planetByBodyId;
     // Persist immediately so a freshly cold-started game has a save to reload.
     this.persist();
+    // Seed the next-turn prediction so the viz shows forward flows from first paint.
+    this.recomputeSpeculative();
   }
 
   // Advance the sim one turn and persist. A step can throw (transfer-pool
@@ -177,6 +209,9 @@ export class EconomyBridge {
     }
     this.stepped = true;
     this.persist();
+    // The previous prediction has become reality (turn advanced); re-predict the
+    // new next turn from the world we just stepped.
+    this.recomputeSpeculative();
   }
 
   // Reconcile the live world to the current game-state facilities after a
@@ -191,6 +226,10 @@ export class EconomyBridge {
     this.bodyIdByPlanet = built.bodyIdByPlanet;
     this.planetByBodyId = built.planetByBodyId;
     this.persist();
+    // Re-predict off the RECONCILED world (the one Next Turn will actually step),
+    // so a new provider's outbound lanes and a relieved deficit appear the instant
+    // the edit lands — without waiting for the player to commit the turn.
+    this.recomputeSpeculative();
   }
 
   // The selected body's economy for the sidebar: per transportable resource it
@@ -204,6 +243,10 @@ export class EconomyBridge {
     const R = w.R;
     // The trade-aware read, when a digest exists this session.
     const pr = this.stepped ? (this.engine.getReadDigest().planets.get(asPlanet(p)) ?? null) : null;
+    // The forward-looking read off the speculative next-turn world. Always has a
+    // digest (the clone is stepped), so predicted cover can exist even before the
+    // first real step — the §6 baseline fallback.
+    const specPr = this.specEngine ? (this.specEngine.getReadDigest().planets.get(asPlanet(p)) ?? null) : null;
 
     const out: ResourceLevel[] = [];
     for (let r = 0; r < R; r++) {
@@ -220,11 +263,20 @@ export class EconomyBridge {
         : null;
       const glut = rr ? rr.throttle === ThrottleReason.OutputFull : false;
 
+      // Per-resource lookup into the speculative digest; a missing key is the
+      // neutral baseline (null), never assume the two digests share keys.
+      const sr = specPr ? (specPr.byResource.get(asResource(r)) ?? null) : null;
+      const predictedCoverMilli = sr ? sr.coverMilli : null;
+      const inboundNextTurnMilli = sr ? sr.inboundWithinHMilli : null;
+
       const noteworthy = stockMilli !== 0 || netFlowMilli !== 0
         || (coverMilli !== null && coverMilli !== 0) || shortfall !== null || glut;
       if (!noteworthy) continue;
 
-      out.push({ key: r as EconResource, name: meta.name, stockMilli, netFlowMilli, coverMilli, shortfall, glut });
+      out.push({
+        key: r as EconResource, name: meta.name, stockMilli, netFlowMilli, coverMilli, shortfall, glut,
+        predictedCoverMilli, inboundNextTurnMilli,
+      });
     }
     return out.length > 0 ? { resources: out } : null;
   }
@@ -239,9 +291,11 @@ export class EconomyBridge {
     const w = this.engine.world;
     const R = w.R;
     const digest = this.stepped ? this.engine.getReadDigest() : null;
+    const specDigest = this.specEngine ? this.specEngine.getReadDigest() : null;
 
     const net = new Array<number>(R).fill(0);
     const cover = new Array<number>(R).fill(0);
+    const specCover = new Array<number>(R).fill(0);
     let hosted = false;
     for (let p = 0; p < w.planetCount; p++) {
       if (w.tombstone[p]) continue;
@@ -250,6 +304,8 @@ export class EconomyBridge {
       for (let r = 0; r < R; r++) net[r]! += w.production[p * R + r]! - w.consumption[p * R + r]!;
       const pr = digest ? digest.planets.get(asPlanet(p)) : undefined;
       if (pr) for (const [rid, rr] of pr.byResource) cover[rid as number]! += rr.coverMilli;
+      const spr = specDigest ? specDigest.planets.get(asPlanet(p)) : undefined;
+      if (spr) for (const [rid, rr] of spr.byResource) specCover[rid as number]! += rr.coverMilli;
     }
     if (!hosted) return null;
 
@@ -259,22 +315,42 @@ export class EconomyBridge {
       if (meta.tier !== TransportTier.Transportable) continue;
       const netMilli = digest ? cover[r]! : net[r]!;
       if (netMilli === 0) continue;
-      resources.push({ name: meta.name, netMilli });
+      const predictedNetMilli = specDigest ? specCover[r]! : null;
+      resources.push({ name: meta.name, netMilli, predictedNetMilli });
     }
     return resources.length > 0 ? { resources } : null;
   }
 
-  // Every live cargo lane that touches one cluster (= one system view), for the
-  // ship-dot overlay. Walks the live transfer ring — NOT the read digest — so
-  // it works before the session's first step (the ring deserializes from the
-  // save) and right after a facility edit. Each transfer is classified by its
-  // endpoints' cluster nodes (world.star) into internal/outgoing/incoming, or,
-  // when neither endpoint is here, kept only if its multi-leg route passes
-  // THROUGH this cluster (relay traffic). Lanes aggregate by their rendered
-  // identity so a body trading with several off-cluster systems reads as one
-  // stream, not a redundant stack. Strict sink: no sim type escapes.
+  // Every cargo lane that touches one cluster (= one system view), classified for
+  // the ship-dot overlay. Two named accessors over one pure core (flowsFor):
+  //
+  //   clusterFlows          — the LIVE ring (cargo actually in flight right now).
+  //   predictedClusterFlows — the SPECULATIVE next-turn ring (the cargo the
+  //                           economy is about to dispatch). This is what the
+  //                           system view draws: it shows forward flows, so a new
+  //                           provider's lanes and a relieved deficit appear the
+  //                           instant an edit lands — and never blank out, because
+  //                           the speculative world re-dispatches every recompute
+  //                           even when a structural edit dropped the live ring.
+  //                           Degrades to the live ring when no prediction exists.
   clusterFlows(clusterIdx: number): ShipLane[] {
-    const w = this.engine.world;
+    return this.flowsFor(this.engine.world, clusterIdx);
+  }
+
+  predictedClusterFlows(clusterIdx: number): ShipLane[] {
+    return this.flowsFor((this.specEngine ?? this.engine).world, clusterIdx);
+  }
+
+  // The pure lane-classification core, parameterized on which world's ring to
+  // walk. Each transfer is classified by its endpoints' cluster nodes
+  // (world.star) into internal/outgoing/incoming, or, when neither endpoint is
+  // here, kept only if its multi-leg route passes THROUGH this cluster (relay
+  // traffic). Lanes aggregate by their rendered identity so a body trading with
+  // several off-cluster systems reads as one stream, not a redundant stack. The
+  // planet→Body.id table is shared by the live world and any clone (serialize/
+  // deserialize preserves dense PlanetIds), so it resolves the clone's ring too.
+  // Strict sink: no sim type escapes.
+  private flowsFor(w: World, clusterIdx: number): ShipLane[] {
     const internal = new Map<string, { src: string; dst: string; res: number; amt: number }>();
     const outgoing = new Map<string, { src: string; res: number; amt: number }>();
     const incoming = new Map<string, { dst: string; res: number; amt: number }>();
@@ -336,6 +412,18 @@ export class EconomyBridge {
 
   // — internals —
 
+  // Refresh the speculative next-turn world from the current live world. Called
+  // only on real-world change (ctor / step / syncFacilities). Clones AFTER the
+  // live engine is the one Next Turn will step, so the prediction matches the
+  // real next turn (the determinism guarantee). On failure the prediction is
+  // dropped and the viz degrades to the live read.
+  private recomputeSpeculative(): void {
+    this.specEngine = cloneWorldForSpeculation(this.engine.world, this.skeleton);
+    if (!this.specEngine && import.meta.env.DEV) {
+      console.warn('[economy] speculative next-turn prediction unavailable — viz falls back to live');
+    }
+  }
+
   private build(facMap: ReadonlyMap<string, readonly Facility[]>, restored: Restored | null): Built {
     const projected = projectWorld(BODIES, facMap, this.starOf);
 
@@ -392,10 +480,7 @@ export class EconomyBridge {
       if (parsed.v !== 1 || !Array.isArray(parsed.bodyIds) || typeof parsed.bytes !== 'string') {
         return null;
       }
-      const world = deserialize(
-        { geometry: this.geometry, resources: this.resources, cfg: this.cfg },
-        bytesFromBase64(parsed.bytes),
-      );
+      const world = deserialize(this.skeleton, bytesFromBase64(parsed.bytes));
       return { world, bodyIds: parsed.bodyIds as string[] };
     } catch (e) {
       // Schema/configHash mismatch (a catalog rebuild, scale or resource change)

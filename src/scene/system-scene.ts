@@ -233,12 +233,13 @@ export class SystemScene implements Screen {
     this.refreshFlows();
   }
 
-  // Push this cluster's current cargo lanes into the diagram's ships overlay.
-  // Fired from the same sites as pushSelectionToSidebar — start, Next Turn, and
-  // facility edits. Reads the live transfer ring, so lanes exist even before the
-  // session's first step (after a reload) and right after a facility edit.
+  // Push this cluster's cargo lanes into the diagram's ships overlay. Fired from
+  // the same sites as pushSelectionToSidebar — start, Next Turn, and facility
+  // edits. Draws the SPECULATIVE next-turn lanes (the cargo the economy is about
+  // to dispatch), so a new provider's ships and a relieved deficit show the
+  // instant an edit lands, and the stream never blanks out across an edit.
   private refreshFlows(): void {
-    this.diagram.setFlows(this.bridge.clusterFlows(this.clusterIdx));
+    this.diagram.setFlows(this.bridge.predictedClusterFlows(this.clusterIdx));
   }
 
   private onPointerMove(e: PointerEvent): void {

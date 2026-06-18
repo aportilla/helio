@@ -124,6 +124,20 @@ export class GalaxyContext implements SidebarContext {
         drawPixelText(g, valStr, x0 + region.w - measurePixelText(valStr), y,
           up ? colors.signalPositive : colors.signalNegative, fonts.body);
         y += bodyH;
+
+        // Forecast: a system in deficit that the next turn improves (a fix the
+        // player just placed taking hold). Dim, right-aligned under the live net,
+        // read off the speculative next-turn world — the galaxy-scan cue that an
+        // action is working before the turn is committed. Shows the IMPROVEMENT
+        // (predicted − live net), which the gate guarantees is positive, so
+        // "++ N" reads as "net gains N next turn" rather than gluing the marker to
+        // a still-negative absolute.
+        const pred = rl.predictedNetMilli;
+        if (pred !== null && rl.netMilli < 0 && pred > rl.netMilli) {
+          const fStr = `++ ${fmtMilli(pred - rl.netMilli)}`;
+          drawPixelText(g, fStr, x0 + region.w - measurePixelText(fStr), y, colors.titleDim, fonts.body);
+          y += bodyH;
+        }
       }
     }
 

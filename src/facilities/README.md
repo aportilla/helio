@@ -49,13 +49,14 @@ facility identity.
 | `project.ts` | `projectBody` / `projectWorld` — THE projection adapter (body intent → `PlanetSpec`). Sim-importing, node-pure (catalog is type-only). |
 | `sim-geometry.ts` | `buildGeometry` — catalog coords → the sim's integer geometry (the float→int round for transport — `Math.round`, for symmetric error). Sim-importing, node-pure. |
 | `world-sync.ts` | `transplantLiveState` / `sameBodyIds` — the reconcile mechanics that preserve stock across a facility edit. Sim-importing, node-pure. |
+| `speculation.ts` | `cloneWorldForSpeculation` — deep-clone the live world via the save round-trip and step it once: the throwaway next-turn world that drives the predictive viz. Sim-importing, node-pure. |
 | `flow-class.ts` | `classifyFlow` — pure within / from / to / through classification of one in-flight transfer relative to the viewed cluster (the 2×2 of src/dst-in-cluster, plus the relay-through case). No sim, no DOM — unit-tested without a world. |
 | `economy-bridge.ts` | `EconomyBridge` — the live engine owner: build/restore/reconcile the world, step, persist (`helio.sim`), read back. The **app-glue** module: imports the sim AND the catalog (`BODIES`/`STAR_CLUSTERS`) + `localStorage`, so it is NOT node-testable (its pure parts live in the modules above). |
 | `index.ts` | Public barrel. |
 
 The sim is imported only from `project.ts`, `resource-vocab.ts`, `sim-geometry.ts`,
-`world-sync.ts`, and `economy-bridge.ts` — all under this package, the one quarter
-the boundary guard permits.
+`world-sync.ts`, `speculation.ts`, and `economy-bridge.ts` — all under this
+package, the one quarter the boundary guard permits.
 
 Dependency direction: `project → registry → {abundance, resource-vocab, types,
 tuning}`. Every module except `economy-bridge.ts` imports `Body` from
@@ -98,10 +99,21 @@ in-flight cargo *through* an edit, not just a reload) stays a later refinement.
   `economy-bridge.ts` instantiates a real `EconomyEngine`, steps it on Next Turn,
   reconciles it after a facility edit (by `Body.id`, preserving stock), persists
   its full state to `localStorage` (`helio.sim`, `configHash`-guarded), and reads
-  per-body / per-system balances back into the sidebar — plus the live cargo lanes
-  touching a cluster (`clusterFlows` → `ShipLane[]`, classified by `flow-class.ts`)
-  that drive the system-view ship-dot overlay. Eligibility, build caps,
-  and the body-derived Add pills are live.
+  per-body / per-system balances back into the sidebar — plus the cargo lanes
+  touching a cluster (`clusterFlows` live / `predictedClusterFlows` forecast →
+  `ShipLane[]`, classified by `flow-class.ts`) that drive the system-view ship-dot
+  overlay. Eligibility, build caps, and the body-derived Add pills are live.
+- **Speculative next-turn preview:** the bridge keeps a second, private,
+  throwaway engine alongside `this.engine` — a clone of the live world stepped one
+  turn ahead (`speculation.ts`), recomputed only on real-world change (ctor /
+  syncFacilities / step) and never persisted. The system-view ship overlay draws
+  *its* lanes (`predictedClusterFlows`), so a new provider's cargo appears the
+  instant it's built and the stream never blanks across an edit (the speculative
+  world re-dispatches every recompute); the sidebars read its digest for the
+  forward-looking `++ inbound next turn` cue (`predictedCoverMilli` /
+  `inboundNextTurnMilli` / `predictedNetMilli`, additive on the existing DTOs).
+  The step logic is reused verbatim on a copy — same computation as the real Next
+  Turn, run early. Design: `plans/4x-economy-speculative-next-turn-preview.md`.
 - **Transport model:** a geometry node is a **cluster** — one system with a
   shared pool of bodies (`sim-geometry.ts` builds one node per cluster at its
   centre of mass; `clusterNodeOfBody` resolves a body to it). All bodies in a
@@ -113,7 +125,11 @@ in-flight cargo *through* an edit, not just a reload) stays a later refinement.
 - **Deferred:** build cost / time, ownership, depot nodes, and the galaxy-view
   (3D) edge-flow overlay (the `digest.edgeFlows` read surface is ready; the 3D
   line layer is not built — distinct from the shipped system-view ship-dot overlay,
-  which rides the live transfer ring, not the read digest).
+  which rides the speculative next-turn transfer ring, not the read digest).
+  Also deferred: in-flight cargo conservation *across* a structural edit (M2 in the
+  preview plan) — a structural edit still drops the live ring as an exogenous
+  event; the speculative world makes the viz freeze a non-issue, so the carry is a
+  pure ledger-conservation cleanup, done only if the leak proves to matter.
 
 ## Invariants & how they're enforced
 
