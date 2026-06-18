@@ -455,12 +455,17 @@ export const SHIP_MAX_TICK_DT_MS = 100;
 // crossing traffic streams read as distinct curved corridors. The control point
 // is offset perpendicular to the chord by a fraction of the chord length drawn
 // from [MIN, MAX]; the rendered apex deflection is HALF that (a quadratic Bézier
-// peaks at half its control offset). Sign is random per ordered body-pair so
-// opposite-direction lanes bow apart. Each pair's bow is cached for the layer's
-// lifetime so every dot on a lane follows the same curve (ephemeral render
-// state — not procedurally stable, just stable within a session).
+// peaks at half its control offset). Sign is seeded per ordered body-pair so
+// opposite-direction lanes bow apart, and the value is procedurally stable across
+// loads (see ShipsLayer.bowFor).
 export const SHIP_ARC_BOW_MIN = 0.18;
 export const SHIP_ARC_BOW_MAX = 0.42;
+// The bodies already sit on a shallow upward sweep, so a downward-bowing arc drops
+// into the empty lower field and reads as a much deeper dip than an equal upward
+// bow. Damp the DOWNWARD half of the range by this factor (applied at render, where
+// the chord's true orientation is known) so down-arcs stay shallow while up-arcs are
+// untouched.
+export const SHIP_ARC_BOW_DOWN_SCALE = 0.45;
 
 // Acceleration profiling. A dot ramps from rest to cruise under CONSTANT
 // acceleration over a STANDARD WALL-CLOCK duration (SHIP_ACCEL_SEC) — NOT a fixed

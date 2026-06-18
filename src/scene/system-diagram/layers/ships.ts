@@ -17,8 +17,9 @@
 // while braking — dark through the cruise middle.
 //
 // Body-to-body (internal) lanes bow into an ARC — the control point is offset
-// perpendicular to the chord, signed-random per ordered body-pair and cached so
-// the lane's dots form a coherent bundle. Endpoints SCATTER per dot: each ship
+// perpendicular to the chord, signed and sized deterministically from the ordered
+// body-pair key (seeded hash, so the same pair bows the same way every load) and
+// cached so the lane's dots form a coherent bundle. Endpoints SCATTER per dot: each ship
 // picks its OWN random point within the source disc to leave from and within the
 // destination disc to arrive at, so no two ships trace quite the same arc (the
 // off-screen ends of outgoing/incoming/through have no disc and stay put).
@@ -44,8 +45,9 @@ import { indexOfBodyId } from '../../../data/stars';
 import { snappedDotsMat, snappedLineMat, unregisterSnappedMaterial } from '../../materials';
 import { disableCulling } from '../geom/cull';
 import { snapPx } from '../geom/snap';
+import { hash32, mulberry32 } from '../geom/prng';
 import {
-  RENDER_ORDER_SHIP, RENDER_ORDER_SHIP_THRUST, SHIP_ARC_BOW_MAX, SHIP_ARC_BOW_MIN,
+  RENDER_ORDER_SHIP, RENDER_ORDER_SHIP_THRUST, SHIP_ARC_BOW_DOWN_SCALE, SHIP_ARC_BOW_MAX, SHIP_ARC_BOW_MIN,
   SHIP_COLOR, SHIP_CROSS_SCREEN_SEC, SHIP_MAX_TICK_DT_MS, SHIP_OFFSCREEN_MARGIN,
   SHIP_POOL_CAP, SHIP_RATE_MAX_PER_LANE, SHIP_RATE_MIN_PER_LANE, SHIP_RATE_PER_MILLI, SHIP_SIZE_PX,
   SHIP_SPEED_VARIANCE, SHIP_THRUST_COLOR, SHIP_THRUST_LEN_PX, SHIP_TRANSIT_FROM_TOP, Z_SHIP,
@@ -132,8 +134,9 @@ export class ShipsLayer {
   private primed = false;
 
   // Per ordered body-pair arc bow (signed control-offset fraction of the chord),
-  // cached so every dot between two bodies shares one curvature. Ephemeral render
-  // state — filled lazily with Math.random(), not procedurally stable.
+  // cached so every dot between two bodies shares one curvature. Filled lazily but
+  // PROCEDURALLY STABLE — the value is seeded from the pair key (see bowFor), so a
+  // given pair bows the same way every load; the Map is just a per-session memo.
   private readonly arcBow = new Map<string, number>();
 
   // The per-turn schedule (raw lanes) + the current layout it resolves against.
@@ -256,12 +259,16 @@ export class ShipsLayer {
 
   // Signed bow fraction for an ordered body-pair, cached so all its dots share
   // one curvature. Magnitude in [MIN, MAX], sign a coin flip — opposite-direction
-  // lanes (which produce a different key) bow independently.
+  // lanes (which produce a different key) bow independently. Seeded from the pair
+  // key via the diagram's hash32+mulberry32 pair (same deterministic seeding as
+  // moon angles / ring tilts), so the arc is stable across reloads, not re-rolled
+  // per view load.
   private bowFor(key: string): number {
     let v = this.arcBow.get(key);
     if (v === undefined) {
-      const mag = SHIP_ARC_BOW_MIN + Math.random() * (SHIP_ARC_BOW_MAX - SHIP_ARC_BOW_MIN);
-      v = Math.random() < 0.5 ? -mag : mag;
+      const rng = mulberry32(hash32(`ship-bow:${key}`));
+      const mag = SHIP_ARC_BOW_MIN + rng() * (SHIP_ARC_BOW_MAX - SHIP_ARC_BOW_MIN);
+      v = rng() < 0.5 ? -mag : mag;
       this.arcBow.set(key, v);
     }
     return v;
@@ -446,9 +453,12 @@ export class ShipsLayer {
       // Control: chord midpoint, pushed perpendicular by the cached bow, then
       // shifted by the average end-jitter so the whole arc tracks its scattered
       // endpoints. perp(chord) = (−dy, dx); bow 0 collapses the Bézier to the
-      // straight chord.
+      // straight chord. The control point's vertical push is (bx−ax)·bow (+y is up);
+      // when that's negative the arc dips DOWN into the empty lower field, so damp it
+      // — down-arcs stay shallow against the bodies' upward sweep, up-arcs untouched.
       let cx = (ax + bx) / 2, cy = (ay + by) / 2;
-      const bow = this.dBow[i]!;
+      let bow = this.dBow[i]!;
+      if (bow !== 0 && (bx - ax) * bow < 0) bow *= SHIP_ARC_BOW_DOWN_SCALE;
       if (bow !== 0) { cx += -(by - ay) * bow; cy += (bx - ax) * bow; }
       cx += (adx + bdx) * 0.5; cy += (ady + bdy) * 0.5;
 
