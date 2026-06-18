@@ -10,6 +10,7 @@ import { quantify } from './quantify.ts';
 import type { Quantified } from './quantify.ts';
 import { allocate } from './allocate.ts';
 import { dispatch } from './dispatch.ts';
+import type { LocalTransfer } from './dispatch.ts';
 import { assertConservation, assertNoNegativeStock, assertLedgerMatchesRing } from './invariants.ts';
 import { buildReadDigest, getInTransitTo, explainShortfall } from './read-surface.ts';
 import type { ReadDigest, PlanetRead, Delivery, ShortfallRecord } from './read-surface.ts';
@@ -25,7 +26,8 @@ export interface TurnReport {
   readonly turn: number;
   readonly produced: number;
   readonly consumed: number;
-  readonly dispatched: number;
+  readonly dispatched: number; // interstellar volume that left sources into transit
+  readonly localDelivered: number; // intra-cluster volume deposited same-turn (0-turn transfers)
   readonly delivered: number;
   readonly rerouted: number;
   readonly continued: number;
@@ -47,6 +49,9 @@ export class EconomyEngine {
   private lastReasons: ReadonlyMap<number, ShortfallReason> = new Map();
   private lastThrottle: Int8Array;
   private lastDigest: ReadDigest | null = null;
+  /** Intra-cluster moves the last step() deposited instantly (§ 0-turn transfers).
+   *  A strict sink: the viz sources internal lanes from these. Empty until step(). */
+  private lastLocalTransfers: readonly LocalTransfer[] = [];
   /** The turn step() last processed (the read surface anchors "now" here, so the
    *  digest and the drill-down queries agree on the same turn). */
   private lastProcessedTurn = -1;
@@ -104,6 +109,7 @@ export class EconomyEngine {
     this.lastReasons = plan.reasons;
     this.lastThrottle = prod.throttle;
     this.lastDigest = buildReadDigest(w, q, plan.reasons, prod.throttle);
+    this.lastLocalTransfers = disp.localTransfers;
     this.lastProcessedTurn = turn;
 
     w.turn = turn + 1;
@@ -113,6 +119,7 @@ export class EconomyEngine {
       produced: prod.produced,
       consumed: prod.consumed,
       dispatched: disp.dispatched,
+      localDelivered: disp.localDelivered,
       delivered: arr.delivered,
       rerouted: arr.rerouted,
       continued: arr.continued,
@@ -127,6 +134,14 @@ export class EconomyEngine {
   getReadDigest(): ReadDigest {
     if (!this.lastDigest) throw new Error('getReadDigest: call step() first');
     return this.lastDigest;
+  }
+
+  /** Intra-cluster (same-node) moves the last step() deposited instantly — the
+   *  intra-system reallocation that resolves with 0 turns of transit, so it never
+   *  appears in the ring or `getInTransitTo`. A strict sink, empty before the
+   *  first step(); the viz reads it to draw internal lanes. */
+  getLocalTransfers(): readonly LocalTransfer[] {
+    return this.lastLocalTransfers;
   }
 
   getResourceCover(p: PlanetId, r: ResourceId): number {

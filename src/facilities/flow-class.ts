@@ -1,7 +1,10 @@
-// Pure classification of one in-flight cargo transfer relative to the system
-// being viewed — the load-bearing within / to / from / through logic behind the
-// ship-dot overlay, extracted from EconomyBridge.clusterFlows so it is unit-
-// testable without constructing a whole sim world.
+// Pure classification of one RING cargo transfer (in-flight, inter-cluster) relative
+// to the viewed system — the within / from / to / through logic `buildShipLanes`
+// (economy-read.ts) applies to each transfer the ring carries, kept pure so it
+// unit-tests without constructing a whole sim world. The overlay's live INTERNAL
+// lanes are sourced separately from the instant intra-cluster moves (the engine's
+// localTransfers), not from here, so the `internal` result below now arises only for
+// a legacy same-cluster transfer draining out of a pre-0-turn save.
 //
 // It is the 2×2 of (is the source in this cluster? × is the destination in this
 // cluster?), plus the relay case where neither endpoint is here but the route

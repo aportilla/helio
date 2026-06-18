@@ -45,7 +45,7 @@ src/
   quantify.ts       P4 single authority: netDemand/exportable/signed cover, hysteresis, inbound-within-H
   shortfall.ts      ShortfallReason codes + SHORTFALL_FIX + shortfallName (the unmet-demand taxonomy)
   allocate.ts       P6 greedy matcher: fan-in, source fair-share, CFL clamp, starvation escalation, resolves shortfall reasons
-  dispatch.ts       P7 conservation chokepoint: merge-on-dispatch, stock→transit, ledger reserve
+  dispatch.ts       P7 conservation chokepoint: interstellar mint/merge + ledger reserve, OR instant same-node deposit (0-turn intra-cluster) — emits localTransfers
   arrivals.ts       P2 arrivals-first: deliver / continue / re-route at each star
   read-surface.ts   §4 ReadDigest (signed cover + edge flows) + getInTransitTo / explainShortfall
   invariants.ts     Conservation (no loss), no-negative-stock, ledger==in-flight (per-turn DEV asserts)
@@ -64,6 +64,13 @@ Mapped to the plan's `v1 / deferred / deleted` banner.
 - Multi-leg routing over the jump graph: `rankCandidates`/`routeBetween`, the
   inline route table (`routeRef`/`hopIndex`/`finalArrival`), advance-in-place at
   each star, stable `EdgeId`s, route-cache invalidation on rebuild (§3.7, §11.4).
+- 0-turn intra-cluster transfers: a same-node (same-star) order is deposited
+  straight into the destination the same turn — never minted into the ring — so
+  intra-system surplus covers deficit instantly and nothing is aloft at a resting
+  boundary, while inter-cluster hauls keep their multi-turn transit. Provably
+  balance-equivalent to the old 1-turn self-leg (deposit replaces a mint+arrival);
+  `step()` exposes the moves via `localDelivered` + `getLocalTransfers()`, the
+  read surface's intra-node analogue of `edgeFlows`.
 - Re-home at each star — the *necessary* case (destination gone / onward path
   removed) — via monotonic ids + tombstones (§3.7, §11.8).
 - ETA-bucketed inbound ledger with horizon H + merge-on-dispatch dedup (§3.2, §3.5).
@@ -108,5 +115,6 @@ bias/restriction policy.
 - **Flow balance**: `Σdispatched − Σdelivered − Σrerouted == in-flight`.
 - **Determinism**: same seed + inputs → byte-identical save; a reload steps
   identically (`serialize-replay.test.ts`).
-- **Invariant A**: depart turn T ⇒ arrive ≥ T+1.
+- **Invariant A**: a *ring* (inter-cluster) transfer departing turn T arrives ≥ T+1;
+  intra-cluster moves are exempt — they deposit same-turn, never entering the ring.
 - **Reachability ≡ route existence** — never a stored flag.

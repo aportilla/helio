@@ -6,8 +6,12 @@
 // standard wall-clock duration, hold, ramp down — short hops peak below cruise; see
 // update()), and despawn at B. A ramp only anchors at a BODY end, so a ship bound
 // off-system accelerates the whole way out and an arriving one brakes the whole way
-// in. Emission RATE scales with the lane's shipped volume (the speculative
-// next-turn lanes SystemScene feeds in), so a busy lane reads as a denser stream.
+// in. INTERNAL (body→body) lanes are the intra-system reallocation the economy
+// resolves instantly on Next Turn — sourced from the speculative dispatch plan's
+// same-cluster moves, not the in-flight transfer ring (which carries only the
+// inter-cluster outgoing/incoming/through cargo). Emission RATE scales with the
+// lane's shipped volume (the speculative next-turn lanes SystemScene feeds in), so
+// a busy lane reads as a denser stream.
 // Through those two ease ramps a dot also trails a short yellow EXHAUST flame (a
 // second in-place snapped-line pool) — behind it while accelerating, out the front
 // while braking — dark through the cruise middle.

@@ -12,8 +12,9 @@
 // Transport model: a geometry node is a CLUSTER — one system with a shared pool
 // of bodies (a cluster is NOT several systems). Every facility-bearing body is a
 // planet sitting on its cluster's node, so all bodies in a cluster trade freely
-// over the sim's 1-turn local self-leg regardless of which member star they
-// orbit; only crossing BETWEEN clusters costs jump range. The sim's
+// AND instantly — an intra-cluster move is delivered the same turn (0 turns of
+// transit, never aloft), regardless of which member star they orbit; only crossing
+// BETWEEN clusters costs jump range and shows ships in transit. The sim's
 // system === node (1:1), so a sim "system" is exactly one of our clusters.
 
 import { BODIES, STAR_CLUSTERS, clusterIndexFor } from '../data/stars.ts';
@@ -37,7 +38,7 @@ import {
 } from '../../sim/src/index.ts';
 import { getGameState, type Facility } from '../game-state.ts';
 import { appResourceTable, type EconResource } from './resource-vocab.ts';
-import { classifyFlow } from './flow-class.ts';
+import { buildShipLanes, intraInboundByResource, foldInboundNextTurn, type ShipLane } from './economy-read.ts';
 import { cloneWorldForSpeculation } from './speculation.ts';
 import { projectWorld } from './project.ts';
 import type { SimStarResolver } from './types.ts';
@@ -122,24 +123,12 @@ export interface SystemEconomyView {
   readonly resources: readonly SystemResourceLevel[];
 }
 
-// One lane of cargo traffic the system view renders as a stream of dots,
-// classified relative to the viewed cluster. The four kinds are the cells of
-// a 2×2 on (is the source in this cluster? × is the destination in this
-// cluster?), plus the relay case where neither endpoint is here but the route
-// passes through:
-//   internal — both bodies in this cluster (body → body, fully on-screen)
-//   outgoing — source here, destination elsewhere (body → off the top)
-//   incoming — destination here, source elsewhere (off the top → body)
-//   through  — neither here, but routed across this cluster (crosses sideways)
-// amountMilli is the shipped volume on the lane (Σ qtyMilli over the transfers
-// on whichever ring the read method walked — the live ring for clusterFlows, the
-// speculative next-turn ring for predictedClusterFlows), an integer; bodyIds are
-// stable Body.id strings. No sim types cross this boundary.
-export type ShipLane =
-  | { readonly kind: 'internal'; readonly srcBodyId: string; readonly dstBodyId: string; readonly resource: EconResource; readonly amountMilli: number }
-  | { readonly kind: 'outgoing'; readonly srcBodyId: string; readonly resource: EconResource; readonly amountMilli: number }
-  | { readonly kind: 'incoming'; readonly dstBodyId: string; readonly resource: EconResource; readonly amountMilli: number }
-  | { readonly kind: 'through'; readonly dir: 'ltr' | 'rtl'; readonly resource: EconResource; readonly amountMilli: number };
+// ShipLane (the system-view cargo-overlay DTO) and its assembly live in the
+// node-pure `economy-read.ts` seam; re-exported here so the scene keeps importing it
+// from the bridge — its established public surface. See that module for the
+// internal/outgoing/incoming/through classification and how internal lanes are
+// sourced from the instant intra-cluster moves rather than the ring.
+export type { ShipLane } from './economy-read.ts';
 
 interface Built {
   readonly engine: EconomyEngine;
@@ -246,6 +235,13 @@ export class EconomyBridge {
     // digest (the clone is stepped), so predicted cover can exist even before the
     // session's first real step — the turn-0 / post-reload baseline.
     const specPr = this.specEngine ? (this.specEngine.getReadDigest().planets.get(asPlanet(p)) ?? null) : null;
+    // Intra-cluster relief the speculative next turn will deposit straight into
+    // THIS body (instant, so it is NOT ledger-inbound). Folded into the inbound
+    // number below (foldInboundNextTurn), so the "++ inbound next turn" cue fires
+    // for an intra-system fix too, not just an interstellar haul.
+    const specIntraIn = this.specEngine
+      ? intraInboundByResource(this.specEngine.getLocalTransfers(), p)
+      : new Map<number, number>();
 
     const out: ResourceLevel[] = [];
     for (let r = 0; r < R; r++) {
@@ -266,7 +262,10 @@ export class EconomyBridge {
       // neutral baseline (null), never assume the two digests share keys.
       const sr = specPr ? (specPr.byResource.get(asResource(r)) ?? null) : null;
       const predictedCoverMilli = sr ? sr.coverMilli : null;
-      const inboundNextTurnMilli = sr ? sr.inboundWithinHMilli : null;
+      // Inbound next turn = interstellar ledger-inbound (from the digest) + the
+      // instant intra-cluster relief (from the speculative localTransfers); null
+      // only when there's neither, preserving the no-prediction baseline.
+      const inboundNextTurnMilli = foldInboundNextTurn(sr ? sr.inboundWithinHMilli : null, specIntraIn.get(r) ?? 0);
 
       const noteworthy = stockMilli !== 0 || netFlowMilli !== 0
         || (coverMilli !== null && coverMilli !== 0) || shortfall !== null || glut;
@@ -321,92 +320,29 @@ export class EconomyBridge {
   }
 
   // Every cargo lane that touches one cluster (= one system view), classified for
-  // the ship-dot overlay. Two named accessors over one pure core (flowsFor):
+  // the ship-dot overlay (`buildShipLanes`, the node-pure seam). Two named accessors,
+  // each reading a (ring, intra-cluster moves) pair off the SAME engine — internal
+  // lanes from `getLocalTransfers` (the instant intra-system reallocation), the rest
+  // from that world's transfer ring:
   //
-  //   clusterFlows          — the LIVE ring (cargo actually in flight right now).
-  //   predictedClusterFlows — the SPECULATIVE next-turn ring (the cargo the
-  //                           economy is about to dispatch). This is what the
-  //                           system view draws: it shows forward flows, so a new
-  //                           provider's lanes and a relieved deficit appear the
-  //                           instant an edit lands — and never blank out, because
-  //                           the speculative world re-dispatches every recompute
-  //                           even when a structural edit dropped the live ring.
-  //                           Degrades to the live ring when no prediction exists.
+  //   clusterFlows          — the LIVE engine (cargo in flight now + this turn's
+  //                           intra deposits).
+  //   predictedClusterFlows — the SPECULATIVE next-turn engine (the cargo the
+  //                           economy is about to dispatch + the intra moves it will
+  //                           resolve instantly). This is what the system view
+  //                           draws: it shows forward flows, so a new provider's
+  //                           lanes and a relieved deficit appear the instant an
+  //                           edit lands — and never blank out, because the
+  //                           speculative world re-dispatches every recompute even
+  //                           when a structural edit dropped the live ring. Degrades
+  //                           to the live engine when no prediction exists.
   clusterFlows(clusterIdx: number): ShipLane[] {
-    return this.flowsFor(this.engine.world, clusterIdx);
+    return buildShipLanes(this.engine.world, this.engine.getLocalTransfers(), clusterIdx, this.bodyIdByPlanet);
   }
 
   predictedClusterFlows(clusterIdx: number): ShipLane[] {
-    return this.flowsFor((this.specEngine ?? this.engine).world, clusterIdx);
-  }
-
-  // The pure lane-classification core, parameterized on which world's ring to
-  // walk. Each transfer is classified by its endpoints' cluster nodes
-  // (world.star) into internal/outgoing/incoming, or, when neither endpoint is
-  // here, kept only if its multi-leg route passes THROUGH this cluster (relay
-  // traffic). Lanes aggregate by their rendered identity so a body trading with
-  // several off-cluster systems reads as one stream, not a redundant stack. The
-  // planet→Body.id table is shared by the live world and any clone (serialize/
-  // deserialize preserves dense PlanetIds), so it resolves the clone's ring too.
-  // Strict sink: no sim type escapes.
-  private flowsFor(w: World, clusterIdx: number): ShipLane[] {
-    const internal = new Map<string, { src: string; dst: string; res: number; amt: number }>();
-    const outgoing = new Map<string, { src: string; res: number; amt: number }>();
-    const incoming = new Map<string, { dst: string; res: number; amt: number }>();
-    const through  = new Map<string, { dir: 'ltr' | 'rtl'; res: number; amt: number }>();
-
-    w.ring.forEachLive((slot) => {
-      const v = w.ring.view(slot);
-      const src = v.srcPlanet as number;
-      const dst = v.dstPlanet as number;
-      // getRoute is an O(1) array deref, so classifying every transfer (not just
-      // the relay case) costs nothing and keeps the logic in one pure helper.
-      const cls = classifyFlow(w.star[src]!, w.star[dst]!, clusterIdx, w.topology.getRoute(v.routeRef).hops);
-      const res = v.resource as number;
-      const qty = v.qtyMilli;
-
-      switch (cls.kind) {
-        case 'none': return;
-        case 'internal': {
-        const a = this.bodyIdByPlanet[src]!;
-        const b = this.bodyIdByPlanet[dst]!;
-        const key = `${a} ${b} ${res}`;
-        const cur = internal.get(key);
-        if (cur) cur.amt += qty; else internal.set(key, { src: a, dst: b, res, amt: qty });
-        return;
-        }
-        case 'outgoing': {
-        const a = this.bodyIdByPlanet[src]!;
-        const key = `${a} ${res}`;
-        const cur = outgoing.get(key);
-        if (cur) cur.amt += qty; else outgoing.set(key, { src: a, res, amt: qty });
-        return;
-        }
-        case 'incoming': {
-        const b = this.bodyIdByPlanet[dst]!;
-        const key = `${b} ${res}`;
-        const cur = incoming.get(key);
-        if (cur) cur.amt += qty; else incoming.set(key, { dst: b, res, amt: qty });
-        return;
-        }
-        case 'through': {
-        const entry = cls.entry;
-        const exit = cls.exit;
-        const dir = cls.dir;
-        const key = `${entry} ${exit} ${res}`;
-        const cur = through.get(key);
-        if (cur) cur.amt += qty; else through.set(key, { dir, res, amt: qty });
-        return;
-        }
-      }
-    });
-
-    const out: ShipLane[] = [];
-    for (const e of internal.values()) out.push({ kind: 'internal', srcBodyId: e.src, dstBodyId: e.dst, resource: e.res as EconResource, amountMilli: e.amt });
-    for (const e of outgoing.values()) out.push({ kind: 'outgoing', srcBodyId: e.src, resource: e.res as EconResource, amountMilli: e.amt });
-    for (const e of incoming.values()) out.push({ kind: 'incoming', dstBodyId: e.dst, resource: e.res as EconResource, amountMilli: e.amt });
-    for (const e of through.values())  out.push({ kind: 'through', dir: e.dir, resource: e.res as EconResource, amountMilli: e.amt });
-    return out;
+    const e = this.specEngine ?? this.engine;
+    return buildShipLanes(e.world, e.getLocalTransfers(), clusterIdx, this.bodyIdByPlanet);
   }
 
   // — internals —

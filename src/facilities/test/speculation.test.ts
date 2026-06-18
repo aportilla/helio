@@ -71,6 +71,31 @@ test('speculative clone is one turn ahead and fully independent', () => {
   assert.equal(engine.world.turn, liveTurn, 'live world turn untouched by clone stepping');
 });
 
+test('speculative clone records intra-cluster moves for the internal-lane viz + M3 hint', () => {
+  // Two bodies in ONE cluster (same star): a FOOD producer and a FOOD consumer.
+  // The next-turn clone resolves that move with 0 turns of transit, so the bridge
+  // sources the system view's internal lanes — and the "++ inbound next turn" cue —
+  // from getLocalTransfers (the move is never in the ring to read).
+  const geometry = makeGeometry([[0, 0, 0]]);
+  const resources = defaultResourceTable();
+  const cfg = defaultBalance({ jumpRadius: 50 });
+  const planets: PlanetSpec[] = [
+    { star: 0, stock: [5000, 0, 0, 0], production: [80, 0, 0, 0] },
+    { star: 0, stock: [0, 0, 0, 0], consumption: [50, 0, 0, 0] },
+  ];
+  const world = makeWorld({ geometry, resources, cfg, seed: 7, planets });
+  const engine = new EconomyEngine(world, { checkInvariants: true });
+
+  const spec = cloneWorldForSpeculation(engine.world, { geometry, resources, cfg });
+  assert.ok(spec, 'clone + speculative step succeeded');
+  const lt = spec!.getLocalTransfers();
+  assert.equal(lt.length, 1, 'the intra-cluster move is recorded');
+  assert.equal(lt[0]!.srcPlanet as number, 0, 'from the producer');
+  assert.equal(lt[0]!.dstPlanet as number, 1, 'to the consumer');
+  assert.ok(lt[0]!.qtyMilli > 0);
+  assert.equal(spec!.world.ring.inFlightTotal, 0, 'nothing aloft — intra is instant, not ringed');
+});
+
 test('speculative clone predicts the first turn of a freshly built world', () => {
   // The "new provider emits ships immediately" case at game start / before the
   // session's first real step: a turn-0 world still yields a stepped prediction.

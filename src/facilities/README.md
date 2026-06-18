@@ -50,14 +50,15 @@ facility identity.
 | `sim-geometry.ts` | `buildGeometry` — catalog coords → the sim's integer geometry (the float→int round for transport — `Math.round`, for symmetric error). Sim-importing, node-pure. |
 | `world-sync.ts` | `transplantLiveState` / `sameBodyIds` — the reconcile mechanics that preserve stock across a facility edit. Sim-importing, node-pure. |
 | `speculation.ts` | `cloneWorldForSpeculation` — deep-clone the live world via the save round-trip and step it once: the throwaway next-turn world that drives the predictive viz. Sim-importing, node-pure. |
-| `flow-class.ts` | `classifyFlow` — pure within / from / to / through classification of one in-flight transfer relative to the viewed cluster (the 2×2 of src/dst-in-cluster, plus the relay-through case). No sim, no DOM — unit-tested without a world. |
+| `flow-class.ts` | `classifyFlow` — pure within / from / to / through classification of one in-flight **ring** transfer relative to the viewed cluster (the 2×2 of src/dst-in-cluster, plus the relay-through case); `buildShipLanes` applies it per ring transfer, while internal lanes come from `localTransfers`. No sim, no DOM — unit-tested without a world. |
+| `economy-read.ts` | `buildShipLanes` (the system-view cargo-overlay assembly: ring → outgoing/incoming/through, intra-cluster `localTransfers` → internal) + the M3 inbound fold (`intraInboundByResource` / `foldInboundNextTurn`). The bridge's pure read-back derivations, extracted so they unit-test on a hand-built world. Sim-importing, node-pure. |
 | `base64.ts` | `base64FromBytes` / `bytesFromBase64` — the byte↔base64 codec for the persisted sim-save blob. No sim, no DOM. |
 | `economy-bridge.ts` | `EconomyBridge` — the live engine owner: build/restore/reconcile the world, step, persist (`helio.sim`), read back. The **app-glue** module: imports the sim AND the catalog (`BODIES`/`STAR_CLUSTERS`) + `localStorage`, so it is NOT node-testable (its pure parts live in the modules above). |
 | `index.ts` | Public barrel. |
 
 The sim is imported only from `project.ts`, `resource-vocab.ts`, `sim-geometry.ts`,
-`world-sync.ts`, `speculation.ts`, and `economy-bridge.ts` — all under this
-package, the one quarter the boundary guard permits.
+`world-sync.ts`, `speculation.ts`, `economy-read.ts`, and `economy-bridge.ts` — all
+under this package, the one quarter the boundary guard permits.
 
 Dependency direction: `project → registry → {abundance, resource-vocab, types,
 tuning}`. Every module except `economy-bridge.ts` imports `Body` from
@@ -105,8 +106,11 @@ fidelity, in-flight cargo kept) when the facility set is unchanged.
   its full state to `localStorage` (`helio.sim`, `configHash`-guarded), and reads
   per-body / per-system balances back into the sidebar — plus the cargo lanes
   touching a cluster (`clusterFlows` live / `predictedClusterFlows` forecast →
-  `ShipLane[]`, classified by `flow-class.ts`) that drive the system-view ship-dot
-  overlay. Eligibility, build caps, and the body-derived Add pills are live.
+  `ShipLane[]`) that drive the system-view ship-dot overlay. The lanes are assembled
+  by `economy-read.ts` (`buildShipLanes`): **internal** (body→body) lanes come from
+  the engine's `getLocalTransfers` (the instant intra-cluster reallocation, never
+  ringed), while outgoing/incoming/through come from the transfer ring, classified by
+  `flow-class.ts`. Eligibility, build caps, and the body-derived Add pills are live.
 - **Speculative next-turn preview:** the bridge keeps a second, private,
   throwaway engine alongside `this.engine` — a clone of the live world stepped one
   turn ahead (`speculation.ts`), recomputed only on real-world change (ctor /
@@ -121,8 +125,11 @@ fidelity, in-flight cargo kept) when the facility set is unchanged.
 - **Transport model:** a geometry node is a **cluster** — one system with a
   shared pool of bodies (`sim-geometry.ts` builds one node per cluster at its
   centre of mass; `clusterNodeOfBody` resolves a body to it). All bodies in a
-  cluster trade freely over the sim's 1-turn self-leg; only crossing between
-  clusters costs jump range. The sim's `system === node`, so a sim "system" is
+  cluster trade freely **and instantly** — an intra-cluster move is delivered the
+  same turn (0 turns of transit, never aloft; the sim's `dispatch` deposits a
+  same-node order straight into the destination), so at a resting turn boundary no
+  same-system cargo is in flight. Only crossing between clusters costs jump range
+  and shows ships in transit. The sim's `system === node`, so a sim "system" is
   exactly one of our clusters.
 - **Provisional:** the `contribute` rates and the `EconResource` roster — both
   app-internal and never serialized into `helio.game`, so freely re-mappable.

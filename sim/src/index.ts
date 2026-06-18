@@ -4,6 +4,8 @@
 export { EconomyEngine } from './engine.ts';
 export type { TurnReport, EngineOptions } from './engine.ts';
 
+export type { LocalTransfer } from './dispatch.ts';
+
 export { makeWorld, World, STORAGE_UNCAPPED } from './world.ts';
 export type { WorldSpec, PlanetSpec } from './world.ts';
 
