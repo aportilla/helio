@@ -2,9 +2,15 @@
 // diagram, the FIRST time-driven element in this otherwise-static view. Each lane the
 // EconomyBridge reports (internal / outgoing / incoming / through) becomes a
 // steady emitter: dots spawn at the lane's A end, march to B along a quadratic
-// Bézier on a trapezoidal ease (accelerate out of the source, cruise, settle into
-// the destination — see easeSpeed), and despawn at B. Emission RATE scales with the
-// lane's live in-flight cargo volume, so a busy lane reads as a denser stream.
+// Bézier under a constant-acceleration motion profile (ramp up to cruise over a
+// standard wall-clock duration, hold, ramp down — short hops peak below cruise; see
+// update()), and despawn at B. A ramp only anchors at a BODY end, so a ship bound
+// off-system accelerates the whole way out and an arriving one brakes the whole way
+// in. Emission RATE scales with the lane's live in-flight cargo volume, so a busy
+// lane reads as a denser stream.
+// Through those two ease ramps a dot also trails a short yellow EXHAUST flame (a
+// second in-place snapped-line pool) — behind it while accelerating, out the front
+// while braking — dark through the cruise middle.
 //
 // Body-to-body (internal) lanes bow into an ARC — the control point is offset
 // perpendicular to the chord, signed-random per ordered body-pair and cached so
@@ -26,17 +32,17 @@
 // journey time is the same on any window size (px/sec auto-scales with the
 // viewport).
 
-import { BufferAttribute, BufferGeometry, DynamicDrawUsage, Points } from 'three';
+import { BufferAttribute, BufferGeometry, DynamicDrawUsage, LineSegments, Points } from 'three';
 import type { Scene, ShaderMaterial } from 'three';
 import { indexOfBodyId } from '../../../data/stars';
-import { snappedDotsMat, unregisterSnappedMaterial } from '../../materials';
+import { snappedDotsMat, snappedLineMat, unregisterSnappedMaterial } from '../../materials';
 import { disableCulling } from '../geom/cull';
 import { snapPx } from '../geom/snap';
 import {
-  RENDER_ORDER_SHIP, SHIP_ARC_BOW_MAX, SHIP_ARC_BOW_MIN, SHIP_COLOR, SHIP_CROSS_SCREEN_SEC,
-  SHIP_EASE_FLOOR, SHIP_EASE_RAMP, SHIP_MAX_TICK_DT_MS, SHIP_OFFSCREEN_MARGIN, SHIP_POOL_CAP,
-  SHIP_RATE_MAX_PER_LANE, SHIP_RATE_MIN_PER_LANE, SHIP_RATE_PER_MILLI, SHIP_SIZE_PX,
-  SHIP_SPEED_VARIANCE, SHIP_TRANSIT_FROM_TOP, Z_SHIP,
+  RENDER_ORDER_SHIP, RENDER_ORDER_SHIP_THRUST, SHIP_ACCEL_SEC, SHIP_ARC_BOW_MAX, SHIP_ARC_BOW_MIN,
+  SHIP_COLOR, SHIP_CROSS_SCREEN_SEC, SHIP_EASE_FLOOR, SHIP_MAX_TICK_DT_MS, SHIP_OFFSCREEN_MARGIN,
+  SHIP_POOL_CAP, SHIP_RATE_MAX_PER_LANE, SHIP_RATE_MIN_PER_LANE, SHIP_RATE_PER_MILLI, SHIP_SIZE_PX,
+  SHIP_SPEED_VARIANCE, SHIP_THRUST_COLOR, SHIP_THRUST_LEN_PX, SHIP_TRANSIT_FROM_TOP, Z_SHIP,
 } from '../layout/constants';
 import type { BodyCenterIndex } from '../types';
 import type { ShipLane } from '../../../facilities/economy-bridge';
@@ -80,6 +86,18 @@ export class ShipsLayer {
   // while the in-place writes silently went nowhere.
   private readonly posAttr: BufferAttribute;
   private readonly pos: Float32Array;
+
+  // Thrust burns — a second, in-place-rewritten pool (same by-reference
+  // BufferAttribute pattern as `pos`). One 2-vertex segment per ship that is in an
+  // ease ramp this frame (accelerating out of the source / braking into the dest);
+  // cruising ships contribute none. Capacity is the whole dot pool (every dot
+  // could be ramping at once). Lit yellow, snapped, layered just under the dots.
+  private readonly thrustGeometry: BufferGeometry;
+  private readonly thrustMaterial: ShaderMaterial;
+  private readonly thrustLines: LineSegments;
+  private readonly thrustPosAttr: BufferAttribute;
+  private readonly thrustPos: Float32Array;
+  private lastThrustSegs = 0;
 
   // Per-live-dot SoA, parallel to pool slots [0, liveCount). A dot stores its
   // journey progress + the IDENTITY of its endpoints (a kind, plus a body catalog
@@ -137,6 +155,26 @@ export class ShipsLayer {
     // stale — skip frustum culling (per-vertex GPU clipping still applies).
     disableCulling(this.points);
     scene.add(this.points);
+
+    // Thrust burns: 2 vertices per segment, capacity = the whole dot pool. Match
+    // the DOTS' compositing exactly — TRANSPARENT + depthTest:false — so the burn
+    // lands in the same render pass as the (transparent) body discs and the dots,
+    // where renderOrder actually orders it: a notch UNDER the dots (so the dot
+    // covers the burn's tip pixel) but OVER the discs. An OPAQUE line would render
+    // in the opaque pass, BEFORE every transparent disc, and so vanish behind each
+    // body it crosses — exactly where the accel/brake flames live.
+    this.thrustPos = new Float32Array(SHIP_POOL_CAP * 2 * 3);
+    this.thrustPosAttr = new BufferAttribute(this.thrustPos, 3);
+    this.thrustPosAttr.setUsage(DynamicDrawUsage);
+    this.thrustGeometry = new BufferGeometry();
+    this.thrustGeometry.setAttribute('position', this.thrustPosAttr);
+    this.thrustGeometry.setDrawRange(0, 0);
+    this.thrustMaterial = snappedLineMat({ color: SHIP_THRUST_COLOR });
+    this.thrustMaterial.depthTest = false;
+    this.thrustLines = new LineSegments(this.thrustGeometry, this.thrustMaterial);
+    this.thrustLines.renderOrder = RENDER_ORDER_SHIP_THRUST;
+    disableCulling(this.thrustLines);
+    scene.add(this.thrustLines);
   }
 
   // Publish the current layout (body anchors + content-rect bounds). Called from
@@ -276,6 +314,7 @@ export class ShipsLayer {
     // a dot's last drawn position is a fraction short of B, hidden inside the
     // destination disc (internal/incoming) or off-screen past the margin.
     let i = 0;
+    let thrustSegs = 0; // burn segments written this frame (2 vertices each)
     while (i < this.liveCount) {
       const t = this.dT[i]!;
       if (t >= 1) { this.swapRemove(i); continue; }
@@ -318,17 +357,68 @@ export class ShipsLayer {
       // Quadratic Bézier P(t) = u²·A + 2ut·C + t²·B (u = 1−t).
       const u = 1 - t;
       const w0 = u * u, w1 = 2 * u * t, w2 = t * t;
-      this.pos[i * 3 + 0] = snapPx(w0 * p0x + w1 * cx + w2 * p2x);
-      this.pos[i * 3 + 1] = snapPx(w0 * p0y + w1 * cy + w2 * p2y);
+      const sx = snapPx(w0 * p0x + w1 * cx + w2 * p2x);
+      const sy = snapPx(w0 * p0y + w1 * cy + w2 * p2y);
+      this.pos[i * 3 + 0] = sx;
+      this.pos[i * 3 + 1] = sy;
       this.pos[i * 3 + 2] = Z_SHIP;
 
-      // Advance t at a SCREEN-NORMALIZED pace: a chord spanning the full content
-      // width crosses in SHIP_CROSS_SCREEN_SEC, shorter chords in proportion, so
-      // the wall-clock journey is window-size-independent (px/sec scales with the
-      // viewport). The ease shapes the velocity within that. Chord floored at 1px
-      // so a near-coincident pair can't divide-by-tiny and teleport.
+      // Motion profile: constant-acceleration ramps of a STANDARD DURATION (time,
+      // not a path fraction), so reaching cruise always takes SHIP_ACCEL_SEC and a
+      // short hop just peaks at its midpoint rather than snapping to full speed. A
+      // ramp anchored at a BODY end pulls the speed to ~rest there; an OFF-SCREEN
+      // end imposes none — so a ship LEAVING the system accelerates the whole way
+      // out and one ARRIVING decelerates the whole way in (no brake/launch against
+      // a virtual point at the screen edge). Distances normalized by content width
+      // keep the pace window-size-independent; dSpeed carries the per-ship
+      // ±variance. Chord floored at 1px so a near-coincident pair can't divide-by-tiny.
       const chord = Math.max(Math.hypot(p2x - p0x, p2y - p0y), 1);
-      this.dT[i] = t + (this.contentW / (SHIP_CROSS_SCREEN_SEC * chord)) * easeSpeed(t) * this.dSpeed[i]! * dt;
+      const dn = chord / this.contentW;                   // journey length, screen widths
+      const vc = this.dSpeed[i]! / SHIP_CROSS_SCREEN_SEC;  // cruise speed, widths/sec
+      const accel = vc / SHIP_ACCEL_SEC;                   // a = cruise / T_accel
+      const dist = t * dn;                                 // distance covered so far
+      const vAccel = Math.sqrt(2 * accel * dist);                    // ramp up from the source body
+      const vDecel = Math.sqrt(2 * accel * Math.max(dn - dist, 0));  // ramp down into the dest body
+      // Pick the speed + exhaust direction by lane kind. dir is the burn: −1 trails
+      // behind (accelerating), +1 streams out the front (braking), 0 = dark (cruise).
+      let v: number;
+      let dir: number;
+      switch (kind) {
+        case KIND_OUTGOING:                  // body → deep space: accelerate the whole way out
+          v = vAccel; dir = -1; break;
+        case KIND_INCOMING:                  // deep space → body: decelerate the whole way in
+          v = vDecel; dir = 1; break;
+        case KIND_THROUGH_LTR:
+        case KIND_THROUGH_RTL:               // relay traffic: cruise straight across, no burn
+          v = vc; dir = 0; break;
+        default: {                           // internal body → body: accel · cruise · decel
+          v = Math.min(vc, vAccel, vDecel);
+          const accelDist = Math.min(vc * SHIP_ACCEL_SEC * 0.5, dn * 0.5);
+          dir = dist < accelDist ? -1 : dist > dn - accelDist ? 1 : 0;
+        }
+      }
+      const vFloor = vc * SHIP_EASE_FLOOR;                 // crawl floor — never a dead stop
+      if (v < vFloor) v = vFloor;
+
+      // Exhaust burn: a short line off the dot along ±the unit Bézier tangent
+      // P'(t) = 2(1−t)(C−A) + 2t(B−C), signed by dir above — trailing behind while
+      // accelerating, out the front while braking, dark at cruise.
+      if (dir !== 0) {
+        const gx = 2 * (1 - t) * (cx - p0x) + 2 * t * (p2x - cx);
+        const gy = 2 * (1 - t) * (cy - p0y) + 2 * t * (p2y - cy);
+        const gl = Math.hypot(gx, gy);
+        if (gl > 1e-4) {
+          const k = (dir * SHIP_THRUST_LEN_PX) / gl; // scale tangent to the burn length
+          const b = thrustSegs * 6;
+          this.thrustPos[b + 0] = sx; this.thrustPos[b + 1] = sy; this.thrustPos[b + 2] = Z_SHIP;
+          this.thrustPos[b + 3] = sx + gx * k; this.thrustPos[b + 4] = sy + gy * k; this.thrustPos[b + 5] = Z_SHIP;
+          thrustSegs++;
+        }
+      }
+
+      // Advance the path fraction by the profiled speed: the normalized distance
+      // step v·dt equals dn·Δt, so Δt = v·dt / dn.
+      this.dT[i] = t + (v / dn) * dt;
       i++;
     }
 
@@ -339,6 +429,14 @@ export class ShipsLayer {
       this.posAttr.needsUpdate = true;
       this.geometry.setDrawRange(0, this.liveCount);
     }
+
+    // Burns: re-upload when any are lit, or when the count dropped to 0 so the
+    // draw range shrinks and last frame's flares clear.
+    if (thrustSegs > 0 || thrustSegs !== this.lastThrustSegs) {
+      this.thrustPosAttr.needsUpdate = true;
+      this.thrustGeometry.setDrawRange(0, thrustSegs * 2);
+    }
+    this.lastThrustSegs = thrustSegs;
   }
 
   // Despawn the dot at slot i: move the last live dot into i and shrink. The
@@ -357,11 +455,14 @@ export class ShipsLayer {
   }
 
   dispose(): void {
-    // Drop the material from the snapped-viewport registry before freeing it, so
-    // the next scene's resize doesn't re-touch a dead GPU handle.
+    // Drop the materials from the snapped-viewport registry before freeing them,
+    // so the next scene's resize doesn't re-touch a dead GPU handle.
     unregisterSnappedMaterial(this.material);
+    unregisterSnappedMaterial(this.thrustMaterial);
     this.geometry.dispose();
     this.material.dispose();
+    this.thrustGeometry.dispose();
+    this.thrustMaterial.dispose();
   }
 }
 
@@ -373,18 +474,4 @@ function clamp(x: number, lo: number, hi: number): number {
 // small flow still reads as a steady trickle and a glut can't swamp the pool.
 function rateFor(amountMilli: number): number {
   return clamp(amountMilli * SHIP_RATE_PER_MILLI, SHIP_RATE_MIN_PER_LANE, SHIP_RATE_MAX_PER_LANE);
-}
-
-// Speed multiplier at path-fraction t — the trapezoidal velocity profile (see
-// SHIP_EASE_* in constants). FLOOR..1 over the first RAMP (accelerate), flat 1
-// through the cruise middle, 1..FLOOR over the last RAMP (decelerate), each ramp
-// smoothstep-shaped. Floored above 0 so a dot near the ends keeps inching toward
-// the despawn at t≥1 rather than stalling.
-function easeSpeed(t: number): number {
-  let ramp: number;
-  if (t < SHIP_EASE_RAMP) ramp = t / SHIP_EASE_RAMP;
-  else if (t > 1 - SHIP_EASE_RAMP) ramp = (1 - t) / SHIP_EASE_RAMP;
-  else return 1;
-  const s = ramp * ramp * (3 - 2 * ramp); // smoothstep
-  return SHIP_EASE_FLOOR + (1 - SHIP_EASE_FLOOR) * s;
 }

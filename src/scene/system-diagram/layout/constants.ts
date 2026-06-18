@@ -367,6 +367,9 @@ export const RENDER_ORDER_PLANET_HALO = 20;
 // render after the planet halo and sit at a fixed z nearer than any row
 // band (see Z_SHIP) — they belong to no row item.
 export const RENDER_ORDER_SHIP = 30;
+// Thrust-burn flares render just UNDER the dots (lower renderOrder draws first),
+// so a ship's dot paints over the tip of its own burn line.
+export const RENDER_ORDER_SHIP_THRUST = 29;
 
 // --- Cargo ships (economy traffic) ---
 //
@@ -414,6 +417,14 @@ export const SHIP_CROSS_SCREEN_SEC = 65;
 // band is centered on 1, so the mean pace stays SHIP_CROSS_SCREEN_SEC.
 export const SHIP_SPEED_VARIANCE = 0.3;
 
+// Exhaust burn: a short, bright-yellow flame trailing off the ship opposite its
+// thrust, lit only while it's accelerating or braking (the SHIP_ACCEL_SEC ramps)
+// and off through cruise — streaming behind a dot as it accelerates out of the
+// source and out the front as it brakes into the destination. One tip sits on the
+// dot; SHIP_THRUST_LEN_PX is how far the other reaches (env-px). The line is 1px.
+export const SHIP_THRUST_COLOR = 0xffff00;
+export const SHIP_THRUST_LEN_PX = 3;
+
 // Emission rate mapping: dots/sec per milli-unit shipped on a lane this turn,
 // clamped so a small flow still reads as a steady trickle and a glut can't swamp
 // the dome or the pool. Calibrated for early-game amounts (a colony's food
@@ -450,12 +461,14 @@ export const SHIP_MAX_TICK_DT_MS = 100;
 export const SHIP_ARC_BOW_MIN = 0.18;
 export const SHIP_ARC_BOW_MAX = 0.42;
 
-// Trapezoidal velocity profile along a lane: a dot eases in from SHIP_EASE_FLOOR
-// of cruise speed up to full speed over the first SHIP_EASE_RAMP of the path,
-// holds cruise (the SHIP_CROSS_SCREEN_SEC pace) through the middle, then eases back down
-// to the floor over the last SHIP_EASE_RAMP — so it accelerates out of the source
-// and settles into the destination rather than moving flat-out end to end. RAMP
-// is a path FRACTION (self-scales to lane length); FLOOR > 0 keeps the ends
-// crawling, not stopped. smoothstep shapes each ramp so velocity has no corner.
-export const SHIP_EASE_RAMP = 0.2;
+// Acceleration profiling. A dot ramps from rest to cruise under CONSTANT
+// acceleration over a STANDARD WALL-CLOCK duration (SHIP_ACCEL_SEC) — NOT a fixed
+// fraction of the path — so a short hop accelerates just as gently as a long haul
+// instead of snapping to full speed. The accel covers a fixed distance, so a trip
+// too short to fit accel + decel never reaches cruise: it peaks at its midpoint (a
+// triangular velocity profile) and starts braking immediately. SHIP_EASE_FLOOR is
+// the minimum crawl speed (fraction of cruise) so the rest-to-rest ends inch into
+// the despawn rather than dividing-by-zero into a stall. Raise SHIP_ACCEL_SEC for
+// longer, gentler ramps; lower it for snappier starts.
+export const SHIP_ACCEL_SEC = 8;
 export const SHIP_EASE_FLOOR = 0.15;
