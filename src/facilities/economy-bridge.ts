@@ -37,6 +37,7 @@ import {
 } from '../../sim/src/index.ts';
 import { getGameState, type Facility } from '../game-state.ts';
 import { appResourceTable, type EconResource } from './resource-vocab.ts';
+import { classifyFlow } from './flow-class.ts';
 import { projectWorld } from './project.ts';
 import type { SimStarResolver } from './types.ts';
 import { buildGeometry, LY_TO_SIM_UNITS } from './sim-geometry.ts';
@@ -104,6 +105,24 @@ export interface SystemResourceLevel {
 export interface SystemEconomyView {
   readonly resources: readonly SystemResourceLevel[];
 }
+
+// One lane of cargo traffic the system view renders as a stream of dots,
+// classified relative to the viewed cluster. The four kinds are the cells of
+// a 2×2 on (is the source in this cluster? × is the destination in this
+// cluster?), plus the relay case where neither endpoint is here but the route
+// passes through:
+//   internal — both bodies in this cluster (body → body, fully on-screen)
+//   outgoing — source here, destination elsewhere (body → off the top)
+//   incoming — destination here, source elsewhere (off the top → body)
+//   through  — neither here, but routed across this cluster (crosses sideways)
+// amountMilli is the live shipped volume on the lane (Σ qtyMilli over in-flight
+// transfers), an integer; bodyIds are stable Body.id strings. No sim types
+// cross this boundary.
+export type ShipLane =
+  | { readonly kind: 'internal'; readonly srcBodyId: string; readonly dstBodyId: string; readonly resource: EconResource; readonly amountMilli: number }
+  | { readonly kind: 'outgoing'; readonly srcBodyId: string; readonly resource: EconResource; readonly amountMilli: number }
+  | { readonly kind: 'incoming'; readonly dstBodyId: string; readonly resource: EconResource; readonly amountMilli: number }
+  | { readonly kind: 'through'; readonly dir: 'ltr' | 'rtl'; readonly resource: EconResource; readonly amountMilli: number };
 
 interface Built {
   readonly engine: EconomyEngine;
@@ -243,6 +262,76 @@ export class EconomyBridge {
       resources.push({ name: meta.name, netMilli });
     }
     return resources.length > 0 ? { resources } : null;
+  }
+
+  // Every live cargo lane that touches one cluster (= one system view), for the
+  // ship-dot overlay. Walks the live transfer ring — NOT the read digest — so
+  // it works before the session's first step (the ring deserializes from the
+  // save) and right after a facility edit. Each transfer is classified by its
+  // endpoints' cluster nodes (world.star) into internal/outgoing/incoming, or,
+  // when neither endpoint is here, kept only if its multi-leg route passes
+  // THROUGH this cluster (relay traffic). Lanes aggregate by their rendered
+  // identity so a body trading with several off-cluster systems reads as one
+  // stream, not a redundant stack. Strict sink: no sim type escapes.
+  clusterFlows(clusterIdx: number): ShipLane[] {
+    const w = this.engine.world;
+    const internal = new Map<string, { src: string; dst: string; res: number; amt: number }>();
+    const outgoing = new Map<string, { src: string; res: number; amt: number }>();
+    const incoming = new Map<string, { dst: string; res: number; amt: number }>();
+    const through  = new Map<string, { dir: 'ltr' | 'rtl'; res: number; amt: number }>();
+
+    w.ring.forEachLive((slot) => {
+      const v = w.ring.view(slot);
+      const src = v.srcPlanet as number;
+      const dst = v.dstPlanet as number;
+      // getRoute is an O(1) array deref, so classifying every transfer (not just
+      // the relay case) costs nothing and keeps the logic in one pure helper.
+      const cls = classifyFlow(w.star[src]!, w.star[dst]!, clusterIdx, w.topology.getRoute(v.routeRef).hops);
+      const res = v.resource as number;
+      const qty = v.qtyMilli;
+
+      switch (cls.kind) {
+        case 'none': return;
+        case 'internal': {
+        const a = this.bodyIdByPlanet[src]!;
+        const b = this.bodyIdByPlanet[dst]!;
+        const key = `${a} ${b} ${res}`;
+        const cur = internal.get(key);
+        if (cur) cur.amt += qty; else internal.set(key, { src: a, dst: b, res, amt: qty });
+        return;
+        }
+        case 'outgoing': {
+        const a = this.bodyIdByPlanet[src]!;
+        const key = `${a} ${res}`;
+        const cur = outgoing.get(key);
+        if (cur) cur.amt += qty; else outgoing.set(key, { src: a, res, amt: qty });
+        return;
+        }
+        case 'incoming': {
+        const b = this.bodyIdByPlanet[dst]!;
+        const key = `${b} ${res}`;
+        const cur = incoming.get(key);
+        if (cur) cur.amt += qty; else incoming.set(key, { dst: b, res, amt: qty });
+        return;
+        }
+        case 'through': {
+        const entry = cls.entry;
+        const exit = cls.exit;
+        const dir = cls.dir;
+        const key = `${entry} ${exit} ${res}`;
+        const cur = through.get(key);
+        if (cur) cur.amt += qty; else through.set(key, { dir, res, amt: qty });
+        return;
+        }
+      }
+    });
+
+    const out: ShipLane[] = [];
+    for (const e of internal.values()) out.push({ kind: 'internal', srcBodyId: e.src, dstBodyId: e.dst, resource: e.res as EconResource, amountMilli: e.amt });
+    for (const e of outgoing.values()) out.push({ kind: 'outgoing', srcBodyId: e.src, resource: e.res as EconResource, amountMilli: e.amt });
+    for (const e of incoming.values()) out.push({ kind: 'incoming', dstBodyId: e.dst, resource: e.res as EconResource, amountMilli: e.amt });
+    for (const e of through.values())  out.push({ kind: 'through', dir: e.dir, resource: e.res as EconResource, amountMilli: e.amt });
+    return out;
   }
 
   // — internals —

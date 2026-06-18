@@ -32,6 +32,17 @@ export interface PlanetCenter {
 }
 export type PlanetCenterIndex = ReadonlyMap<number, PlanetCenter>;
 
+// A body's on-screen anchor in content-buffer-pixel coords. The unified
+// lookup the ships layer consumes: SystemDiagram.layout merges the per-kind
+// centers (planets publish the richer PlanetCenter; moons + belts publish
+// this) into one bodyIdx → {cx,cy} map, so a cargo dot can spawn at / aim for
+// any body kind, not just planets.
+export interface BodyCenter {
+  cx: number;
+  cy: number;
+}
+export type BodyCenterIndex = ReadonlyMap<number, BodyCenter>;
+
 // StarsRowLayer publishes one entry per cluster member after its layout
 // pass; PlanetsLayer + MoonsLayer consume it to drive per-fragment
 // lighting on the body discs. Position is in buffer-pixel coords

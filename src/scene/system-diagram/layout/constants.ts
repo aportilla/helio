@@ -363,3 +363,67 @@ export const RENDER_ORDER_FRONT_MOON = 15;
 // keeps R's halo from painting over R's own front ring/moon
 // (higher z) and lets it paint over L's full stack (lower z).
 export const RENDER_ORDER_PLANET_HALO = 20;
+// Cargo-ship dots are a flat overlay that flies OVER every body, so they
+// render after the planet halo and sit at a fixed z nearer than any row
+// band (see Z_SHIP) — they belong to no row item.
+export const RENDER_ORDER_SHIP = 30;
+
+// --- Cargo ships (economy traffic) ---
+//
+// Animated 1-px dots representing in-flight cargo while a system is open.
+// A per-turn shipped amount is rendered as a continuous emission RATE; dots
+// march a straight A→B segment at constant pixel speed and despawn at B.
+// All values are the "edit a number, reload, eyeball" tuning surface.
+
+// Fixed world-z for the whole ship pool. The diagram's ortho camera maps world
+// z linearly to NDC over [-1, 1] (near -1 / far 1), so any small z renders fine;
+// 0.005 sits at the front of the body-band span but not strictly ahead of the
+// deepest row (rowIdx·Z_STRIDE + Z_FRONT_MOON, ~0.01 for a busy system). Ships
+// don't rely on z for layering: the material runs depthTest:false + a high
+// renderOrder, so they always paint over every body regardless of the exact z.
+export const Z_SHIP = 0.005;
+
+// Pre-allocated dot pool size. A hard ceiling on simultaneously-visible
+// dots; a turn that would emit more drops the surplus spawns (saturation
+// cap) rather than growing the buffer.
+export const SHIP_POOL_CAP = 512;
+
+// One neutral cargo color for v1 (pale cyan, in the cyan-on-near-black
+// palette). Per-resource tinting is a documented follow-up.
+export const SHIP_COLOR = 0x8fd3ff;
+
+// Dot size in env-px (a chunky square — odd size centers crisply on the grid).
+// 1 px reads as noise among the bodies; a few px makes each ship legible.
+export const SHIP_SIZE_PX = 3;
+
+// Constant travel speed (env-px/sec). Transit time = segment length / speed,
+// so long and short lanes stay equally legible (a long haul just shows more
+// dots in flight, not faster ones). Deliberately slow so dots LINGER in flight
+// — at a given spawn rate, slower travel keeps more dots on screen at once, so
+// even a small flow reads as a continuous trickle rather than a lone blip.
+export const SHIP_SPEED_PX_PER_SEC = 40;
+
+// Emission rate mapping: dots/sec per milli-unit shipped on a lane this turn,
+// clamped so a small flow still reads as a steady trickle and a glut can't swamp
+// the dome or the pool. Calibrated for early-game amounts (a colony's food
+// surplus split across consumers is only a few hundred milli per lane), so most
+// lanes ride near the floor until the economy scales up.
+export const SHIP_RATE_PER_MILLI = 0.006;
+export const SHIP_RATE_MIN_PER_LANE = 0.8;
+export const SHIP_RATE_MAX_PER_LANE = 10;
+
+// Pixels past a screen edge a dot travels before despawning, so it fully
+// clears the edge rather than blinking out at it. Used for the off-screen
+// end of outgoing/incoming (the top) and through-traffic (the sides).
+export const SHIP_OFFSCREEN_MARGIN = 24;
+
+// Height of the horizontal through-traffic band, measured down from the top
+// of the content rect — above the dome's planet peak (PLANET_PEAK_FROM_TOP)
+// so transit cargo reads as crossing "above the planets", distinct from the
+// vertical in/out columns.
+export const SHIP_TRANSIT_FROM_TOP = 56;
+
+// Per-frame dt clamp (ms) — mirrors the galaxy scene's MAX_TICK_DT_MS so a
+// backgrounded tab resuming doesn't dump a burst of spawns or teleport
+// in-flight dots.
+export const SHIP_MAX_TICK_DT_MS = 100;

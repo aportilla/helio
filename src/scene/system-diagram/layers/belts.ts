@@ -19,7 +19,7 @@ import { hash32, mulberry32 } from '../geom/prng';
 import { bandZ, snapPx } from '../geom/snap';
 import { writeLightUniforms } from '../lighting';
 import { disposePool } from './dispose';
-import type { DiagramHit, DiagramPick, StarLightSource } from '../types';
+import type { BodyCenterIndex, DiagramHit, DiagramPick, StarLightSource } from '../types';
 
 // One belt's footprint inside the shared chunk pool — vertex range +
 // the oriented half-extents used by the picker's rotated-box test.
@@ -62,6 +62,9 @@ export class BeltsLayer {
   // bodyIdx → BeltSlot ref, so setHovered can iterate the slot's vertex
   // range without scanning pool.slots.
   private readonly slotByBodyIdx: ReadonlyMap<number, BeltSlot>;
+  // Per-belt on-screen anchor (bodyIdx → slot center), rebuilt each layout so
+  // the ships layer can spawn/aim cargo at a belt.
+  private readonly centerIndex = new Map<number, { cx: number; cy: number }>();
 
   constructor(scene: Scene, rowSlots: readonly RowSlot[]) {
     const beltItems = rowSlots.filter(r => r.kind === 'belt');
@@ -88,6 +91,7 @@ export class BeltsLayer {
   // parity-snap intent at chunk scale).
   layout(rowSlots: readonly RowSlot[]): void {
     if (!this.pool) return;
+    this.centerIndex.clear();
     const positions    = this.pool.geometry.attributes.position!.array as Float32Array;
     const chunkCenters = this.pool.geometry.attributes.aChunkCenter!.array as Float32Array;
     let bi = 0;
@@ -96,6 +100,7 @@ export class BeltsLayer {
       const slot = this.pool.slots[bi]!;
       slot.cx = item.cx;
       slot.cy = item.cy;
+      this.centerIndex.set(slot.bodyIdx, { cx: item.cx, cy: item.cy });
       const z = bandZ(slot.rowIdx, Z_BELT);
       for (let v = slot.startVertex; v < slot.endVertex; v++) {
         const off    = slot.chunkOffsets[v - slot.startVertex]!;
@@ -110,6 +115,12 @@ export class BeltsLayer {
     }
     this.pool.geometry.attributes.position!.needsUpdate = true;
     this.pool.geometry.attributes.aChunkCenter!.needsUpdate = true;
+  }
+
+  // Read-only view of the published belt centers. Empty before the first
+  // layout() call (and when the cluster has no belts).
+  getCenterIndex(): BodyCenterIndex {
+    return this.centerIndex;
   }
 
   // Push the cluster's star positions / colors / intensities into the

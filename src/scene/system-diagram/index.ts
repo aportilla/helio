@@ -17,9 +17,11 @@ import { BeltsLayer } from './layers/belts';
 import { MoonsLayer } from './layers/moons';
 import { PlanetsLayer } from './layers/planets';
 import { RingsLayer } from './layers/rings';
+import { ShipsLayer } from './layers/ships';
 import { StarsRowLayer } from './layers/stars-row';
 import { buildRowSlots, layoutRow, type RowSlot } from './layout/row';
-import { type DiagramHit, type DiagramPick, picksEqual } from './types';
+import { type BodyCenter, type BodyCenterIndex, type DiagramHit, type DiagramPick, type PlanetCenterIndex, picksEqual } from './types';
+import type { ShipLane } from '../../facilities/economy-bridge';
 
 export type { DiagramPick } from './types';
 
@@ -41,6 +43,8 @@ export class SystemDiagram {
   private readonly belts:   BeltsLayer;
   private readonly moons:   MoonsLayer;
   private readonly rings:   RingsLayer;
+  // Cargo-ship overlay — the one time-driven layer; fed lanes by SystemScene.
+  private readonly ships:   ShipsLayer;
 
   // Two independent outline channels that share one visual (the 1-px rim):
   // the transient hover follows the cursor, the persistent selection is set by
@@ -58,6 +62,7 @@ export class SystemDiagram {
     this.belts   = new BeltsLayer(this.scene, this.rowSlots);
     this.moons   = new MoonsLayer(this.scene, this.rowSlots);
     this.rings   = new RingsLayer(this.scene, this.rowSlots);
+    this.ships   = new ShipsLayer(this.scene);
   }
 
   resize(contentW: number, bufferH: number): void {
@@ -93,9 +98,38 @@ export class SystemDiagram {
     this.moons.layout(centers);
     this.rings.layout(centers);
 
+    // Publish the unified body-anchor index (planets + moons + belts) plus the
+    // content-rect bounds to the ships layer, so cargo dots spawn/aim at any
+    // body kind and re-track across a resize.
+    this.ships.setLayout(this.buildBodyCenters(centers), this.contentW, this.bufferH);
+
     // Layout rebuilds the per-body outline attributes, so re-stamp the
     // persistent selection (hover re-applies itself on the next pointer move).
     if (this.selectedPick) this.writeOutline(this.selectedPick, 1);
+  }
+
+  // Merge the per-kind center indices into one bodyIdx → BodyCenter lookup for
+  // the ships layer. Keys are unique across kinds (each body has one catalog
+  // index), so merge order is irrelevant; entries are shared by reference (the
+  // ships layer only reads cx/cy and never retains them), and the planet index
+  // is the one already laid out this pass.
+  private buildBodyCenters(planetCenters: PlanetCenterIndex): BodyCenterIndex {
+    const m = new Map<number, BodyCenter>();
+    for (const [b, c] of planetCenters) m.set(b, c);
+    for (const [b, c] of this.moons.getCenterIndex()) m.set(b, c);
+    for (const [b, c] of this.belts.getCenterIndex()) m.set(b, c);
+    return m;
+  }
+
+  // Advance the cargo-ship overlay one frame. The system view's only per-frame
+  // path, threaded from SystemScene.tick.
+  update(now: number): void {
+    this.ships.update(now);
+  }
+
+  // Hand the ships layer this cluster's cargo lanes for the current turn.
+  setFlows(lanes: readonly ShipLane[]): void {
+    this.ships.setFlows(lanes);
   }
 
   // Hit-test the rendered discs at (x, y) in buffer-pixel coords and
@@ -177,5 +211,6 @@ export class SystemDiagram {
     this.belts.dispose();
     this.moons.dispose();
     this.rings.dispose();
+    this.ships.dispose();
   }
 }

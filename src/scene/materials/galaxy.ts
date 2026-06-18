@@ -122,7 +122,13 @@ export function snappedLineMat(opts: SnappedLineOptions): ShaderMaterial {
 // and setting gl_PointSize = 1. Used by droplines for the dotted (far-side
 // of the galactic plane) variant — far simpler than baking dash segments
 // into LineSegments geometry, since each dot is a single vertex.
-export function snappedDotsMat(opts: { color: number; opacity?: number }): ShaderMaterial {
+export function snappedDotsMat(opts: { color: number; opacity?: number; size?: number }): ShaderMaterial {
+  const size = opts.size ?? 1.0;
+  // Parity-match the center snap to the point size: an ODD size centers on a
+  // pixel (oddOff 0.5), an EVEN size on a pixel boundary (0.0), so a size-N
+  // square rasterizes symmetrically rather than straddling. Defaults to 1 → the
+  // crisp 1-px dot the droplines use, unchanged.
+  const oddOff = Math.round(size) % 2 === 1 ? '0.5' : '0.0';
   const m = new ShaderMaterial({
     uniforms: {
       uColor:    { value: new Color(opts.color) },
@@ -136,10 +142,8 @@ export function snappedDotsMat(opts: { color: number; opacity?: number }): Shade
       ${PIXEL_SNAP_GLSL}
       void main() {
         vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        // oddOff 0.5 snaps to pixel CENTER (integer + 0.5) so a size-1
-        // point covers exactly one buffer pixel rather than straddling two.
-        ${snapClipToGlPosition('clip.xy / clip.w', '0.5')}
-        gl_PointSize = 1.0;
+        ${snapClipToGlPosition('clip.xy / clip.w', oddOff)}
+        gl_PointSize = ${glsl(size)};
       }
     `,
     fragmentShader: `

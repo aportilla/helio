@@ -25,7 +25,7 @@ import { hash32, mulberry32 } from '../geom/prng';
 import { bandZ, snapPx } from '../geom/snap';
 import { pickDiscPool } from '../geom/hit';
 import { disableCulling } from '../geom/cull';
-import type { DiagramHit, DiagramPick, PlanetCenterIndex, StarLightSource } from '../types';
+import type { BodyCenterIndex, DiagramHit, DiagramPick, PlanetCenterIndex, StarLightSource } from '../types';
 
 interface MoonSlot {
   // bodyIdx of this moon's parent planet. Layout looks the parent's
@@ -57,6 +57,9 @@ interface MoonPool {
 export class MoonsLayer {
   private readonly backPool:  MoonPool | null;
   private readonly frontPool: MoonPool | null;
+  // Per-moon on-screen anchor (bodyIdx → {cx,cy}), rebuilt each layout so the
+  // ships layer can spawn/aim cargo at a moon, not just its host planet.
+  private readonly centerIndex = new Map<number, { cx: number; cy: number }>();
 
   constructor(scene: Scene, rowSlots: readonly RowSlot[]) {
     const planetItems = rowSlots.filter(r => r.kind === 'planet');
@@ -93,8 +96,15 @@ export class MoonsLayer {
   }
 
   layout(centers: PlanetCenterIndex): void {
-    writePoolPositions(this.backPool,  centers, Z_BACK_MOON);
-    writePoolPositions(this.frontPool, centers, Z_FRONT_MOON);
+    this.centerIndex.clear();
+    writePoolPositions(this.backPool,  centers, Z_BACK_MOON,  this.centerIndex);
+    writePoolPositions(this.frontPool, centers, Z_FRONT_MOON, this.centerIndex);
+  }
+
+  // Read-only view of the published moon centers. Empty before the first
+  // layout() call (and for moons whose parent has no published center).
+  getCenterIndex(): BodyCenterIndex {
+    return this.centerIndex;
   }
 
   pickFront(x: number, y: number): DiagramHit | null {
@@ -156,16 +166,24 @@ function pickFromPool(pool: MoonPool | null, x: number, y: number): DiagramHit |
   );
 }
 
-function writePoolPositions(pool: MoonPool | null, centers: PlanetCenterIndex, layerZ: number): void {
+function writePoolPositions(
+  pool: MoonPool | null,
+  centers: PlanetCenterIndex,
+  layerZ: number,
+  centerOut: Map<number, { cx: number; cy: number }>,
+): void {
   if (!pool) return;
-  const out = pool.geometry.attributes.position!.array as Float32Array;
+  const pos = pool.geometry.attributes.position!.array as Float32Array;
   pool.slots.forEach((slot, i) => {
     const parent = centers.get(slot.parentBodyIdx);
     if (!parent) return;
     const D = slot.parentR + MOON_EDGE_BIAS + moonRimOffset(slot.discPx);
-    out[i * 3 + 0] = snapPx(parent.cx + Math.cos(slot.angle) * D);
-    out[i * 3 + 1] = snapPx(parent.cy + Math.sin(slot.angle) * D);
-    out[i * 3 + 2] = bandZ(parent.rowIdx, layerZ);
+    const cx = snapPx(parent.cx + Math.cos(slot.angle) * D);
+    const cy = snapPx(parent.cy + Math.sin(slot.angle) * D);
+    pos[i * 3 + 0] = cx;
+    pos[i * 3 + 1] = cy;
+    pos[i * 3 + 2] = bandZ(parent.rowIdx, layerZ);
+    centerOut.set(slot.bodyIdx, { cx, cy });
   });
   pool.geometry.attributes.position!.needsUpdate = true;
 }

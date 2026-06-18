@@ -31,6 +31,9 @@ export class SystemScene implements Screen {
   // The live economy, owned by AppController. We reconcile it after a facility
   // edit and read each selected body's standing from it for the sidebar.
   private readonly bridge: EconomyBridge;
+  // The cluster this view shows. Retained (not just forwarded to SystemDiagram)
+  // so refreshFlows can query the bridge for this system's cargo lanes.
+  private readonly clusterIdx: number;
   // The system view's contextual region inside the sidebar (selected body's
   // facilities). Set as the sidebar's active context on start, cleared on dispose.
   private readonly context: SystemContext;
@@ -75,6 +78,7 @@ export class SystemScene implements Screen {
     this.renderer = renderer;
     this.sidebar = sidebar;
     this.bridge = bridge;
+    this.clusterIdx = clusterIdx;
 
     this.diagram = new SystemDiagram(clusterIdx);
     this.hud = new SystemHud();
@@ -88,11 +92,13 @@ export class SystemScene implements Screen {
       addFacility(bodyId, type);
       this.bridge.syncFacilities();
       this.pushSelectionToSidebar();
+      this.refreshFlows();
     };
     this.context.onRemoveFacility = (facilityId) => {
       removeFacility(facilityId);
       this.bridge.syncFacilities();
       this.pushSelectionToSidebar();
+      this.refreshFlows();
     };
 
     // DPR boundary crossings (zoom, monitor swap) re-trigger resize so the
@@ -113,6 +119,9 @@ export class SystemScene implements Screen {
     // the header glyph is a no-op here for now.
     this.sidebar.onSettings = () => {};
     this.pushSelectionToSidebar();
+    // resize() has laid out the diagram (the ships layer has anchors + bounds),
+    // so seed the cargo lanes before the first frame.
+    this.refreshFlows();
     this.tick();
   }
 
@@ -221,6 +230,15 @@ export class SystemScene implements Screen {
   // sidebar's stock/flow numbers reflect the turn just processed.
   afterTurnAdvance(): void {
     this.pushSelectionToSidebar();
+    this.refreshFlows();
+  }
+
+  // Push this cluster's current cargo lanes into the diagram's ships overlay.
+  // Fired from the same sites as pushSelectionToSidebar — start, Next Turn, and
+  // facility edits. Reads the live transfer ring, so lanes exist even before the
+  // session's first step (after a reload) and right after a facility edit.
+  private refreshFlows(): void {
+    this.diagram.setFlows(this.bridge.clusterFlows(this.clusterIdx));
   }
 
   private onPointerMove(e: PointerEvent): void {
@@ -282,6 +300,9 @@ export class SystemScene implements Screen {
 
   private tick = (): void => {
     if (!this.running) return;
+    // Advance the cargo-ship overlay before rendering — the system view's only
+    // per-frame animation. Everything else in the diagram is static layout.
+    this.diagram.update(performance.now());
     // One full-buffer clear (the reserved sidebar strip stays clear-color), then
     // the diagram clipped to the content rect so its pixel-snapped body materials
     // line up with the content-width uViewport; the HUD spans the full buffer.
