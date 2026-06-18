@@ -87,11 +87,14 @@ array), or the sim's seeded PRNG / replay would diverge.
 The projector is pure and used two ways. At cold start `projectWorld` builds the
 full `PlanetSpec[]`. A mid-game facility edit must NOT reset the economy, so
 `economy-bridge.ts` re-projects into a fresh world and then **transplants the live
-state** — stock plus the smoothing/hysteresis it depends on — across by `Body.id`
-(`world-sync.ts`): rates update, the larder survives. A plain reload instead
-adopts the persisted world untouched (full fidelity, in-flight cargo kept) when
-the facility set is unchanged. True in-place incremental mutation (carrying
-in-flight cargo *through* an edit, not just a reload) stays a later refinement.
+state** across by `Body.id` (`world-sync.ts`): the stock + smoothing/hysteresis
+accumulators carry so rates update while the larder survives, **and in-flight
+cargo carries through the edit too** — the transfer ring + route table remap by
+`Body.id` (routes key on clusters, stable across edits), and cargo whose
+destination body the edit removed lands as stock on a same-cluster holding planet
+(mirroring `arrivals.reroute`), so conservation stays exact rather than the cargo
+vanishing. A plain reload instead adopts the persisted world untouched (full
+fidelity, in-flight cargo kept) when the facility set is unchanged.
 
 ## Status
 
@@ -126,10 +129,6 @@ in-flight cargo *through* an edit, not just a reload) stays a later refinement.
   (3D) edge-flow overlay (the `digest.edgeFlows` read surface is ready; the 3D
   line layer is not built — distinct from the shipped system-view ship-dot overlay,
   which rides the speculative next-turn transfer ring, not the read digest).
-  Also deferred: in-flight cargo conservation *across* a structural edit (M2 in the
-  preview plan) — a structural edit still drops the live ring as an exogenous
-  event; the speculative world makes the viz freeze a non-issue, so the carry is a
-  pure ledger-conservation cleanup, done only if the leak proves to matter.
 
 ## Invariants & how they're enforced
 
