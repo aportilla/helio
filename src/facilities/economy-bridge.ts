@@ -17,7 +17,7 @@
 // BETWEEN clusters costs jump range and shows ships in transit. The sim's
 // system === node (1:1), so a sim "system" is exactly one of our clusters.
 
-import { BODIES, STAR_CLUSTERS, clusterIndexFor } from '../data/stars.ts';
+import { BODIES, STAR_CLUSTERS, clusterIndexFor, indexOfBodyId } from '../data/stars.ts';
 import type { Body } from '../data/stars.ts';
 import {
   EconomyEngine,
@@ -38,6 +38,7 @@ import {
 import { getGameState, type Facility } from '../game-state.ts';
 import { appResourceTable, type EconResource } from './resource-vocab.ts';
 import { buildShipLanes, intraInboundByResource, foldInboundNextTurn, type ShipLane } from './economy-read.ts';
+import { captureArrivals, intraArrivals, buildTurnLog, type ArrivalRecord } from './economy-log.ts';
 import { cloneWorldForSpeculation } from './speculation.ts';
 import { projectWorld } from './project.ts';
 import type { SimStarResolver } from './types.ts';
@@ -200,6 +201,10 @@ export class EconomyBridge {
   // exhaustion, a tripped DEV invariant); we degrade rather than crash the turn
   // UI, and skip persisting a partially-stepped world.
   step(): void {
+    // Capture this turn's interstellar arrivals BEFORE stepping — the step's
+    // arrivals pass drains them from the ring, so they must be read off the live
+    // world first (DEV log only; skipped entirely in a production build).
+    const arrivals = import.meta.env.DEV ? captureArrivals(this.engine.world) : null;
     try {
       this.engine.step();
     } catch (e) {
@@ -211,6 +216,7 @@ export class EconomyBridge {
     // The previous prediction has become reality (turn advanced); re-predict the
     // new next turn from the world we just stepped.
     this.recomputeSpeculative();
+    if (import.meta.env.DEV && arrivals) this.logTurn(arrivals);
   }
 
   // Reconcile the live world to the current game-state facilities after a
@@ -376,6 +382,39 @@ export class EconomyBridge {
   }
 
   // — internals —
+
+  // DEV per-turn console digest: every facility-bearing body's realized
+  // production / consumption (with the % of capacity / demand it ran at) and every
+  // delivery that landed this turn, with where it came from. Interstellar arrivals
+  // were captured pre-step; the instant intra-cluster moves come off the engine.
+  // Grouped (collapsed) so a long game doesn't flood the console. Best-effort —
+  // logging must never break a turn.
+  private logTurn(interstellar: readonly ArrivalRecord[]): void {
+    try {
+      const digest = this.engine.getReadDigest();
+      const lines = buildTurnLog({
+        digest,
+        world: this.engine.world,
+        resources: this.resources,
+        interstellar,
+        intra: intraArrivals(this.engine.getLocalTransfers()),
+        labelOf: (p) => this.planetLabel(p),
+      });
+      console.groupCollapsed(`[economy] turn ${digest.turn}`);
+      for (const line of lines) console.log(line);
+      console.groupEnd();
+    } catch (e) {
+      console.warn('[economy] turn log failed (non-fatal):', e);
+    }
+  }
+
+  // A planet's display label for the log: its Body's catalog name, falling back to
+  // the raw Body.id if the catalog no longer carries it (a stale save).
+  private planetLabel(planet: number): string {
+    const id = this.bodyIdByPlanet[planet] ?? `p${planet}`;
+    const idx = indexOfBodyId(id);
+    return idx >= 0 ? BODIES[idx]!.name : id;
+  }
 
   // Refresh the speculative next-turn world from the current live world. Called
   // only on real-world change (ctor / step / syncFacilities). Clones AFTER the

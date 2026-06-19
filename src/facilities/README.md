@@ -53,13 +53,15 @@ no body physics scales it. The only thing a body's data gates is *eligibility*
 | `speculation.ts` | `cloneWorldForSpeculation` — deep-clone the live world via the save round-trip and step it once: the throwaway next-turn world that drives the predictive viz. Sim-importing, node-pure. |
 | `flow-class.ts` | `classifyFlow` — pure within / from / to / through classification of one in-flight **ring** transfer relative to the viewed cluster (the 2×2 of src/dst-in-cluster, plus the relay-through case); `buildShipLanes` applies it per ring transfer, while internal lanes come from `localTransfers`. No sim, no DOM — unit-tested without a world. |
 | `economy-read.ts` | `buildShipLanes` (the system-view cargo-overlay assembly: ring → outgoing/incoming/through, intra-cluster `localTransfers` → internal) + the M3 inbound fold (`intraInboundByResource` / `foldInboundNextTurn`). The bridge's pure read-back derivations, extracted so they unit-test on a hand-built world. Sim-importing, node-pure. |
+| `economy-log.ts` | The DEV per-turn console digest: `captureArrivals` (pre-step ring scan for deliveries landing this turn), `intraArrivals` (the instant intra-cluster moves), and `buildTurnLog` (formats each body's realized production / consumption with the % of capacity·demand it ran at, plus every arrival's source → destination). Sim-importing, node-pure; the bridge calls it from `step()` behind `import.meta.env.DEV`. |
 | `base64.ts` | `base64FromBytes` / `bytesFromBase64` — the byte↔base64 codec for the persisted sim-save blob. No sim, no DOM. |
 | `economy-bridge.ts` | `EconomyBridge` — the live engine owner: build/restore/reconcile the world, step, persist (`helio.sim`), read back. The **app-glue** module: imports the sim AND the catalog (`BODIES`/`STAR_CLUSTERS`) + `localStorage`, so it is NOT node-testable (its pure parts live in the modules above). |
 | `index.ts` | Public barrel. |
 
 The sim is imported only from `project.ts`, `resource-vocab.ts`, `sim-geometry.ts`,
-`world-sync.ts`, `speculation.ts`, `economy-read.ts`, and `economy-bridge.ts` — all
-under this package, the one quarter the boundary guard permits.
+`world-sync.ts`, `speculation.ts`, `economy-read.ts`, `economy-log.ts`, and
+`economy-bridge.ts` — all under this package, the one quarter the boundary guard
+permits.
 
 Dependency direction: `project → registry → {resource-vocab, types, tuning}`.
 Every module except `economy-bridge.ts` imports `Body` from
