@@ -410,13 +410,13 @@ export const SHIP_SIZE_PX = 2;
 // so dots LINGER in flight
 // — more stay on screen at once, so even a small flow reads as a continuous
 // trickle rather than a lone blip. Raise to slow traffic down, lower to speed up.
-export const SHIP_CROSS_SCREEN_SEC = 65;
+export const SHIP_CROSS_SCREEN_SEC = 200;
 
 // Per-ship speed variance. Each dot's cruise pace is multiplied by a random factor
 // in [1 − V/2, 1 + V/2], fixed for its whole journey, so ships spread across a
 // V-wide band (here 30%) instead of moving in lockstep — a livelier stream. The
 // band is centered on 1, so the mean pace stays SHIP_CROSS_SCREEN_SEC.
-export const SHIP_SPEED_VARIANCE = 0.3;
+export const SHIP_SPEED_VARIANCE = 0.5;
 
 // Exhaust burn: a short, bright-yellow flame trailing off the ship opposite its
 // thrust, lit only while it's accelerating or braking (the SHIP_ACCEL_SEC ramps)
@@ -431,9 +431,9 @@ export const SHIP_THRUST_LEN_PX = 3;
 // the dome or the pool. Calibrated for early-game amounts (a colony's food
 // surplus split across consumers is only a few hundred milli per lane), so most
 // lanes ride near the floor until the economy scales up.
-export const SHIP_RATE_PER_MILLI = 0.002;
-export const SHIP_RATE_MIN_PER_LANE = 0.27;
-export const SHIP_RATE_MAX_PER_LANE = 3.3;
+export const SHIP_RATE_PER_MILLI = 0.00003;
+export const SHIP_RATE_MIN_PER_LANE = 0.0001;
+export const SHIP_RATE_MAX_PER_LANE = 1.00;
 
 // Pixels past a screen edge a dot travels before despawning, so it fully
 // clears the edge rather than blinking out at it. Used for the off-screen
@@ -476,5 +476,5 @@ export const SHIP_ARC_BOW_DOWN_SCALE = 0.45;
 // the minimum crawl speed (fraction of cruise) so the rest-to-rest ends inch into
 // the despawn rather than dividing-by-zero into a stall. Raise SHIP_ACCEL_SEC for
 // longer, gentler ramps; lower it for snappier starts.
-export const SHIP_ACCEL_SEC = 8;
+export const SHIP_ACCEL_SEC = 20;
 export const SHIP_EASE_FLOOR = 0.15;
