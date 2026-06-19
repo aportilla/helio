@@ -41,11 +41,11 @@ src/
   topology.ts       Jump graph, stable star-pair EdgeIds, multi-leg Dijkstra, append-only route table
   transfer-ring.ts  TransferRing (timing-wheel single source of truth) + derived EtaBuckets ledger
   world.ts          The SoA world (planets as v1 node-contributors) + builder
-  produce.ts        P3 produce/consume flux + output-room clamp (glut throttle)
-  quantify.ts       P4 single authority: netDemand/exportable/signed cover, hysteresis, inbound-within-H
+  produce.ts        P3 consume + same-body self-feed (demand-pull faucet: no silo, export minted on pull at P7)
+  quantify.ts       P4 single authority: netDemand/exportable (faucet capacity + resting)/signed cover, hysteresis, inbound-within-H
   shortfall.ts      ShortfallReason codes + SHORTFALL_FIX + shortfallName (the unmet-demand taxonomy)
-  allocate.ts       P6 greedy matcher: fan-in, source fair-share, CFL clamp, starvation escalation, resolves shortfall reasons
-  dispatch.ts       P7 conservation chokepoint: interstellar mint/merge + ledger reserve, OR instant same-node deposit (0-turn intra-cluster) — emits localTransfers
+  allocate.ts       P6 greedy matcher: fan-in, source fair-share, CFL clamp (on capacity), starvation escalation, resolves shortfall reasons
+  dispatch.ts       P7 conservation chokepoint: realize-on-pull mint (Pass 0), then interstellar mint/merge + ledger reserve OR instant same-node deposit (0-turn intra-cluster) — emits localTransfers
   arrivals.ts       P2 arrivals-first: deliver / continue / re-route at each star
   read-surface.ts   §4 ReadDigest (signed cover + edge flows) + getInTransitTo / explainShortfall
   invariants.ts     Conservation (no loss), no-negative-stock, ledger==in-flight (per-turn DEV asserts)
@@ -78,10 +78,19 @@ Mapped to the plan's `v1 / deferred / deleted` banner.
   equal-distance sources (nearer tie-groups drawn first), one CFL outflow clamp,
   hysteresis deadband, starvation escalation, the four single-cause shortfall
   reasons (§5).
+- Demand-pull (make-to-order) production: a producer is a FAUCET, not a tank. P3
+  mints only the same-body self-feed; the export surplus is realized at the P7
+  dispatch chokepoint, sized by what the matcher pulled and capped at the per-turn
+  rating. A producer with no consumer makes nothing — no silo, no glut. `quantify`
+  offers per-turn capacity (`netProd + resting`) as supply; the CFL clamp throttles
+  a fraction of that capacity (not resting stock). The read surface exposes realized
+  production/consumption per turn — the integers behind the display utilization %
+  (made ÷ capacity) and fill % (ate ÷ demand) shown per body.
 - Node-contributor seam: the matcher reads per-planet emissions uniformly, no
   facility-type branch (§6.0).
-- Sim → read-surface one-way wall + the integer `ReadDigest` and the
-  `getInTransitTo` / `explainShortfall` drill-downs (§4).
+- Sim → read-surface one-way wall + the integer `ReadDigest` (signed cover +
+  realized production/consumption rates) and the `getInTransitTo` /
+  `explainShortfall` drill-downs (§4).
 - Same-machine bit-stable serialize/replay + the conservation/ledger/no-negative
   invariant harness, asserted every turn (§10, §11).
 

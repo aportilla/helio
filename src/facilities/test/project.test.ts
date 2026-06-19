@@ -59,21 +59,23 @@ test('projectBody: a colony is a flat consumer of food + minerals, producing not
   assert.equal(sum(c.production!), 0, 'a colony produces nothing');
 });
 
-test('projectBody: a mining base makes flat minerals (silo-capped), eats a little food', () => {
+test('projectBody: a mining base is a faucet making flat minerals (uncapped), eats a little food', () => {
   const m = projectBody(PLANET, [{ type: 'mining-base' }], ctx)!;
   assert.equal(m.production![MIN], MINE_MINERALS_PRODUCE_MILLI);
   assert.equal(m.production![FOOD], 0, 'a mine makes no food');
   assert.equal(m.consumption![FOOD], MINE_FOOD_CONSUME_MILLI);
-  assert.equal(m.storageCeiling![MIN], MINE_MINERALS_PRODUCE_MILLI, 'minerals silo = one turn');
+  // Demand-pull: a producer imposes NO storage ceiling — it mints on pull and holds
+  // nothing, so its minerals column is uncapped like every other.
+  assert.equal(m.storageCeiling![MIN], STORAGE_UNCAPPED, 'a faucet sets no silo (uncapped)');
   assert.equal(m.storageCeiling![FOOD], STORAGE_UNCAPPED, 'imported food stays uncapped');
 });
 
-test('projectBody: a farm makes flat food (silo-capped), draws a little minerals', () => {
+test('projectBody: a farm is a faucet making flat food (uncapped), draws a little minerals', () => {
   const f = projectBody(PLANET, [{ type: 'farm' }], ctx)!;
   assert.equal(f.production![FOOD], FARM_FOOD_PRODUCE_MILLI);
   assert.equal(f.production![MIN], 0, 'a farm makes no minerals');
   assert.equal(f.consumption![MIN], FARM_MINERALS_CONSUME_MILLI);
-  assert.equal(f.storageCeiling![FOOD], FARM_FOOD_PRODUCE_MILLI, 'food silo = one turn');
+  assert.equal(f.storageCeiling![FOOD], STORAGE_UNCAPPED, 'a faucet sets no silo (uncapped)');
   assert.equal(f.storageCeiling![MIN], STORAGE_UNCAPPED, 'imported minerals stay uncapped');
 });
 
@@ -102,9 +104,10 @@ test('projectBody: facility order does not change the result (commutative sum)',
   assert.deepEqual(ab, ba);
 });
 
-test('projectBody: a finite silo cap combined with an uncapped facility stays uncapped (no overflow)', () => {
-  // colony (uncapped everything) + mine (minerals silo-capped): the uncapped side
-  // must dominate, NOT sum two sentinels into a negative Int32 (§7.3 combineCeiling).
+test('projectBody: two uncapped facilities combine to one uncapped sentinel (no Int32 overflow)', () => {
+  // Under demand-pull no v1 facility caps, so colony + mine are both uncapped:
+  // combineCeiling must return the sentinel, NOT sum two sentinels into a negative
+  // Int32 (§7.3 — the overflow guard that keeps the future warehouse-cap lever safe).
   const spec = projectBody(PLANET, [{ type: 'colony' }, { type: 'mining-base' }], ctx)!;
   for (let r = 0; r < R; r++) {
     assert.equal(spec.storageCeiling![r], STORAGE_UNCAPPED, `ceiling[${r}] uncapped`);

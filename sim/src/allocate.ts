@@ -118,7 +118,12 @@ export function allocate(world: World, q: Quantified): DispatchPlan {
         const srcI = (d.cands[k]!.src as number) * R + (d.r as number);
         const a = avail[srcI]!;
         const fsSrc = Math.floor(q.exportable[srcI]! / Math.max(1, contenders[srcI]!));
-        const cfl = Math.max(0, Math.floor(world.stock[srcI]! * cfg.cflNum / cfg.cflDen) - alreadyShed[srcI]!);
+        // CFL bounds outflow to a fraction of OFFERED CAPACITY (exportable), not
+        // resting stock — a demand-pull faucet rests at stock≈0, so a stock-based
+        // CFL would clamp every faucet to 0 outflow and deadlock the economy. With
+        // the shipped default (cflNum==cflDen) the clamp is inert; this is the
+        // correct basis for the throughput-throttle intent when it is tuned on.
+        const cfl = Math.max(0, Math.floor(q.exportable[srcI]! * cfg.cflNum / cfg.cflDen) - alreadyShed[srcI]!);
         if (cfl < a && cfl < fsSrc) cflBound = true;
         const cap = Math.max(0, Math.min(a, fsSrc, cfl));
         caps[k - gi] = cap;
@@ -131,8 +136,8 @@ export function allocate(world: World, q: Quantified): DispatchPlan {
         // floor(take · Σcaps[0..k] / sumCap). The cumulative form sums EXACTLY to
         // `take`, never hands a source more than its cap, and needs no remainder
         // pass — and it's deterministic in the frozen candidate order. A bigger
-        // capacity (≈ higher production, since the silo is one turn's output) draws
-        // a proportionally bigger share.
+        // capacity (a higher per-turn faucet rating) draws a proportionally bigger
+        // share of the demand.
         let cumCap = 0;
         let cumAlloc = 0;
         for (let k = gi; k < gj; k++) {

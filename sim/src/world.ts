@@ -22,11 +22,15 @@ export interface PlanetSpec {
   readonly star: number;
   /** Per-resource initial stock (milli); missing entries default to 0. */
   readonly stock?: readonly number[];
-  /** Per-resource production per turn (milli). */
+  /** Per-resource production per turn (milli) — a faucet RATING under demand-pull:
+   *  the most this body can mint of the resource in one turn (realized on pull). */
   readonly production?: readonly number[];
   /** Per-resource consumption per turn (milli). */
   readonly consumption?: readonly number[];
-  /** Per-resource storage ceiling (milli); defaults to uncapped. */
+  /** Per-resource storage ceiling (milli); defaults to uncapped. A WAREHOUSE cap
+   *  (a future depot/larder lever), NOT a production gate — demand-pull mints only
+   *  what ships, so no producer reads this column today; it is kept (and
+   *  serialized) so the byte layout / configHash stay stable across the change. */
   readonly storageCeiling?: readonly number[];
 }
 

@@ -31,9 +31,10 @@ export interface SelectedBodyInfo {
   // Types this body can still host (registry-derived: physics predicate AND build
   // cap), in Add-button order. SystemScene computes it — it owns the Body.
   readonly addableTypes: readonly FacilityType[];
-  // The body's live economy (per-resource stock, balance, shortfall, glut), or
-  // null when it hosts no facility / carries nothing yet. SystemScene reads it
-  // from the EconomyBridge; updated on selection and after each turn.
+  // The body's live economy (per-resource stock, balance, shortfall, and a
+  // realized utilization/fill rate), or null when it hosts no facility / carries
+  // nothing yet. SystemScene reads it from the EconomyBridge; updated on selection
+  // and after each turn.
   readonly economy: BodyEconomyView | null;
 }
 
@@ -133,8 +134,9 @@ export class SystemContext implements SidebarContext {
     // Economy: per-resource stock + signed balance, once the body is a sim node
     // (it has a facility projecting into the economy). Each row is
     // "name · stock · ±balance" — trade-aware cover once a turn has run, else the
-    // intrinsic flow — tinted by sign (surplus green / deficit red), with a glut
-    // marker and a shortfall-reason sub-line when present.
+    // intrinsic flow — tinted by sign (surplus green / deficit red), with a realized
+    // utilization/fill rate (shown only when interesting) and a shortfall-reason
+    // sub-line when present.
     const econ = this.info.economy;
     if (econ) {
       const econLineH = getFont(fonts.body).lineHeight;
@@ -158,8 +160,15 @@ export class SystemContext implements SidebarContext {
           drawPixelText(g, balTxt, lx, y, up ? colors.signalPositive : colors.signalNegative);
           lx += measurePixelText(balTxt) + ECON_COL_GAP;
         }
-        // Glut: production capped because storage is full.
-        if (rl.glut) drawPixelText(g, 'full', lx, y, colors.titleDim);
+        // Realized rate, always shown: a net-producer resource shows its output
+        // utilization (made ÷ capacity) as "N% out"; a net-consumer resource its
+        // demand fill (ate ÷ demand) as "N% fed". 100% reads as a healthy confirm
+        // (faucet maxed / fully fed); anything less is the signal to act.
+        if (rl.utilizationPct !== null) {
+          drawPixelText(g, `${Math.round(rl.utilizationPct * 100)}% out`, lx, y, colors.titleDim);
+        } else if (rl.fillPct !== null) {
+          drawPixelText(g, `${Math.round(rl.fillPct * 100)}% fed`, lx, y, colors.titleDim);
+        }
         y += econLineH + ROW_GAP;
 
         // Shortfall: the binding reason for an unmet demand, indented under the

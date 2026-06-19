@@ -23,7 +23,7 @@ Facilities are deliberately **not** in the sim's save: the sim has no concept of
 
 - A selection rim visually distinct from the hover rim (today they share one).
 - More facility types beyond `colony` / `mining-base` — now one `FacilityDef` object each; the sidebar shows one Add pill per type the selected body can host, which will want a proper picker once the list grows past a handful.
-- Deepen the now-live economy: build costs + build time, glut/storage caps, trade-hub depot nodes, and a galaxy-view edge-flow overlay (the `digest.edgeFlows` read surface is ready; the 3D line layer isn't built).
+- Deepen the now-live economy: build costs + build time, warehouse/depot storage caps (the `storageCeiling` lever, now inert — producers are demand-pull faucets, so it's reserved for a finite larder/depot), trade-hub depot nodes, and a galaxy-view edge-flow overlay (the `digest.edgeFlows` read surface is ready; the 3D line layer isn't built).
 - Planet ownership / players.
 - Multi-slot saves with a new-game / load-game splash (the `STORAGE_KEY` seam).
 

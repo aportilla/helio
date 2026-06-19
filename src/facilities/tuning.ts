@@ -28,12 +28,10 @@ export const MINE_FOOD_CONSUME_MILLI = 1000;
 export const COLONY_FOOD_CONSUME_MILLI = 4000;
 export const COLONY_MINERALS_CONSUME_MILLI = 4000;
 
-// A PROVIDER (farm / mine) is a pure emitter, not a warehouse: its silo for the
-//   good it makes is just ONE TURN of that output (set in registry.ts as the cap
-//   = the production rate), so it ships what it makes and holds nothing at rest.
-//   The moment a turn passes with no consumer pulling, the silo is full and the
-//   sim gluts it — production throttles until cargo ships (the storage-room clamp
-//   in produce.ts). Without a cap a provider accumulates without bound, so the
-//   lowest-indexed one builds a runaway stockpile and single-sources all demand
-//   while its peers silently hoard. The good a provider IMPORTS stays uncapped so
-//   it can buffer what it eats.
+// A PROVIDER (farm / mine) is a demand-pull FAUCET, not a warehouse: each
+//   *_PRODUCE_MILLI is a per-turn RATING — the most it can mint of that good in a
+//   turn — realized only when a consumer pulls (the mint happens at the dispatch
+//   chokepoint, sized by the plan). A provider with no buyer makes nothing and
+//   holds nothing at rest, so there is no silo and no glut; the sim never imposes
+//   a storage ceiling on a producer (registry sets none). The good a provider
+//   IMPORTS is handled by the consumer side's larder, also uncapped.

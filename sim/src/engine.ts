@@ -15,7 +15,6 @@ import { assertConservation, assertNoNegativeStock, assertLedgerMatchesRing } fr
 import { buildReadDigest, getInTransitTo, explainShortfall } from './read-surface.ts';
 import type { ReadDigest, PlanetRead, Delivery, ShortfallRecord } from './read-surface.ts';
 import { serialize } from './serialize.ts';
-import { ThrottleReason } from './produce.ts';
 import type { ShortfallReason } from './shortfall.ts';
 import type { World } from './world.ts';
 import type { BalanceConfig } from './constants.ts';
@@ -47,7 +46,6 @@ export class EconomyEngine {
 
   private lastQ: Quantified | null = null;
   private lastReasons: ReadonlyMap<number, ShortfallReason> = new Map();
-  private lastThrottle: Int8Array;
   private lastDigest: ReadDigest | null = null;
   /** Intra-cluster moves the last step() deposited instantly (§ 0-turn transfers).
    *  A strict sink: the viz sources internal lanes from these. Empty until step(). */
@@ -59,7 +57,6 @@ export class EconomyEngine {
   constructor(world: World, opts: EngineOptions = {}) {
     this.world = world;
     this.check = opts.checkInvariants ?? true;
-    this.lastThrottle = new Int8Array(world.planetCount * world.R);
   }
 
   /** Apply a reach/speed tech intent (P0/P1): retune the balance config and
@@ -98,17 +95,28 @@ export class EconomyEngine {
 
     // P8 — telemetry + commit. Serialize-before-float-telemetry holds because
     // every value here is integer (the read digest is built from integer state).
+    // `produced` is now born in two places — P3 self-feed + P7 export mint — so
+    // the conservation tally sums both halves; the identity (produced − consumed
+    // == Δ(stock + in-transit)) is unchanged because mint adds to stock and every
+    // dispatch move conserves stock + in-flight.
+    const produced = prod.producedLocalTotal + disp.producedMintedTotal;
     const after = w.totalStockAll() + w.ring.inFlightTotal;
     if (this.check) {
-      assertConservation(before, after, prod.produced, prod.consumed);
+      assertConservation(before, after, produced, prod.consumed);
       assertNoNegativeStock(w);
       assertLedgerMatchesRing(w);
     }
 
+    // Realized production per (planet, resource) = self-feed (P3) + export mint
+    // (P7) — the numerator of the read surface's utilization %.
+    const realizedProduction = new Int32Array(w.planetCount * w.R);
+    for (let i = 0; i < realizedProduction.length; i++) {
+      realizedProduction[i] = prod.producedLocal[i]! + disp.producedMinted[i]!;
+    }
+
     this.lastQ = q;
     this.lastReasons = plan.reasons;
-    this.lastThrottle = prod.throttle;
-    this.lastDigest = buildReadDigest(w, q, plan.reasons, prod.throttle);
+    this.lastDigest = buildReadDigest(w, q, plan.reasons, realizedProduction, prod.realizedConsumption);
     this.lastLocalTransfers = disp.localTransfers;
     this.lastProcessedTurn = turn;
 
@@ -116,7 +124,7 @@ export class EconomyEngine {
 
     return {
       turn,
-      produced: prod.produced,
+      produced,
       consumed: prod.consumed,
       dispatched: disp.dispatched,
       localDelivered: disp.localDelivered,
@@ -162,11 +170,6 @@ export class EconomyEngine {
     const out: PlanetRead[] = [];
     for (const pr of digest.planets.values()) if ((pr.system as number) === (s as number)) out.push(pr);
     return out;
-  }
-
-  /** Current OUTPUT_FULL throttle state for (planet, resource), the glut signal. */
-  throttleOf(p: PlanetId, r: ResourceId): ThrottleReason {
-    return this.lastThrottle[(p as number) * this.world.R + (r as number)]! as ThrottleReason;
   }
 
   serialize(): Uint8Array {

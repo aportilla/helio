@@ -1,35 +1,59 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { scene, only, stepN, stockOf, FOOD, P0, P1 } from './helpers.ts';
-import { ThrottleReason } from '../src/produce.ts';
 import { STORAGE_UNCAPPED } from '../src/world.ts';
+import { asResource } from '../src/ids.ts';
 
-test('glut → throttle (not destruction): a producer with no demand pegs and pauses', () => {
-  // A produces 100 food/turn into a 500 ceiling, with no reachable consumer.
+// Read realized production / consumption for a (planet, resource) off the digest —
+// the integers behind the display utilization % / fill %.
+function realized(engine: ReturnType<typeof scene>['engine'], p: typeof P0, r = FOOD) {
+  const rr = engine.getReadDigest().planets.get(p)?.byResource.get(asResource(r as number));
+  return { prod: rr?.realizedProductionMilli ?? 0, cons: rr?.realizedConsumptionMilli ?? 0 };
+}
+
+test('demand-pull: a producer with no consumer makes nothing (no silo, no glut)', () => {
+  // A faucet rated 100 food/turn, no reachable consumer. It mints only what's
+  // pulled — and nothing is pulled — so it holds ~0 and runs at 0% utilization.
   const { engine } = scene({
     xs: [0],
-    planets: [{ star: 0, stock: only(FOOD, 0), production: only(FOOD, 100), storageCeiling: only(FOOD, 500) }],
+    planets: [{ star: 0, production: only(FOOD, 100) }],
     cfg: { jumpRadius: 50 },
   });
   stepN(engine, 8);
-  assert.equal(stockOf(engine, P0, FOOD), 500, 'stock pegs at the storage ceiling — nothing destroyed');
-  assert.equal(engine.throttleOf(P0, FOOD), ThrottleReason.OutputFull, 'production paused itself (output-room clamp)');
+  assert.equal(stockOf(engine, P0, FOOD), 0, 'no silo fill — a faucet holds nothing at rest');
+  assert.equal(realized(engine, P0).prod, 0, 'idle faucet realized 0 (0% utilization)');
 });
 
-test('glut resolves on its own when demand returns', () => {
-  // A is glutted; C downstream is hungry → A drains, throttle clears.
+test('demand-pull: an over-subscribed faucet runs at 100% and its consumer reads under-fed', () => {
+  // C wants 150/turn but A makes only 100 — the faucet pegs at its capacity (100%
+  // utilization) and C stays hungry (fill < 100%): the two continuous rates ARE the
+  // demand-pull signals — 100% means "maxed", and the under-fill IS the shortage cue.
+  const { engine } = scene({
+    xs: [0],
+    planets: [
+      { star: 0, production: only(FOOD, 100) },                         // faucet, no resting stock
+      { star: 0, stock: only(FOOD, 0), consumption: only(FOOD, 150) },  // wants more than A can make
+    ],
+    cfg: { jumpRadius: 50, setpointTurns: 3, keepBufferTurns: 3, horizonH: 6 },
+  });
+  stepN(engine, 10);
+  assert.equal(realized(engine, P0).prod, 100, 'faucet maxed at its 100 rating (100% utilization)');
+  assert.ok(realized(engine, P1).cons < 150, `consumer under-fed (fill < 100%), ate ${realized(engine, P1).cons}`);
+});
+
+test('demand-pull: a new provider ships on turn 0 — no silo-fill latency', () => {
+  // A faucet with a downstream consumer dispatches immediately — production is
+  // realized on pull at the chokepoint, so nothing waits a turn to leave.
   const { engine } = scene({
     xs: [0, 30],
     planets: [
-      { star: 0, stock: only(FOOD, 500), production: only(FOOD, 100), storageCeiling: only(FOOD, 500) },
+      { star: 0, production: only(FOOD, 100) },
       { star: 1, stock: only(FOOD, 0), consumption: only(FOOD, 80) },
     ],
     cfg: { jumpRadius: 50, maxLegTurns: 5, horizonH: 6, setpointTurns: 3, keepBufferTurns: 3 },
   });
   const first = engine.step();
-  assert.ok(first.dispatched > 0, 'A ships to C, freeing storage room');
-  stepN(engine, 5);
-  assert.equal(engine.throttleOf(P0, FOOD), ThrottleReason.None, 'production resumes once it has somewhere to go');
+  assert.ok(first.dispatched > 0, 'A ships to C on the very first turn');
 });
 
 test('starvation escalation: an unserved demand accrues, then resets when served', () => {

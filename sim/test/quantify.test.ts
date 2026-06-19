@@ -33,6 +33,24 @@ test('a pure producer exports its stock above the keep buffer', () => {
   assert.equal(w.ordering[i], 0);
 });
 
+test('a faucet offers its per-turn production capacity as exportable (no resting stock)', () => {
+  const w = freshWorld({ star: 0, production: only(FOOD, 800) }, TUNE); // capacity, holds nothing
+  const q = quantify(w);
+  const i = w.pr(P0, FOOD as number);
+  assert.equal(q.exportable[i], 800, 'offers per-turn capacity, not silo surplus');
+  assert.equal(q.cover[i], 800, 'cover reports offered capacity (a healthy faucet reads green)');
+  assert.equal(q.netDemand[i], 0);
+});
+
+test('a mixed producer offers only its NET capacity (same-body appetite withheld)', () => {
+  // Makes 800 food, eats 300 of it → offers 500 for export; the 300 self-feeds in P3.
+  const w = freshWorld({ star: 0, production: only(FOOD, 800), consumption: only(FOOD, 300) }, TUNE);
+  const q = quantify(w);
+  const i = w.pr(P0, FOOD as number);
+  assert.equal(q.exportable[i], 500, 'net = production − consumption (a net producer never orders its own good)');
+  assert.equal(w.ordering[i], 0, 'a self-sufficient producer stays in the export branch');
+});
+
 test('hysteresis: same projStock yields different output by prior ordering state', () => {
   // setpoint 150, deadband 50 → reorder threshold 100. Pick stock so projStock=120
   // (inside the deadband): a settled planet does NOT start ordering...

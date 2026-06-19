@@ -12,7 +12,6 @@
 import { systemOfStar } from './geometry.ts';
 import { TransportTier } from './resources.ts';
 import { ShortfallReason, SHORTFALL_FIX } from './shortfall.ts';
-import { ThrottleReason } from './produce.ts';
 import { asPlanet, asResource } from './ids.ts';
 import type { PlanetId, ResourceId, SystemId, EdgeId } from './ids.ts';
 import type { World } from './world.ts';
@@ -21,10 +20,16 @@ import type { Quantified } from './quantify.ts';
 export interface ResourceRead {
   readonly coverMilli: number; // signed: + surplus / − deficit
   readonly netDemandMilli: number;
-  readonly exportableMilli: number;
+  readonly exportableMilli: number; // offered supply/turn — faucet capacity + resting surplus
   readonly inboundWithinHMilli: number;
   readonly shortfall: ShortfallReason | null;
-  readonly throttle: ThrottleReason; // OutputFull = glutted provider (§6)
+  // Realized rates THIS turn, the integers behind the display utilization % /
+  // fill % (§ rate-display). A consumer derives utilization = realizedProduction
+  // ÷ production rate (0% idle … 100% maxed) and fill = realizedConsumption ÷
+  // consumption rate (100% fed … less when hungry); the sim itself stays
+  // integer-only and the percentages are display-floats computed app-side.
+  readonly realizedProductionMilli: number; // self-feed + export mint actually made this turn
+  readonly realizedConsumptionMilli: number; // consumption actually served this turn (stock-clamped)
 }
 
 export interface PlanetRead {
@@ -63,7 +68,8 @@ export interface ShortfallRecord {
 }
 
 export function buildReadDigest(
-  world: World, q: Quantified, reasons: ReadonlyMap<number, ShortfallReason>, throttle: Int8Array,
+  world: World, q: Quantified, reasons: ReadonlyMap<number, ShortfallReason>,
+  realizedProduction: Int32Array, realizedConsumption: Int32Array,
 ): ReadDigest {
   const R = world.R;
   const planets = new Map<PlanetId, PlanetRead>();
@@ -78,14 +84,22 @@ export function buildReadDigest(
       const nd = q.netDemand[i]!;
       const ex = q.exportable[i]!;
       const inH = world.ledger.inboundWithinH(asPlanet(p), asResource(r), world.turn, world.cfg.horizonH);
-      const thr = throttle[i]! as ThrottleReason;
+      const realProd = realizedProduction[i]!;
+      const realCons = realizedConsumption[i]!;
+      const prodRate = world.production[i]!;
+      const consRate = world.consumption[i]!;
       const sf = reasons.get(i) ?? null;
-      if (cover === 0 && nd === 0 && ex === 0 && inH === 0 && sf === null && thr === ThrottleReason.None) {
-        continue; // emit only non-zero / noteworthy pairs
+      // Emit any economically-live pair PLUS any resource this body produces or
+      // consumes (rate > 0), so the utilization / fill numerators are always
+      // available for a producing/consuming body. A truly quiescent (planet,
+      // resource) — no rate, no flow, no signal — is pruned.
+      if (cover === 0 && nd === 0 && ex === 0 && inH === 0 && sf === null && prodRate === 0 && consRate === 0) {
+        continue;
       }
       byResource.set(asResource(r), {
         coverMilli: cover, netDemandMilli: nd, exportableMilli: ex,
-        inboundWithinHMilli: inH, shortfall: sf, throttle: thr,
+        inboundWithinHMilli: inH, shortfall: sf,
+        realizedProductionMilli: realProd, realizedConsumptionMilli: realCons,
       });
     }
     if (byResource.size > 0) {

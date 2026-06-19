@@ -1,8 +1,14 @@
 // P7 — dispatch (§8). The SINGLE conservation chokepoint: the only place stock
-// leaves a planet. An interstellar order enters transit — merge-on-dispatch into
-// an existing same-(src,dst,res,arrivalTurn) transfer or mint a new one, decrement
-// source stock by the floored qty, reserve inbound in the ETA ledger, and insert
-// into the arrival ring. An intra-cluster (same-node) order is instead deposited
+// leaves a planet — AND, under demand-pull, the single point a producer's export
+// stock is BORN. A demand-pull faucet holds nothing at rest; Pass 0 mints exactly
+// what the plan pulls from each source (capped at its per-turn rating, after
+// resting stock), then Pass 1 ships it. So a producer with no consumer mints
+// nothing and there is no glut.
+//
+// An interstellar order enters transit — merge-on-dispatch into an existing
+// same-(src,dst,res,arrivalTurn) transfer or mint a new one, decrement source
+// stock by the floored qty, reserve inbound in the ETA ledger, and insert into
+// the arrival ring. An intra-cluster (same-node) order is instead deposited
 // straight into the destination the same turn — the cargo is already home, so it
 // never sits in the ring (§ 0-turn intra-system transfers). Either way stock is
 // conserved and auditable at exactly this point (§3.6).
@@ -33,6 +39,8 @@ export interface DispatchResult {
   readonly records: number; // distinct ring records touched (mint + merge)
   readonly localDelivered: number; // Σ qty deposited same-turn by intra-cluster moves
   readonly localTransfers: readonly LocalTransfer[]; // those moves, aggregated by (src,dst,res)
+  readonly producedMintedTotal: number; // Σ export stock minted on pull this turn (the off-body half of `produced`)
+  readonly producedMinted: Int32Array; // per-(planet, resource) export mint — the off-body component of realized production
 }
 
 export function dispatch(world: World, plan: DispatchPlan): DispatchResult {
@@ -48,6 +56,28 @@ export function dispatch(world: World, plan: DispatchPlan): DispatchResult {
   // string-concat key convention as mergeIndex.
   const localAgg = new Map<string, { srcPlanet: PlanetId; dstPlanet: PlanetId; resource: ResourceId; qtyMilli: number }>();
 
+  // PASS 0 — realize-on-pull. Mint exactly what the plan pulls from each source,
+  // resting stock first, then up to the per-turn production rating. A dense typed
+  // array (NOT a Map) keeps the tally deterministic. The `min(…, production)` is a
+  // BACKSTOP: allocate only ever planned qty ≤ exportable = netProd + resting, so
+  // need − stock ≤ production always holds and allocate stays the single authority
+  // for per-order quantity. After this pass stock[src] ≥ Σ qty for every planned
+  // source, so the Pass-1 over-commit guard is a genuine backstop, not dead code.
+  const need = new Int32Array(world.planetCount * R);
+  for (const o of plan.orders) need[(o.src as number) * R + (o.res as number)]! += o.qty;
+  const producedMinted = new Int32Array(world.planetCount * R);
+  let producedMintedTotal = 0;
+  for (let i = 0; i < need.length; i++) {
+    if (need[i] === 0) continue;
+    const mint = Math.max(0, Math.min(need[i]! - world.stock[i]!, world.production[i]!));
+    if (mint > 0) {
+      producedMinted[i] = mint;
+      producedMintedTotal += mint;
+      world.stock[i] = world.stock[i]! + mint;
+    }
+  }
+
+  // PASS 1 — the order loop. After Pass 0, source stock covers every planned qty.
   for (const o of plan.orders) {
     const qty = o.qty;
     if (qty <= 0) continue;
@@ -118,5 +148,5 @@ export function dispatch(world: World, plan: DispatchPlan): DispatchResult {
     (a.dstPlanet as number) - (b.dstPlanet as number) ||
     (a.resource as number) - (b.resource as number));
 
-  return { dispatched, records, localDelivered, localTransfers };
+  return { dispatched, records, localDelivered, localTransfers, producedMintedTotal, producedMinted };
 }

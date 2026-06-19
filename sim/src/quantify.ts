@@ -15,7 +15,7 @@ import { asPlanet, asResource } from './ids.ts';
 
 export interface Quantified {
   readonly netDemand: Int32Array; // uncovered demand this turn (0 in surplus)
-  readonly exportable: Int32Array; // released above keep-floor (0 in deficit)
+  readonly exportable: Int32Array; // offered supply/turn — faucet capacity + resting surplus (0 in deficit)
   readonly cover: Int32Array; // signed: + surplus / − deficit
 }
 
@@ -61,7 +61,17 @@ export function quantify(world: World): Quantified {
         netDemand[i] = nd;
         cover[i] = -nd;
       } else {
-        const ex = Math.max(0, stock - keepBuffer);
+        // Demand-pull supply: offer the faucet's per-turn NET capacity (gross
+        // production less the same-body appetite already reserved by P3 self-feed)
+        // PLUS any resting stock above the keep buffer. A pure faucet rests at
+        // stock≈0 and offers `netProd`; the resting term only drains stock CARRIED
+        // across a facility edit (the `stock` accumulator survives reproject), so
+        // under steady pull it is ~0. Net (not gross) withholds the same-body
+        // ration; using the static `consumption` rate — exact and integer in v1,
+        // where consumption is constant — mirrors the consumer side's net-import
+        // projection without coupling the export offer to EMA ramp transients.
+        const netProd = Math.max(0, prodPerTurn - world.consumption[i]!);
+        const ex = netProd + Math.max(0, stock - keepBuffer);
         exportable[i] = ex;
         cover[i] = ex;
       }

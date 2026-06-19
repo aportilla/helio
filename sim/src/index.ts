@@ -28,7 +28,6 @@ export { Prng } from './prng.ts';
 export { isqrt, ceilDiv, clampInt } from './math.ts';
 
 export { ShortfallReason, SHORTFALL_FIX, shortfallName } from './shortfall.ts';
-export { ThrottleReason } from './produce.ts';
 
 export { serialize, deserialize, configHash } from './serialize.ts';
 export type { WorldSkeleton } from './serialize.ts';

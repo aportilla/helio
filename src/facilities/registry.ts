@@ -54,14 +54,12 @@ const DEFS = {
     addOrder: 1,
     maxPerBody: 1,
     canBuildOn: isSolidSite,
-    // A mineral provider: extracts a flat output of minerals and feeds a small
-    // workforce on imported food. Emit-only silo (one turn of minerals) so it
-    // gluts rather than hoards when no one is buying; the food it imports is
-    // uncapped so it can buffer its ration.
+    // A mineral provider: a FAUCET that mints minerals on demand (up to its
+    // per-turn rating) and feeds a small workforce on imported food. It holds
+    // nothing at rest — a mine with no buyer makes nothing, no silo, no glut.
     contribute: (_body: Body, ctx) => {
       const c = new ContributionBuilder(ctx.R);
       c.produce(EconResource.Minerals, MINE_MINERALS_PRODUCE_MILLI);
-      c.cap(EconResource.Minerals, MINE_MINERALS_PRODUCE_MILLI);
       c.consume(EconResource.Food, MINE_FOOD_CONSUME_MILLI);
       return c.build();
     },
@@ -72,13 +70,12 @@ const DEFS = {
     addOrder: 2,
     maxPerBody: 1,
     canBuildOn: isSolidSite,
-    // A food provider: grows a flat output of food and draws a little minerals for
-    // tooling. Emit-only silo (one turn of food) so surplus gluts rather than
-    // hoards when demand is met; the minerals it imports are uncapped.
+    // A food provider: a FAUCET that grows food on demand (up to its per-turn
+    // rating) and draws a little minerals for tooling. It holds nothing at rest —
+    // a farm with no buyer makes nothing, so surplus never gluts.
     contribute: (_body: Body, ctx) => {
       const c = new ContributionBuilder(ctx.R);
       c.produce(EconResource.Food, FARM_FOOD_PRODUCE_MILLI);
-      c.cap(EconResource.Food, FARM_FOOD_PRODUCE_MILLI);
       c.consume(EconResource.Minerals, FARM_MINERALS_CONSUME_MILLI);
       return c.build();
     },

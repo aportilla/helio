@@ -25,7 +25,6 @@ import {
   deserialize,
   defaultBalance,
   TransportTier,
-  ThrottleReason,
   ShortfallReason,
   SHORTFALL_FIX,
   asPlanet,
@@ -79,10 +78,14 @@ const SHORTFALL_LABEL: Readonly<Record<ShortfallReason, string>> = {
 };
 
 // One transportable resource's standing on a body: how much it has, its intrinsic
-// per-turn balance (production − consumption, before trade), and — once the sim
-// has produced a read digest this session — the trade-aware signed cover
-// (+surplus / −deficit), a binding shortfall, and whether production is glutted
-// (storage full). Plain app values — no sim types cross this boundary.
+// per-turn balance (production − consumption, before trade — the NAMEPLATE/installed
+// intent, what a just-placed facility reads before the first step), and — once the
+// sim has produced a read digest this session — the trade-aware signed cover
+// (+surplus / −deficit), a binding shortfall, and a realized RATE: utilizationPct
+// for a net-producer resource (made ÷ capacity, 0% idle … 100% maxed) or fillPct
+// for a net-consumer resource (ate ÷ demand, 100% fed … less when hungry). Exactly
+// one rate is set per resource (the side this body is net), or neither before the
+// first step. Plain app values — no sim types cross this boundary.
 //
 // The `predicted*` fields are the FORWARD-LOOKING read off the speculative
 // next-turn world (§ speculation.ts): what this body's cover/inbound WILL be once
@@ -100,7 +103,14 @@ export interface ResourceLevel {
   readonly netFlowMilli: number;
   readonly coverMilli: number | null;
   readonly shortfall: ShortfallView | null;
-  readonly glut: boolean;
+  // Realized rate as a clamped 0..1 fraction (display %), or null when the side
+  // doesn't apply / no digest carries the resource. A net producer of the resource
+  // reports utilizationPct (fillPct null); a net consumer reports fillPct
+  // (utilizationPct null). Available from first paint — the live digest once a turn
+  // has run, else the speculative next-turn one. Utilization 100% IS "maxed", 0% IS
+  // idle; fill < 100% IS hungry.
+  readonly utilizationPct: number | null;
+  readonly fillPct: number | null;
   readonly predictedCoverMilli: number | null;
   readonly inboundNextTurnMilli: number | null;
 }
@@ -154,10 +164,11 @@ export class EconomyBridge {
   private engine: EconomyEngine;
   private bodyIdByPlanet: readonly string[];
   private planetByBodyId: ReadonlyMap<string, number>;
-  // The read digest exists only after a step (it isn't serialized), so cover /
-  // shortfall / glut are unavailable until the first Next Turn of a session —
+  // The live read digest exists only after a step (it isn't serialized), so cover
+  // and shortfall are unavailable until the first Next Turn of a session —
   // including right after a reload. Until then the chip shows stock + intrinsic
-  // flow only. Reset whenever the engine is rebuilt.
+  // flow, and the utilization/fill rate falls back to the speculative next-turn
+  // read (always stepped). Reset whenever the engine is rebuilt.
   private stepped = false;
   // The speculative next-turn world: a throwaway clone of the live world, stepped
   // once, that drives the predictive viz (predicted ship lanes + forward-looking
@@ -222,8 +233,10 @@ export class EconomyBridge {
 
   // The selected body's economy for the sidebar: per transportable resource it
   // holds or moves — stock and intrinsic net flow always, plus trade-aware cover,
-  // a shortfall reason, and a glut flag once a turn has run this session. Null if
-  // the body hosts no facility (not a sim node) or carries nothing noteworthy yet.
+  // a shortfall reason, and a realized utilization/fill rate (from the live digest
+  // once a turn has run, else the speculative next-turn one, so it shows from first
+  // paint). Null if the body hosts no facility (not a sim node) or carries nothing
+  // noteworthy yet.
   bodyEconomy(bodyId: string): BodyEconomyView | null {
     const p = this.planetByBodyId.get(bodyId);
     if (p === undefined) return null;
@@ -252,15 +265,32 @@ export class EconomyBridge {
       const netFlowMilli = w.production[i]! - w.consumption[i]!;
 
       const rr = pr ? (pr.byResource.get(asResource(r)) ?? null) : null;
+      // Per-resource lookup into the speculative (next-turn) digest; a missing key is
+      // the neutral baseline (null), never assume the two digests share keys. Always
+      // present (the clone is stepped), so it backs the forward-looking cues AND the
+      // realized rates before the session's first real step.
+      const sr = specPr ? (specPr.byResource.get(asResource(r)) ?? null) : null;
       const coverMilli = rr ? rr.coverMilli : null;
       const shortfall: ShortfallView | null = rr && rr.shortfall !== null
         ? { label: SHORTFALL_LABEL[rr.shortfall], fix: SHORTFALL_FIX[rr.shortfall] }
         : null;
-      const glut = rr ? rr.throttle === ThrottleReason.OutputFull : false;
+      // Realized rate, the side this body is NET on: utilization for a net producer
+      // of r (made ÷ capacity), fill for a net consumer (ate ÷ demand). Both
+      // denominators are the static rate, so the % is stable across turns. Read off
+      // the live digest once a turn has run, else the speculative next-turn digest —
+      // so a just-placed or just-loaded body shows its rate immediately rather than
+      // blank until the first Next Turn. Null only when neither digest carries the
+      // resource (not this body's net side). A balanced/self-feeding body reports fill.
+      const prodRate = w.production[i]!;
+      const consRate = w.consumption[i]!;
+      const rateRead = rr ?? sr;
+      let utilizationPct: number | null = null;
+      let fillPct: number | null = null;
+      if (rateRead) {
+        if (prodRate > consRate) utilizationPct = clamp01(rateRead.realizedProductionMilli / prodRate);
+        else if (consRate > 0) fillPct = clamp01(rateRead.realizedConsumptionMilli / consRate);
+      }
 
-      // Per-resource lookup into the speculative digest; a missing key is the
-      // neutral baseline (null), never assume the two digests share keys.
-      const sr = specPr ? (specPr.byResource.get(asResource(r)) ?? null) : null;
       const predictedCoverMilli = sr ? sr.coverMilli : null;
       // Inbound next turn = interstellar ledger-inbound (from the digest) + the
       // instant intra-cluster relief (from the speculative localTransfers); null
@@ -268,12 +298,12 @@ export class EconomyBridge {
       const inboundNextTurnMilli = foldInboundNextTurn(sr ? sr.inboundWithinHMilli : null, specIntraIn.get(r) ?? 0);
 
       const noteworthy = stockMilli !== 0 || netFlowMilli !== 0
-        || (coverMilli !== null && coverMilli !== 0) || shortfall !== null || glut;
+        || (coverMilli !== null && coverMilli !== 0) || shortfall !== null;
       if (!noteworthy) continue;
 
       out.push({
-        key: r as EconResource, name: meta.name, stockMilli, netFlowMilli, coverMilli, shortfall, glut,
-        predictedCoverMilli, inboundNextTurnMilli,
+        key: r as EconResource, name: meta.name, stockMilli, netFlowMilli, coverMilli, shortfall,
+        utilizationPct, fillPct, predictedCoverMilli, inboundNextTurnMilli,
       });
     }
     return out.length > 0 ? { resources: out } : null;
@@ -473,5 +503,12 @@ function enforceReach(world: World): void {
   if (world.cfg.jumpRadius === REACH_UNITS) return;
   world.cfg = { ...world.cfg, jumpRadius: REACH_UNITS };
   world.topology.rebuild(world.cfg);
+}
+
+// A realized rate (realized ÷ static rate) clamped to a 0..1 display fraction. The
+// rate denominators are integers > 0 at the call sites, so this only guards FP edge
+// rounding — a faucet maxed at capacity must read exactly 1.0, never 1.0000001.
+function clamp01(x: number): number {
+  return x < 0 ? 0 : x > 1 ? 1 : x;
 }
 
