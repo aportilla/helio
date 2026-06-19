@@ -67,7 +67,13 @@ test('CFL on a zero-stock faucet ships up to a fraction of CAPACITY, not (zero) 
   const r = engine.step();
   assert.ok(r.localDelivered > 0 && r.localDelivered <= 50,
     `faucet ships ≤ floor(100/2)=50 under CFL, got ${r.localDelivered}`);
-  assert.ok(stockOf(engine, P1, FOOD) > 0, 'the consumer received its CFL-limited relief this turn');
+  // The relief lands intra-cluster AND is eaten the same turn (P7.5 residual
+  // consume). The consumer's appetite (80) exceeds the CFL-capped supply (≤50), so
+  // it eats everything that landed and keeps nothing — fill < 100%, stock 0.
+  const rr = engine.getReadDigest().planets.get(P1)!.byResource.get(FOOD)!;
+  assert.equal(rr.realizedConsumptionMilli, r.localDelivered,
+    'the consumer ate exactly its CFL-limited relief this turn — still hungry, nothing left over');
+  assert.equal(stockOf(engine, P1, FOOD), 0, 'all relief consumed same-turn (demand exceeds capped supply)');
 });
 
 // — Capacity-math consistency: Σ planned outflow ≤ exportable ⇒ mint ≤ rating —

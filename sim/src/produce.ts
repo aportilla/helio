@@ -73,3 +73,44 @@ export function produceConsume(world: World): ProduceResult {
 
   return { producedLocalTotal, consumed, producedLocal, realizedConsumption };
 }
+
+/** P7.5 — residual consume (§ same-turn intra-cluster consumption). After dispatch
+ *  (P7) has deposited this turn's instant intra-cluster cargo straight into
+ *  destination stock, top each body's consumption up to its static rate from the
+ *  freshly-landed stock. P3 consume ran before P7, so an import-fed body that was
+ *  starved then (stock 0) ate 0 even though its same-system supply lands this turn;
+ *  this pass lets it eat that supply the SAME turn it arrives, rather than waiting
+ *  for next turn's P3.
+ *
+ *  Mints NOTHING (self-feed was settled at P3) and touches NEITHER emaConsume (the
+ *  attempted-appetite EMA is finalized at P3, not re-fed) NOR the ledger/ring. Its
+ *  only mutation is `stock[i] -= take`, where take ≤ stock[i] and take ≤ the
+ *  unmet appetite — so realized never exceeds the static rate (fill% stays ≤ 100%),
+ *  stock never goes negative, and conservation holds by adding `extraConsumed` to
+ *  the turn's `consumed` (the same stock is eaten one turn sooner, never created).
+ *  Integer-only and iterated in the fixed (p·R + r) order, so replay stays
+ *  bit-stable. Returns the folded per-(planet,resource) realized consumption (P3 +
+ *  this top-up) for the read surface, plus the scalar delta for the tally. */
+export function consumeResidual(
+  world: World, alreadyRealized: Int32Array,
+): { extraConsumed: number; realizedConsumption: Int32Array } {
+  const R = world.R;
+  const realizedConsumption = alreadyRealized.slice();
+  let extraConsumed = 0;
+
+  for (let p = 0; p < world.planetCount; p++) {
+    if (world.tombstone[p]) continue;
+    for (let r = 0; r < R; r++) {
+      const i = p * R + r;
+      const residual = world.consumption[i]! - realizedConsumption[i]!;
+      if (residual <= 0) continue; // already fully fed at P3
+      const take = Math.min(residual, world.stock[i]!);
+      if (take <= 0) continue; // nothing landed since P3 to top up with
+      world.stock[i] = world.stock[i]! - take;
+      realizedConsumption[i] = realizedConsumption[i]! + take;
+      extraConsumed += take;
+    }
+  }
+
+  return { extraConsumed, realizedConsumption };
+}

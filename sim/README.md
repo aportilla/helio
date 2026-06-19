@@ -41,7 +41,7 @@ src/
   topology.ts       Jump graph, stable star-pair EdgeIds, multi-leg Dijkstra, append-only route table
   transfer-ring.ts  TransferRing (timing-wheel single source of truth) + derived EtaBuckets ledger
   world.ts          The SoA world (planets as v1 node-contributors) + builder
-  produce.ts        P3 consume + same-body self-feed (demand-pull faucet: no silo, export minted on pull at P7)
+  produce.ts        P3 consume + same-body self-feed (demand-pull faucet: no silo, export minted on pull at P7); P7.5 residual consume — eat same-turn intra-cluster arrivals
   quantify.ts       P4 single authority: netDemand/exportable (faucet capacity + resting)/signed cover, hysteresis, inbound-within-H
   shortfall.ts      ShortfallReason codes + SHORTFALL_FIX + shortfallName (the unmet-demand taxonomy)
   allocate.ts       P6 greedy matcher: fan-in, source fair-share, CFL clamp (on capacity), starvation escalation, resolves shortfall reasons
@@ -50,7 +50,7 @@ src/
   read-surface.ts   §4 ReadDigest (signed cover + edge flows) + getInTransitTo / explainShortfall
   invariants.ts     Conservation (no loss), no-negative-stock, ledger==in-flight (per-turn DEV asserts)
   serialize.ts      Bit-stable serialize/deserialize (+ configHash guard); derived caches rebuilt on load
-  engine.ts         EconomyEngine.step() wires the 9-phase pipeline; read-only queries
+  engine.ts         EconomyEngine.step() wires the turn pipeline (arrivals → produce/consume → quantify → allocate → dispatch → residual consume → commit); read-only queries
   index.ts          Public barrel
 ```
 
@@ -70,7 +70,14 @@ Mapped to the plan's `v1 / deferred / deleted` banner.
   boundary, while inter-cluster hauls keep their multi-turn transit. Provably
   balance-equivalent to the old 1-turn self-leg (deposit replaces a mint+arrival);
   `step()` exposes the moves via `localDelivered` + `getLocalTransfers()`, the
-  read surface's intra-node analogue of `edgeFlows`.
+  read surface's intra-node analogue of `edgeFlows`. The deposit happens at P7,
+  after P3 consume, so a post-dispatch **residual consume** (P7.5) eats it the same
+  turn — an import-fed body's fill % reflects the arrival the turn it lands, not the
+  next. This shifts an already-conserved unit from stock to consumed within the same
+  window (mints nothing, touches neither ring nor ledger), so conservation,
+  determinism, and the save format are unchanged. It fixes same-turn *consumption*,
+  not same-turn *demand re-sizing* (the order is still quantified against pre-arrival
+  stock — true pooling stays deferred).
 - Re-home at each star — the *necessary* case (destination gone / onward path
   removed) — via monotonic ids + tombstones (§3.7, §11.8).
 - ETA-bucketed inbound ledger with horizon H + merge-on-dispatch dedup (§3.2, §3.5).

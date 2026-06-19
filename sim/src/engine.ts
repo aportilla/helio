@@ -5,7 +5,7 @@
 
 import { advanceArrivals } from './arrivals.ts';
 import type { ArrivalsResult } from './arrivals.ts';
-import { produceConsume } from './produce.ts';
+import { produceConsume, consumeResidual } from './produce.ts';
 import { quantify } from './quantify.ts';
 import type { Quantified } from './quantify.ts';
 import { allocate } from './allocate.ts';
@@ -92,17 +92,26 @@ export class EconomyEngine {
     const plan = allocate(w, q);
     // P7 — dispatch (single conservation chokepoint) + transit advance.
     const disp = dispatch(w, plan);
+    // P7.5 — residual consume. Dispatch just deposited this turn's instant
+    // intra-cluster cargo into destination stock (P7); let a starved consumer eat
+    // that same-system supply THIS turn rather than next turn's P3. Mints nothing
+    // and touches neither ring nor ledger, so it shifts an already-conserved unit
+    // from "stock" to "consumed" within the same window.
+    const consume2 = consumeResidual(w, prod.realizedConsumption);
+    const consumed = prod.consumed + consume2.extraConsumed;
 
     // P8 — telemetry + commit. Serialize-before-float-telemetry holds because
     // every value here is integer (the read digest is built from integer state).
-    // `produced` is now born in two places — P3 self-feed + P7 export mint — so
-    // the conservation tally sums both halves; the identity (produced − consumed
-    // == Δ(stock + in-transit)) is unchanged because mint adds to stock and every
-    // dispatch move conserves stock + in-flight.
+    // `produced` is born in two places — P3 self-feed + P7 export mint — so the
+    // conservation tally sums both halves; the identity (produced − consumed ==
+    // Δ(stock + in-transit)) is unchanged because mint adds to stock and every
+    // dispatch move conserves stock + in-flight. The `after` snapshot and the
+    // asserts run AFTER P7.5, and `consumed` includes its top-up, so the same
+    // identity still closes (both sides drop by extraConsumed).
     const produced = prod.producedLocalTotal + disp.producedMintedTotal;
     const after = w.totalStockAll() + w.ring.inFlightTotal;
     if (this.check) {
-      assertConservation(before, after, produced, prod.consumed);
+      assertConservation(before, after, produced, consumed);
       assertNoNegativeStock(w);
       assertLedgerMatchesRing(w);
     }
@@ -116,7 +125,11 @@ export class EconomyEngine {
 
     this.lastQ = q;
     this.lastReasons = plan.reasons;
-    this.lastDigest = buildReadDigest(w, q, plan.reasons, realizedProduction, prod.realizedConsumption);
+    // The digest reports the FOLDED realized consumption (P3 + the P7.5 top-up), so
+    // fill% reflects same-turn intra-cluster arrivals. cover/netDemand stay as
+    // quantified at P4 (the order placed this turn, still sized against pre-arrival
+    // stock) — same-turn CONSUMPTION, not same-turn demand re-sizing.
+    this.lastDigest = buildReadDigest(w, q, plan.reasons, realizedProduction, consume2.realizedConsumption);
     this.lastLocalTransfers = disp.localTransfers;
     this.lastProcessedTurn = turn;
 
@@ -125,7 +138,7 @@ export class EconomyEngine {
     return {
       turn,
       produced,
-      consumed: prod.consumed,
+      consumed,
       dispatched: disp.dispatched,
       localDelivered: disp.localDelivered,
       delivered: arr.delivered,

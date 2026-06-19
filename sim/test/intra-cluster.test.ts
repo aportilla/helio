@@ -80,7 +80,7 @@ function relievedConsumerCfg() {
   return { jumpRadius: 50, maxLegTurns: 5, horizonH: 6, setpointTurns: 3, keepBufferTurns: 3 };
 }
 
-test('a same-cluster producer→consumer is relieved the SAME turn, nothing left aloft', () => {
+test('a same-cluster producer→consumer is relieved AND fed the SAME turn, nothing left aloft', () => {
   const { engine } = scene({
     xs: [0],
     planets: [{ star: 0, stock: only(FOOD, 600) }, { star: 0, stock: only(FOOD, 0), consumption: only(FOOD, 50) }],
@@ -93,10 +93,33 @@ test('a same-cluster producer→consumer is relieved the SAME turn, nothing left
   assert.equal(engine.world.ring.liveCount, 0);
   assert.equal(engine.getInTransitTo(P1, FOOD).length, 0, 'nothing in transit toward the consumer');
   assert.ok(stockOf(engine, P1, FOOD) > 0, 'the relief landed in the consumer this turn');
+  // It is also EATEN this turn (P7.5 residual consume): the consumer's full
+  // appetite (50) is served from the just-deposited intra cargo, so fill reads
+  // 100% on its very first turn rather than 0% until next turn.
+  const rr = engine.getReadDigest().planets.get(P1)!.byResource.get(FOOD)!;
+  assert.equal(rr.realizedConsumptionMilli, 50, 'consumer fed to its full rate the same turn the intra relief lands');
   const lt = engine.getLocalTransfers();
   assert.equal(lt.length, 1);
   assert.equal(lt[0]!.srcPlanet as number, 0);
   assert.equal(lt[0]!.dstPlanet as number, 1);
+});
+
+test('priming turn: a faucet→colony in one cluster reads true fill (100%) on turn one, not 0%', () => {
+  // The user-reported symptom: a freshly-built same-system colony fed by a local
+  // faucet showed 0% fed on the turn it was built (intra cargo lands at P7, after
+  // P3 consume). With the P7.5 residual pass it eats that supply the same turn.
+  const { engine } = scene({
+    xs: [0],
+    planets: [
+      { star: 0, production: only(FOOD, 100) },                        // faucet, no resting stock
+      { star: 0, stock: only(FOOD, 0), consumption: only(FOOD, 50) },  // colony, empty larder
+    ],
+    cfg: relievedConsumerCfg(),
+  });
+  const r = engine.step(); // checkInvariants on → conservation/no-negative/ledger asserted
+  assert.ok(r.localDelivered > 0, 'the faucet fed the colony intra-cluster this turn');
+  const rr = engine.getReadDigest().planets.get(P1)!.byResource.get(FOOD)!;
+  assert.equal(rr.realizedConsumptionMilli, 50, 'colony eats its full 50 the same turn — fill 100%, no priming 0%');
 });
 
 test('an inter-cluster producer→consumer still mints a ring transfer and is in flight', () => {

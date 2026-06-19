@@ -29,7 +29,7 @@ export interface ResourceRead {
   // consumption rate (100% fed … less when hungry); the sim itself stays
   // integer-only and the percentages are display-floats computed app-side.
   readonly realizedProductionMilli: number; // self-feed + export mint actually made this turn
-  readonly realizedConsumptionMilli: number; // consumption actually served this turn (stock-clamped)
+  readonly realizedConsumptionMilli: number; // consumption actually served this turn (stock-clamped), INCLUDING the same-turn intra-cluster arrival eaten in the post-dispatch residual pass (P7.5)
 }
 
 export interface PlanetRead {
