@@ -18,21 +18,9 @@ import {
 } from '../registry.ts';
 import { addableTypesFor } from '../eligibility.ts';
 
-// The fields the v1 predicates read (kind + resource indices), all "absent" by
-// default. Cast through unknown — the test never exercises the rest of Body.
-const body = (kind: Body['kind'], over: Partial<Body> = {}): Body =>
-  ({
-    kind,
-    resMetals: null,
-    resSilicates: null,
-    resVolatiles: null,
-    resRareEarths: null,
-    resRadioactives: null,
-    resExotics: null,
-    ...over,
-  }) as unknown as Body;
-// A solid site with something worth mining (a non-null strategic index).
-const richBody = (kind: Body['kind']): Body => body(kind, { resMetals: 8 });
+// The only field the v1 eligibility predicate reads is `kind` (a structural gate,
+// no body physics). Cast through unknown — the test never touches the rest of Body.
+const body = (kind: Body['kind']): Body => ({ kind }) as unknown as Body;
 
 test('registry: every def.type is its own map key, no duplicates', () => {
   for (const d of FACILITY_DEFS) {
@@ -60,23 +48,22 @@ test('registry: ADD_ORDER is addOrder-sorted and excludes retired defs', () => {
 test('facilityLabel: resolves a def to its display label', () => {
   assert.equal(facilityLabel('colony'), 'Colony');
   assert.equal(facilityLabel('mining-base'), 'Mining base');
+  assert.equal(facilityLabel('farm'), 'Farm');
 });
 
-test('eligibility: a colony fits any solid site; a mining base needs extractable richness', () => {
+test('eligibility: every facility fits any solid site; a ring hosts nothing', () => {
   for (const kind of ['planet', 'moon', 'belt'] as const) {
-    // Barren: colony only — mining-base is richness-gated (plan §10).
-    assert.deepEqual(addableTypesFor(body(kind), []), ['colony'], `barren ${kind} → colony only`);
-    // With strategic richness present: both, in ADD_ORDER order.
-    assert.deepEqual(addableTypesFor(richBody(kind), []), [...ADD_ORDER], `rich ${kind} → all types`);
+    // No body-physics gate any more: every type is addable on any solid site.
+    assert.deepEqual(addableTypesFor(body(kind), []), [...ADD_ORDER], `${kind} → all types`);
   }
-  // A ring hosts nothing regardless of richness (not a solid extraction site).
-  assert.deepEqual(addableTypesFor(body('ring'), []), [], 'barren ring hosts nothing');
-  assert.deepEqual(addableTypesFor(richBody('ring'), []), [], 'rich ring still hosts nothing');
+  // A ring is not a solid site, so it hosts nothing.
+  assert.deepEqual(addableTypesFor(body('ring'), []), [], 'ring hosts nothing');
 });
 
 test('eligibility: a type already at its per-body cap drops out of the addable set', () => {
   const current: { type: FacilityType }[] = [{ type: 'colony' }];
-  const addable = addableTypesFor(richBody('planet'), current);
+  const addable = addableTypesFor(body('planet'), current);
   assert.ok(!addable.includes('colony'), 'colony is at maxPerBody=1, so not re-addable');
   assert.ok(addable.includes('mining-base'), 'mining-base is unaffected by a colony placement');
+  assert.ok(addable.includes('farm'), 'farm is unaffected too');
 });

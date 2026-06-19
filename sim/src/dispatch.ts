@@ -13,7 +13,6 @@
 // drained bucket T before any P7 insertion, and all P7 arrivals are in future
 // buckets.
 
-import { floorToGranularity } from './math.ts';
 import type { World } from './world.ts';
 import type { DispatchPlan } from './allocate.ts';
 import type { PlanetId, ResourceId } from './ids.ts';
@@ -50,8 +49,7 @@ export function dispatch(world: World, plan: DispatchPlan): DispatchResult {
   const localAgg = new Map<string, { srcPlanet: PlanetId; dstPlanet: PlanetId; resource: ResourceId; qtyMilli: number }>();
 
   for (const o of plan.orders) {
-    const grain = world.resources.metas[o.res as number]!.transferChunkMilli;
-    const qty = floorToGranularity(o.qty, grain);
+    const qty = o.qty;
     if (qty <= 0) continue;
 
     const srcI = (o.src as number) * R + (o.res as number);

@@ -51,7 +51,7 @@ export function configHash(sk: WorldSkeleton): number {
   for (let i = 0; i < sk.geometry.starCount; i++) nums.push(sk.geometry.x[i]!, sk.geometry.y[i]!, sk.geometry.z[i]!);
   nums.push(sk.resources.count);
   for (const m of sk.resources.metas) {
-    nums.push(m.id, m.tier, m.criticality, m.transferChunkMilli);
+    nums.push(m.id, m.tier, m.criticality);
     for (let i = 0; i < m.name.length; i++) nums.push(m.name.charCodeAt(i));
   }
   return fnv1a(nums);

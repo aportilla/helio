@@ -4,7 +4,7 @@
 // place a float could sneak in is an initial guess, and `isqrt` is written to
 // avoid even that, so the same input yields the same bytes on every machine the
 // game ever runs on. These are the only arithmetic primitives the sim uses for
-// distance, travel time, fair-share splits, and granularity flooring.
+// distance, travel time, and fair-share splits.
 
 /** Floor of the square root of a non-negative integer, with no float anywhere.
  *  Domain: 0 ≤ n ≤ Number.MAX_SAFE_INTEGER. The sim's coordinate range keeps
@@ -33,11 +33,4 @@ export function ceilDiv(a: number, b: number): number {
 /** Clamp an integer to [lo, hi]. */
 export function clampInt(x: number, lo: number, hi: number): number {
   return x < lo ? lo : x > hi ? hi : x;
-}
-
-/** Largest multiple of `grain` not exceeding `x` (x ≥ 0, grain ≥ 1).
- *  The remainder has a named home at every call site (§3.6) — it is never lost. */
-export function floorToGranularity(x: number, grain: number): number {
-  if (grain <= 1) return x;
-  return x - (x % grain);
 }

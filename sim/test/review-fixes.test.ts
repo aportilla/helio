@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scene, stepN, only, FOOD, MUNITIONS, P0, P1, P2 } from './helpers.ts';
+import { scene, stepN, only, FOOD, P0, P1, P2 } from './helpers.ts';
 import type { SceneSpec } from './helpers.ts';
 import { quantify } from '../src/quantify.ts';
 import { allocate } from '../src/allocate.ts';
@@ -80,27 +80,6 @@ test('C: routeBetween after a re-cost matches getRoute(ref); the old ref stays v
   assert.equal(topo.getRoute(after.routeRef).totalTurns, 4, 'table entry agrees with the returned route');
   assert.equal(topo.getRoute(before.routeRef).totalTurns, 6, 'in-flight cargo keeps its original route');
   assert.equal(topo.reachTurns(A, C), after.route.totalTurns, 'reachTurns agrees with the live route');
-});
-
-// — Fix D: sub-chunk demand defers without a false shortfall reason —
-
-test('D: a below-one-chunk demand is not mislabeled OutbidByPriority and does not escalate', () => {
-  // Munitions grain is 1000; C's munitions demand (9·100) = 900 < one chunk.
-  const w = scene({
-    xs: [0, 30],
-    planets: [
-      { star: 0, stock: [0, 0, 50000, 0] }, // ample reachable munitions
-      { star: 1, stock: [0, 0, 0, 0], consumption: [0, 0, 100, 0] },
-    ],
-    cfg: { jumpRadius: 50, maxLegTurns: 5, horizonH: 6, setpointTurns: 3, keepBufferTurns: 3 },
-  }).engine.world;
-  const q = quantify(w);
-  const i = w.pr(P1, MUNITIONS as number);
-  assert.ok(q.netDemand[i]! > 0 && q.netDemand[i]! < 1000, 'demand is positive but sub-chunk');
-  const dp = allocate(w, q);
-  assert.equal(dp.orders.filter((o) => (o.res as number) === (MUNITIONS as number)).length, 0, 'nothing ships (floors to 0)');
-  assert.equal(dp.reasons.get(i), undefined, 'NOT flagged as a shortfall (granularity defer, not OutbidByPriority)');
-  assert.equal(w.starveTurns[i], 0, 'no false starvation escalation');
 });
 
 // — Fix E: Unreachable vs SourceExhausted is reach-scoped, not a galaxy-wide sum —

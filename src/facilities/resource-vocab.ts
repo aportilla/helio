@@ -13,30 +13,22 @@
 
 import { makeResourceTable, TransportTier, type ResourceTable } from '../../sim/src/index.ts';
 
+// The v1 roster, deliberately minimal: just the two goods the base facilities
+// move. Farms make Food, mines make Minerals, colonies eat both. More resources
+// (and a general resource granularity) are a later, additive change.
 export const EconResource = {
   Food: 0,
-  Alloys: 1,
-  Minerals: 2,
-  Volatiles: 3,
-  RareTech: 4,
-  Exotics: 5,
-  Energy: 6,
+  Minerals: 1,
 } as const;
 export type EconResource = (typeof EconResource)[keyof typeof EconResource];
 
-// Built once per call; callers (the future engine-bridge, the projector for its
-// resource count, tests) cache as they see fit. Row order MUST match the
-// EconResource ordinals above — makeResourceTable enforces it.
+// Built once per call; callers (the engine-bridge, the projector for its resource
+// count, tests) cache as they see fit. Row order MUST match the EconResource
+// ordinals above — makeResourceTable enforces it. Food outranks Minerals on
+// criticality so the matcher feeds people before tooling under contention.
 export function appResourceTable(): ResourceTable {
   return makeResourceTable([
-    { id: EconResource.Food, name: 'Food', tier: TransportTier.Transportable, criticality: 100, transferChunkMilli: 1 },
-    { id: EconResource.Alloys, name: 'Alloys', tier: TransportTier.Transportable, criticality: 60, transferChunkMilli: 1 },
-    { id: EconResource.Minerals, name: 'Minerals', tier: TransportTier.Transportable, criticality: 55, transferChunkMilli: 1 },
-    { id: EconResource.Volatiles, name: 'Volatiles', tier: TransportTier.Transportable, criticality: 50, transferChunkMilli: 1 },
-    // Strategic, lumpy: coarse transfer chunks + high criticality.
-    { id: EconResource.RareTech, name: 'RareTech', tier: TransportTier.Transportable, criticality: 80, transferChunkMilli: 1000 },
-    { id: EconResource.Exotics, name: 'Exotics', tier: TransportTier.Transportable, criticality: 85, transferChunkMilli: 1000 },
-    // LocalOnly: consumed where it's made, never shipped.
-    { id: EconResource.Energy, name: 'Energy', tier: TransportTier.LocalOnly, criticality: 90, transferChunkMilli: 1 },
+    { id: EconResource.Food, name: 'Food', tier: TransportTier.Transportable, criticality: 100 },
+    { id: EconResource.Minerals, name: 'Minerals', tier: TransportTier.Transportable, criticality: 60 },
   ]);
 }

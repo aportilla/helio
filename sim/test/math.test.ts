@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isqrt, ceilDiv, clampInt, floorToGranularity } from '../src/math.ts';
+import { isqrt, ceilDiv, clampInt } from '../src/math.ts';
 
 test('isqrt: exact for perfect squares and floors otherwise', () => {
   for (let n = 0; n < 1000; n++) {
@@ -34,12 +34,4 @@ test('clampInt bounds to [lo, hi]', () => {
   assert.equal(clampInt(5, 1, 10), 5);
   assert.equal(clampInt(-3, 1, 10), 1);
   assert.equal(clampInt(99, 1, 10), 10);
-});
-
-test('floorToGranularity keeps the remainder out of the shipment', () => {
-  assert.equal(floorToGranularity(0, 1000), 0);
-  assert.equal(floorToGranularity(999, 1000), 0);
-  assert.equal(floorToGranularity(1000, 1000), 1000);
-  assert.equal(floorToGranularity(2500, 1000), 2000);
-  assert.equal(floorToGranularity(2500, 1), 2500); // grain 1 is a no-op
 });

@@ -14,7 +14,7 @@ function busyGalaxy(cfgOver = {}): Scene {
       { star: 2, stock: [0, 4000, 0, 0], production: [0, 60, 0, 0], consumption: [40, 0, 0, 0] }, // mine + eats food
       { star: 3, stock: [0, 0, 0, 0], consumption: [30, 40, 0, 0] }, // pure consumer
       { star: 4, stock: [0, 0, 20000, 0], production: [0, 0, 2000, 0], consumption: [20, 30, 0, 0] }, // arsenal
-      { star: 5, stock: [100, 100, 0, 0], consumption: [25, 25, 2000, 0] }, // frontier, wants munitions (coarse grain)
+      { star: 5, stock: [100, 100, 0, 0], consumption: [25, 25, 2000, 0] }, // frontier, wants munitions
     ],
     cfg: { jumpRadius: 50, maxLegTurns: 5, horizonH: 8, setpointTurns: 3, keepBufferTurns: 3, ...cfgOver },
   });

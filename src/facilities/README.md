@@ -26,7 +26,7 @@ used to be smeared across `game-state.ts`, the system-view facilities UI, and
       │              │  sim seam: Body + Facility[]  │
       └──────────────┼─▶ ──projectBody/World──────── │──▶ PlanetSpec[] ──▶ makeWorld()
  catalog (read-only) │   = node ＝ contributors summed│
- Body physics ───────┼─▶ (richness inputs)           │
+ Body kind ──────────┼─▶ (eligibility gate only)     │
                      └─────────────────────────────┘
 ```
 
@@ -34,16 +34,17 @@ The architectural through-line: in the sim a **planet is the node and facilities
 are its contributors**, read uniformly with no facility-type branch. So here a
 **body is the node and each facility is a contributor** — a body's facilities'
 contributions are **summed** into one `PlanetSpec`, and the kernel never sees
-facility identity.
+facility identity. A facility's contribution is **flat** — the same on every body;
+no body physics scales it. The only thing a body's data gates is *eligibility*
+(the structural `kind` check), never the economic output.
 
 ## Module layout (acyclic — leaves first)
 
 | Module | Role |
 |---|---|
 | `types.ts` | `FacilityDef`, `FacilityType` (the frozen save union), `Contribution`, `ProjectionCtx`, `PlacedFacility`, and the `ContributionBuilder` / `emptyContribution` helpers. No sim, no DOM. |
-| `tuning.ts` | Hoisted economic tunables (richness ramp, per-facility base rates). Symbol-named — referenced by name, never by value. |
+| `tuning.ts` | Hoisted economic tunables (per-facility **flat** rates). Symbol-named — referenced by name, never by value. |
 | `resource-vocab.ts` | `EconResource` (const-object + derived union) and `appResourceTable()`, built via the sim's own `makeResourceTable`. The sim owns the table *type*; the app owns the *instance*. |
-| `abundance.ts` | `abundanceMilli(body, res)` — integer-milli "site richness" from the catalog's 0..10 indices + 0..1 biotic scalars. The **richness float→int floor** in the seam. |
 | `registry.ts` | `FACILITY_DEFS` + derived lookups (`FACILITY_BY_TYPE`, `FACILITY_TYPES`, `ADD_ORDER`, `facilityLabel`), `FROZEN_FACILITY_IDS`, and a DEV module-load invariant. |
 | `eligibility.ts` | `addableTypesFor(body, current)` — which Add buttons a body shows, gated by predicate **and** build cap. |
 | `project.ts` | `projectBody` / `projectWorld` — THE projection adapter (body intent → `PlanetSpec`). Sim-importing, node-pure (catalog is type-only). |
@@ -60,8 +61,8 @@ The sim is imported only from `project.ts`, `resource-vocab.ts`, `sim-geometry.t
 `world-sync.ts`, `speculation.ts`, `economy-read.ts`, and `economy-bridge.ts` — all
 under this package, the one quarter the boundary guard permits.
 
-Dependency direction: `project → registry → {abundance, resource-vocab, types,
-tuning}`. Every module except `economy-bridge.ts` imports `Body` from
+Dependency direction: `project → registry → {resource-vocab, types, tuning}`.
+Every module except `economy-bridge.ts` imports `Body` from
 `../data/stars` **as a type only**, so the projection/geometry/reconcile logic
 node-tests without dragging in the DOM-coupled catalog. `economy-bridge.ts` is the
 deliberate exception — the app-glue layer that *does* load the catalog and
@@ -146,11 +147,10 @@ fidelity, in-flight cargo kept) when the facility set is unchanged.
 - **Frozen save keys:** `FROZEN_FACILITY_IDS` is the localStorage contract; a
   test asserts the live key set is a superset, so renaming/removing a *shipped*
   id fails CI. A retired type stays as a `retired: true` tombstone def.
-- **Determinism:** the seam has exactly two float→int crossings, each an explicit
-  rounding op — the richness floor (`Math.floor`) in `abundance.ts`, so every value
-  crossing into a `Contribution` is integer milli, and the geometry round
-  (`Math.round`) in `sim-geometry.ts` for symmetric coordinate error. `projectBody`
-  itself only adds/combines integers.
+- **Determinism:** the seam is integer-milli throughout. Facility contributions are
+  flat integer constants (no float scaling), so the only float→int crossing left is
+  the geometry round (`Math.round`) in `sim-geometry.ts` for symmetric coordinate
+  error. `projectBody` itself only adds/combines integers.
 
 Tests: `npm run test:facilities` (`src/facilities/test/`). Source is type-checked
 by the app's `npm run typecheck`; the test files run under `node --test`

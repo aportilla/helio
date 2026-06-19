@@ -40,6 +40,22 @@ test('fan-in: one demand accumulates partial fills across several sources', () =
   assert.equal(os.reduce((s, o) => s + o.qty, 0), 330, 'partial fills sum to the need');
 });
 
+test('proportional fan-in: a distance tie-group splits a demand by capacity, not lowest-index-first', () => {
+  // A(0) and B(60) are both 30 from C(30) → one distance tie-group. B holds 3× A's
+  // exportable, so it ships 3× as much; the old lowest-index drain would have maxed
+  // A (100) before touching B. C's demand (200) is below the pooled 400, so the
+  // split is genuinely proportional rather than everyone maxing out.
+  const { dp } = plan([0, 30, 60], [
+    { star: 0, stock: only(FOOD, 100) },                              // A: exportable 100
+    { star: 1, stock: only(FOOD, 250), consumption: only(FOOD, 50) }, // C: demand 200
+    { star: 2, stock: only(FOOD, 300) },                              // B: exportable 300
+  ], { jumpRadius: 50, maxLegTurns: 5, horizonH: 6, setpointTurns: 3, keepBufferTurns: 3 });
+  const fromA = ordersTo(dp, 1).find((o) => (o.src as number) === 0)!;
+  const fromB = ordersTo(dp, 1).find((o) => (o.src as number) === 2)!;
+  assert.equal(fromA.qty, 50, 'A ships its 1/4 share — NOT its full 100 (no lowest-index drain)');
+  assert.equal(fromB.qty, 150, 'B ships its 3/4 share — proportional to its 3× capacity');
+});
+
 test('fan-out: one rich source feeds several consumers', () => {
   // A(0) in the middle feeds C(30 left)... use A at 30, C at 0, D at 60.
   const { dp } = plan([0, 30, 60], [

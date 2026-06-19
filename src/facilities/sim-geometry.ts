@@ -1,7 +1,7 @@
 // Catalog → sim geometry adapter. Scales each cluster centre-of-mass's float
 // light-year position into the sim's integer coordinate space and rounds — THE
-// single float→int crossing for transport geometry, the geometry-side analogue
-// of abundance.ts's role for richness.
+// single float→int crossing for transport geometry, and (now that facility
+// contributions are flat integers) the only float→int crossing left in the seam.
 //
 // Why integer at all: the sim is integer-only so it stays bit-identical across
 // re-implementations (the planned WASM port, sim/README.md), and everything a

@@ -33,7 +33,7 @@ as Node's loader requires).
 ```
 src/
   ids.ts            Branded id types (PlanetId/StarId/ResourceId/EdgeId/Turn/…) + constructors
-  math.ts           Integer-only isqrt / ceilDiv / clampInt / floorToGranularity (float-free results)
+  math.ts           Integer-only isqrt / ceilDiv / clampInt (float-free results)
   prng.ts           xoshiro128** integer PRNG (4-word serializable state) — net-new for bit-stable replay
   constants.ts      MILLI_PER_UNIT + the BalanceConfig tuning surface + integer emaStep
   resources.ts      TransportTier (Transportable/LocalOnly/Intangible) + ResourceMeta table
@@ -74,9 +74,10 @@ Mapped to the plan's `v1 / deferred / deleted` banner.
 - Re-home at each star — the *necessary* case (destination gone / onward path
   removed) — via monotonic ids + tombstones (§3.7, §11.8).
 - ETA-bucketed inbound ledger with horizon H + merge-on-dispatch dedup (§3.2, §3.5).
-- Greedy priority matcher: source fair-share, fan-in accumulation, one CFL
-  outflow clamp, hysteresis deadband, starvation escalation, the four single-cause
-  shortfall reasons (§5).
+- Greedy priority matcher: source fair-share, fan-in split proportionally across
+  equal-distance sources (nearer tie-groups drawn first), one CFL outflow clamp,
+  hysteresis deadband, starvation escalation, the four single-cause shortfall
+  reasons (§5).
 - Node-contributor seam: the matcher reads per-planet emissions uniformly, no
   facility-type branch (§6.0).
 - Sim → read-surface one-way wall + the integer `ReadDigest` and the
@@ -101,10 +102,6 @@ bias/restriction policy.
   *consumer's* RNG/wall-clock and asserts byte-identical saves — it needs the
   consumer/AI layer, which is deferred (§4.3). The sim side (integer-only,
   read-surface excluded from the save) is upheld by construction today.
-- **§3.3 grain audit is an authoring contract.** A resource whose
-  `transferChunkMilli` exceeds a colony's achievable demand will defer forever
-  (visible as persistent negative cover with no shortfall reason); keep a
-  resource's chunk ≤ its typical per-turn drain.
 
 ## Invariants the tests pin (§11)
 

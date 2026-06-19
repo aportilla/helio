@@ -25,7 +25,7 @@ export { TransferRing, EtaBuckets } from './transfer-ring.ts';
 export type { TransferView, MintArgs } from './transfer-ring.ts';
 
 export { Prng } from './prng.ts';
-export { isqrt, ceilDiv, clampInt, floorToGranularity } from './math.ts';
+export { isqrt, ceilDiv, clampInt } from './math.ts';
 
 export { ShortfallReason, SHORTFALL_FIX, shortfallName } from './shortfall.ts';
 export { ThrottleReason } from './produce.ts';

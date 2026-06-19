@@ -431,9 +431,9 @@ export const SHIP_THRUST_LEN_PX = 3;
 // the dome or the pool. Calibrated for early-game amounts (a colony's food
 // surplus split across consumers is only a few hundred milli per lane), so most
 // lanes ride near the floor until the economy scales up.
-export const SHIP_RATE_PER_MILLI = 0.006;
-export const SHIP_RATE_MIN_PER_LANE = 0.8;
-export const SHIP_RATE_MAX_PER_LANE = 10;
+export const SHIP_RATE_PER_MILLI = 0.002;
+export const SHIP_RATE_MIN_PER_LANE = 0.27;
+export const SHIP_RATE_MAX_PER_LANE = 3.3;
 
 // Pixels past a screen edge a dot travels before despawning, so it fully
 // clears the edge rather than blinking out at it. Used for the off-screen

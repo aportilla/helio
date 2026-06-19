@@ -3,14 +3,16 @@
 // per-(planet, resource) starvation counters (escalation history). All mutation
 // of stock / ledger / ring happens later, at the single dispatch chokepoint (P7).
 //
-// Three mechanisms keep the greedy pass honest (§5): source fair-share (the only
+// Mechanisms that keep the pass honest (§5): source fair-share (the only
 // contended capacity — transport is uncapped), starvation escalation
 // (anti-livelock), and frozen-snapshot scores (computed before the loop, never
-// mutated mid-pass). Fan-out falls out of the shared `avail` working copy;
-// fan-in falls out of a demand accumulating partial fills across its ranked
-// candidate sources.
+// mutated mid-pass). Fan-out falls out of the shared `avail` working copy; fan-in
+// from a demand drawing across its ranked candidate sources. Candidates are filled
+// in distance-group order — a nearer tie-group is exhausted before a farther one —
+// but WITHIN a tie-group the demand is split in proportion to each source's
+// capacity, so equal-distance providers share a load rather than the lowest-index
+// one being drained first (the 0-turn intra-cluster pool is the common tie).
 
-import { floorToGranularity } from './math.ts';
 import { TransportTier } from './resources.ts';
 import { ShortfallReason } from './shortfall.ts';
 import { asPlanet, asResource } from './ids.ts';
@@ -85,59 +87,83 @@ export function allocate(world: World, q: Quantified): DispatchPlan {
     for (const c of d.cands) contenders[(c.src as number) * R + (d.r as number)]!++;
   }
 
-  // PASS B — greedy fill against a working copy; never over-commit a source.
+  // PASS B — fill against a working copy; never over-commit a source.
   const avail = q.exportable.slice();
   const alreadyShed = new Int32Array(world.planetCount * R); // CFL accumulator this turn
 
   for (const d of demands) {
     let remaining = d.amount;
-    const grain = world.resources.metas[d.r as number]!.transferChunkMilli;
     let cflBound = false;
 
-    for (const c of d.cands) {
-      if (remaining <= 0) break;
-      const srcI = (c.src as number) * R + (d.r as number);
-      const a = avail[srcI]!;
-      if (a <= 0) continue; // existed at snapshot, drained since (→ OutbidByPriority)
+    // Walk candidates in DISTANCE-GROUP order (cands are pre-sorted by totalTurns
+    // then src). A nearer group is fully drawn before a farther one — the distance
+    // heuristic is untouched — but WITHIN a group every source is equidistant, so
+    // the demand is split across them in PROPORTION TO CAPACITY rather than draining
+    // the lowest-index source dry first. The 0-turn intra-cluster pool is just the
+    // most common tie; this handles every equal-distance set the same way (§5).
+    let gi = 0;
+    while (gi < d.cands.length && remaining > 0) {
+      const dist = d.cands[gi]!.totalTurns;
+      let gj = gi + 1;
+      while (gj < d.cands.length && d.cands[gj]!.totalTurns === dist) gj++;
 
-      // Even share of the source's ORIGINAL exportable (not the diminishing
-      // working copy) — so each contending sink gets a fair slice, not a
-      // compounding fraction of what earlier sinks left behind.
-      const fsSrc = Math.floor(q.exportable[srcI]! / Math.max(1, contenders[srcI]!));
-      const cfl = Math.max(0, Math.floor(world.stock[srcI]! * cfg.cflNum / cfg.cflDen) - alreadyShed[srcI]!);
+      // Each tied source's capacity for THIS demand: the working `avail`, the
+      // cross-sink fair share of its ORIGINAL exportable (so contending sinks get
+      // fair slices, not a compounding fraction of leftovers), and the CFL outflow
+      // cap — whichever is smallest. cflBound flags a source CFL bit strictly first:
+      // the shortfall blame if the demand ends unmet (else it's contention).
+      const caps = new Array<number>(gj - gi);
+      let sumCap = 0;
+      for (let k = gi; k < gj; k++) {
+        const srcI = (d.cands[k]!.src as number) * R + (d.r as number);
+        const a = avail[srcI]!;
+        const fsSrc = Math.floor(q.exportable[srcI]! / Math.max(1, contenders[srcI]!));
+        const cfl = Math.max(0, Math.floor(world.stock[srcI]! * cfg.cflNum / cfg.cflDen) - alreadyShed[srcI]!);
+        if (cfl < a && cfl < fsSrc) cflBound = true;
+        const cap = Math.max(0, Math.min(a, fsSrc, cfl));
+        caps[k - gi] = cap;
+        sumCap += cap;
+      }
 
-      // Which upper bound is binding (for the shortfall reason)? CFL is blamed
-      // only when it bites STRICTLY before availability and fair-share — a cfl
-      // that merely ties a drained `avail` is really contention (OutbidByPriority).
-      const binder = Math.min(a, fsSrc, cfl, remaining);
-      if (binder < remaining && cfl < a && cfl < fsSrc) cflBound = true;
+      if (sumCap > 0) {
+        const take = Math.min(remaining, sumCap);
+        // Proportional split by CUMULATIVE rounding: source k ships the rise in
+        // floor(take · Σcaps[0..k] / sumCap). The cumulative form sums EXACTLY to
+        // `take`, never hands a source more than its cap, and needs no remainder
+        // pass — and it's deterministic in the frozen candidate order. A bigger
+        // capacity (≈ higher production, since the silo is one turn's output) draws
+        // a proportionally bigger share.
+        let cumCap = 0;
+        let cumAlloc = 0;
+        for (let k = gi; k < gj; k++) {
+          cumCap += caps[k - gi]!;
+          const target = Math.floor((take * cumCap) / sumCap);
+          const qty = target - cumAlloc;
+          cumAlloc = target;
+          if (qty <= 0) continue;
+          const c = d.cands[k]!;
+          const srcI = (c.src as number) * R + (d.r as number);
+          const route = c.route;
+          orders.push({
+            src: c.src, dst: d.p, res: d.r, qty,
+            routeRef: c.routeRef,
+            firstLegArrival: world.turn + route.legTurns[0]!,
+            finalArrival: world.turn + route.totalTurns,
+          });
+          avail[srcI] = avail[srcI]! - qty;
+          alreadyShed[srcI] = alreadyShed[srcI]! + qty;
+        }
+        remaining -= take;
+      }
 
-      // binder ≤ remaining ≤ d.amount already, so the floored qty never exceeds
-      // the need (no slosh). A sub-grain binder floors to 0 and is skipped — the
-      // residual is handled as deferred demand below, not silently mis-blamed.
-      const qty = floorToGranularity(binder, grain);
-      if (qty <= 0) continue;
-
-      const route = c.route;
-      orders.push({
-        src: c.src, dst: d.p, res: d.r, qty,
-        routeRef: c.routeRef,
-        firstLegArrival: world.turn + route.legTurns[0]!,
-        finalArrival: world.turn + route.totalTurns,
-      });
-      avail[srcI] = a - qty;
-      alreadyShed[srcI] = alreadyShed[srcI]! + qty;
-      remaining -= qty;
+      gi = gj;
     }
 
-    if (remaining >= grain) {
-      // A whole chunk could not be supplied → a real shortfall (reach / production / contention).
+    if (remaining > 0) {
+      // Demand left unmet → a real shortfall (reach / production / contention).
       reasons.set(d.i, resolveReason(world, d, cflBound));
       world.starveTurns[d.i] = world.starveTurns[d.i]! + 1;
     } else {
-      // remaining is 0 (fully served) or a sub-chunk residual — a benign
-      // granularity defer that ships once the deficit accumulates past one
-      // chunk (§3.3 audit territory), NOT a shortfall to flag or escalate.
       world.starveTurns[d.i] = 0;
     }
   }

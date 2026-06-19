@@ -12,7 +12,7 @@ import type { Body } from '../data/stars.ts';
 // it (registry FROZEN_FACILITY_IDS + its CI test, the DEV module-load assert,
 // and this literal union forcing every switch/Record to update). See the plan
 // in plans/4x-facility-definitions-modularity-plan.md §8/§11.
-export type FacilityType = 'colony' | 'mining-base';
+export type FacilityType = 'colony' | 'mining-base' | 'farm';
 
 // Body → its transport-graph node (the value that becomes PlanetSpec.star). In
 // the shipped model that node is the body's CLUSTER — one node per cluster, a
@@ -109,7 +109,8 @@ export class ContributionBuilder {
     return this;
   }
   // A finite storage cap for r (milli). Default (unset) is uncapped; the
-  // projector sums finite caps and lets any uncapped facility dominate.
+  // projector COMBINES caps across a body's facilities — finite caps sum, any
+  // uncapped facility dominates (never a plain sum of the two — see combineCeiling).
   cap(r: number, milli: number): this {
     this.storageCeiling[r] = milli;
     return this;

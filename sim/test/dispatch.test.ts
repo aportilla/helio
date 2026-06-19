@@ -52,8 +52,8 @@ test('over-commit guard: shipping more than stock throws', () => {
   assert.throws(() => dispatch(w, { orders: [order(5000)], reasons: new Map() }), /over-commit/);
 });
 
-test('granularity floors at dispatch; the remainder stays in source stock', () => {
-  // Munitions (id 2) has a 1000-milli chunk: an order of 2500 ships 2000.
+test('all goods ship at milli granularity; no chunk flooring at dispatch', () => {
+  // No per-resource chunk: an order of 2500 ships the full 2500, nothing held back.
   const w = scene({
     xs: [0, 30],
     planets: [{ star: 0, stock: [0, 0, 5000, 0] }, { star: 1, stock: [0, 0, 0, 0], consumption: [0, 0, 100, 0] }],
@@ -66,6 +66,6 @@ test('granularity floors at dispatch; the remainder stays in source stock', () =
       firstLegArrival: w.turn + rb.route.legTurns[0]!, finalArrival: w.turn + rb.route.totalTurns }],
     reasons: new Map(),
   });
-  assert.equal(res.dispatched, 2000, 'floored to the 1000-grain');
-  assert.equal(w.stock[w.pr(P0, 2)], 3000, 'the 500 remainder stays put — never lost');
+  assert.equal(res.dispatched, 2500, 'the full order ships — no grain');
+  assert.equal(w.stock[w.pr(P0, 2)], 2500, 'source debited by exactly the order');
 });
