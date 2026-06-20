@@ -93,12 +93,14 @@ export class SystemScene implements Screen {
       this.bridge.syncFacilities();
       this.pushSelectionToSidebar();
       this.refreshFlows();
+      this.diagram.syncFacilities();
     };
     this.context.onRemoveFacility = (facilityId) => {
       removeFacility(facilityId);
       this.bridge.syncFacilities();
       this.pushSelectionToSidebar();
       this.refreshFlows();
+      this.diagram.syncFacilities();
     };
 
     // DPR boundary crossings (zoom, monitor swap) re-trigger resize so the

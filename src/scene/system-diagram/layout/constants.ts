@@ -513,3 +513,38 @@ export const SHIP_ARC_BOW_DOWN_SCALE = 0.45;
 // longer, gentler ramps; lower it for snappier starts.
 export const SHIP_ACCEL_SEC = 20;
 export const SHIP_EASE_FLOOR = 0.15;
+
+// --- Facility icons (on-body overlay) ---
+//
+// A horizontal row of square color-chips painted over each body that carries
+// placed facilities — one chip per facility, fill = its registry color (the
+// at-a-glance "what's built here" readout, peer to the sidebar's list). STATIC:
+// written at layout (resize) + on facility edits, never per frame. Each chip is
+// a single snapped Points vertex drawn by `facilityChipMat` (materials/
+// system-decor.ts), which paints the rounded 1-px frame, the inner shadow, and
+// the dithered diagonal fill gradient per pixel — its CHIP_* constants own the
+// look. Colored tiles now; an icon sprite swaps into the fill later. Here lives
+// the geometry/placement tuning ("edit a number, reload").
+
+// Chip edge length in env-px. EVEN so the parity snap lands it on a pixel
+// boundary (a clean N-px square).
+export const FACILITY_ICON_PX = 16;
+// Horizontal OVERLAP (env-px) between adjacent chips in a row: each tile's right
+// frame column lands on the next tile's left frame column, so a multi-chip row
+// reads as one connected strip sharing a single 1-px edge per junction (the
+// per-tile corner rounding is suppressed on the abutting sides — see
+// facilityChipMat's aRound). Center-to-center step = FACILITY_ICON_PX − this.
+export const FACILITY_ICON_OVERLAP = 1;
+// Gap (env-px) between a planet/moon's top rim (disc edge toward screen-top) and
+// the bottom of its chip row. Belts ignore it — their row centers ON the belt,
+// which has no single rim to hang from.
+export const FACILITY_ROW_MARGIN = 3;
+// Frame (bezel) color around every chip — a bright gold setting that pops the
+// darker, muted fill tiles off the near-black field.
+export const FACILITY_ICON_FRAME_COLOR = 0xf2c14e;
+// Fixed world-z + render order for the chip overlay. Like the ships, chips run
+// depthTest:false, so z never decides body layering — renderOrder does: OVER
+// every body (after the planet halo at 20) but UNDER the cargo dots (29/30), so
+// traffic still flies on top of the chips.
+export const Z_FACILITY = 0.004;
+export const RENDER_ORDER_FACILITY = 25;

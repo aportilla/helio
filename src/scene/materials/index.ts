@@ -27,6 +27,7 @@ export {
   makePlanetMaterial,
 } from './planet';
 export {
+  facilityChipMat,
   makeBlobMaterial,
   makeRingMaterial,
   makeStarHaloMaterial,

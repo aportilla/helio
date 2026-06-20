@@ -15,6 +15,7 @@ import {
   FACILITY_TYPES,
   FROZEN_FACILITY_IDS,
   facilityLabel,
+  facilityColor,
 } from '../registry.ts';
 import { addableTypesFor } from '../eligibility.ts';
 
@@ -49,6 +50,16 @@ test('facilityLabel: resolves a def to its display label', () => {
   assert.equal(facilityLabel('colony'), 'Colony');
   assert.equal(facilityLabel('mining-base'), 'Mining base');
   assert.equal(facilityLabel('farm'), 'Farm');
+});
+
+test('facilityColor: every type carries a well-formed sRGB hex swatch', () => {
+  // The on-body icon chip + future sidebar chip read this; a missing or malformed
+  // color would render as the white fallback (or NaN in the shader), so pin both
+  // the format and the accessor round-trip for every live def.
+  for (const d of FACILITY_DEFS) {
+    assert.match(d.color, /^#[0-9a-fA-F]{6}$/, `def '${d.type}' has a malformed color '${d.color}'`);
+    assert.equal(facilityColor(d.type), d.color, `facilityColor('${d.type}') must resolve to its def color`);
+  }
 });
 
 test('eligibility: every facility fits any solid site; a ring hosts nothing', () => {

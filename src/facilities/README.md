@@ -3,7 +3,8 @@
 The single source of truth for every facility type the player can build, and the
 contract that turns placed facilities into economy-sim input. Adding a facility
 is **one `FacilityDef` object plus one literal in the `FacilityType` union** — its
-save-key, UI label, Add-button order, build cap, body-eligibility predicate, and
+save-key, UI label, display color (the sidebar + on-body icon swatch, via
+`facilityColor`), Add-button order, build cap, body-eligibility predicate, and
 economic projection all flow from that one edit. This replaced a definition that
 used to be smeared across `game-state.ts`, the system-view facilities UI, and
 `system-scene.ts`.

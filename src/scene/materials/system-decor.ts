@@ -7,6 +7,7 @@
 
 import { AdditiveBlending, Color, ShaderMaterial, Vector2 } from 'three';
 import { MAX_LIGHTS, BAYER4_GLSL, HASH_GLSL, HUEDIR_GLSL, STAR_CRESCENT_LIGHTING_GLSL } from './chunks';
+import { PIXEL_SNAP_GLSL, RASTER_PAD, glsl, snapClipToGlPosition, snappedMaterials } from './shared';
 
 // Blob material — flat-color triangle-mesh fill for irregular polygon
 // chunks (belt + debris-ring debris). Geometry is indexed triangles
@@ -599,4 +600,126 @@ export function makeStarHaloMaterial(): ShaderMaterial {
     depthWrite: false,
     blending: AdditiveBlending,
   });
+}
+
+// Facility chip — a small rounded, inset, dithered-gradient square tile drawn
+// once per placed facility over a body (see system-diagram/layers/facilities.ts).
+// One Points vertex per chip: the built-in `color` attribute carries the
+// facility's fill tint, `aSize` the chip's (even) edge length, and `aRound`
+// which corners to round (0 none / 1 left end / 2 right end / 3 both) so tiles in
+// a row can abut on a square shared edge while the row's outer ends stay round.
+// The fragment paints, per integer pixel inside the snapped N×N quad:
+//   - a 1-px FRAME (uFrameColor) with pixel-rounded corners on the flagged sides
+//     (a 45° chamfer of depth CHIP_CORNER_PX whose outer diagonal is itself frame,
+//     so the border wraps the round cleanly; un-flagged sides stay square),
+//   - a 1-px INNER SHADOW on the inner top + left edge (the frame casts onto the
+//     recessed tile — an inset read), and
+//   - a Bayer-dithered diagonal GRADIENT of the fill, brighter at the top-left
+//     corner (CHIP_GRAD_BRIGHT) easing to darker at the bottom-right
+//     (CHIP_GRAD_DARK).
+// Every decision is integer-pixel (gl_FragCoord − vCenter, the crisp path the
+// star disc uses), so the tile stays sharp at any render scale, and the material
+// registers in the snapped-viewport registry so resize feeds uViewport. Edit the
+// CHIP_* constants below to retune the look; geometry/placement lives in the layer.
+
+// Shader appearance constants, hoisted (interpolated as glsl literals). Buffer-px
+// and unitless multipliers; the "edit a number, reload, eyeball" surface. The
+// gradient runs DARK and SUBTLE — both shades are below 1.0 (muted tiles) and
+// close together (a faint diagonal sheen, not a hard ramp) so the bright gold
+// frame carries the contrast.
+const CHIP_GRAD_BRIGHT = 0.66;  // fill multiplier at the top-left corner
+const CHIP_GRAD_DARK   = 0.52;  // fill multiplier at the bottom-right corner
+const CHIP_INNER_SHADOW = 0.62; // darken factor for the 1-px inner top+left shadow line
+const CHIP_CORNER_PX   = 2.0;   // pixel-rounded corner radius (chamfer depth, px)
+
+export function facilityChipMat(frameColor: number): ShaderMaterial {
+  const m = new ShaderMaterial({
+    uniforms: {
+      uFrameColor: { value: new Color(frameColor) },
+      uOpacity: { value: 1.0 },
+      // 0,0 until the first resize overwrites it via setSnappedLineViewport — the
+      // snap math needs the drawing-buffer size, not CSS px.
+      uViewport: { value: new Vector2() },
+    },
+    vertexShader: `
+      uniform vec2 uViewport;
+      attribute float aSize;
+      attribute float aRound;
+      varying vec3 vColor;
+      varying vec2 vCenter;
+      varying float vSize;
+      varying float vRound;
+      ${PIXEL_SNAP_GLSL}
+      void main() {
+        vColor = color;
+        vSize = aSize;
+        vRound = aRound;
+        // Even sizes → oddOff 0 → center on a pixel boundary (a clean N-px square).
+        float oddOff = mod(aSize, 2.0) * 0.5;
+        vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        ${snapClipToGlPosition('clip.xy / clip.w', 'oddOff')}
+        vCenter = px;
+        // Pad the rasterized quad so the outer pixel row/column never gets dropped
+        // at a tie-break; the fragment discards the pad ring back to exactly N×N.
+        gl_PointSize = aSize + ${glsl(RASTER_PAD)};
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uFrameColor;
+      uniform float uOpacity;
+      varying vec3 vColor;
+      varying vec2 vCenter;
+      varying float vSize;
+      varying float vRound;
+      ${BAYER4_GLSL}
+      void main() {
+        float N = vSize;
+        // Integer pixel index within the chip, 0..N-1 (x right, y up). gl_FragCoord
+        // sits at pixel centers and vCenter on the boundary, so this is exact.
+        vec2 d = gl_FragCoord.xy - vCenter;
+        float h = N * 0.5;
+        float ix = floor(d.x + h);
+        float iy = floor(d.y + h);
+        if (ix < 0.0 || ix > N - 1.0 || iy < 0.0 || iy > N - 1.0) discard; // raster pad
+        // Distance (px) to the nearest vertical / horizontal edge; 0 = outer ring.
+        float ex = min(ix, N - 1.0 - ix);
+        float ey = min(iy, N - 1.0 - iy);
+        // Per-side corner rounding (vRound: 0 none / 1 left / 2 right / 3 both), so
+        // tiles that abut a neighbour keep a SQUARE shared edge and only the row's
+        // outer ends round. Round this corner only if its horizontal side is flagged.
+        bool roundLeft  = mod(vRound, 2.0) > 0.5;
+        bool roundRight = vRound > 1.5;
+        bool roundSide  = (ix < N - 1.0 - ix) ? roundLeft : roundRight;
+        // Rounded corners: clip the chamfer notch (ex+ey below the radius); its
+        // outermost kept diagonal (ex+ey == radius) is painted as frame so the
+        // border wraps the round. Square sides skip both, staying full frame.
+        if (roundSide && ex + ey < ${glsl(CHIP_CORNER_PX)} - 0.5) discard;
+        float edge = min(ex, ey);
+        bool frame = edge < 0.5 || (roundSide && abs(ex + ey - ${glsl(CHIP_CORNER_PX)}) < 0.5);
+        vec3 outc;
+        if (frame) {
+          outc = uFrameColor;
+        } else {
+          // Dithered diagonal gradient: 0 at the top-left corner (small ix, large
+          // iy), 1 at the bottom-right. Ordered Bayer threshold turns the ramp into
+          // a stipple between the bright and dark shades — no smooth blend sampled.
+          float t = (ix + (N - 1.0 - iy)) / (2.0 * (N - 1.0));
+          vec3 fill = bayer4(gl_FragCoord.xy) < t
+            ? vColor * ${glsl(CHIP_GRAD_DARK)}
+            : vColor * ${glsl(CHIP_GRAD_BRIGHT)};
+          // 1-px inner shadow on the inner top + left edge (recessed-tile read).
+          if (iy > N - 2.5 && iy < N - 1.5) fill *= ${glsl(CHIP_INNER_SHADOW)};
+          else if (ix > 0.5 && ix < 1.5) fill *= ${glsl(CHIP_INNER_SHADOW)};
+          outc = fill;
+        }
+        gl_FragColor = vec4(outc, uOpacity);
+      }
+    `,
+    vertexColors: true,
+    transparent: true,
+    depthWrite: false,
+  });
+  // Reuse the snapped-viewport registry so resize() pushes uViewport here too.
+  snappedMaterials.push(m);
+  return m;
 }

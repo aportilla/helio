@@ -55,6 +55,7 @@ export interface PlacedFacility {
 export interface FacilityDef {
   readonly type: FacilityType;          // === its registry key; a DEV assert pins def.type === key
   readonly label: string;               // 'Colony' — single source for rows + "Add <label>" buttons
+  readonly color: string;               // '#5ec8ff' — fill of the on-body icon chip (+ later the sidebar chip); a literal sRGB hex, rendered verbatim end-to-end since ColorManagement is OFF
   readonly addOrder: number;            // stable display order of the Add button
   readonly maxPerBody: number;          // build cap per (body, type) (v1 = 1; raise to allow stacking)
   readonly retired?: boolean;           // a shipped-then-removed type: no Add button, empty contribute (plan §11)

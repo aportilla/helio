@@ -35,6 +35,7 @@ const DEFS = {
   colony: {
     type: 'colony',
     label: 'Colony',
+    color: '#5ec8ff', // cyan — the civic hue, matching the HUD's selection accent
     addOrder: 0,
     maxPerBody: 1,
     canBuildOn: isSolidSite,
@@ -51,6 +52,7 @@ const DEFS = {
   'mining-base': {
     type: 'mining-base',
     label: 'Mining base',
+    color: '#d7b070', // ore tan — minerals
     addOrder: 1,
     maxPerBody: 1,
     canBuildOn: isSolidSite,
@@ -67,6 +69,7 @@ const DEFS = {
   farm: {
     type: 'farm',
     label: 'Farm',
+    color: '#8ae89a', // green — food (the signalPositive family)
     addOrder: 2,
     maxPerBody: 1,
     canBuildOn: isSolidSite,
@@ -104,6 +107,15 @@ export const FACILITY_TYPES: ReadonlySet<string> = new Set(Object.keys(DEFS));
 // Single source of a facility's display name — rows and "Add <label>" buttons.
 export function facilityLabel(type: FacilityType): string {
   return FACILITY_BY_TYPE.get(type)?.label ?? type;
+}
+
+// Single source of a facility's display COLOR — the on-body icon chip in the
+// system view (and, later, a matching chip in the sidebar rows). A literal sRGB
+// hex; with ColorManagement OFF it renders verbatim through both the canvas
+// painter and the scene shaders. White fallback is unreachable for a live type
+// (color is required on FacilityDef) — it only guards a future retired tombstone.
+export function facilityColor(type: FacilityType): string {
+  return FACILITY_BY_TYPE.get(type)?.color ?? '#ffffff';
 }
 
 // The localStorage save contract: every facility id that has ever shipped. These

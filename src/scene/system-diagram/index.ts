@@ -14,6 +14,7 @@
 import { OrthographicCamera, Scene } from 'three';
 import { STAR_CLUSTERS } from '../../data/stars';
 import { BeltsLayer } from './layers/belts';
+import { FacilitiesLayer } from './layers/facilities';
 import { MoonsLayer } from './layers/moons';
 import { PlanetsLayer } from './layers/planets';
 import { RingsLayer } from './layers/rings';
@@ -45,6 +46,8 @@ export class SystemDiagram {
   private readonly rings:   RingsLayer;
   // Cargo-ship overlay — the one time-driven layer; fed lanes by SystemScene.
   private readonly ships:   ShipsLayer;
+  // On-body facility chips — a static overlay re-read from game-state each layout.
+  private readonly facilities: FacilitiesLayer;
 
   // Two independent outline channels that share one visual (the 1-px rim):
   // the transient hover follows the cursor, the persistent selection is set by
@@ -63,6 +66,7 @@ export class SystemDiagram {
     this.moons   = new MoonsLayer(this.scene, this.rowSlots);
     this.rings   = new RingsLayer(this.scene, this.rowSlots);
     this.ships   = new ShipsLayer(this.scene);
+    this.facilities = new FacilitiesLayer(this.scene);
   }
 
   resize(contentW: number, bufferH: number): void {
@@ -100,8 +104,11 @@ export class SystemDiagram {
 
     // Publish the unified body-anchor index (planets + moons + belts) plus the
     // content-rect bounds to the ships layer, so cargo dots spawn/aim at any
-    // body kind and re-track across a resize.
-    this.ships.setLayout(this.buildBodyCenters(centers), this.contentW, this.bufferH);
+    // body kind and re-track across a resize. The facility chips anchor to the
+    // same centers (a body's top rim / belt center), re-read from game-state.
+    const bodyCenters = this.buildBodyCenters(centers);
+    this.ships.setLayout(bodyCenters, this.contentW, this.bufferH);
+    this.facilities.layout(bodyCenters);
 
     // Layout rebuilds the per-body outline attributes, so re-stamp the
     // persistent selection (hover re-applies itself on the next pointer move).
@@ -131,6 +138,13 @@ export class SystemDiagram {
   // Hand the ships layer this cluster's cargo lanes for the current turn.
   setFlows(lanes: readonly ShipLane[]): void {
     this.ships.setFlows(lanes);
+  }
+
+  // Repaint the on-body facility chips after an add/remove edit. The body layout
+  // is untouched, so only the facilities layer re-runs (against the centers the
+  // last layout published) — no full diagram relayout.
+  syncFacilities(): void {
+    this.facilities.layout(this.buildBodyCenters(this.planets.getCenterIndex()));
   }
 
   // Open the cargo overlay already at steady state (one-shot). Call once, after the
@@ -219,5 +233,6 @@ export class SystemDiagram {
     this.moons.dispose();
     this.rings.dispose();
     this.ships.dispose();
+    this.facilities.dispose();
   }
 }

@@ -21,6 +21,7 @@ export {
   ADD_ORDER,
   FROZEN_FACILITY_IDS,
   facilityLabel,
+  facilityColor,
 } from './registry.ts';
 
 export { addableTypesFor } from './eligibility.ts';
