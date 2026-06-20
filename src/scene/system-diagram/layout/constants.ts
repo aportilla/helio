@@ -410,11 +410,19 @@ export const SHIP_COLOR_SAT_MAX = 0.42;
 export const SHIP_COLOR_LIGHT_MIN = 0.62;
 export const SHIP_COLOR_LIGHT_MAX = 0.86;
 
-// Dot size in env-px. 2 px reads as visible cargo traffic without going chunky —
-// a single pixel proved too faint to register against the bodies. An even size
-// centers on a pixel boundary via snappedDotsMat's parity snap, so the square
-// stays crisp.
-export const SHIP_SIZE_PX = 2;
+// Per-ship dot size in env-px. Each ship rolls one of these sizes at spawn (see
+// ShipsLayer.rollAppearance), WEIGHTED so smaller hulls dominate the stream: 1px is
+// ~3× as common as 3px and ~2× as common as 2px. Each entry is [size_px, relative
+// weight] — weights are relative (any scale; they need not sum to anything). The size
+// rides a per-vertex `aSize` attribute (the snappedDotsMat `vertexSizes` path); the
+// parity snap keeps each size crisp (odd → pixel center, even → boundary). A 1px hull
+// also gets a stubby 1px drive flame instead of the full SHIP_THRUST_LEN_PX (see
+// ShipsLayer.renderFrame). Add or retune entries freely.
+export const SHIP_SIZE_PX_WEIGHTS: readonly (readonly [number, number])[] = [
+  [1, 6], // 1px — most common
+  [2, 3], // 2px — half as common as 1px
+  [3, 2], // 3px — a third as common as 1px
+];
 
 // Cruise pace, expressed as the wall-clock SECONDS for a dot to traverse the full
 // content width; a chord shorter than the screen scales down in proportion, so

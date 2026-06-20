@@ -1,5 +1,6 @@
-// Ships layer — animated "cargo ship" dots (SHIP_SIZE_PX square) over the system
-// diagram, the FIRST time-driven element in this otherwise-static view. Each lane the
+// Ships layer — animated "cargo ship" dots (per-ship 1–3px square, see
+// SHIP_SIZE_PX_WEIGHTS) over the system diagram, the FIRST time-driven element in this
+// otherwise-static view. Each lane the
 // EconomyBridge reports (internal / outgoing / incoming / through) becomes a
 // steady emitter: dots spawn at the lane's A end, march to B along a quadratic
 // Bézier under a constant-acceleration motion profile (ramp up to cruise over a
@@ -11,13 +12,14 @@
 // plan's same-cluster moves, not the in-flight transfer ring (which carries only the
 // inter-cluster outgoing/incoming/through cargo). Emission RATE scales with the
 // lane's shipped volume (the speculative next-turn lanes SystemScene feeds in), so
-// a busy lane reads as a denser stream. Each dot also rolls its OWN color at spawn —
-// a metallic sheen (random hue, low saturation, high lightness; see rollColor + the
-// SHIP_COLOR_* band) — so a stream reads as individually-hulled ships, not one
-// uniform substance.
+// a busy lane reads as a denser stream. Each dot also rolls its OWN appearance at
+// spawn (see rollAppearance) — a metallic-sheen color (random hue, low saturation,
+// high lightness; SHIP_COLOR_* band) and a weighted 1–3px size (smaller hulls more
+// common; SHIP_SIZE_PX_WEIGHTS) — so a stream reads as individually-hulled ships of
+// mixed size, not one uniform substance.
 // Through those two ease ramps a dot also trails a short yellow EXHAUST flame (a
 // second in-place snapped-line pool) — behind it while accelerating, out the front
-// while braking — dark through the cruise middle.
+// while braking — dark through the cruise middle; a 1px hull gets a stubby 1px flame.
 //
 // Body-to-body (internal) lanes bow into an ARC — the control point is offset
 // perpendicular to the chord, signed and sized deterministically from the ordered
@@ -55,7 +57,8 @@ import {
   RENDER_ORDER_SHIP, RENDER_ORDER_SHIP_THRUST, SHIP_ARC_BOW_DOWN_SCALE, SHIP_ARC_BOW_MAX, SHIP_ARC_BOW_MIN,
   SHIP_COLOR_HUE_MAX, SHIP_COLOR_HUE_MIN, SHIP_COLOR_LIGHT_MAX, SHIP_COLOR_LIGHT_MIN,
   SHIP_COLOR_SAT_MAX, SHIP_COLOR_SAT_MIN, SHIP_CROSS_SCREEN_SEC, SHIP_OFFSCREEN_MARGIN,
-  SHIP_POOL_CAP, SHIP_RATE_MAX_PER_LANE, SHIP_RATE_MIN_PER_LANE, SHIP_RATE_PER_MILLI, SHIP_SIZE_PX,
+  SHIP_POOL_CAP, SHIP_RATE_MAX_PER_LANE, SHIP_RATE_MIN_PER_LANE, SHIP_RATE_PER_MILLI,
+  SHIP_SIZE_PX_WEIGHTS,
   SHIP_SPEED_VARIANCE, SHIP_THRUST_COLOR, SHIP_THRUST_LEN_PX, SHIP_TRANSIT_FROM_TOP, SHIP_UPDATE_INTERVAL_MS, Z_SHIP,
 } from '../layout/constants';
 import {
@@ -67,6 +70,9 @@ import type { BodyCenterIndex } from '../types';
 import type { ShipLane } from '../../../facilities/economy-bridge';
 
 const TAU = Math.PI * 2;
+
+// Sum of the per-ship size weights, precomputed once for the weighted roll (rollSize).
+const SHIP_SIZE_WEIGHT_TOTAL = SHIP_SIZE_PX_WEIGHTS.reduce((sum, [, w]) => sum + w, 0);
 
 // A lane resolved to its endpoint IDENTITIES + emission rate, ready to spawn dots.
 // No screen coordinates live here — they're re-derived per frame from the live
@@ -95,16 +101,19 @@ export class ShipsLayer {
   private readonly posAttr: BufferAttribute;
   private readonly pos: Float32Array;
 
-  // Per-dot color, packed RGB (3 floats/slot) parallel to `pos`. Each ship rolls
-  // its own metallic-sheen tint once at spawn (rollColor) and holds it for its whole
-  // journey — so unlike `pos` (recomputed every frame from τ) this buffer is written
-  // only when the live set changes (spawn / swap-remove). `colorsDirty` gates the
-  // re-upload: an in-flight frame that just advances τ leaves colors untouched and
-  // skips the color GPU write. Same by-reference BufferAttribute pattern as `pos`.
+  // Per-dot APPEARANCE, parallel to `pos`: packed RGB color (3 floats/slot) + point
+  // size (1 float/slot). Each ship rolls both once at spawn (rollAppearance) and holds
+  // them for its whole journey — so unlike `pos` (recomputed every frame from τ) these
+  // buffers are written only when the live set changes (spawn / swap-remove).
+  // `attrsDirty` gates the re-upload: an in-flight frame that just advances τ leaves
+  // them untouched and skips the GPU write. Same by-reference BufferAttribute pattern as
+  // `pos`. `aSize` drives gl_PointSize per dot (snappedDotsMat vertexSizes path).
   private readonly colorAttr: BufferAttribute;
   private readonly colors: Float32Array;
-  private colorsDirty = false;
-  // Scratch Color reused by rollColor so the per-spawn HSL→RGB conversion allocates
+  private readonly sizeAttr: BufferAttribute;
+  private readonly sizes: Float32Array;
+  private attrsDirty = false;
+  // Scratch Color reused by rollAppearance so the per-spawn HSL→RGB conversion allocates
   // nothing. ColorManagement is OFF project-wide, so setHSL's RGB lands verbatim in
   // the buffer and renders at exactly that sRGB value.
   private readonly scratchColor = new Color();
@@ -179,13 +188,18 @@ export class ShipsLayer {
     this.colors = new Float32Array(SHIP_POOL_CAP * 3);
     this.colorAttr = new BufferAttribute(this.colors, 3);
     this.colorAttr.setUsage(DynamicDrawUsage);
+    this.sizes = new Float32Array(SHIP_POOL_CAP);
+    this.sizeAttr = new BufferAttribute(this.sizes, 1);
+    this.sizeAttr.setUsage(DynamicDrawUsage);
     this.geometry = new BufferGeometry();
     this.geometry.setAttribute('position', this.posAttr);
     this.geometry.setAttribute('color', this.colorAttr);
+    this.geometry.setAttribute('aSize', this.sizeAttr);
     this.geometry.setDrawRange(0, 0);
-    // vertexColors: each dot draws its own per-ship tint from the `color` attribute
-    // above (rolled at spawn), instead of one shared uniform color.
-    this.material = snappedDotsMat({ size: SHIP_SIZE_PX, vertexColors: true });
+    // vertexColors + vertexSizes: each dot draws its own per-ship tint (from `color`)
+    // and per-ship point size (from `aSize`), both rolled at spawn, instead of one
+    // shared uniform color + fixed size.
+    this.material = snappedDotsMat({ vertexColors: true, vertexSizes: true });
     // Layer ships over every body. Z_SHIP sits at the front of the bodies' z
     // span but isn't strictly ahead of the deepest row band, so depthTest:false
     // + the high renderOrder (not the z value) are what guarantee ships paint on
@@ -423,14 +437,14 @@ export class ShipsLayer {
   // Allocate a pool slot for a new dot on a lane, entering at normalized journey time
   // `tau` (0 for the live emitter; a uniform random value for prime()'s steady-state
   // seed). Rolls the dot's own per-end scatter (uniform-in-area, r = R·√u), cruise
-  // variance, and metallic-sheen color. Caller MUST ensure liveCount < SHIP_POOL_CAP.
+  // variance, and metallic-sheen color + point size. Caller MUST ensure liveCount < SHIP_POOL_CAP.
   private spawn(kind: number, srcIdx: number, dstIdx: number, bow: number, tau: number): void {
     const s = this.liveCount++;
     this.dKind[s] = kind;
     this.dSrc[s] = srcIdx;
     this.dDst[s] = dstIdx;
     this.dBow[s] = bow;
-    this.rollColor(s);
+    this.rollAppearance(s);
     // This ship's own emit/arrive points: uniform-in-area scatter (r = R·√u), stored as a
     // fraction-of-radius vector so each ship's arc differs AND the points track the disc
     // if it resizes.
@@ -443,13 +457,14 @@ export class ShipsLayer {
     this.dTau[s] = tau;
   }
 
-  // Roll this dot's fixed-for-life color into the color buffer at `slot`: a metallic
-  // sheen — a random hue across the configured band, held to low saturation + high
-  // lightness so it reads as brushed metal rather than a candy dot (see the
-  // SHIP_COLOR_* band in constants.ts). Ephemeral render state, so plain Math.random()
-  // like the scatter/speed rolls — not the deterministic sim PRNG. Marks colorsDirty
-  // so renderFrame re-uploads the color buffer this frame.
-  private rollColor(slot: number): void {
+  // Roll this dot's fixed-for-life appearance into the per-vertex buffers at `slot`:
+  // a metallic-sheen color (random hue across the configured band, held to low
+  // saturation + high lightness so it reads as brushed metal rather than a candy dot;
+  // see the SHIP_COLOR_* band) and a weighted point size (see rollSize / the
+  // SHIP_SIZE_PX_WEIGHTS table). Ephemeral render state, so plain Math.random() like the
+  // scatter/speed rolls — not the deterministic sim PRNG. Marks attrsDirty so renderFrame
+  // re-uploads both buffers this frame.
+  private rollAppearance(slot: number): void {
     const h = SHIP_COLOR_HUE_MIN + Math.random() * (SHIP_COLOR_HUE_MAX - SHIP_COLOR_HUE_MIN);
     const sat = SHIP_COLOR_SAT_MIN + Math.random() * (SHIP_COLOR_SAT_MAX - SHIP_COLOR_SAT_MIN);
     const light = SHIP_COLOR_LIGHT_MIN + Math.random() * (SHIP_COLOR_LIGHT_MAX - SHIP_COLOR_LIGHT_MIN);
@@ -458,7 +473,8 @@ export class ShipsLayer {
     this.colors[b + 0] = this.scratchColor.r;
     this.colors[b + 1] = this.scratchColor.g;
     this.colors[b + 2] = this.scratchColor.b;
-    this.colorsDirty = true;
+    this.sizes[slot] = rollSize();
+    this.attrsDirty = true;
   }
 
   // Render-then-advance every live dot for a `dt`-second step (dt = 0 just redraws — used
@@ -551,7 +567,9 @@ export class ShipsLayer {
         const gy = 2 * (1 - f) * (cy - p0y) + 2 * f * (p2y - cy);
         const gl = Math.hypot(gx, gy);
         if (gl > 1e-4) {
-          const k = (dir * SHIP_THRUST_LEN_PX) / gl; // scale tangent to the burn length
+          // A 1px hull gets a stubby 1px flame; bigger hulls keep the full length.
+          const thrustLen = this.sizes[i]! === 1 ? 1 : SHIP_THRUST_LEN_PX;
+          const k = (dir * thrustLen) / gl; // scale tangent to the burn length
           const b = thrustSegs * 6;
           this.thrustPos[b + 0] = sx; this.thrustPos[b + 1] = sy; this.thrustPos[b + 2] = Z_SHIP;
           this.thrustPos[b + 3] = sx + gx * k; this.thrustPos[b + 4] = sy + gy * k; this.thrustPos[b + 5] = Z_SHIP;
@@ -572,12 +590,13 @@ export class ShipsLayer {
       this.posAttr.needsUpdate = true;
       this.geometry.setDrawRange(0, this.liveCount);
     }
-    // Colors only change when the live set does (spawn / despawn), so re-upload
-    // the color buffer only then — an in-flight frame that just advanced τ leaves
-    // it alone. The draw range is shared with `pos` above, set whenever this fires.
-    if (this.colorsDirty) {
+    // Color + size only change when the live set does (spawn / despawn), so re-upload
+    // those buffers only then — an in-flight frame that just advanced τ leaves them
+    // alone. The draw range is shared with `pos` above, set whenever this fires.
+    if (this.attrsDirty) {
       this.colorAttr.needsUpdate = true;
-      this.colorsDirty = false;
+      this.sizeAttr.needsUpdate = true;
+      this.attrsDirty = false;
     }
 
     // Burns: re-upload when any are lit, or when the count dropped to 0 so the
@@ -602,13 +621,14 @@ export class ShipsLayer {
     this.dBow[i] = this.dBow[last]!;
     this.dSpeed[i] = this.dSpeed[last]!;
     this.dTau[i] = this.dTau[last]!;
-    // Color lives in the GPU-facing buffer (not an SoA array), so compact it the
-    // same way and flag a re-upload — slot i now wears the moved dot's tint.
+    // Color + size live in the GPU-facing buffers (not SoA arrays), so compact them the
+    // same way and flag a re-upload — slot i now wears the moved dot's tint + size.
     const ib = i * 3, lb = last * 3;
     this.colors[ib + 0] = this.colors[lb + 0]!;
     this.colors[ib + 1] = this.colors[lb + 1]!;
     this.colors[ib + 2] = this.colors[lb + 2]!;
-    this.colorsDirty = true;
+    this.sizes[i] = this.sizes[last]!;
+    this.attrsDirty = true;
   }
 
   dispose(): void {
@@ -631,4 +651,16 @@ function clamp(x: number, lo: number, hi: number): number {
 // small flow still reads as a steady trickle and a glut can't swamp the pool.
 function rateFor(amountMilli: number): number {
   return clamp(amountMilli * SHIP_RATE_PER_MILLI, SHIP_RATE_MIN_PER_LANE, SHIP_RATE_MAX_PER_LANE);
+}
+
+// Weighted pick of a per-ship point size from SHIP_SIZE_PX_WEIGHTS — smaller hulls
+// dominate the stream (see the table's ratios). Walk the cumulative weight; the final
+// return is an FP-rounding guard the loop never actually reaches (r < total always).
+function rollSize(): number {
+  let r = Math.random() * SHIP_SIZE_WEIGHT_TOTAL;
+  for (const [size, weight] of SHIP_SIZE_PX_WEIGHTS) {
+    r -= weight;
+    if (r < 0) return size;
+  }
+  return SHIP_SIZE_PX_WEIGHTS[SHIP_SIZE_PX_WEIGHTS.length - 1]![0];
 }

@@ -131,15 +131,20 @@ export function snappedLineMat(opts: SnappedLineOptions): ShaderMaterial {
 // same path as the perspective stars), letting one pool draw differently-colored
 // dots — the system-view cargo ships roll a per-ship tint into that attribute.
 // uColor is then unused (left in place so the snapped-viewport registry and the
-// uniform-color call sites stay identical).
-export function snappedDotsMat(opts: { color?: number; opacity?: number; size?: number; vertexColors?: boolean }): ShaderMaterial {
+// uniform-color call sites stay identical). `vertexSizes: true` likewise drives
+// gl_PointSize from a per-vertex `aSize` attribute (with a per-vertex parity snap)
+// instead of the one compile-time `size`, so one pool can mix point sizes — the
+// cargo ships roll a per-ship 1–3px size. Both flags are independent.
+export function snappedDotsMat(opts: { color?: number; opacity?: number; size?: number; vertexColors?: boolean; vertexSizes?: boolean }): ShaderMaterial {
   const size = opts.size ?? 1.0;
   const perVertexColor = opts.vertexColors === true;
+  const perVertexSize = opts.vertexSizes === true;
   // Parity-match the center snap to the point size: an ODD size centers on a
   // pixel (oddOff 0.5), an EVEN size on a pixel boundary (0.0), so a size-N
-  // square rasterizes symmetrically rather than straddling. Defaults to 1 → the
-  // crisp 1-px dot the droplines use, unchanged.
-  const oddOff = Math.round(size) % 2 === 1 ? '0.5' : '0.0';
+  // square rasterizes symmetrically rather than straddling. Per-vertex when sizes
+  // vary (computed from aSize), else compile-time from the fixed size; defaults to
+  // 1 → the crisp 1-px dot the droplines use, unchanged.
+  const oddOff = perVertexSize ? 'mod(aSize, 2.0) * 0.5' : (Math.round(size) % 2 === 1 ? '0.5' : '0.0');
   const m = new ShaderMaterial({
     uniforms: {
       uColor:    { value: new Color(opts.color ?? 0xffffff) },
@@ -151,12 +156,13 @@ export function snappedDotsMat(opts: { color?: number; opacity?: number; size?: 
     vertexShader: `
       uniform vec2 uViewport;
       ${perVertexColor ? 'varying vec3 vColor;' : ''}
+      ${perVertexSize ? 'attribute float aSize;' : ''}
       ${PIXEL_SNAP_GLSL}
       void main() {
         ${perVertexColor ? 'vColor = color;' : ''}
         vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         ${snapClipToGlPosition('clip.xy / clip.w', oddOff)}
-        gl_PointSize = ${glsl(size)};
+        gl_PointSize = ${perVertexSize ? 'aSize' : glsl(size)};
       }
     `,
     fragmentShader: `
