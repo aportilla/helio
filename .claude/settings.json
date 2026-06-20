@@ -95,5 +95,18 @@
       "Surveying the heliopause",
       "Boostin' to relativistic"
     ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/oxlint-changed.mjs\""
+          }
+        ]
+      }
+    ]
   }
 }

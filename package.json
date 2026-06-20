@@ -19,6 +19,8 @@
     "test:scene": "node --test 'src/scene/test/**/*.test.ts'",
     "test": "npm run test:sim && npm run test:facilities && npm run test:data && npm run test:scene",
     "typecheck:test": "tsc -p tsconfig.test.json",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
     "check:boundaries": "node scripts/check-sim-boundary.mjs",
     "check": "node scripts/check.mjs",
     "audit:procgen": "node scripts/audit-procgen.mjs",
@@ -36,6 +38,7 @@
   "devDependencies": {
     "@types/node": "25.9.3",
     "@types/three": "0.184.0",
+    "oxlint": "1.70.0",
     "puppeteer": "25.1.0",
     "typescript": "6.0.3",
     "vite": "8.0.10"

@@ -6,6 +6,8 @@
 //
 //   - lint-star-csv — does every star CSV row carry (or yield) the class +
 //     position the build needs? Fails on a row a scrape/edit left dead.
+//   - oxlint — fast correctness lint over the .ts/.mjs tree (config in
+//     .oxlintrc.json). Flags suspicious-but-well-typed code tsc can't see.
 //   - build:catalog — does the data pipeline parse + procgen + emit without
 //     throwing? `--strict` also fails on any dropped star row.
 //   - tsc --noEmit — does the runtime still type-check?
@@ -30,6 +32,8 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const steps = [
   { label: 'lint-star-csv',      cmd: 'node', args: ['scripts/lint-star-csv.mjs'] },
+  // Fastest gate, depends on neither catalog nor types — runs near the top.
+  { label: 'oxlint',             cmd: 'npx',  args: ['oxlint'] },
   { label: 'build:catalog',      cmd: 'node', args: ['scripts/build-catalog.mjs', '--strict'] },
   // Direct tsc to skip the pretypecheck hook (which would rebuild the catalog).
   { label: 'tsc --noEmit',       cmd: 'npx',  args: ['tsc', '--noEmit'] },

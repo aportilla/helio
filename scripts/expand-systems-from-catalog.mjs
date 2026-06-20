@@ -140,7 +140,7 @@ function resolveComponentLetters(blocks, primaryName, primarySlug) {
   // Without this, V1054 Ophiuchi's "Gliese 643" sibling (its D component)
   // would be assigned letter "B", clashing with the binary that "Ba"+"Bb"
   // together form.
-  for (const c of [...claimed]) {
+  for (const c of Array.from(claimed)) {
     if (c.length === 2) claimed.add(c[0]);
   }
   for (const b of blocks) {
@@ -363,7 +363,7 @@ for (const u of idUpdates) {
 }
 
 let totalNew = 0;
-for (const [t, list] of newRowsByTable) totalNew += list.length;
+for (const [, list] of newRowsByTable) totalNew += list.length;
 console.log(`\n=== New sibling rows (${totalNew}) ===`);
 for (const [t, list] of newRowsByTable) {
   for (const item of list) {

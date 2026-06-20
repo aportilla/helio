@@ -98,7 +98,7 @@
 // via the step-8 surface-age lift for eccentric moons of giants; every
 // other input is shared between planets and moons.
 
-import { hash32, mulberry32, sampleNormal, sampleTruncated, sampleLogTruncated, sampleMixture, drawWeightedDeposits } from './prng.mjs';
+import { hash32, mulberry32, sampleNormal, sampleTruncated, sampleMixture, drawWeightedDeposits } from './prng.mjs';
 import { GAS_POTENCY } from './gas-potency.mjs';
 import {
   PROCGEN_VERSION,
@@ -1633,7 +1633,6 @@ function productivityPostAtm(body, hostStar, hostBody) {
   const T = body.avgSurfaceTempK;
   const P = body.surfacePressureBar ?? 0;
   const g = bodyGravityEarth(body);
-  const colMass = P > 0 ? Math.log10(P / g + 1) : 0;
   const tect = body.tectonicActivity ?? 0;
   const age = hostStar?.ageGyr ?? 5.0;
   // Shares astrophysics.insolation so the biosphere insolation input
@@ -1687,9 +1686,9 @@ function productivityPostAtm(body, hostStar, hostBody) {
     const nh3 = atmFracOf(body, 'NH3');
     const h2o = atmFracOf(body, 'H2O');
     // Gas giants carry no surfacePressureBar (no surface to anchor
-    // against) so the shared `colMass` is 0 here. Sub a cloud-top
-    // reference pressure (~1 bar) so the precursor gate has a column-
-    // thickness signal to weight against atm composition.
+    // against), so there's no surface atmospheric column here. Sub a
+    // cloud-top reference pressure (~1 bar) so the precursor gate has a
+    // column-thickness signal to weight against atm composition.
     const cloudDeckColMass = Math.log10(k.cloudTopPressureBar / g + 1);
     const organic_precursors = smoothstep(k.organicPrecursors[0], k.organicPrecursors[1], (ch4 + nh3 + h2o) * cloudDeckColMass);
     const windMs = (body.cloudLayers ?? []).reduce(
@@ -2030,14 +2029,13 @@ function fillBody(b, allBodies, stars) {
   // at the body's formation location, not its current orbit — a hot
   // Jupiter that migrated from past the frost line keeps its outer-zone
   // water budget. For in-situ formation (formationAu null or equal to
-  // semiMajorAu), Sform === S. Moons inherit formation context from
-  // their host planet.
+  // semiMajorAu), formation and present-day insolation coincide. Moons
+  // inherit formation context from their host planet.
   const aFormation = b.kind === 'planet'
     ? (b.formationAu ?? aFromStar)
     : (b.kind === 'moon' && hostBody)
       ? (hostBody.formationAu ?? aFromStar)
       : aFromStar;
-  const Sform = hostStar ? insolation(hostStar.mass, aFormation) : null;
   // Frost-line trio for the four-zone bulk-composition gate. Deterministic
   // from host star mass — no PRNG draw, computed once per body. Null when
   // the host star is missing; bulk* fillers fall through to null.

@@ -17,6 +17,25 @@ the hub; the deep docs for each area are linked at the bottom.
 Catalog-specific inspectors and audits (`inspect:body`, `inspect:csv`,
 `audit:procgen`, …) live in [scripts/README.md](../scripts/README.md).
 
+## Linting
+
+[oxc](https://oxc.rs)'s `oxlint` is the code linter — a single Rust binary,
+correctness-only, configured in `.oxlintrc.json` (the source of truth for rules +
+suppressions). It complements `tsc` rather than overlapping it: `tsc` owns types,
+oxlint catches well-typed-but-suspicious patterns, and it's the only static
+analysis the `.mjs` tooling layer gets. Three ways it runs:
+
+| Entry point | When | What |
+|---|---|---|
+| `npm run lint` | Ad-hoc | Whole tree; `npm run lint:fix` applies the autofixable subset. |
+| inside `npm run check` | Pre-commit / CI | A gating step near the top of the umbrella (fast, fails fast). CI runs `check` before `build`, so a finding blocks the deploy. |
+| `.claude/hooks/oxlint-changed.mjs` | After every Claude edit | A PostToolUse hook (wired in `.claude/settings.json`) lints just the edited file and blocks back to the agent on a finding — "lint-on-save" for a Claude session, where editor extensions are useless because the editor *is* the agent. Fails open if oxlint can't run. |
+
+Suppressions are deliberate and rationale-commented in `.oxlintrc.json` — no blanket
+disables. The standalone-sim import wall stays owned by
+`scripts/check-sim-boundary.mjs`, not oxlint (its `import` plugin is too
+false-positive-prone for path-based zones).
+
 ## Headless sim / economy inspection
 
 The economy sim and its projection seam run in **plain Node** — no browser, no

@@ -216,7 +216,8 @@ export function parseComponentSections(html, primaryName, primarySlug) {
     if (letter) claimed.add(letter);
     b.letter = letter;
   }
-  for (const c of [...claimed]) if (c.length === 2) claimed.add(c[0]);
+  // Iterate a snapshot — the loop adds parent letters to `claimed`.
+  for (const c of Array.from(claimed)) if (c.length === 2) claimed.add(c[0]);
   for (const b of blocks) {
     if (b.letter) continue;
     for (const c of 'BCDEFGHIJKLMNOPQRSTUVWXYZ') {

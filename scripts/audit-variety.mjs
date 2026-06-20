@@ -164,8 +164,6 @@ const belts   = bodies.filter(b => b.kind === 'belt');
 const rings   = bodies.filter(b => b.kind === 'ring');
 const procgenPlanets = planets.filter(b => !isCurated(b));
 const procgenMoons   = moons.filter(b => !isCurated(b));
-const allTerrestrialish = [...procgenPlanets, ...procgenMoons]
-  .filter(b => !GASEOUS_ARCHETYPES.has(arch(b)));
 
 console.log('VARIETY AUDIT — what cool things is procgen surfacing?');
 console.log('catalog: ' + CATALOG_PATH);

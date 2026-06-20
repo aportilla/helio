@@ -11,9 +11,10 @@
 //      (src/facilities/project.ts) + the resource-vocab bridge are the one
 //      quarantined seam; a second importer elsewhere silently erodes it.
 //
-// This is the repo's node-script stand-in for the ESLint `no-restricted-imports`
-// rule the plan names — there is no ESLint config here, and check.mjs already
-// owns the "umbrella of node-script checks" idiom.
+// This node script — not a lint rule — owns the sim wall. It's the spiritual
+// `no-restricted-imports`/`no-restricted-paths` check, but oxlint's `import`
+// plugin is too false-positive-prone for path-based zones, so the deterministic
+// script stays the source of truth. check.mjs already owns the node-script idiom.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
@@ -28,9 +29,9 @@ const FACILITIES = resolve(REPO_ROOT, 'src/facilities');
 // and dynamic import('...') with a string-literal argument (the idiomatic way a
 // future lazy engine-bridge would pull the sim — exactly the second-importer case
 // this guard exists to catch). A dynamic import whose specifier is a computed or
-// template expression can't be caught by a lexer and is out of scope; the ESLint
-// `no-restricted-imports` rule the plan names would cover it, but the repo has no
-// ESLint, so this script is the stand-in.
+// template expression can't be caught by a lexer and is out of scope; an AST-based
+// import rule would cover it, but we deliberately don't route the wall through
+// oxlint (see the header), so that edge stays a documented blind spot.
 const SPECIFIER = /(?:import|export)\b[^;]*?from\s*['"]([^'"]+)['"]|import\s*(?:\(\s*)?['"]([^'"]+)['"]/g;
 
 function tsFilesUnder(dir) {

@@ -658,11 +658,6 @@ function assertBodyShape(b) {
   }
 }
 
-function cellOrNull(raw) {
-  const t = (raw ?? '').trim();
-  return t === '' || t === 'n/a' ? null : t;
-}
-
 function parseCsvBodies(text, label) {
   const rows = parseCsv(text);
   const header = rows.shift();

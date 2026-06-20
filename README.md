@@ -23,6 +23,7 @@ npm run dev            # vite dev server, opens browser (prebuilds catalog)
 npm run build          # tsc + vite build → dist/   (prebuilds catalog; tsconfig sets noEmit, so tsc just type-checks)
 npm run preview        # serve dist/
 npm run typecheck      # tsc --noEmit (prebuilds catalog)
+npm run lint           # oxlint over the tree (fast correctness lint; also gated in `npm run check`)
 npm run build:catalog  # regenerate src/data/catalog.generated.json from src/data/*.csv
 ```
 

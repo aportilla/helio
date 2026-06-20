@@ -17,7 +17,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadCatalog, buildIndex, findStar, parseCsv } from './lib/catalog-index.mjs';
+import { loadCatalog, parseCsv } from './lib/catalog-index.mjs';
 
 const argv = {};
 for (const a of process.argv.slice(2)) {

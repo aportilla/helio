@@ -51,9 +51,7 @@ import {
   BELT_RESOURCE_OCCURRENCE,
   RESOURCE_KEYS,
   RESOURCE_TIER,
-  RESOURCE_OCCURRENCE,
   RESOURCE_PAIR_AFFINITY,
-  MOTHERLODE_HOSTILITY,
   DEPOSIT_COUNT_DIST,
   COMPANION_PLANET_SUPPRESSION,
   zoneForFormationAu,
@@ -679,36 +677,6 @@ for (const cls of STELLAR_CLASSES) {
 }
 console.log();
 
-// --- 7. Surface scalars by archetype ----------------------------------------
-
-console.log('=== Surface scalars, by archetype (procgen planets) ===');
-function auditScalar(field, priorTable, label) {
-  console.log('  --- ' + label + ' ---');
-  console.log('  class       |  n      obs.mean  obs.sd     prior.mean  prior.sd   z');
-  const byClass = {};
-  for (const b of bodies) {
-    if (b.kind !== 'planet' || b.source !== 'procgen') continue;
-    if (b[field] == null) continue;
-    const arch = archOf(b);
-    if (!byClass[arch]) byClass[arch] = [];
-    byClass[arch].push(b[field]);
-  }
-  for (const cls of Object.keys(priorTable).sort()) {
-    const arr = byClass[cls] || [];
-    const obs = meanStd(arr);
-    const p = priorTable[cls];
-    if (!arr.length) continue;
-    console.log(
-      '  ' + pad(cls, 11) +
-      ' |' + pad(arr.length, 5, true) +
-      '   ' + pad(obs.mean.toFixed(3), 6, true) +
-      '   ' + pad(obs.sd.toFixed(3), 5, true) +
-      '      ' + pad(p.mean.toFixed(3), 5, true) +
-      '       ' + pad(p.sd.toFixed(3), 5, true) +
-      fmtZ(zMean(obs.mean, arr.length, p.mean, p.sd || 0.001), arr.length),
-    );
-  }
-}
 // Phase 3 closes the bug where small airless bodies rendered liquid
 // oceans and warm airless bodies rendered surface ice. Both cases
 // should be ≈ 0 once the cover formulas read (T, P, bulkWater).
@@ -823,10 +791,8 @@ auditCoverBugClosure();
 auditBulkComposition('bulkWaterFraction',    'bulkWaterFraction',    BULK_WATER_FRACTION_BY_ZONE);
 auditBulkComposition('bulkMetalFraction',    'bulkMetalFraction',    BULK_METAL_FRACTION_BY_ZONE);
 auditBulkComposition('bulkVolatileFraction', 'bulkVolatileFraction', BULK_VOLATILE_FRACTION_BY_ZONE);
-// Phase 4: surfaceAge / tectonicActivity / magneticFieldGauss are now
-// physics-derived (no per-class prior table); the class-keyed auditScalar
-// is incompatible. Drop these reports for now; replace with derivation-
-// distribution reports if needed.
+// surfaceAge / tectonicActivity / magneticFieldGauss are physics-derived
+// (no per-class prior table), so they carry no class-keyed scalar audit.
 
 // Archetype distribution (audit rollup). After all physics settles, archOf
 // buckets each body by the body-traits predicates. Report counts so it's easy
