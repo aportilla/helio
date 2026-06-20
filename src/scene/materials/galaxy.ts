@@ -125,8 +125,16 @@ export function snappedLineMat(opts: SnappedLineOptions): ShaderMaterial {
 // droplines (far-side-of-the-galactic-plane variant) need; a larger size drives
 // the system-view cargo-ship dots. Cheaper than baking dash segments into
 // LineSegments geometry — each dot is a single vertex.
-export function snappedDotsMat(opts: { color: number; opacity?: number; size?: number }): ShaderMaterial {
+//
+// `vertexColors: true` switches the fill from the single uColor uniform to a
+// per-vertex `color` attribute (built-in, injected by three when the flag is set,
+// same path as the perspective stars), letting one pool draw differently-colored
+// dots — the system-view cargo ships roll a per-ship tint into that attribute.
+// uColor is then unused (left in place so the snapped-viewport registry and the
+// uniform-color call sites stay identical).
+export function snappedDotsMat(opts: { color?: number; opacity?: number; size?: number; vertexColors?: boolean }): ShaderMaterial {
   const size = opts.size ?? 1.0;
+  const perVertexColor = opts.vertexColors === true;
   // Parity-match the center snap to the point size: an ODD size centers on a
   // pixel (oddOff 0.5), an EVEN size on a pixel boundary (0.0), so a size-N
   // square rasterizes symmetrically rather than straddling. Defaults to 1 → the
@@ -134,7 +142,7 @@ export function snappedDotsMat(opts: { color: number; opacity?: number; size?: n
   const oddOff = Math.round(size) % 2 === 1 ? '0.5' : '0.0';
   const m = new ShaderMaterial({
     uniforms: {
-      uColor:    { value: new Color(opts.color) },
+      uColor:    { value: new Color(opts.color ?? 0xffffff) },
       uOpacity:  { value: opts.opacity ?? 1.0 },
       // 0,0 until first resize overwrites via setSnappedLineViewport — the
       // snap math needs the drawing-buffer size, not CSS px.
@@ -142,20 +150,23 @@ export function snappedDotsMat(opts: { color: number; opacity?: number; size?: n
     },
     vertexShader: `
       uniform vec2 uViewport;
+      ${perVertexColor ? 'varying vec3 vColor;' : ''}
       ${PIXEL_SNAP_GLSL}
       void main() {
+        ${perVertexColor ? 'vColor = color;' : ''}
         vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         ${snapClipToGlPosition('clip.xy / clip.w', oddOff)}
         gl_PointSize = ${glsl(size)};
       }
     `,
     fragmentShader: `
-      uniform vec3 uColor;
+      ${perVertexColor ? 'varying vec3 vColor;' : 'uniform vec3 uColor;'}
       uniform float uOpacity;
       void main() {
-        gl_FragColor = vec4(uColor, uOpacity);
+        gl_FragColor = vec4(${perVertexColor ? 'vColor' : 'uColor'}, uOpacity);
       }
     `,
+    vertexColors: perVertexColor,
     transparent: true,
     depthWrite: false,
   });

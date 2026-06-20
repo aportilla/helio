@@ -121,8 +121,9 @@ export class SystemDiagram {
     return m;
   }
 
-  // Advance the cargo-ship overlay one frame. The system view's only per-frame
-  // path, threaded from SystemScene.tick.
+  // Drive the cargo-ship overlay — the system view's only per-frame path, threaded
+  // from SystemScene.tick. Called every frame; the dots redraw each frame but their
+  // motion steps on a fixed cadence (see ShipsLayer.update).
   update(now: number): void {
     this.ships.update(now);
   }

@@ -11,7 +11,10 @@
 // plan's same-cluster moves, not the in-flight transfer ring (which carries only the
 // inter-cluster outgoing/incoming/through cargo). Emission RATE scales with the
 // lane's shipped volume (the speculative next-turn lanes SystemScene feeds in), so
-// a busy lane reads as a denser stream.
+// a busy lane reads as a denser stream. Each dot also rolls its OWN color at spawn —
+// a metallic sheen (random hue, low saturation, high lightness; see rollColor + the
+// SHIP_COLOR_* band) — so a stream reads as individually-hulled ships, not one
+// uniform substance.
 // Through those two ease ramps a dot also trails a short yellow EXHAUST flame (a
 // second in-place snapped-line pool) — behind it while accelerating, out the front
 // while braking — dark through the cruise middle.
@@ -29,17 +32,19 @@
 // allocation, no GPU clock. A live dot stores only its NORMALIZED JOURNEY TIME
 // (τ ∈ [0,1]) and its endpoint IDENTITIES (which bodies / which screen edges) plus
 // its per-end scatter as a fraction of the disc radius — never absolute coordinates.
-// Each frame it maps τ → arc position through the shared motion profile (ship-profile.ts)
+// Every frame it maps τ → arc position through the shared motion profile (ship-profile.ts)
 // and RE-DERIVES the arc from the live body layout, so a resize moves the bodies and the
 // dots follow automatically (each keeping its own scattered endpoints), and a mid-turn
-// setFlows() never re-aims a dot already in flight (its τ + endpoints are untouched).
+// setFlows() never re-aims a dot already in flight (its τ + endpoints are untouched). The
+// motion (τ) only ADVANCES on a fixed SHIP_UPDATE_INTERVAL_MS cadence — slow sub-pixel
+// motion snapped every frame shimmers at uneven moments, so dots step on a regular beat.
 // Storing TIME (not arc position) is what lets prime() open the view already at steady
 // state from a uniform random τ spread (see prime()). Travel is screen-normalized:
 // crossing the full content width always takes SHIP_CROSS_SCREEN_SEC, so a dot's
 // wall-clock journey time is the same on any window size (px/sec auto-scales with the
 // viewport).
 
-import { BufferAttribute, BufferGeometry, DynamicDrawUsage, LineSegments, Points } from 'three';
+import { BufferAttribute, BufferGeometry, Color, DynamicDrawUsage, LineSegments, Points } from 'three';
 import type { Scene, ShaderMaterial } from 'three';
 import { indexOfBodyId } from '../../../data/stars';
 import { snappedDotsMat, snappedLineMat, unregisterSnappedMaterial } from '../../materials';
@@ -48,9 +53,10 @@ import { snapPx } from '../geom/snap';
 import { hash32, mulberry32 } from '../geom/prng';
 import {
   RENDER_ORDER_SHIP, RENDER_ORDER_SHIP_THRUST, SHIP_ARC_BOW_DOWN_SCALE, SHIP_ARC_BOW_MAX, SHIP_ARC_BOW_MIN,
-  SHIP_COLOR, SHIP_CROSS_SCREEN_SEC, SHIP_MAX_TICK_DT_MS, SHIP_OFFSCREEN_MARGIN,
+  SHIP_COLOR_HUE_MAX, SHIP_COLOR_HUE_MIN, SHIP_COLOR_LIGHT_MAX, SHIP_COLOR_LIGHT_MIN,
+  SHIP_COLOR_SAT_MAX, SHIP_COLOR_SAT_MIN, SHIP_CROSS_SCREEN_SEC, SHIP_OFFSCREEN_MARGIN,
   SHIP_POOL_CAP, SHIP_RATE_MAX_PER_LANE, SHIP_RATE_MIN_PER_LANE, SHIP_RATE_PER_MILLI, SHIP_SIZE_PX,
-  SHIP_SPEED_VARIANCE, SHIP_THRUST_COLOR, SHIP_THRUST_LEN_PX, SHIP_TRANSIT_FROM_TOP, Z_SHIP,
+  SHIP_SPEED_VARIANCE, SHIP_THRUST_COLOR, SHIP_THRUST_LEN_PX, SHIP_TRANSIT_FROM_TOP, SHIP_UPDATE_INTERVAL_MS, Z_SHIP,
 } from '../layout/constants';
 import {
   journeyTime, sampleProfile,
@@ -88,6 +94,20 @@ export class ShipsLayer {
   // while the in-place writes silently went nowhere.
   private readonly posAttr: BufferAttribute;
   private readonly pos: Float32Array;
+
+  // Per-dot color, packed RGB (3 floats/slot) parallel to `pos`. Each ship rolls
+  // its own metallic-sheen tint once at spawn (rollColor) and holds it for its whole
+  // journey — so unlike `pos` (recomputed every frame from τ) this buffer is written
+  // only when the live set changes (spawn / swap-remove). `colorsDirty` gates the
+  // re-upload: an in-flight frame that just advances τ leaves colors untouched and
+  // skips the color GPU write. Same by-reference BufferAttribute pattern as `pos`.
+  private readonly colorAttr: BufferAttribute;
+  private readonly colors: Float32Array;
+  private colorsDirty = false;
+  // Scratch Color reused by rollColor so the per-spawn HSL→RGB conversion allocates
+  // nothing. ColorManagement is OFF project-wide, so setHSL's RGB lands verbatim in
+  // the buffer and renders at exactly that sRGB value.
+  private readonly scratchColor = new Color();
 
   // Thrust burns — a second, in-place-rewritten pool (same by-reference
   // BufferAttribute pattern as `pos`). One 2-vertex segment per ship that is in an
@@ -146,16 +166,26 @@ export class ShipsLayer {
   private bufferH = 0;
   private resolved: ResolvedLane[] = [];
 
+  // Previous frame's timestamp, and wall-clock time accumulated toward the next motion
+  // step. update() runs + redraws every frame, but only ADVANCES the dots once
+  // tickAccum crosses SHIP_UPDATE_INTERVAL_MS — see update().
   private lastNow = -1;
+  private tickAccum = 0;
 
   constructor(scene: Scene) {
     this.pos = new Float32Array(SHIP_POOL_CAP * 3);
     this.posAttr = new BufferAttribute(this.pos, 3);
     this.posAttr.setUsage(DynamicDrawUsage);
+    this.colors = new Float32Array(SHIP_POOL_CAP * 3);
+    this.colorAttr = new BufferAttribute(this.colors, 3);
+    this.colorAttr.setUsage(DynamicDrawUsage);
     this.geometry = new BufferGeometry();
     this.geometry.setAttribute('position', this.posAttr);
+    this.geometry.setAttribute('color', this.colorAttr);
     this.geometry.setDrawRange(0, 0);
-    this.material = snappedDotsMat({ color: SHIP_COLOR, size: SHIP_SIZE_PX });
+    // vertexColors: each dot draws its own per-ship tint from the `color` attribute
+    // above (rolled at spawn), instead of one shared uniform color.
+    this.material = snappedDotsMat({ size: SHIP_SIZE_PX, vertexColors: true });
     // Layer ships over every body. Z_SHIP sits at the front of the bodies' z
     // span but isn't strictly ahead of the deepest row band, so depthTest:false
     // + the high renderOrder (not the z value) are what guarantee ships paint on
@@ -274,23 +304,34 @@ export class ShipsLayer {
     return v;
   }
 
-  // Per-frame: spawn at each lane's rate, then re-derive + advance every live dot.
-  // dt is clamped (SHIP_MAX_TICK_DT_MS) so a resumed background tab doesn't dump a
-  // burst of spawns or teleport in-flight dots.
+  // Per-frame: re-derive + redraw every live dot (so they always track the live layout
+  // and the buffer stays current), but only ADVANCE their motion on a fixed CADENCE
+  // (SHIP_UPDATE_INTERVAL_MS). Wall-clock time accumulates in tickAccum; once it crosses
+  // the cadence it's released as one motion step (`stepDt`) and the dots move, otherwise
+  // stepDt is 0 and they're re-derived in place at the same τ. Holding τ between beats
+  // makes the slow dots step on a regular cadence instead of creeping sub-pixel and
+  // snapping at uneven moments — an even, deliberate retro step rather than a shimmer.
   update(now: number): void {
-    const dt = this.lastNow < 0 ? 0 : Math.min(now - this.lastNow, SHIP_MAX_TICK_DT_MS) / 1000;
+    // Per-frame dt, clamped so a resumed background tab advances at most one beat
+    // (2× the cadence) rather than teleporting in-flight dots through their journey.
+    const rawDt = this.lastNow < 0 ? 0 : Math.min(now - this.lastNow, 2 * SHIP_UPDATE_INTERVAL_MS) / 1000;
     this.lastNow = now;
     if (this.liveCount === 0 && this.resolved.length === 0) return;
-    // Nothing moves on a zero-dt frame (the first frame, or a duplicate timestamp) and
-    // the buffer is already current — skip the work so this formerly-static view pays no
-    // idle per-frame GPU re-upload. After prime() this first frame is also where the
-    // seeded pool is left standing (prime() already flushed it to the buffer).
-    if (dt <= 0) return;
 
-    // Spawn at each lane's rate. A dot captures only its lane's identity + a random
-    // per-end scatter (set in spawn); its screen position is derived in renderFrame.
+    // Release accumulated time as a single motion step only once it crosses the cadence;
+    // between beats stepDt is 0 (dots re-derived in place — still tracking a resize — but
+    // not moved). Resetting to 0 (not subtracting) keeps total advance == wall time, so a
+    // dot's journey still takes its full SHIP_CROSS_SCREEN_SEC.
+    this.tickAccum += rawDt;
+    let stepDt = 0;
+    if (this.tickAccum * 1000 >= SHIP_UPDATE_INTERVAL_MS) {
+      stepDt = this.tickAccum;
+      this.tickAccum = 0;
+    }
+
+    // Spawn at each lane's rate for this step's worth of time (0 between beats).
     for (const lane of this.resolved) {
-      lane.emitAccum += lane.ratePerSec * dt;
+      lane.emitAccum += lane.ratePerSec * stepDt;
       while (lane.emitAccum >= 1) {
         // Pool full: keep ONE dot pending (clamp, don't zero) so a busy lane
         // resumes at full rate the instant a slot frees — zeroing would re-prime
@@ -301,7 +342,7 @@ export class ShipsLayer {
       }
     }
 
-    this.renderFrame(dt);
+    this.renderFrame(stepDt);
   }
 
   // Open the view already at STEADY STATE: seed every lane with the in-flight traffic it
@@ -381,14 +422,15 @@ export class ShipsLayer {
 
   // Allocate a pool slot for a new dot on a lane, entering at normalized journey time
   // `tau` (0 for the live emitter; a uniform random value for prime()'s steady-state
-  // seed). Rolls the dot's own per-end scatter (uniform-in-area, r = R·√u) and cruise
-  // variance. Caller MUST ensure liveCount < SHIP_POOL_CAP.
+  // seed). Rolls the dot's own per-end scatter (uniform-in-area, r = R·√u), cruise
+  // variance, and metallic-sheen color. Caller MUST ensure liveCount < SHIP_POOL_CAP.
   private spawn(kind: number, srcIdx: number, dstIdx: number, bow: number, tau: number): void {
     const s = this.liveCount++;
     this.dKind[s] = kind;
     this.dSrc[s] = srcIdx;
     this.dDst[s] = dstIdx;
     this.dBow[s] = bow;
+    this.rollColor(s);
     // This ship's own emit/arrive points: uniform-in-area scatter (r = R·√u), stored as a
     // fraction-of-radius vector so each ship's arc differs AND the points track the disc
     // if it resizes.
@@ -399,6 +441,24 @@ export class ShipsLayer {
     // Fixed random cruise multiplier in [1 − V/2, 1 + V/2], centered on 1.
     this.dSpeed[s] = 1 + (Math.random() - 0.5) * SHIP_SPEED_VARIANCE;
     this.dTau[s] = tau;
+  }
+
+  // Roll this dot's fixed-for-life color into the color buffer at `slot`: a metallic
+  // sheen — a random hue across the configured band, held to low saturation + high
+  // lightness so it reads as brushed metal rather than a candy dot (see the
+  // SHIP_COLOR_* band in constants.ts). Ephemeral render state, so plain Math.random()
+  // like the scatter/speed rolls — not the deterministic sim PRNG. Marks colorsDirty
+  // so renderFrame re-uploads the color buffer this frame.
+  private rollColor(slot: number): void {
+    const h = SHIP_COLOR_HUE_MIN + Math.random() * (SHIP_COLOR_HUE_MAX - SHIP_COLOR_HUE_MIN);
+    const sat = SHIP_COLOR_SAT_MIN + Math.random() * (SHIP_COLOR_SAT_MAX - SHIP_COLOR_SAT_MIN);
+    const light = SHIP_COLOR_LIGHT_MIN + Math.random() * (SHIP_COLOR_LIGHT_MAX - SHIP_COLOR_LIGHT_MIN);
+    this.scratchColor.setHSL(h, sat, light);
+    const b = slot * 3;
+    this.colors[b + 0] = this.scratchColor.r;
+    this.colors[b + 1] = this.scratchColor.g;
+    this.colors[b + 2] = this.scratchColor.b;
+    this.colorsDirty = true;
   }
 
   // Render-then-advance every live dot for a `dt`-second step (dt = 0 just redraws — used
@@ -512,6 +572,13 @@ export class ShipsLayer {
       this.posAttr.needsUpdate = true;
       this.geometry.setDrawRange(0, this.liveCount);
     }
+    // Colors only change when the live set does (spawn / despawn), so re-upload
+    // the color buffer only then — an in-flight frame that just advanced τ leaves
+    // it alone. The draw range is shared with `pos` above, set whenever this fires.
+    if (this.colorsDirty) {
+      this.colorAttr.needsUpdate = true;
+      this.colorsDirty = false;
+    }
 
     // Burns: re-upload when any are lit, or when the count dropped to 0 so the
     // draw range shrinks and last frame's flares clear.
@@ -535,6 +602,13 @@ export class ShipsLayer {
     this.dBow[i] = this.dBow[last]!;
     this.dSpeed[i] = this.dSpeed[last]!;
     this.dTau[i] = this.dTau[last]!;
+    // Color lives in the GPU-facing buffer (not an SoA array), so compact it the
+    // same way and flag a re-upload — slot i now wears the moved dot's tint.
+    const ib = i * 3, lb = last * 3;
+    this.colors[ib + 0] = this.colors[lb + 0]!;
+    this.colors[ib + 1] = this.colors[lb + 1]!;
+    this.colors[ib + 2] = this.colors[lb + 2]!;
+    this.colorsDirty = true;
   }
 
   dispose(): void {

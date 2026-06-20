@@ -392,9 +392,23 @@ export const Z_SHIP = 0.005;
 // cap) rather than growing the buffer.
 export const SHIP_POOL_CAP = 512;
 
-// One neutral cargo color for v1 (pale cyan, in the cyan-on-near-black
-// palette). Per-resource tinting is a documented follow-up.
-export const SHIP_COLOR = 0x8fd3ff;
+// Per-ship cargo tint. Each dot rolls its OWN color once at spawn (see
+// ShipsLayer.rollColor), so a lane reads as a stream of individually-hulled
+// ships rather than one uniform substance. The roll is a METALLIC SHEEN: a hue
+// drawn anywhere in [HUE_MIN, HUE_MAX) but held to LOW saturation + HIGH
+// lightness, so every dot reads as brushed metal catching starlight (steel,
+// titanium, gold, copper, gunmetal) rather than a candy-bright dot — varied yet
+// cohesive. Tune to taste: widen the saturation band for more color, raise the
+// lightness band for more sheen, narrow the hue band to bias warm (gold/copper,
+// ~0.0–0.15) or cool (steel/titanium, ~0.5–0.7). Hue/sat/light are HSL fractions
+// in [0,1]; the default hue band is the full circle. (This is aesthetic per-ship
+// variety; keying hue off the cargo RESOURCE stays a possible later layer.)
+export const SHIP_COLOR_HUE_MIN = 0.0;
+export const SHIP_COLOR_HUE_MAX = 1.0;
+export const SHIP_COLOR_SAT_MIN = 0.15;
+export const SHIP_COLOR_SAT_MAX = 0.42;
+export const SHIP_COLOR_LIGHT_MIN = 0.62;
+export const SHIP_COLOR_LIGHT_MAX = 0.86;
 
 // Dot size in env-px. 2 px reads as visible cargo traffic without going chunky —
 // a single pixel proved too faint to register against the bodies. An even size
@@ -410,7 +424,7 @@ export const SHIP_SIZE_PX = 2;
 // so dots LINGER in flight
 // — more stay on screen at once, so even a small flow reads as a continuous
 // trickle rather than a lone blip. Raise to slow traffic down, lower to speed up.
-export const SHIP_CROSS_SCREEN_SEC = 200;
+export const SHIP_CROSS_SCREEN_SEC = 180;
 
 // Per-ship speed variance. Each dot's cruise pace is multiplied by a random factor
 // in [1 − V/2, 1 + V/2], fixed for its whole journey, so ships spread across a
@@ -446,10 +460,23 @@ export const SHIP_OFFSCREEN_MARGIN = 24;
 // vertical in/out columns.
 export const SHIP_TRANSIT_FROM_TOP = 56;
 
-// Per-frame dt clamp (ms) — mirrors the galaxy scene's MAX_TICK_DT_MS so a
-// backgrounded tab resuming doesn't dump a burst of spawns or teleport
-// in-flight dots.
-export const SHIP_MAX_TICK_DT_MS = 100;
+// Position-update cadence (ms). Ship dots are re-derived + redrawn every frame (so they
+// always track the live layout), but their MOTION only advances on this fixed beat — the
+// journey time τ is held in between, so positions step on the cadence rather than gliding.
+// At the deliberately slow cruise pace (SHIP_CROSS_SCREEN_SEC) a dot creeps well under a
+// pixel per 60 fps frame, so advancing + pixel-snapping every frame makes it dwell on a
+// pixel for an uneven span then jump — an irregular shimmer, worst on the curved arcs (x
+// and y cross their pixel boundaries at different moments). Advancing on a regular cadence
+// turns that into deliberate, even retro sprite-stepping.
+//
+// TUNE AGAINST SHIP SPEED: the faster ships move (lower SHIP_CROSS_SCREEN_SEC), the
+// SHORTER this should be, or the per-tick jump grows and motion reads as choppy
+// teleporting; slower ships tolerate a longer beat. Rule of thumb: keep the cruise
+// step (≈ contentW / SHIP_CROSS_SCREEN_SEC · INTERVAL/1000) around 1–2 px. Also doubles
+// as the resumed-background-tab guard — a single tick advances by at most 2× this, so
+// a refocused tab steps forward one beat rather than teleporting every dot through its
+// whole journey.
+export const SHIP_UPDATE_INTERVAL_MS = 83; // 12fps
 
 // Body-to-body (internal) lanes bow into an arc rather than a straight chord, so
 // crossing traffic streams read as distinct curved corridors. The control point
