@@ -371,6 +371,25 @@ export const RENDER_ORDER_SHIP = 30;
 // so a ship's dot paints over the tip of its own burn line.
 export const RENDER_ORDER_SHIP_THRUST = 29;
 
+// --- Fleet (built ships) ---
+//
+// The player's built ships, parked as one centered formation in the system's lower
+// field. They render ABOVE the cargo dots — foreground actors, not background
+// traffic — and (like the cargo pool) rely on depthTest:false + renderOrder for
+// layering, not z. The gap above RENDER_ORDER_FLEET is reserved for the eventual
+// combat-sprite block (Appendix A10).
+export const RENDER_ORDER_FLEET = 35;
+export const Z_FLEET = 0.006;
+// Hard ceiling on simultaneously-rendered fleet sprites. Ready ships have no exit
+// path in v1 (no movement/combat), so the rendered count is capped rather than
+// growing unbounded; surplus ships beyond this are simply not drawn.
+export const MAX_FLEET_SPRITES = 32;
+// The fleet's baseline height as a fraction of the buffer, measured UP from the
+// bottom — low in the open field, clear of the planet row above. Rows stack upward.
+export const FLEET_BASELINE_FRAC = 0.16;
+// Gap in buffer px between adjacent fleet sprites in the formation grid.
+export const FLEET_SPRITE_GAP = 4;
+
 // --- Cargo ships (economy traffic) ---
 //
 // Animated dots representing the cluster's cargo lanes while a system is open. A

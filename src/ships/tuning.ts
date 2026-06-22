@@ -1,0 +1,15 @@
+// Hoisted ship-class tunables. Kept in one place so balance passes never hunt
+// through def bodies — and so docs reference them by NAME, never by value (a number
+// in prose rots the instant it's tuned).
+//
+// PROVISIONAL: v1 ships a single class; these values are an early interpretation
+// made before Helio's fleet is finalized. Re-tuning is non-breaking — the only
+// serialized ship contract is the classId wire string, never these numbers.
+
+// — Corvette: the v1 starter ship. A small hull built in a handful of galaxy turns.
+export const CORVETTE_BUILD_TURNS = 3;
+
+// Fleet-sprite radius in content-buffer px. The fleet draws Mesh quads on the
+// makeStarMeshMaterial path — the same disc primitive the system view's bodies use,
+// shared with the eventual combat sprites — not GL_POINTS (plan §8).
+export const CORVETTE_SPRITE_SIZE_PX = 5;

@@ -25,3 +25,10 @@ export function addableTypesFor(
     return (counts.get(t) ?? 0) < def.maxPerBody;
   });
 }
+
+// Whether any placed facility lets this body build ships — the gate for the
+// Build-Ship affordance. Asks the registry (the capability flag), never an inline
+// `type === 'shipyard'`, so it stays in lockstep with the defs (mirrors addableTypesFor).
+export function facilityHasShipbuilding(current: readonly PlacedFacility[]): boolean {
+  return current.some((f) => FACILITY_BY_TYPE.get(f.type)?.enablesShipbuilding === true);
+}

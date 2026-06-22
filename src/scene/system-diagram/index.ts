@@ -15,6 +15,7 @@ import { OrthographicCamera, Scene } from 'three';
 import { STAR_CLUSTERS } from '../../data/stars';
 import { BeltsLayer } from './layers/belts';
 import { FacilitiesLayer } from './layers/facilities';
+import { FleetLayer } from './layers/fleet';
 import { MoonsLayer } from './layers/moons';
 import { PlanetsLayer } from './layers/planets';
 import { RingsLayer } from './layers/rings';
@@ -23,6 +24,7 @@ import { StarsRowLayer } from './layers/stars-row';
 import { buildRowSlots, layoutRow, type RowSlot } from './layout/row';
 import { type BodyCenter, type BodyCenterIndex, type DiagramHit, type DiagramPick, type PlanetCenterIndex, picksEqual } from './types';
 import type { ShipLane } from '../../facilities/economy-bridge';
+import type { Ship } from '../../game-state';
 
 export type { DiagramPick } from './types';
 
@@ -48,6 +50,9 @@ export class SystemDiagram {
   private readonly ships:   ShipsLayer;
   // On-body facility chips — a static overlay re-read from game-state each layout.
   private readonly facilities: FacilitiesLayer;
+  // The player's built-ship fleet — a single formation in the lower field, fed this
+  // system's ready ships by SystemScene. Render-only (no pick) in v1.
+  private readonly fleet: FleetLayer;
 
   // Two independent outline channels that share one visual (the 1-px rim):
   // the transient hover follows the cursor, the persistent selection is set by
@@ -67,6 +72,7 @@ export class SystemDiagram {
     this.rings   = new RingsLayer(this.scene, this.rowSlots);
     this.ships   = new ShipsLayer(this.scene);
     this.facilities = new FacilitiesLayer(this.scene);
+    this.fleet   = new FleetLayer(this.scene);
   }
 
   resize(contentW: number, bufferH: number): void {
@@ -109,6 +115,8 @@ export class SystemDiagram {
     const bodyCenters = this.buildBodyCenters(centers);
     this.ships.setLayout(bodyCenters, this.contentW, this.bufferH);
     this.facilities.layout(bodyCenters);
+    // The fleet isn't body-anchored — it formations off the content rect only.
+    this.fleet.layout(this.contentW, this.bufferH);
 
     // Layout rebuilds the per-body outline attributes, so re-stamp the
     // persistent selection (hover re-applies itself on the next pointer move).
@@ -145,6 +153,12 @@ export class SystemDiagram {
   // last layout published) — no full diagram relayout.
   syncFacilities(): void {
     this.facilities.layout(this.buildBodyCenters(this.planets.getCenterIndex()));
+  }
+
+  // Hand the fleet layer this system's READY ships (the caller pre-filters). A pure
+  // pass-through; the layer re-derives the formation from the bounds it already has.
+  syncFleet(ships: readonly Ship[]): void {
+    this.fleet.setFleet(ships);
   }
 
   // Open the cargo overlay already at steady state (one-shot). Call once, after the
@@ -234,5 +248,6 @@ export class SystemDiagram {
     this.rings.dispose();
     this.ships.dispose();
     this.facilities.dispose();
+    this.fleet.dispose();
   }
 }

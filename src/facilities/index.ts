@@ -24,7 +24,7 @@ export {
   facilityColor,
 } from './registry.ts';
 
-export { addableTypesFor } from './eligibility.ts';
+export { addableTypesFor, facilityHasShipbuilding } from './eligibility.ts';
 
 // — Projection seam (live: economy-bridge.ts folds these into the running sim) —
 export { EconResource, appResourceTable } from './resource-vocab.ts';

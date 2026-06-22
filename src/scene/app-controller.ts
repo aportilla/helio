@@ -20,7 +20,7 @@ import { TestScene } from './test-view/test-scene';
 import { warmPlanetShaders } from './warm-shaders';
 import { Sidebar } from '../ui/sidebar/sidebar';
 import { EconomyBridge } from '../facilities/economy-bridge';
-import { advanceTurn, getGameState } from '../game-state';
+import { advanceTurn, getGameState, stepShipBuilds } from '../game-state';
 import type { Screen } from './screen';
 
 // Opt out of Three.js color management. Without this, hex values in shader
@@ -103,7 +103,13 @@ export class AppController {
   // phases (AI, research, events) attach here, not in a sidebar closure.
   private nextTurn(): void {
     this.bridge.step();
-    this.sidebar.setTurn(advanceTurn());
+    const turn = advanceTurn();
+    this.sidebar.setTurn(turn);
+    // The ship-build turn phase: flip every 'building' ship that reached its
+    // completesOnTurn to 'ready'. AFTER the turn bump (it compares the new scalar)
+    // and BEFORE afterTurnAdvance (so the live system view's refreshFleet observes
+    // this turn's completions).
+    stepShipBuilds(turn);
     this.current.afterTurnAdvance?.();
   }
 

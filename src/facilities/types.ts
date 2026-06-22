@@ -12,7 +12,7 @@ import type { Body } from '../data/stars.ts';
 // it (registry FROZEN_FACILITY_IDS + its CI test, the DEV module-load assert,
 // and this literal union forcing every switch/Record to update). See the plan
 // in plans/4x-facility-definitions-modularity-plan.md §8/§11.
-export type FacilityType = 'colony' | 'mining-base' | 'farm';
+export type FacilityType = 'colony' | 'mining-base' | 'farm' | 'shipyard';
 
 // Body → its transport-graph node (the value that becomes PlanetSpec.star). In
 // the shipped model that node is the body's CLUSTER — one node per cluster, a
@@ -59,6 +59,12 @@ export interface FacilityDef {
   readonly addOrder: number;            // stable display order of the Add button
   readonly maxPerBody: number;          // build cap per (body, type) (v1 = 1; raise to allow stacking)
   readonly retired?: boolean;           // a shipped-then-removed type: no Add button, empty contribute (plan §11)
+
+  // Opt-in capability: this facility lets its body build ships. The Build-Ship
+  // affordance keys on this flag via a registry query (facilityHasShipbuilding),
+  // never an inline `type === 'shipyard'` at a call site — the same ask-the-registry
+  // discipline as canBuildOn.
+  readonly enablesShipbuilding?: boolean;
 
   // Eligibility as a per-def predicate over catalog physics — replaces the old
   // inline kind gate, honouring the repo's "non-exclusive predicates, no single

@@ -17,7 +17,7 @@ import {
   facilityLabel,
   facilityColor,
 } from '../registry.ts';
-import { addableTypesFor } from '../eligibility.ts';
+import { addableTypesFor, facilityHasShipbuilding } from '../eligibility.ts';
 
 // The only field the v1 eligibility predicate reads is `kind` (a structural gate,
 // no body physics). Cast through unknown — the test never touches the rest of Body.
@@ -50,6 +50,15 @@ test('facilityLabel: resolves a def to its display label', () => {
   assert.equal(facilityLabel('colony'), 'Colony');
   assert.equal(facilityLabel('mining-base'), 'Mining base');
   assert.equal(facilityLabel('farm'), 'Farm');
+  assert.equal(facilityLabel('shipyard'), 'Shipyard');
+});
+
+test('facilityHasShipbuilding: only a shipyard-bearing body can build ships', () => {
+  // The Build-Ship gate — asks the registry's capability flag, not a type string.
+  assert.equal(facilityHasShipbuilding([]), false);
+  assert.equal(facilityHasShipbuilding([{ type: 'colony' }, { type: 'farm' }]), false);
+  assert.equal(facilityHasShipbuilding([{ type: 'shipyard' }]), true);
+  assert.equal(facilityHasShipbuilding([{ type: 'colony' }, { type: 'shipyard' }]), true);
 });
 
 test('facilityColor: every type carries a well-formed sRGB hex swatch', () => {

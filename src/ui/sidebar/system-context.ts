@@ -1,11 +1,13 @@
 // SystemContext — the sidebar's contextual region while the system view is up.
 // Shows the system name, then the selected body's name + its placed-facility list
 // (each with a remove ✕), its economy rows (stock + signed balance, with a dim
-// next-turn forecast cue when inbound cargo is set to relieve a deficit), and one
-// "Add <type>" pill per buildable facility type, stacked vertically down the
-// narrow column. SystemScene drives it through setBody() (selection changed /
-// facilities mutated) and routes the clicked controls back through
-// onAddFacility / onRemoveFacility.
+// next-turn forecast cue when inbound cargo is set to relieve a deficit), a ship
+// construction control when the body has a shipyard (a Build-ship pill when idle,
+// or an in-progress readout + Cancel while a build is in flight), and one "Add
+// <type>" pill per buildable facility type, stacked vertically down the narrow
+// column. SystemScene drives it through setBody() (selection changed / facilities
+// or builds mutated) and routes the clicked controls back through onAddFacility /
+// onRemoveFacility / onBuildShip / onCancelBuild.
 //
 // The data path is the registry-driven one — `SelectedBodyInfo` + `addableTypes` +
 // the add/remove loop, shared with `game-state` / `src/facilities`; this file owns
@@ -14,7 +16,7 @@
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
 import type { BodyKind } from '../../data/stars';
 import type { BodyEconomyView } from '../../facilities/economy-bridge';
-import { facilityLabel, type FacilityType } from '../../facilities';
+import { facilityHasShipbuilding, facilityLabel, type FacilityType } from '../../facilities';
 import type { Facility } from '../../game-state';
 import { paintPillButton } from '../painter';
 import { colors, fonts, sizes } from '../theme';
@@ -36,6 +38,10 @@ export interface SelectedBodyInfo {
   // nothing yet. SystemScene reads it from the EconomyBridge; updated on selection
   // and after each turn.
   readonly economy: BodyEconomyView | null;
+  // The body's in-flight ship build (a shipyard holds one build slot), or null when
+  // none. SystemScene composes it from the game-state store; turnsLeft is DERIVED
+  // (completesOnTurn - turn), never stored, and refreshes on selection / each turn.
+  readonly build: { readonly shipId: string; readonly classLabel: string; readonly turnsLeft: number } | null;
 }
 
 const KIND_LABEL: Record<BodyKind, string> = {
@@ -53,14 +59,20 @@ const ECON_COL_GAP = 5;
 // Indent of a shortfall sub-line under its resource row.
 const ECON_SUB_INDENT = 6;
 
-type HoverHit = { kind: 'add'; type: FacilityType } | { kind: 'remove'; id: string } | null;
+type HoverHit =
+  | { kind: 'add'; type: FacilityType }
+  | { kind: 'remove'; id: string }
+  | { kind: 'build' }
+  | { kind: 'cancel' }
+  | null;
 
 function hoverEqual(a: HoverHit, b: HoverHit): boolean {
   if (a === b) return true;
   if (!a || !b || a.kind !== b.kind) return false;
   if (a.kind === 'remove' && b.kind === 'remove') return a.id === b.id;
   if (a.kind === 'add' && b.kind === 'add') return a.type === b.type;
-  return false;
+  // 'build' / 'cancel' are per-body singletons — same kind means the same control.
+  return true;
 }
 
 // 1-px X glyph in a closeGlyph×closeGlyph box — the per-row remove affordance.
@@ -79,11 +91,17 @@ export class SystemContext implements SidebarContext {
   // Cached hit-rects in absolute canvas coords, rebuilt every paint().
   private addRects: Array<{ type: FacilityType; rect: Rect }> = [];
   private removeRects: Array<{ id: string; rect: Rect }> = [];
+  // At most one of each per body (a shipyard's single build slot) — a plain Rect,
+  // reset to a zero-size rect each paint (inRect on a 0-w rect is always false).
+  private buildRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
+  private cancelRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
 
   // Fired from the controls; SystemScene routes these to the game-state store,
   // then re-pushes the updated body via setBody so the list stays in sync.
   onAddFacility: (bodyId: string, type: FacilityType) => void = () => {};
   onRemoveFacility: (facilityId: string) => void = () => {};
+  onBuildShip: (bodyId: string) => void = () => {};
+  onCancelBuild: (shipId: string) => void = () => {};
 
   // The system name is fixed for the life of the view (the diagram never changes
   // system mid-life), so it's a constructor arg, not part of the per-selection DTO.
@@ -97,6 +115,8 @@ export class SystemContext implements SidebarContext {
   paint(g: CanvasRenderingContext2D, region: Region): void {
     this.addRects = [];
     this.removeRects = [];
+    this.buildRect = { x: 0, y: 0, w: 0, h: 0 };
+    this.cancelRect = { x: 0, y: 0, w: 0, h: 0 };
     const x0 = region.x;
     let y = region.y;
 
@@ -192,6 +212,30 @@ export class SystemContext implements SidebarContext {
       }
     }
 
+    // Ship construction: a shipyard-bearing body gets a Build-ship pill when idle,
+    // or an in-progress readout + a Cancel pill while a build is in flight. The two
+    // states are mutually exclusive (one build slot per yard, cost is time-only).
+    if (facilityHasShipbuilding(this.info.facilities)) {
+      y += sizes.cardActionGap;
+      if (this.info.build === null) {
+        const buildHover = this.hovered?.kind === 'build';
+        const { w, h } = paintPillButton(g, x0, y, 'Build ship', { hover: buildHover });
+        this.buildRect = { x: x0, y, w, h };
+        y += h + ADD_BUTTON_GAP;
+      } else {
+        const b = this.info.build;
+        const lineH = getFont(fonts.body).lineHeight;
+        drawPixelText(g, `Building ${b.classLabel}`, x0, y, colors.textBody);
+        y += lineH + ROW_GAP;
+        drawPixelText(g, b.turnsLeft === 1 ? '1 turn left' : `${b.turnsLeft} turns left`, x0, y, colors.titleDim);
+        y += lineH + ROW_GAP;
+        const cancelHover = this.hovered?.kind === 'cancel';
+        const { w, h } = paintPillButton(g, x0, y, 'Cancel', { hover: cancelHover });
+        this.cancelRect = { x: x0, y, w, h };
+        y += h + ADD_BUTTON_GAP;
+      }
+    }
+
     // One "Add <label>" pill per buildable type, stacked.
     if (this.info.addableTypes.length > 0) {
       y += sizes.cardActionGap;
@@ -206,11 +250,15 @@ export class SystemContext implements SidebarContext {
 
   isInteractive(cx: number, cy: number): boolean {
     return this.addRects.some((a) => inRect(cx, cy, a.rect))
-      || this.removeRects.some((r) => inRect(cx, cy, r.rect));
+      || this.removeRects.some((r) => inRect(cx, cy, r.rect))
+      || inRect(cx, cy, this.buildRect)
+      || inRect(cx, cy, this.cancelRect);
   }
 
   handleClick(cx: number, cy: number): void {
     if (this.info) {
+      if (inRect(cx, cy, this.buildRect)) { this.onBuildShip(this.info.bodyId); return; }
+      if (this.info.build && inRect(cx, cy, this.cancelRect)) { this.onCancelBuild(this.info.build.shipId); return; }
       for (const a of this.addRects) {
         if (inRect(cx, cy, a.rect)) { this.onAddFacility(this.info.bodyId, a.type); return; }
       }
@@ -230,6 +278,8 @@ export class SystemContext implements SidebarContext {
         if (inRect(cx, cy, r.rect)) { next = { kind: 'remove', id: r.id }; break; }
       }
     }
+    if (!next && inRect(cx, cy, this.buildRect)) next = { kind: 'build' };
+    if (!next && inRect(cx, cy, this.cancelRect)) next = { kind: 'cancel' };
     if (hoverEqual(next, this.hovered)) return false;
     this.hovered = next;
     return true;

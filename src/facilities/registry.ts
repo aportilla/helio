@@ -6,7 +6,7 @@
 
 import type { Body } from '../data/stars.ts';
 import type { FacilityDef, FacilityType } from './types.ts';
-import { ContributionBuilder } from './types.ts';
+import { ContributionBuilder, emptyContribution } from './types.ts';
 import { EconResource } from './resource-vocab.ts';
 import {
   COLONY_FOOD_CONSUME_MILLI,
@@ -83,6 +83,20 @@ const DEFS = {
       return c.build();
     },
   },
+  shipyard: {
+    type: 'shipyard',
+    label: 'Shipyard',
+    color: '#b884e0', // violet — construction/industry, distinct from the economy hues
+    addOrder: 3,
+    maxPerBody: 1,
+    enablesShipbuilding: true,
+    canBuildOn: isSolidSite,
+    // NOT an economy producer: a shipyard unlocks ship construction (the Build-Ship
+    // pill), not a resource flow. It emits the zero Contribution so the projector
+    // folds nothing onto the body's stock/flows — including the speculative
+    // next-turn preview — and the build stepper can never perturb the economy.
+    contribute: (_body: Body, ctx) => emptyContribution(ctx.R),
+  },
 } satisfies Record<FacilityType, FacilityDef>;
 
 export const FACILITY_DEFS: readonly FacilityDef[] = Object.values(DEFS);
@@ -126,7 +140,7 @@ export function facilityColor(type: FacilityType): string {
 // shipped id fails — protecting old saves from a compiler-invisible "cleanup". A
 // retired type stays here AND in the registry as a `retired: true` tombstone def
 // (plan §11), never deleted outright.
-export const FROZEN_FACILITY_IDS: readonly string[] = ['colony', 'mining-base', 'farm'];
+export const FROZEN_FACILITY_IDS: readonly string[] = ['colony', 'mining-base', 'farm', 'shipyard'];
 
 // DEV-only module-load invariant: each def's `type` field equals its registry key,
 // and every frozen id is still a live type. Mirrors the catalog drift check in

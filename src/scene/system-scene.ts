@@ -6,10 +6,20 @@
 // a static screen diagram, not a navigable space. SystemHud sits on top.
 
 import { type WebGLRenderer } from 'three';
-import { BODIES, clusterDisplayName } from '../data/stars';
+import { BODIES, clusterDisplayName, systemIdForCluster } from '../data/stars';
 import { addableTypesFor } from '../facilities';
 import type { EconomyBridge } from '../facilities/economy-bridge';
-import { addFacility, facilitiesOnBody, removeFacility } from '../game-state';
+import {
+  addFacility,
+  buildingShipAtYard,
+  facilitiesOnBody,
+  getGameState,
+  removeFacility,
+  removeShip,
+  shipsInSystem,
+  startShipBuild,
+} from '../game-state';
+import { buildTurns, DEFAULT_SHIP_CLASS, shipClassLabel } from '../ships/registry';
 import { SystemHud } from '../ui/system-hud';
 import { Sidebar } from '../ui/sidebar/sidebar';
 import { SystemContext } from '../ui/sidebar/system-context';
@@ -102,6 +112,19 @@ export class SystemScene implements Screen {
       this.refreshFlows();
       this.diagram.syncFacilities();
     };
+    // A ship build carries no economy coupling (the shipyard's contribute is empty),
+    // so build/cancel need no bridge/flows reconcile — just persist and re-pull the
+    // sidebar. A new ship is 'building' (not in the ready fleet), and a cancel/reap
+    // only ever drops a 'building' ship, so the fleet overlay is untouched until a
+    // turn completes a build (afterTurnAdvance handles that).
+    this.context.onBuildShip = (bodyId) => {
+      startShipBuild(bodyId, DEFAULT_SHIP_CLASS, getGameState().turn + buildTurns(DEFAULT_SHIP_CLASS));
+      this.pushSelectionToSidebar();
+    };
+    this.context.onCancelBuild = (shipId) => {
+      removeShip(shipId);
+      this.pushSelectionToSidebar();
+    };
 
     // DPR boundary crossings (zoom, monitor swap) re-trigger resize so the
     // pixel-ratio + buffer dims pick up the new integer N.
@@ -124,6 +147,8 @@ export class SystemScene implements Screen {
     // resize() has laid out the diagram (the ships layer has anchors + bounds),
     // so seed the cargo lanes before the first frame.
     this.refreshFlows();
+    // Seed the built-ship fleet from the durable store so it shows on open.
+    this.refreshFleet();
     // Lanes + layout are now resolved but the pool is empty — prime it to steady-state
     // occupancy so the view opens with traffic already in flight (one-shot; never
     // re-applied on the resizes/turns that re-resolve lanes).
@@ -221,6 +246,9 @@ export class SystemScene implements Screen {
     }
     const body = BODIES[pick.bodyIdx]!;
     const facilities = facilitiesOnBody(body.id);
+    // The yard's one in-flight build (if any) → the sidebar's in-progress readout.
+    // turnsLeft is derived from the absolute completesOnTurn, never stored.
+    const inProgress = buildingShipAtYard(body.id);
     this.context.setBody({
       bodyId: body.id,
       name: body.name,
@@ -228,6 +256,13 @@ export class SystemScene implements Screen {
       facilities,
       addableTypes: addableTypesFor(body, facilities),
       economy: this.bridge.bodyEconomy(body.id),
+      build: inProgress
+        ? {
+            shipId: inProgress.id,
+            classLabel: shipClassLabel(inProgress.classId),
+            turnsLeft: Math.max(1, inProgress.completesOnTurn - getGameState().turn),
+          }
+        : null,
     });
     this.sidebar.refreshContent();
   }
@@ -237,6 +272,9 @@ export class SystemScene implements Screen {
   afterTurnAdvance(): void {
     this.pushSelectionToSidebar();
     this.refreshFlows();
+    // A build that completed this turn (stepShipBuilds ran just before this in
+    // AppController.nextTurn) joins the fleet now.
+    this.refreshFleet();
   }
 
   // Push this cluster's cargo lanes into the diagram's ships overlay. Fired from
@@ -246,6 +284,16 @@ export class SystemScene implements Screen {
   // instant an edit lands, and the stream never blanks out across an edit.
   private refreshFlows(): void {
     this.diagram.setFlows(this.bridge.predictedClusterFlows(this.clusterIdx));
+  }
+
+  // Push this system's READY ships into the fleet overlay. The fleet is system-keyed
+  // (ships are peers of planets, never tied to a body), so resolve the system handle
+  // from the cluster and filter the durable store to 'ready'. Fired on open and on
+  // Next Turn (a completed build joins the fleet) — NOT on build/cancel/reap, which
+  // only ever touch 'building' ships, which aren't in the fleet.
+  private refreshFleet(): void {
+    const systemId = systemIdForCluster(this.clusterIdx);
+    this.diagram.syncFleet(shipsInSystem(systemId).filter((s) => s.status === 'ready'));
   }
 
   private onPointerMove(e: PointerEvent): void {

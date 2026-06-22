@@ -580,6 +580,60 @@ export function clusterDisplayName(clusterIdx: number): string {
   return extras > 0 ? `${primary.name} +${extras}` : primary.name;
 }
 
+// =============================================================================
+// System identity — a ship lives in a SYSTEM, not on a planet. A cluster has no
+// stable id of its own, so the system handle is its PRIMARY (heaviest) star's
+// stable slug — the same convention WAYPOINT_STAR_IDS keys on. Stable across
+// catalog rebuilds like Body.id, and — unlike a cluster INDEX — decoupled from
+// STAR_CLUSTERS order, so a persisted ship can't be mislocated by a reordering
+// rebuild.
+// =============================================================================
+
+// A cluster's stable system handle: its primary star's slug.
+export function systemIdForCluster(clusterIdx: number): string {
+  return STARS[STAR_CLUSTERS[clusterIdx]!.primary]!.id;
+}
+
+// The system a body belongs to. Walks a moon/ring up its hostBody chain to the
+// star-hosted parent (mirroring economy-bridge's clusterNodeOfBody), then reads
+// that cluster's primary slug. A malformed/over-deep chain falls back to cluster 0
+// (always a real slug — 'sol' in practice), DEV-warned, never throwing: a caller
+// stamping Ship.systemId can rely on a non-empty result.
+export function systemIdForBody(body: Body): string {
+  let b: Body = body;
+  let guard = 0;
+  while (b.hostStarIdx === null && b.hostBodyIdx !== null && guard++ < 8) {
+    b = BODIES[b.hostBodyIdx]!;
+  }
+  if (b.hostStarIdx === null) {
+    if (import.meta.env.DEV) {
+      console.warn(`[catalog] body '${body.id}' resolved to no host star (guard ${guard}); system mapped to cluster 0`);
+    }
+    return systemIdForCluster(0);
+  }
+  return systemIdForCluster(clusterIndexFor(b.hostStarIdx));
+}
+
+// Convenience over a stable Body.id: the body's system handle, or null if the
+// catalog no longer carries that body (skip-on-missing, like indexOfBodyId).
+export function systemIdForBodyId(bodyId: string): string | null {
+  const idx = indexOfBodyId(bodyId);
+  return idx >= 0 ? systemIdForBody(BODIES[idx]!) : null;
+}
+
+// Every live system handle (one per cluster), for skip-on-missing save validation:
+// a persisted ship whose system the rebuilt catalog dropped is discarded. Built
+// once at module load, mirroring BODY_INDEX_BY_ID.
+const SYSTEM_PRIMARY_IDS: ReadonlySet<string> = (() => {
+  const s = new Set<string>();
+  for (const c of STAR_CLUSTERS) s.add(STARS[c.primary]!.id);
+  return s;
+})();
+
+export function systemExists(systemId: string): boolean {
+  return SYSTEM_PRIMARY_IDS.has(systemId);
+}
+
 // Nearest cluster (by COM) to (x, y, z). Returns -1 only if STAR_CLUSTERS is
 // empty (defensive — in practice the catalog always has Sol).
 export function nearestClusterIdxTo(x: number, y: number, z: number): number {
