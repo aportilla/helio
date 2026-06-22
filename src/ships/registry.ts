@@ -1,6 +1,6 @@
 // SHIP_CLASS_DEFS — the single source of truth for every ship class. Adding a
 // class is one object here plus one literal in the ShipClassType union: its save-key
-// (classId), build-flow label, fleet color, build time, and sprite budget all flow
+// (classId), build-flow label, display color, build time, and sprite budget all flow
 // from that one edit. Mirrors src/facilities/registry.ts exactly, deliberately, so
 // the frozen-key discipline reads identically across both registries.
 
@@ -42,10 +42,11 @@ export function shipClassLabel(type: ShipClassType): string {
   return SHIP_CLASS_BY_TYPE.get(type)?.label ?? type;
 }
 
-// Single source of a class's display COLOR — the fleet sprite (and a later build
-// preview). A literal sRGB hex; with ColorManagement OFF it renders verbatim through
-// both the canvas painter and the scene shaders. White fallback only guards a future
-// retired tombstone (color is required on a live def).
+// Single source of a class's display COLOR. Currently DORMANT: the fleet sprite tints
+// by FACTION color (src/factions/), not class color, so this is reserved for a later
+// per-class accent / build preview. A literal sRGB hex; with ColorManagement OFF it
+// renders verbatim through both the canvas painter and the scene shaders. White
+// fallback only guards a future retired tombstone (color is required on a live def).
 export function shipClassColor(type: ShipClassType): string {
   return SHIP_CLASS_BY_TYPE.get(type)?.color ?? '#ffffff';
 }

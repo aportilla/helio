@@ -1,10 +1,12 @@
 // The fleet's pick geometry, split out of fleet.ts as a pure leaf (no Three.js, no
-// catalog) so it loads cleanly under node --test and the disc hit-test is pinned on
-// its own. FleetLayer rebuilds the candidate list on each relayout (the formation is
+// catalog) so it loads cleanly under node --test and the radial hit-test is pinned on
+// its own. FleetLayer rebuilds the candidate list on each relayout (the formations are
 // otherwise static) and delegates pickAt here.
 
-// One pickable ship sprite: its parity-snapped center, disc radius, and the
-// game-state Ship.id the pick carries out. Buffer-pixel coords, matching the layout.
+// One pickable ship sprite: its parity-snapped center, pick radius, and the game-state
+// Ship.id the pick carries out. The pick is a circle around the center even though the
+// sprite renders as a triangle — close enough at this size. Buffer-pixel coords,
+// matching the layout.
 export interface FleetPickCandidate {
   readonly cx: number;
   readonly cy: number;
@@ -12,10 +14,10 @@ export interface FleetPickCandidate {
   readonly shipId: string;
 }
 
-// The ready ship whose disc covers (x, y), or null. The fleet is a single flat
-// formation with no z-banding, so "topmost" reduces to the nearest center among the
-// discs that actually contain the point (inclusive of the exact rim). Returns its
-// shipId. A plain walk — the caller holds a stable candidate array, so no allocation.
+// The ready ship whose pick-circle covers (x, y), or null. The fleet sprites are a
+// flat layer with no z-banding (both formations included), so "topmost" reduces to the
+// nearest center among the circles that contain the point (inclusive of the exact rim).
+// Returns its shipId. A plain walk — the caller holds a stable candidate array, so no allocation.
 export function pickFleetShip(
   candidates: readonly FleetPickCandidate[],
   x: number,

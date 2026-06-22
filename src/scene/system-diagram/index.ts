@@ -50,8 +50,8 @@ export class SystemDiagram {
   private readonly ships:   ShipsLayer;
   // On-body facility chips — a static overlay re-read from game-state each layout.
   private readonly facilities: FacilitiesLayer;
-  // The player's built-ship fleet — a single formation in the lower field, fed this
-  // system's ready ships by SystemScene. Pickable: a ship hit wins over the bodies
+  // The system's ready ships — two faction-split formations in the lower field, fed
+  // this system's ready ships by SystemScene. Pickable: a ship hit wins over the bodies
   // beneath it (see pickAt), driving the sidebar's ship card.
   private readonly fleet: FleetLayer;
 
@@ -157,7 +157,7 @@ export class SystemDiagram {
   }
 
   // Hand the fleet layer this system's READY ships (the caller pre-filters). A pure
-  // pass-through; the layer re-derives the formation from the bounds it already has.
+  // pass-through; the layer re-derives the two formations from the bounds it already has.
   syncFleet(ships: readonly Ship[]): void {
     this.fleet.setFleet(ships);
   }

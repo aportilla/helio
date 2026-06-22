@@ -18,7 +18,7 @@ export type ShipClassType = 'corvette';
 export interface ShipClassDef {
   readonly type: ShipClassType;  // === its registry key; a DEV assert pins def.type === key
   readonly label: string;        // 'Corvette' — single source for build rows + later fleet labels
-  readonly color: string;        // literal sRGB hex, rendered verbatim end-to-end (ColorManagement is OFF)
+  readonly color: string;        // literal sRGB hex; DORMANT — the fleet tints by faction, this is reserved for a later per-class accent
   readonly buildTurns: number;   // the v1 cost: galaxy turns from build start to 'ready'
-  readonly spriteSizePx: number; // fleet-sprite radius in content-buffer px (drawn as a Mesh quad)
+  readonly spriteSizePx: number; // fleet-sprite radius in content-buffer px (the triangle's half-size)
 }

@@ -11,6 +11,7 @@ import { addableTypesFor } from '../facilities';
 import type { EconomyBridge } from '../facilities/economy-bridge';
 import {
   addFacility,
+  addOpponentShip,
   buildingShipAtYard,
   facilitiesOnBody,
   getGameState,
@@ -19,6 +20,7 @@ import {
   shipsInSystem,
   startShipBuild,
 } from '../game-state';
+import { factionColor, factionLabel } from '../factions/registry';
 import { buildTurns, DEFAULT_SHIP_CLASS, shipClassLabel } from '../ships/registry';
 import { SystemHud } from '../ui/system-hud';
 import { Sidebar } from '../ui/sidebar/sidebar';
@@ -125,6 +127,16 @@ export class SystemScene implements Screen {
       removeShip(shipId);
       this.pushSelectionToSidebar();
     };
+    // DEV-only debug action: drop a ready opponent ship into THIS system. Gated at the
+    // wiring site (not just the pill) so the whole debug path — callback + addOpponentShip
+    // — tree-shakes out of a production build. Opponent ships are 'ready', so they join
+    // the fleet overlay immediately; refresh it to show the new sprite.
+    if (import.meta.env.DEV) {
+      this.context.onAddOpponentShip = () => {
+        addOpponentShip(systemIdForCluster(this.clusterIdx));
+        this.refreshFleet();
+      };
+    }
 
     // DPR boundary crossings (zoom, monitor swap) re-trigger resize so the
     // pixel-ratio + buffer dims pick up the new integer N.
@@ -252,7 +264,15 @@ export class SystemScene implements Screen {
     if (pick && pick.kind === 'ship') {
       const ship = shipsInSystem(systemIdForCluster(this.clusterIdx)).find((s) => s.id === pick.shipId);
       this.context.setShip(
-        ship ? { name: ship.name, classLabel: shipClassLabel(ship.classId), status: ship.status } : null,
+        ship
+          ? {
+              name: ship.name,
+              classLabel: shipClassLabel(ship.classId),
+              factionLabel: factionLabel(ship.factionId),
+              factionColor: factionColor(ship.factionId),
+              status: ship.status,
+            }
+          : null,
       );
       this.sidebar.refreshContent();
       return;
@@ -278,7 +298,9 @@ export class SystemScene implements Screen {
         ? {
             shipId: inProgress.id,
             classLabel: shipClassLabel(inProgress.classId),
-            turnsLeft: Math.max(1, inProgress.completesOnTurn - getGameState().turn),
+            // A 'building' ship always carries completesOnTurn; the ?? only satisfies
+            // the optional type (it falls back to a 1-turn readout, never throws).
+            turnsLeft: Math.max(1, (inProgress.completesOnTurn ?? getGameState().turn) - getGameState().turn),
           }
         : null,
     });

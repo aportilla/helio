@@ -29,7 +29,7 @@ npm run build:catalog  # regenerate src/data/catalog.generated.json from src/dat
 
 `build:catalog` is auto-run by `predev` / `prebuild` / `pretypecheck` hooks, so you only invoke it directly when iterating on a CSV mid-session and want to refresh the runtime without restarting the dev server.
 
-The standalone economy sim has its own scripts — `npm run test:sim` and `npm run typecheck:sim` — see [sim/README.md](sim/README.md). The facility registry + sim-projection seam adds `npm run test:facilities` and `npm run check:boundaries` (the latter guards the standalone-sim import wall and is also part of `npm run check`) — see [src/facilities/README.md](src/facilities/README.md). The neutral ship-class registry adds `npm run test:ships` — see [src/ships/README.md](src/ships/README.md). `npm test` runs every unit suite.
+The standalone economy sim has its own scripts — `npm run test:sim` and `npm run typecheck:sim` — see [sim/README.md](sim/README.md). The facility registry + sim-projection seam adds `npm run test:facilities` and `npm run check:boundaries` (the latter guards the standalone-sim import wall and is also part of `npm run check`) — see [src/facilities/README.md](src/facilities/README.md). The neutral ship-class registry adds `npm run test:ships` — see [src/ships/README.md](src/ships/README.md), and its twin faction registry adds `npm run test:factions` — see [src/factions/README.md](src/factions/README.md). `npm test` runs every unit suite.
 
 For verification, headless economy inspection (`npm run inspect:economy`), and screenshots (`npm run screenshot`), see [docs/dev-tooling.md](docs/dev-tooling.md).
 
@@ -65,6 +65,7 @@ One deep doc per subsystem. Start in the root for orientation, then open the doc
 | `src/data/` | Runtime catalog API + types, cluster/naming model, bundled bitmap fonts | [src/data/README.md](src/data/README.md) |
 | `src/facilities/` | Facility registry (one object per type) + the economy-sim projection seam + the live engine bridge | [src/facilities/README.md](src/facilities/README.md) |
 | `src/ships/` | Neutral ship-class registry (one `ShipClassDef` per type) — consumed by the sidebar build flow + the fleet render layer | [src/ships/README.md](src/ships/README.md) |
+| `src/factions/` | Neutral faction registry (one `FactionDef` per side) — ship *ownership*; consumed by the fleet tint + ship card, and (later) combat sides | [src/factions/README.md](src/factions/README.md) |
 | `scripts/` | Star-data tooling + the catalog/procgen **build pipeline** that emits the JSON; `scripts/lib/` is also a shared kernel the runtime consumes (body-traits / PRNG / gas-potency), so it isn't build-only | [scripts/README.md](scripts/README.md) |
 | `sim/` | Standalone deterministic economy/logistics sim | [sim/README.md](sim/README.md) |
 | `docs/` | Game-systems status + roadmap; dev/verification tooling | [docs/game-systems.md](docs/game-systems.md), [docs/dev-tooling.md](docs/dev-tooling.md) |

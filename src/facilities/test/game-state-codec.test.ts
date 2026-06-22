@@ -25,6 +25,7 @@ const blob = (o: unknown) => JSON.stringify(o);
 const ship = (o: Partial<Ship> = {}): Ship => ({
   id: 's1',
   systemId: 'sol',
+  factionId: 'player',
   shipyardBodyId: 'earth',
   classId: 'corvette',
   name: 'Corvette 1',
@@ -131,6 +132,55 @@ test('a building ship whose shipyard body is gone is reaped; a ready ship outliv
   const { state, droppedShips } = parseGameState(raw, noBody, anySystem);
   assert.deepEqual(state.ships.map((s) => s.id), ['s2']);
   assert.equal(droppedShips, 1);
+});
+
+test('factionId validate-and-merge: a pre-faction or unknown side defaults to the controlled faction', () => {
+  const raw = blob({
+    version: 1, turn: 5, seq: 9,
+    ships: [
+      // no factionId (a ship saved before ownership existed) → defaults
+      { id: 's1', systemId: 'sol', shipyardBodyId: 'earth', classId: 'corvette', name: 'A', status: 'building', completesOnTurn: 7 },
+      // an unknown factionId (a retired/typo'd side) → defaults, NOT dropped
+      { id: 's2', systemId: 'sol', classId: 'corvette', name: 'B', status: 'ready', factionId: 'no-such-faction' },
+      // an explicit live faction is preserved
+      { id: 's3', systemId: 'sol', classId: 'corvette', name: 'C', status: 'ready', factionId: 'rival' },
+    ],
+  });
+  const { state, droppedShips } = parseGameState(raw, anyBody, anySystem);
+  assert.equal(droppedShips, 0, 'a missing/unknown factionId must default, never drop the ship');
+  assert.deepEqual(state.ships.map((s) => s.factionId), ['player', 'player', 'rival']);
+});
+
+test("a 'ready' ship may omit the build-only fields (shipyard / completion turn)", () => {
+  // The build-only fields are present iff 'building'. A 'ready' ship that never went
+  // through the build flow legitimately carries neither, and survives even when NO body
+  // exists, because the shipyard-existence prune is skipped for a ready ship. This is a
+  // durable schema property — any non-built ready ship (a future starting/captured/
+  // gifted ship) relies on it, independent of how one gets created today.
+  const raw = blob({
+    version: 1, turn: 3, seq: 4,
+    ships: [
+      { id: 's1', systemId: 'sol', classId: 'corvette', name: 'Corvette 1', status: 'ready' },
+    ],
+  });
+  const { state, droppedShips } = parseGameState(raw, noBody, anySystem);
+  assert.equal(droppedShips, 0);
+  assert.equal(state.ships.length, 1);
+  assert.equal(state.ships[0]!.shipyardBodyId, undefined);
+  assert.equal(state.ships[0]!.completesOnTurn, undefined);
+});
+
+test('a building ship still REQUIRES a shipyard + completion turn (the build-only invariant)', () => {
+  const raw = blob({
+    version: 1, turn: 1, seq: 2,
+    ships: [
+      { id: 's1', systemId: 'sol', classId: 'corvette', name: 'A', status: 'building', completesOnTurn: 3 }, // no shipyardBodyId → dropped
+      { id: 's2', systemId: 'sol', shipyardBodyId: 'earth', classId: 'corvette', name: 'B', status: 'building' }, // no completesOnTurn → dropped
+    ],
+  });
+  const { state, droppedShips } = parseGameState(raw, anyBody, anySystem);
+  assert.equal(state.ships.length, 0);
+  assert.equal(droppedShips, 2);
 });
 
 test('advanceShipBuilds flips at completesOnTurn (>=), not before; idempotent on a double-fire', () => {

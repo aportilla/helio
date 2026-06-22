@@ -31,7 +31,8 @@ import {
   type GameState,
   type Ship,
 } from './game-state-codec';
-import { shipClassLabel } from './ships/registry';
+import { CONTROLLED_FACTION_ID, FACTION_DEFS } from './factions/registry';
+import { DEFAULT_SHIP_CLASS, shipClassLabel } from './ships/registry';
 import type { ShipClassType } from './ships/types';
 import { slotKey, readRaw, writeRaw } from './storage';
 import { recordsOnBody } from './world-overlay';
@@ -153,11 +154,37 @@ export function startShipBuild(
   const ship: Ship = {
     id: `s${seq}`,
     systemId,
+    factionId: CONTROLLED_FACTION_ID, // the player builds the player's ships
     shipyardBodyId,
     classId,
     name: `${shipClassLabel(classId)} ${seq}`,
     status: 'building',
     completesOnTurn,
+  };
+  current = { ...current, seq, ships: [...current.ships, ship] };
+  writeToStorage(current);
+  return ship;
+}
+
+// DEBUG ONLY — drop a 'ready' opponent ship straight into a system, bypassing the
+// build flow, to populate the fleet for encounter-combat testing. Generic across any
+// system (a ship keys to its system handle); the caller is DEV-gated. The ship spawns
+// into the first non-controlled faction and never had a shipyard, so it carries
+// neither shipyardBodyId nor completesOnTurn (both build-only). The opponent-side pick
+// lives HERE, in the debug path — the faction registry stays free of any "opponent"
+// concept. Returns the new ship, or null if the system is unknown. Teardown reuses
+// removeShip.
+export function addOpponentShip(systemId: string, classId: ShipClassType = DEFAULT_SHIP_CLASS): Ship | null {
+  if (!systemExists(systemId)) return null;
+  const factionId = FACTION_DEFS.find((f) => f.id !== CONTROLLED_FACTION_ID)?.id ?? CONTROLLED_FACTION_ID;
+  const seq = current.seq + 1;
+  const ship: Ship = {
+    id: `s${seq}`,
+    systemId,
+    factionId,
+    classId,
+    name: `${shipClassLabel(classId)} ${seq}`,
+    status: 'ready',
   };
   current = { ...current, seq, ships: [...current.ships, ship] };
   writeToStorage(current);

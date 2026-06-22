@@ -467,6 +467,55 @@ export function makeStarMeshMaterial(): ShaderMaterial {
   });
 }
 
+// Mesh-based pixel-triangle material — the fleet sprite. A flat-color
+// isoceles triangle pointing LEFT or RIGHT (uDir = -1 / +1), tested per
+// integer pixel against the triangle's tapering half-height so it stays
+// crisp at any render scale (the same gl_FragCoord-vs-parity-snapped-uCenter
+// discipline as makeStarMeshMaterial, and likewise NOT a snapped/registered
+// material). The triangle fills its d×d quad: a full-height base on one
+// side, an apex point on the other. uDir is what gives the two factions
+// their facing — the player's ships aim at the enemy, the enemy's aim back.
+//
+// Per-sprite uniforms: uCenter (buffer-pixel coords, parity-snapped by the
+// caller), uRadius (half the quad edge), uColor, uDir (+1 apex-right /
+// -1 apex-left). Geometry should be a PlaneGeometry sized d×d (d = 2·uRadius);
+// the caller positions the mesh at uCenter.
+export function makeFleetTriangleMaterial(): ShaderMaterial {
+  return new ShaderMaterial({
+    uniforms: {
+      uCenter: { value: new Vector2() },
+      uRadius: { value: 0 },
+      uColor:  { value: new Color() },
+      uDir:    { value: 1 },
+    },
+    vertexShader: `
+      void main() {
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec2 uCenter;
+      uniform float uRadius;
+      uniform vec3 uColor;
+      uniform float uDir;
+
+      void main() {
+        vec2 d = gl_FragCoord.xy - uCenter;
+        // Outside the quad's bounding box — the corners the triangle leaves empty.
+        if (abs(d.x) > uRadius || abs(d.y) > uRadius) discard;
+        // Half-height tapers linearly from uRadius at the base to 0 at the apex.
+        // uDir = +1: base at -x, apex at +x → hh = (uRadius - d.x) / 2.
+        // uDir = -1: base at +x, apex at -x → hh = (uRadius + d.x) / 2.
+        float hh = (uRadius - uDir * d.x) * 0.5;
+        if (abs(d.y) > hh) discard;
+        gl_FragColor = vec4(uColor, 1.0);
+      }
+    `,
+    transparent: false,
+    depthWrite: false,
+  });
+}
+
 // Outer halo for star discs — sized large around the disc and rendered
 // with additive blending so uColor bleeds into the dark background and
 // any planets/chrome below. The fragment shader runs an ordered Bayer

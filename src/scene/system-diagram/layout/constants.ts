@@ -373,11 +373,12 @@ export const RENDER_ORDER_SHIP_THRUST = 29;
 
 // --- Fleet (built ships) ---
 //
-// The player's built ships, parked as one centered formation in the system's lower
-// field. They render ABOVE the cargo dots — foreground actors, not background
-// traffic — and (like the cargo pool) rely on depthTest:false + renderOrder for
-// layering, not z. The gap above RENDER_ORDER_FLEET is reserved for the eventual
-// combat-sprite block (Appendix A10).
+// A system's ready ships, parked as TWO opposing formations in the lower field — the
+// player's side at left facing right, opponents at right facing left, so the two
+// read as a stand-off across the open battlefield. They render ABOVE the cargo dots
+// — foreground actors, not background traffic — and (like the cargo pool) rely on
+// depthTest:false + renderOrder for layering, not z. The gap above RENDER_ORDER_FLEET
+// is reserved for the eventual combat-sprite block (Appendix A10).
 export const RENDER_ORDER_FLEET = 35;
 export const Z_FLEET = 0.006;
 // Hard ceiling on simultaneously-rendered fleet sprites. Ready ships have no exit
@@ -389,6 +390,11 @@ export const MAX_FLEET_SPRITES = 32;
 export const FLEET_BASELINE_FRAC = 0.16;
 // Gap in buffer px between adjacent fleet sprites in the formation grid.
 export const FLEET_SPRITE_GAP = 4;
+// The two sides' formation centers, as fractions of the content width: the player's
+// fleet is centered in the left half, opponents in the right half, so a wide gap of
+// open field sits between them. Each side grids within its own half.
+export const FLEET_MINE_CENTER_FRAC = 0.25;
+export const FLEET_THEIRS_CENTER_FRAC = 0.75;
 
 // --- Cargo ships (economy traffic) ---
 //

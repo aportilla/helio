@@ -52,6 +52,10 @@ export interface SelectedBodyInfo {
 export interface SelectedShipInfo {
   readonly name: string;
   readonly classLabel: string;
+  // Whose ship — the only ownership signal in the card. factionColor ties the line to
+  // the fleet sprite's tint (both come from the faction registry).
+  readonly factionLabel: string;
+  readonly factionColor: string;
   readonly status: 'building' | 'ready';
 }
 
@@ -80,6 +84,7 @@ type HoverHit =
   | { kind: 'remove'; id: string }
   | { kind: 'build' }
   | { kind: 'cancel' }
+  | { kind: 'devOpponent' }
   | null;
 
 function hoverEqual(a: HoverHit, b: HoverHit): boolean {
@@ -87,7 +92,7 @@ function hoverEqual(a: HoverHit, b: HoverHit): boolean {
   if (!a || !b || a.kind !== b.kind) return false;
   if (a.kind === 'remove' && b.kind === 'remove') return a.id === b.id;
   if (a.kind === 'add' && b.kind === 'add') return a.type === b.type;
-  // 'build' / 'cancel' are per-body singletons — same kind means the same control.
+  // 'build' / 'cancel' / 'devOpponent' are singletons — same kind means the same control.
   return true;
 }
 
@@ -114,6 +119,10 @@ export class SystemContext implements SidebarContext {
   // reset to a zero-size rect each paint (inRect on a 0-w rect is always false).
   private buildRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
   private cancelRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
+  // DEV-only "add opponent ship" debug pill — system-scoped, so painted at the top
+  // regardless of selection. Zero-size (inert) in a production build, where the paint
+  // branch is dead-code-eliminated.
+  private devOpponentRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
 
   // Fired from the controls; SystemScene routes these to the game-state store,
   // then re-pushes the updated body via setBody so the list stays in sync.
@@ -121,6 +130,8 @@ export class SystemContext implements SidebarContext {
   onRemoveFacility: (facilityId: string) => void = () => {};
   onBuildShip: (bodyId: string) => void = () => {};
   onCancelBuild: (shipId: string) => void = () => {};
+  // DEV-only: drop a ready opponent ship into this system (no body arg — system-scoped).
+  onAddOpponentShip: () => void = () => {};
 
   // The system name is fixed for the life of the view (the diagram never changes
   // system mid-life), so it's a constructor arg, not part of the per-selection DTO.
@@ -143,12 +154,25 @@ export class SystemContext implements SidebarContext {
     this.removeRects = [];
     this.buildRect = { x: 0, y: 0, w: 0, h: 0 };
     this.cancelRect = { x: 0, y: 0, w: 0, h: 0 };
+    this.devOpponentRect = { x: 0, y: 0, w: 0, h: 0 };
     const x0 = region.x;
     let y = region.y;
 
     // System name as the region title.
     drawPixelText(g, this.systemName, x0, y, colors.starName, fonts.cardName);
     y += getFont(fonts.cardName).lineHeight + sizes.cardNameGap;
+
+    // DEV-only: a system-scoped "+ opponent ship" pill, painted ahead of the selection
+    // block so it is reachable in every state (body selected, ship selected, or
+    // nothing). It drops a ready opponent ship into this system to populate the fleet
+    // for encounter-combat testing. Stripped from production builds (import.meta.env.DEV
+    // is statically false there, so this whole branch — and its hit-rect — vanish).
+    if (import.meta.env.DEV) {
+      const devHover = this.hovered?.kind === 'devOpponent';
+      const { w, h } = paintPillButton(g, x0, y, '+ opponent ship', { hover: devHover });
+      this.devOpponentRect = { x: x0, y, w, h };
+      y += h + sizes.cardActionGap;
+    }
 
     // A selected ship is a read-only card (no controls in v1), painted in place of the
     // body block. Returns before the body rect-bearing rows below, so the cached
@@ -158,6 +182,10 @@ export class SystemContext implements SidebarContext {
       drawPixelText(g, this.ship.name, x0, y, colors.textBody, fonts.body);
       y += lineH + ROW_GAP;
       drawPixelText(g, this.ship.classLabel, x0, y, colors.titleDim, fonts.body);
+      y += lineH + ROW_GAP;
+      // Whose ship, painted in the faction's own color — the card's tie to the fleet
+      // sprite's tint (both resolve from the faction registry).
+      drawPixelText(g, this.ship.factionLabel, x0, y, this.ship.factionColor, fonts.body);
       y += lineH + ROW_GAP;
       drawPixelText(g, SHIP_STATUS_LABEL[this.ship.status], x0, y, colors.textKey, fonts.body);
       return;
@@ -291,10 +319,15 @@ export class SystemContext implements SidebarContext {
     return this.addRects.some((a) => inRect(cx, cy, a.rect))
       || this.removeRects.some((r) => inRect(cx, cy, r.rect))
       || inRect(cx, cy, this.buildRect)
-      || inRect(cx, cy, this.cancelRect);
+      || inRect(cx, cy, this.cancelRect)
+      || inRect(cx, cy, this.devOpponentRect);
   }
 
   handleClick(cx: number, cy: number): void {
+    // DEV debug pill first — it's system-scoped, reachable in every selection state.
+    // The rect is zero-size in production (the paint branch is stripped), so this is
+    // inert there even without the env guard.
+    if (inRect(cx, cy, this.devOpponentRect)) { this.onAddOpponentShip(); return; }
     if (this.info) {
       if (inRect(cx, cy, this.buildRect)) { this.onBuildShip(this.info.bodyId); return; }
       if (this.info.build && inRect(cx, cy, this.cancelRect)) { this.onCancelBuild(this.info.build.shipId); return; }
@@ -319,6 +352,7 @@ export class SystemContext implements SidebarContext {
     }
     if (!next && inRect(cx, cy, this.buildRect)) next = { kind: 'build' };
     if (!next && inRect(cx, cy, this.cancelRect)) next = { kind: 'cancel' };
+    if (!next && inRect(cx, cy, this.devOpponentRect)) next = { kind: 'devOpponent' };
     if (hoverEqual(next, this.hovered)) return false;
     this.hovered = next;
     return true;

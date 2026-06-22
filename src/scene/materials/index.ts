@@ -29,6 +29,7 @@ export {
 export {
   facilityChipMat,
   makeBlobMaterial,
+  makeFleetTriangleMaterial,
   makeRingMaterial,
   makeStarHaloMaterial,
   makeStarMeshMaterial,

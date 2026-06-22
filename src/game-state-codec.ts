@@ -8,6 +8,8 @@
 
 import { FACILITY_TYPES } from './facilities/registry.ts';
 import type { FacilityType } from './facilities/types.ts';
+import { CONTROLLED_FACTION_ID, FACTION_TYPES } from './factions/registry.ts';
+import type { FactionType } from './factions/types.ts';
 import { SHIP_CLASS_TYPES } from './ships/registry.ts';
 import type { ShipClassType } from './ships/types.ts';
 import { pruneMissingBodies } from './world-overlay.ts';
@@ -23,24 +25,35 @@ export interface Facility {
 // A built or in-progress ship. Durable player intent, like Facility — but keyed to
 // its SYSTEM, never a planet (planets and ships are independently-destroyable peers
 // in combat). `systemId` (the cluster primary's stable slug) is where the ship lives
-// and what skip-on-missing validates; `shipyardBodyId` is load-bearing only while
-// 'building' — it drives the in-progress readout, the one-build-per-yard cap, and
-// yard-removal reaping — and is inert birthplace trivia once 'ready'.
+// and what skip-on-missing validates.
 export interface Ship {
   // Unique within this save (allocated from the shared GameState.seq, 's'-prefixed).
   readonly id: string;
   // The stable system handle = STARS[cluster.primary].id. Survives any planet's death.
   readonly systemId: string;
-  // The building shipyard's catalog Body.id.
-  readonly shipyardBodyId: string;
+  // Whose ship — the side that owns it. A pre-faction save (every ship built before
+  // ownership existed) reads as CONTROLLED_FACTION_ID via validate-and-merge.
+  readonly factionId: FactionType;
   readonly classId: ShipClassType;
-  // Auto-generated at build start; carried for the future ship-selection seam.
+  // Auto-generated at creation; the ship card reads it.
   readonly name: string;
   readonly status: 'building' | 'ready';
-  // Absolute turn the build flips to 'ready' — a replay-safe threshold compare, not
-  // a per-turn decrement (a skipped/double-fired turn can't desync two stored ints).
-  readonly completesOnTurn: number;
+  // Build-only fields, present iff 'building'. A 'ready' ship omits both — a finished
+  // build no longer needs them, and a ship that NEVER built (a bootstrapped opponent
+  // dropped straight into a system) never had them.
+  //   - shipyardBodyId: the building yard's catalog Body.id — drives the in-progress
+  //     readout, the one-build-per-yard cap, and yard-removal reaping.
+  //   - completesOnTurn: the absolute turn the build flips to 'ready' — a replay-safe
+  //     threshold compare, not a per-turn decrement (a skipped/double-fired turn can't
+  //     desync two stored ints).
+  readonly shipyardBodyId?: string;
+  readonly completesOnTurn?: number;
 }
+
+// The on-disk ship shape after STRUCTURAL validation but before factionId is
+// normalized — factionId is validate-and-merged (defaulted), never gated, so a
+// pre-faction or corrupt value can't drop an otherwise-valid ship.
+type ParsedShip = Omit<Ship, 'factionId'> & { readonly factionId?: unknown };
 
 export interface GameState {
   version: 1;
@@ -63,17 +76,29 @@ function isValidFacility(f: unknown): f is Facility {
     && typeof o.type === 'string' && FACILITY_TYPES.has(o.type);
 }
 
-function isValidShip(s: unknown): s is Ship {
+const isCompletionTurn = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 1;
+
+function isValidShip(s: unknown): s is ParsedShip {
   if (!s || typeof s !== 'object') return false;
   const o = s as Record<string, unknown>;
-  return typeof o.id === 'string'
-    && typeof o.systemId === 'string'
-    && typeof o.shipyardBodyId === 'string'
-    && typeof o.classId === 'string' && SHIP_CLASS_TYPES.has(o.classId)
-    && typeof o.name === 'string'
-    && (o.status === 'building' || o.status === 'ready')
-    && typeof o.completesOnTurn === 'number'
-    && Number.isInteger(o.completesOnTurn) && o.completesOnTurn >= 1;
+  if (typeof o.id !== 'string') return false;
+  if (typeof o.systemId !== 'string') return false;
+  if (typeof o.classId !== 'string' || !SHIP_CLASS_TYPES.has(o.classId)) return false;
+  if (typeof o.name !== 'string') return false;
+  if (o.status !== 'building' && o.status !== 'ready') return false;
+  // Build-only fields: a 'building' ship MUST carry a well-formed shipyard + completion
+  // turn (the in-progress machinery depends on both); a 'ready' ship MAY omit them, but
+  // a present value still has to be well-formed.
+  if (o.status === 'building') {
+    if (typeof o.shipyardBodyId !== 'string') return false;
+    if (!isCompletionTurn(o.completesOnTurn)) return false;
+  } else {
+    if (o.shipyardBodyId !== undefined && typeof o.shipyardBodyId !== 'string') return false;
+    if (o.completesOnTurn !== undefined && !isCompletionTurn(o.completesOnTurn)) return false;
+  }
+  // factionId is validate-and-merged (defaulted) by the caller, never gated here.
+  return true;
 }
 
 // Parse a stored helio.game blob into a validated GameState, merging over
@@ -100,12 +125,21 @@ export function parseGameState(
     // dimension the BodyKeyed helper can't model: drop on a missing SYSTEM; drop a
     // still-'building' ship whose shipyard body is gone (its yard vanished mid-build
     // — a zombie build); KEEP a 'ready' ship even when its birth yard is gone (a
-    // ready ship is independent of the planet that built it). droppedShips, like
+    // ready ship is independent of the planet that built it). factionId is normalized
+    // here (validate-and-merge): a missing or unknown side defaults to the controlled
+    // faction, so adding ownership can't drop a pre-faction ship. droppedShips, like
     // droppedFacilities, counts malformed + pruned together.
     const rawShips = Array.isArray(parsed.ships) ? parsed.ships : [];
     const ships = rawShips
       .filter(isValidShip)
-      .filter((s) => systemExists(s.systemId) && !(s.status === 'building' && !bodyExists(s.shipyardBodyId)));
+      .map((s): Ship => ({
+        ...s,
+        factionId: typeof s.factionId === 'string' && FACTION_TYPES.has(s.factionId)
+          ? (s.factionId as FactionType)
+          : CONTROLLED_FACTION_ID,
+      }))
+      .filter((s) => systemExists(s.systemId)
+        && (s.status !== 'building' || (s.shipyardBodyId !== undefined && bodyExists(s.shipyardBodyId))));
     const droppedShips = rawShips.length - ships.length;
     // Turns are 1-based; seq is a non-negative counter. A corrupt/missing value
     // reads as the default (validate-and-merge), so an old save lacking a field
@@ -127,7 +161,10 @@ export function parseGameState(
 export function advanceShipBuilds(ships: readonly Ship[], turn: number): readonly Ship[] {
   let changed = false;
   const next = ships.map((s) => {
-    if (s.status === 'building' && turn >= s.completesOnTurn) {
+    // completesOnTurn is always present on a 'building' ship (the validator + every
+    // construction site enforce it); the undefined guard only satisfies the optional
+    // type — a building ship without one simply never completes, never throws.
+    if (s.status === 'building' && s.completesOnTurn !== undefined && turn >= s.completesOnTurn) {
       changed = true;
       return { ...s, status: 'ready' as const };
     }
