@@ -31,6 +31,11 @@ export class Sidebar extends BasePanel {
   private bufferH = 0;
   private turn = 1;
   private hovered: Control | null = null;
+  // Whether the Next Turn pill is live. When false it paints greyed/inert and
+  // ignores clicks + hover — the galaxy-freeze lever an overlay pulls while it
+  // suspends the outer turn (the encounter modal, combat plan §8.2). The screen's
+  // own freezesTurn marker guards the turn loop in parallel (app-controller).
+  private nextTurnOn = true;
 
   // The swappable contextual region below the header. Set by the active scene
   // (via AppController) and fed its data through its own setters; null = empty.
@@ -56,6 +61,17 @@ export class Sidebar extends BasePanel {
   setTurn(turn: number): void {
     if (this.turn === turn) return;
     this.turn = turn;
+    this.rebuild();
+  }
+
+  // Enable/disable the Next Turn pill. Disabling greys it and makes it inert to
+  // clicks + hover; an overlay that suspends the galaxy turn calls this on enter
+  // and re-enables on exit (combat plan §8.2). Clearing hover avoids a stuck
+  // highlight if the pill is disabled mid-hover.
+  setNextTurnEnabled(enabled: boolean): void {
+    if (this.nextTurnOn === enabled) return;
+    this.nextTurnOn = enabled;
+    if (!enabled && this.hovered === 'next') this.hovered = null;
     this.rebuild();
   }
 
@@ -86,7 +102,9 @@ export class Sidebar extends BasePanel {
   handleClick(bufX: number, bufY: number): boolean {
     if (!this.visible || !this.visibleBounds.contains(bufX, bufY)) return false;
     const cx = this.toCanvasX(bufX), cy = this.toCanvasY(bufY);
-    if (inRect(cx, cy, this.nextRect)) this.onNextTurn();
+    // A disabled pill still absorbs its rect (it's chrome, not scene) but fires
+    // nothing — the click neither advances the turn nor falls through to context.
+    if (inRect(cx, cy, this.nextRect)) { if (this.nextTurnOn) this.onNextTurn(); }
     else if (inRect(cx, cy, this.settingsRect)) this.onSettings();
     else this.context?.handleClick(cx, cy);
     return true; // absorb every click within the strip
@@ -95,7 +113,8 @@ export class Sidebar extends BasePanel {
   hitTest(bufX: number, bufY: number): HitResult {
     if (!this.visible || !this.visibleBounds.contains(bufX, bufY)) return 'transparent';
     const cx = this.toCanvasX(bufX), cy = this.toCanvasY(bufY);
-    if (inRect(cx, cy, this.nextRect) || inRect(cx, cy, this.settingsRect)
+    // A disabled pill is opaque chrome, not an interactive target (no pointer cursor).
+    if ((this.nextTurnOn && inRect(cx, cy, this.nextRect)) || inRect(cx, cy, this.settingsRect)
       || this.context?.isInteractive(cx, cy)) return 'interactive';
     return 'opaque';
   }
@@ -106,7 +125,7 @@ export class Sidebar extends BasePanel {
     const inside = this.visible && this.visibleBounds.contains(bufX, bufY);
     const cx = inside ? this.toCanvasX(bufX) : -1;
     const cy = inside ? this.toCanvasY(bufY) : -1;
-    const overNext = inside && inRect(cx, cy, this.nextRect);
+    const overNext = inside && this.nextTurnOn && inRect(cx, cy, this.nextRect);
     const overSettings = inside && inRect(cx, cy, this.settingsRect);
     const headerHover: Control | null = overNext ? 'next' : overSettings ? 'settings' : null;
     let changed = false;
@@ -140,7 +159,8 @@ export class Sidebar extends BasePanel {
     // Turn header: "TURN" caption (dim) over the number (yellow, title font).
     drawPixelText(g, 'TURN', sizes.padX, sizes.padY, colors.textKey, fonts.body);
     drawPixelText(g, String(this.turn), sizes.padX, sizes.padY + bodyH, colors.starName, fonts.title);
-    paintPillButton(g, this.nextRect.x, this.nextRect.y, 'Next Turn', { hover: this.hovered === 'next' });
+    paintPillButton(g, this.nextRect.x, this.nextRect.y, 'Next Turn',
+      { hover: this.hovered === 'next', disabled: !this.nextTurnOn });
     // Settings glyph (top-right of the header).
     const sHover = this.hovered === 'settings';
     paintSurface(g, this.settingsRect.x, this.settingsRect.y, sizes.iconBox, sizes.iconBox,

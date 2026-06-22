@@ -6,13 +6,21 @@
 // optional: only screens that surface turn-driven state (the economy read-outs)
 // implement it, so the turn loop can call it without a type test.
 //
-// Today AppController keeps the galaxy scene as a persistent ROOT and at most one
-// lazily-built OVERLAY (system or test) on top of it; the single overlay slot is
-// the seam a future screen stack / modal layer grows from (`current` already
-// abstracts "whichever screen is live").
+// AppController keeps the galaxy scene as a persistent ROOT with a stack of
+// lazily-built OVERLAYS (system / test, and a modal-over-system to come) layered
+// on top (overlay-stack.ts); `current` abstracts "whichever screen is live". Only
+// depth-1 is reachable today — the depth-N spine exists for a modal that sits over
+// the system view (the encounter modal) without disturbing the round-trip.
 export interface Screen {
   start(): void;
   stop(): void;
   dispose(): void;
   afterTurnAdvance?(): void;
+  // When true on the live screen, the outer galaxy turn is suspended: nextTurn()
+  // short-circuits so neither a programmatic call nor a turn phase can step the
+  // economy/turn scalar while it's up. The seam the encounter modal sets to run
+  // its own round loop within a single galaxy turn (combat plan §8.2); the
+  // galaxy/system/test screens leave it unset, so the turn advances normally
+  // there. The sidebar's Next Turn pill is gated separately (setNextTurnEnabled).
+  readonly freezesTurn?: boolean;
 }

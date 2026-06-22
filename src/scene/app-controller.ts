@@ -21,6 +21,7 @@ import { warmPlanetShaders } from './warm-shaders';
 import { Sidebar } from '../ui/sidebar/sidebar';
 import { EconomyBridge } from '../facilities/economy-bridge';
 import { advanceTurn, getGameState, stepShipBuilds } from '../game-state';
+import { OverlayStack } from './overlay-stack';
 import type { Screen } from './screen';
 
 // Opt out of Three.js color management. Without this, hex values in shader
@@ -44,11 +45,13 @@ export class AppController {
   // Next Turn, reconciled by the system view after a facility edit.
   private readonly bridge = new EconomyBridge();
   private readonly starmap: StarmapScene;
-  // The galaxy scene is the persistent ROOT (paused, never disposed, on a swap).
-  // At most one lazily-built OVERLAY (system / test) sits on top and is disposed
-  // on exit. This single slot is the seam a future screen stack / modal layer
-  // grows from; `current` abstracts "whichever screen is live".
-  private overlay?: Screen;
+  // The galaxy scene is the persistent ROOT (paused, never disposed, on a swap);
+  // lazily-built OVERLAYS (system / test, and a modal-over-system to come) layer
+  // on top and are disposed on exit. The stack is the depth-N generalization of
+  // the former single slot; `current` abstracts "whichever screen is live". Today
+  // only depth-1 is reachable (enterOverlay guards re-entry), preserving the exact
+  // galaxy↔system/test round-trip.
+  private readonly overlays = new OverlayStack<Screen>();
   // Retained planet-material variants (disc / halo / moon 'all'), kept alive so
   // their compiled GL programs survive every SystemScene round-trip. See
   // warm-shaders.ts. Undefined until the deferred idle warm runs.
@@ -83,8 +86,7 @@ export class AppController {
     // window/matchMedia listeners), unlike enterOverlay below which only stop()s
     // it so a later start() resumes the same instance.
     this.starmap.dispose();
-    this.overlay?.dispose();
-    this.overlay = undefined;
+    for (const overlay of this.overlays.clear()) overlay.dispose();
     this.sidebar.dispose();
     if (this.warmedShaders) {
       for (const m of this.warmedShaders) m.dispose();
@@ -95,13 +97,18 @@ export class AppController {
   // Whichever screen is currently driving the canvas: the active overlay, else
   // the galaxy root.
   private get current(): Screen {
-    return this.overlay ?? this.starmap;
+    return this.overlays.current(this.starmap);
   }
 
   // Step the economy one turn, bump the saved turn scalar, and refresh the live
   // screen's turn-driven read-out. The turn loop's single home: future turn
   // phases (AI, research, events) attach here, not in a sidebar closure.
   private nextTurn(): void {
+    // Belt-and-suspenders to the sidebar's setNextTurnEnabled gate: a screen that
+    // suspends the outer game (the encounter modal, combat plan §8.2) freezes the turn
+    // even against a programmatic caller, since bridge.step()/advanceTurn() below
+    // are unconditional. The galaxy/system/test screens leave freezesTurn unset.
+    if (this.current.freezesTurn) return;
     this.bridge.step();
     const turn = advanceTurn();
     this.sidebar.setTurn(turn);
@@ -137,18 +144,20 @@ export class AppController {
   // screen is a new enterX() that calls this with its factory; the factory gets the
   // exit callback to wire into its onExit.
   private enterOverlay(make: (exit: () => void) => Screen): void {
-    if (this.overlay) return;
+    if (this.overlays.hasOverlay) return;
     this.starmap.stop();
-    this.overlay = make(() => this.exitOverlay());
-    this.overlay.start();
+    const overlay = make(() => this.exitOverlay());
+    this.overlays.push(overlay);
+    overlay.start();
   }
 
-  // Dispose the active overlay and resume the galaxy root exactly where it paused.
+  // Dispose the active overlay and resume the screen beneath it (another overlay,
+  // or the galaxy root) exactly where it paused.
   private exitOverlay(): void {
-    if (!this.overlay) return;
-    this.overlay.dispose();
-    this.overlay = undefined;
-    this.starmap.start();
+    const overlay = this.overlays.pop();
+    if (!overlay) return;
+    overlay.dispose();
+    this.current.start();
   }
 
   enterSystem(clusterIdx: number): void {
