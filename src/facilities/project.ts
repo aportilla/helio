@@ -14,7 +14,7 @@ import { FACILITY_BY_TYPE } from './registry.ts';
 import { appResourceTable } from './resource-vocab.ts';
 import type { Contribution, FacilityDef, PlacedFacility, ProjectionCtx, SimStarResolver } from './types.ts';
 
-// Combine two storage ceilings (plan §7.3). Inputs use the sim sentinel:
+// Combine two storage ceilings. Inputs use the sim sentinel:
 // callers translate a facility's "0 = no limit" via ceilingFromContribution()
 // BEFORE folding. Any uncapped operand dominates; finite capacities sum; the
 // min() keeps two uncapped sentinels (1<<30 + 1<<30 = 2^31) from wrapping
@@ -76,9 +76,9 @@ export function projectBody(
 // The full cold-start projection. PlanetIds are allocated in the order of the
 // `bodies` argument (NOT facility-insertion or Map-iteration order), so CALLERS
 // MUST pass bodies in canonical BODIES order — or the sim's seeded PRNG and any
-// replay diverge (plan §9.2). The function preserves the caller's order; it does
+// replay diverge. The function preserves the caller's order; it does
 // not impose it. bodyIdByPlanet is the read-back side-table a future flow
-// visualization resolves edges through (plan §9.3).
+// visualization resolves edges through.
 export interface ProjectedWorld {
   readonly planets: readonly PlanetSpec[];
   /** PlanetId (dense index) → catalog Body.id. */

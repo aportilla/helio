@@ -31,6 +31,7 @@ This is the runtime side of the star catalog — it imports the precomputed `cat
 - `clusterDisplayName(clusterIdx)` — the cluster's primary name with a ` +N` suffix when it carries N additional members.
 - `nearestClusterIdxTo(x, y, z)` — nearest cluster by COM, backed by the k-d tree.
 - `indexOfBodyId(id)` — stable `Body.id` → `BODIES` index (or `-1`), used to resolve persisted game-state facilities.
+- `systemIdForCluster(clusterIdx)` / `systemIdForBody(body)` / `systemIdForBodyId(id)` / `systemExists(id)` — a body or cluster's **stable system handle** (the cluster primary's star slug); `systemExists` gates skip-on-missing pruning of persisted game-state ships, which are system-keyed rather than body-keyed.
 - `CLASS_COLOR` — approximate blackbody color per spectral class, consumed by the stars shader.
 - `WAYPOINT_STAR_IDS` — the curated set of waypoint-star slugs the labels module promotes.
 

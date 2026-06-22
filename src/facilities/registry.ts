@@ -27,7 +27,7 @@ function isSolidSite(body: Body): boolean {
 }
 
 // The registry, keyed by FacilityType. `satisfies Record<FacilityType, ...>` is
-// the compile layer of the frozen-key guard (plan §11.3a): adding a literal to
+// the compile layer of the frozen-key guard: adding a literal to
 // the FacilityType union without adding a def here fails to compile, and a key
 // that isn't a FacilityType is rejected. The key IS the save id; the DEV assert
 // below pins each def's own `type` field to its key.
@@ -138,8 +138,8 @@ export function facilityColor(type: FacilityType): string {
 // this list under compiler pressure. The CI test (test/registry.test.ts) asserts
 // each entry is still a live type (FACILITY_TYPES.has), so removing OR renaming a
 // shipped id fails — protecting old saves from a compiler-invisible "cleanup". A
-// retired type stays here AND in the registry as a `retired: true` tombstone def
-// (plan §11), never deleted outright.
+// retired type stays here AND in the registry as a `retired: true` tombstone def,
+// never deleted outright.
 export const FROZEN_FACILITY_IDS: readonly string[] = ['colony', 'mining-base', 'farm', 'shipyard'];
 
 // DEV-only module-load invariant: each def's `type` field equals its registry key,

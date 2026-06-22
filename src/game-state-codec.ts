@@ -1,9 +1,10 @@
 // Pure parse/validate-and-merge for the helio.game save, extracted from
-// game-state.ts so the reader logic — skip-on-missing facilities, turn/seq
-// flooring, corrupt-blob fallback — is node-testable without localStorage or the
-// catalog. The caller injects the raw string and a body-existence predicate; this
-// module touches no globals. (Imports the registry's frozen type set directly,
-// not the barrel, so it loads under `node --test`.)
+// game-state.ts so the reader logic — skip-on-missing facilities and ships, turn/seq
+// flooring, corrupt-blob fallback — plus the pure ship-build kernels
+// (advanceShipBuilds / buildingShipAt) are node-testable without localStorage or the
+// catalog. The caller injects the raw string and body- and system-existence
+// predicates; this module touches no globals. (Imports the registries' frozen type
+// sets directly, not the barrels, so it loads under `node --test`.)
 
 import { FACILITY_TYPES } from './facilities/registry.ts';
 import type { FacilityType } from './facilities/types.ts';

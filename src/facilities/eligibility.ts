@@ -3,7 +3,7 @@
 // physics (each def's canBuildOn predicate) AND what's already placed (the
 // per-(body, type) build cap). The `current` parameter is in the signature from
 // the start so caps — and future "requires an existing X" prerequisites — land
-// without a signature change (plan §10).
+// without a signature change.
 
 import type { Body } from '../data/stars.ts';
 import type { FacilityType, PlacedFacility } from './types.ts';

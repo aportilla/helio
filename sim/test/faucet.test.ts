@@ -1,6 +1,5 @@
-// Demand-pull (make-to-order) production — the faucet model (§
-// plans/4x-economy-demand-pull-production.md). A producer mints ONLY what is
-// pulled from it this turn, up to its per-turn rating; it holds nothing at rest;
+// Demand-pull (make-to-order) production — the faucet model. A producer mints ONLY
+// what is pulled from it this turn, up to its per-turn rating; it holds nothing at rest;
 // a producer with no consumer makes nothing. These pin the four sharpest edges:
 // no-consumer mints 0, same-body self-feed nets in place, a zero-stock faucet
 // still ships under CFL, and the capacity-math consistency that keeps dispatch's

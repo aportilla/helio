@@ -1,6 +1,6 @@
 // The economic vocabulary bridge. The sim owns the ResourceTable *type* and its
 // validating constructor; the app owns the *instance* — the correct side of the
-// standalone wall (plan §8). This module imports the sim; the package README
+// standalone wall. This module imports the sim; the package README
 // lists which modules here reach it.
 //
 // EconResource is a const-object + derived union (the erasableSyntaxOnly idiom

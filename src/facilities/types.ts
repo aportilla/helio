@@ -10,8 +10,7 @@ import type { Body } from '../data/stars.ts';
 // (keyed by Body.id, value `{id, bodyId, type}`). Adding a member is safe;
 // renaming/removing a shipped member breaks old saves — three guards defend
 // it (registry FROZEN_FACILITY_IDS + its CI test, the DEV module-load assert,
-// and this literal union forcing every switch/Record to update). See the plan
-// in plans/4x-facility-definitions-modularity-plan.md §8/§11.
+// and this literal union forcing every switch/Record to update).
 export type FacilityType = 'colony' | 'mining-base' | 'farm' | 'shipyard';
 
 // Body → its transport-graph node (the value that becomes PlanetSpec.star). In
@@ -40,8 +39,8 @@ export interface ProjectionCtx {
 export interface Contribution {
   readonly production: readonly number[];     // per-turn production (milli)
   readonly consumption: readonly number[];    // per-turn consumption (milli)
-  readonly stock: readonly number[];          // initial endowment, cold-start only (plan §7.4)
-  readonly storageCeiling: readonly number[]; // per-resource ceiling (combine, never add — plan §7.3)
+  readonly stock: readonly number[];          // initial endowment, cold-start only
+  readonly storageCeiling: readonly number[]; // per-resource ceiling (combine, never add)
 }
 
 // The minimum a placed facility must expose to be queried/projected — just its
@@ -58,7 +57,7 @@ export interface FacilityDef {
   readonly color: string;               // '#5ec8ff' — fill of the on-body icon chip (+ later the sidebar chip); a literal sRGB hex, rendered verbatim end-to-end since ColorManagement is OFF
   readonly addOrder: number;            // stable display order of the Add button
   readonly maxPerBody: number;          // build cap per (body, type) (v1 = 1; raise to allow stacking)
-  readonly retired?: boolean;           // a shipped-then-removed type: no Add button, empty contribute (plan §11)
+  readonly retired?: boolean;           // a shipped-then-removed type: no Add button, empty contribute
 
   // Opt-in capability: this facility lets its body build ships. The Build-Ship
   // affordance keys on this flag via a registry query (facilityHasShipbuilding),
@@ -80,7 +79,7 @@ export interface FacilityDef {
 // A zero Contribution of the right width — the cold-start identity the
 // projector folds onto, and what a retired (or economy-less) def emits. A zero
 // storageCeiling means "no limit from me" (the common case); the projector
-// translates that to the sim's uncapped sentinel (plan §7.3) so this stays
+// translates that to the sim's uncapped sentinel so this stays
 // sim-free.
 export function emptyContribution(R: number): Contribution {
   return new ContributionBuilder(R).build();

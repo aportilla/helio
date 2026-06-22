@@ -6,13 +6,14 @@
 // (private browsing, quota) so the session still works, it just won't
 // persist.
 //
-// The save stores player *intent* — "a colony sits on this body" — keyed by
-// the stable catalog Body.id (§2 of the first-light plan), plus the current
-// turn number, the player's progress through the game. It deliberately
-// stores no economic behavior: what a colony produces/consumes is the sim's
-// concern, derived later by projecting facilities into the node-contributor
-// seam (the standalone sim under sim/), never baked into this blob. So adding
-// the economy won't reshape this file.
+// The save stores player *intent* — a facility sits on this body, a ship belongs
+// to this system — each keyed by a stable catalog anchor: facilities by Body.id,
+// ships by their system handle (the cluster-primary slug), because a ship is a peer
+// of planets, not an appendage. Plus the current turn number, the player's progress
+// through the game. It deliberately stores no economic behavior: what a colony
+// produces/consumes is the sim's concern, derived later by projecting facilities
+// into the node-contributor seam (the standalone sim under sim/), never baked into
+// this blob. So adding the economy won't reshape this file.
 //
 // MULTI-SLOT SEAM: the active save's storage location resolves through
 // storage.slotKey('game'). Multiple save slots (with a new-game / load-game
@@ -77,7 +78,7 @@ export function facilitiesOnBody(bodyId: string): readonly Facility[] {
 
 // Place a facility, or return null if the body is already at the per-(body, type)
 // build cap (FacilityDef.maxPerBody). The UI hides the Add button at cap; this is
-// the defensive backstop so no path can exceed it (plan §10).
+// the defensive backstop so no path can exceed it.
 export function addFacility(bodyId: string, type: FacilityType): Facility | null {
   const cap = FACILITY_BY_TYPE.get(type)?.maxPerBody ?? 1;
   const placed = current.facilities.filter((f) => f.bodyId === bodyId && f.type === type).length;

@@ -1,7 +1,7 @@
 # Economy sim (standalone)
 
 The deterministic logistics simulation for **Helio** — the single-tier
-discrete-transfer economy from `plans/4x-economy-plan-discrete-single-tier.md`.
+discrete-transfer economy.
 
 It is built **standalone**: a self-contained TypeScript module with its own
 `tsconfig.json`, no dependency on the Three.js/Vite browser build or the catalog

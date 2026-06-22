@@ -15,6 +15,9 @@
 //     AtmGas / ResourceKey field vocabularies).
 //   - Owns runtime-only constants (CLASS_COLOR for the stars shader,
 //     WAYPOINT_STAR_IDS for the labels module).
+//   - Resolves a body or cluster to its stable SYSTEM handle (the cluster
+//     primary's slug) — used to key persisted ships (see the System identity
+//     banner below).
 //
 // Body/planet render color-science (biome, gas, rock, haze, cloud and
 // resource palettes) is NOT here — it lives in

@@ -1,18 +1,19 @@
 # `src/facilities/` — the facility registry + the sim projection seam
 
 The single source of truth for every facility type the player can build, and the
-contract that turns placed facilities into economy-sim input. Adding a facility
-is **one `FacilityDef` object plus one literal in the `FacilityType` union** — its
-save-key, UI label, display color (the sidebar + on-body icon swatch, via
-`facilityColor`), Add-button order, build cap, body-eligibility predicate, and
-economic projection all flow from that one edit. This replaced a definition that
-used to be smeared across `game-state.ts`, the system-view facilities UI, and
-`system-scene.ts`.
+contract that turns placed facilities into economy-sim input (or, for a non-economy
+facility like the `shipyard`, into a **capability** the rest of the game queries).
+Adding a facility is **one `FacilityDef` object plus one literal in the
+`FacilityType` union** — its save-key, UI label, display color (the sidebar +
+on-body icon swatch, via `facilityColor`), Add-button order, build cap,
+body-eligibility predicate, economic projection, and any capability flags (e.g.
+`enablesShipbuilding`, read via `facilityHasShipbuilding` to gate the Build-ship
+action — a shipyard contributes nothing to the sim) all flow from that one edit.
+This replaced a definition that used to be smeared across `game-state.ts`, the
+system-view facilities UI, and `system-scene.ts`.
 
-> Durable design rationale (the why behind every decision here) lives in
-> `plans/4x-facility-definitions-modularity-plan.md`. Roadmap / cross-system
-> status lives in [docs/game-systems.md](../../docs/game-systems.md). This file
-> describes the **shipped** package.
+> This file describes the **shipped** package; roadmap / cross-system status lives
+> in [docs/game-systems.md](../../docs/game-systems.md).
 
 ## The two seams
 
@@ -47,7 +48,7 @@ no body physics scales it. The only thing a body's data gates is *eligibility*
 | `tuning.ts` | Hoisted economic tunables (per-facility **flat** rates). Symbol-named — referenced by name, never by value. |
 | `resource-vocab.ts` | `EconResource` (const-object + derived union) and `appResourceTable()`, built via the sim's own `makeResourceTable`. The sim owns the table *type*; the app owns the *instance*. |
 | `registry.ts` | `FACILITY_DEFS` + derived lookups (`FACILITY_BY_TYPE`, `FACILITY_TYPES`, `ADD_ORDER`, `facilityLabel`), `FROZEN_FACILITY_IDS`, and a DEV module-load invariant. |
-| `eligibility.ts` | `addableTypesFor(body, current)` — which Add buttons a body shows, gated by predicate **and** build cap. |
+| `eligibility.ts` | `addableTypesFor(body, current)` — which Add buttons a body shows, gated by predicate **and** build cap; plus `facilityHasShipbuilding(current)` — the registry-driven gate (the `enablesShipbuilding` flag) for the Build-ship action. |
 | `project.ts` | `projectBody` / `projectWorld` — THE projection adapter (body intent → `PlanetSpec`). Sim-importing, node-pure (catalog is type-only). |
 | `sim-geometry.ts` | `buildGeometry` — catalog coords → the sim's integer geometry (the float→int round for transport — `Math.round`, for symmetric error). Sim-importing, node-pure. |
 | `world-sync.ts` | `transplantLiveState` / `sameBodyIds` — the reconcile mechanics that preserve stock across a facility edit. Sim-importing, node-pure. |
@@ -131,7 +132,7 @@ fidelity, in-flight cargo kept) when the facility set is unchanged.
   forward-looking `++ inbound next turn` cue (`predictedCoverMilli` /
   `inboundNextTurnMilli` / `predictedNetMilli`, additive on the existing DTOs).
   The step logic is reused verbatim on a copy — same computation as the real Next
-  Turn, run early. Design: `plans/4x-economy-speculative-next-turn-preview.md`.
+  Turn, run early.
 - **Transport model:** a geometry node is a **cluster** — one system with a
   shared pool of bodies (`sim-geometry.ts` builds one node per cluster at its
   centre of mass; `clusterNodeOfBody` resolves a body to it). All bodies in a

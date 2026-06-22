@@ -14,6 +14,9 @@
 // A new overlay is then "a versioned list of BodyKeyed records": persist it under
 // storage.slotKey(name), parse it with the same validate-and-merge shape as
 // game-state-codec, prune it with pruneMissingBodies, read it with recordsOnBody.
+// (A concern keyed on a different stable anchor — e.g. a ship's SYSTEM rather than a
+// body — reuses the validate-and-merge SHAPE but supplies its own prune; see the
+// ship handling in game-state-codec.)
 
 // Anything carrying a stable catalog Body.id it overlays state onto.
 export interface BodyKeyed {

@@ -11,5 +11,5 @@ export const CORVETTE_BUILD_TURNS = 3;
 
 // Fleet-sprite radius in content-buffer px. The fleet draws Mesh quads on the
 // makeStarMeshMaterial path — the same disc primitive the system view's bodies use,
-// shared with the eventual combat sprites — not GL_POINTS (plan §8).
+// shared with the eventual combat sprites — not GL_POINTS.
 export const CORVETTE_SPRITE_SIZE_PX = 5;
