@@ -6,7 +6,7 @@
 // sync with the data layer.
 
 import { BODIES, STARS, type BiosphereArchetype, type BiosphereComplexity, type BiosphereImpactLevel, type Body, type ResourceKey, type SurfaceLiquidSpecies } from '../../data/stars';
-import type { DiagramPick } from '../../diagram-pick';
+import type { BodyOrStarPick } from '../../diagram-pick';
 import { composeWorldLabel } from './body-label';
 import { isGaseousBody } from '../../../scripts/lib/body-traits.mjs';
 
@@ -293,12 +293,13 @@ function rowsForRing(b: Body): BodyRow[] {
 }
 
 // Dispatch a pick to its key/value row set — star vs. body (planet / moon /
-// belt / ring). The single entry point the card calls for its body rows.
-export function rowsFor(pick: DiagramPick): BodyRow[] {
+// belt / ring). The single entry point the card calls for its body rows. Ships never
+// reach here — the card only describes catalog bodies, so its pick type excludes them.
+export function rowsFor(pick: BodyOrStarPick): BodyRow[] {
   return pick.kind === 'star' ? rowsForStar(pick.starIdx) : rowsForBody(pick.bodyIdx);
 }
 
-export function titleFor(pick: DiagramPick): string {
+export function titleFor(pick: BodyOrStarPick): string {
   if (pick.kind === 'star') return STARS[pick.starIdx]!.name;
   return BODIES[pick.bodyIdx]!.name;
 }
@@ -306,7 +307,7 @@ export function titleFor(pick: DiagramPick): string {
 // Subtitle line under the name — the "what is this" descriptor. Stars show
 // their raw spectral class; planets/moons show the richly-composed world
 // label (see body-label.ts). Belts/rings have no class, so no subtitle.
-export function subtitleFor(pick: DiagramPick): string | null {
+export function subtitleFor(pick: BodyOrStarPick): string | null {
   if (pick.kind === 'star') return STARS[pick.starIdx]!.rawClass;
   const b = BODIES[pick.bodyIdx]!;
   if (b.kind === 'belt' || b.kind === 'ring') return null;

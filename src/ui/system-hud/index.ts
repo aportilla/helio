@@ -106,7 +106,10 @@ export class SystemHud {
   // near the cursor, flipping across the cursor axis when the default below-right
   // placement would clip a screen edge.
   setHoveredBody(pick: DiagramPick | null, bufX: number, bufY: number): void {
-    if (!pick) {
+    // The info card describes catalog bodies only; a ship pick has no card (its hover
+    // affordance is the pointer cursor, its selection feedback the sidebar). Hiding here
+    // narrows `pick` to BodyOrStarPick for the card below.
+    if (!pick || pick.kind === 'ship') {
       this.bodyCard.setVisible(false);
       this.bodyCard.clearTarget();
       return;

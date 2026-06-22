@@ -219,19 +219,27 @@ export class SystemScene implements Screen {
     }
   }
 
-  // Update the persistent selection. Only bodies that can host at least one
-  // facility can be selected — a star, a ring, or empty space clears it, so the
-  // sidebar's facilities context only ever shows Add pills for a buildable body. Eligibility is the
-  // registry's call (addableTypesFor), not an inline kind check, so it stays in
-  // lockstep with the defs as types are added or their predicates diverge.
+  // Update the persistent selection. A ship is always selectable; a body only if it can
+  // host at least one facility — a star, a ring, or empty space clears it, so the
+  // sidebar shows either a ship card, a buildable body's facilities, or nothing.
   private select(pick: DiagramPick | null): void {
-    const body = pick && pick.kind !== 'star' ? BODIES[pick.bodyIdx] : undefined;
-    const eligible = !!body && addableTypesFor(body, []).length > 0;
-    const next = eligible ? pick : null;
+    const next = this.isSelectable(pick) ? pick : null;
     if (picksEqual(next, this.selectedPick)) return;
     this.selectedPick = next;
     this.diagram.setSelected(next);
     this.pushSelectionToSidebar();
+  }
+
+  // A pick is selectable if it's a ship, or a facility-eligible body. Body eligibility
+  // stays the registry's call (addableTypesFor with no existing facilities = "can host
+  // any type at all"), not an inline kind check, so it tracks the defs as types are
+  // added or their predicates diverge.
+  private isSelectable(pick: DiagramPick | null): boolean {
+    if (!pick) return false;
+    if (pick.kind === 'ship') return true;
+    if (pick.kind === 'star') return false;
+    const body = BODIES[pick.bodyIdx];
+    return !!body && addableTypesFor(body, []).length > 0;
   }
 
   // Push the selected body (with its current facilities, read fresh from the
@@ -239,6 +247,16 @@ export class SystemScene implements Screen {
   // change and after each add/remove so the list stays in sync.
   private pushSelectionToSidebar(): void {
     const pick = this.selectedPick;
+    // A selected ship → the sidebar's read-only ship card. Resolve it from the durable
+    // store (only 'ready' ships render, so a picked ship is always present + 'ready').
+    if (pick && pick.kind === 'ship') {
+      const ship = shipsInSystem(systemIdForCluster(this.clusterIdx)).find((s) => s.id === pick.shipId);
+      this.context.setShip(
+        ship ? { name: ship.name, classLabel: shipClassLabel(ship.classId), status: ship.status } : null,
+      );
+      this.sidebar.refreshContent();
+      return;
+    }
     if (!pick || pick.kind === 'star') {
       this.context.setBody(null);
       this.sidebar.refreshContent();
@@ -303,10 +321,12 @@ export class SystemScene implements Screen {
     this.viewport.clientToHud(e.clientX, e.clientY, this._hudPt);
     const onSidebar = this.sidebar.handlePointerMove(this._hudPt.x, this._hudPt.y);
     const onButton = this.hud.handlePointerMove(this._hudPt.x, this._hudPt.y);
-    this.canvas.style.cursor = (onSidebar || onButton) ? 'pointer' : '';
     const pick = this.pickAt(this._hudPt.x, this._hudPt.y);
     this.diagram.setHovered(pick);
     this.hud.setHoveredBody(pick, this._hudPt.x, this._hudPt.y);
+    // A ship has no hover rim or info card yet, so the pointer cursor is its hover
+    // affordance — the cue that it's clickable. Bodies rely on their rim + card instead.
+    this.canvas.style.cursor = (onSidebar || onButton || pick?.kind === 'ship') ? 'pointer' : '';
   }
 
   // Pick the disc under a HUD-space point, skipping the picker when the

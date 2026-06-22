@@ -51,7 +51,8 @@ export class SystemDiagram {
   // On-body facility chips — a static overlay re-read from game-state each layout.
   private readonly facilities: FacilitiesLayer;
   // The player's built-ship fleet — a single formation in the lower field, fed this
-  // system's ready ships by SystemScene. Render-only (no pick) in v1.
+  // system's ready ships by SystemScene. Pickable: a ship hit wins over the bodies
+  // beneath it (see pickAt), driving the sidebar's ship card.
   private readonly fleet: FleetLayer;
 
   // Two independent outline channels that share one visual (the 1-px rim):
@@ -183,6 +184,13 @@ export class SystemDiagram {
   // disc → back ring → belt → back moon → star), mirroring the
   // back-to-front render order within a band.
   pickAt(x: number, y: number): DiagramPick | null {
+    // The fleet is a foreground overlay (depthTest:false, top RENDER_ORDER_FLEET) that
+    // sits alone in the lower field, sharing neither the bodies' row-band z scheme nor
+    // their region — so a hit on a ship sprite wins outright and is resolved before the
+    // z-banded body walk rather than folded into it.
+    const ship = this.fleet.pickAt(x, y);
+    if (ship) return ship.pick;
+
     const centers = this.planets.getCenterIndex();
     const hits: (DiagramHit | null)[] = [
       this.moons.pickFront(x, y),
@@ -236,6 +244,9 @@ export class SystemDiagram {
       case 'belt':   this.belts.setHovered(pick, value); return;
       case 'moon':   this.moons.setHovered(pick, value); return;
       case 'ring':   this.rings.setHovered(pick, value); return;
+      // The fleet material has no outline channel yet, so a selected/hovered ship draws
+      // no rim — its selection feedback is the sidebar ship card. Deferred, not missed.
+      case 'ship':   return;
       default:       pick satisfies never;
     }
   }

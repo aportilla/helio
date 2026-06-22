@@ -17,13 +17,13 @@ map-hud/
 system-hud/
   index.ts              SystemHud: floating back button (top-left) + the on-hover body tooltip; the selected body's facilities + the system name now live in the sidebar's contextual region
   body-info-card.ts     BodyInfoCard: thin BasePanel that measures + lays out the on-hover tooltip
-  body-rows.ts          Body → title / subtitle / key-value row projection for the card (label tables + per-kind builders)
+  body-rows.ts          Body or star → title / subtitle / key-value row projection for the card (label tables + per-kind builders; takes BodyOrStarPick — ships never reach it)
   body-label.ts         Generative biome name for the BodyInfoCard subtitle — `[lead] [terrain]` composed from per-family word pools (surface worlds wear a landscape, gaseous worlds a skyscape), family chosen by a precedence cascade over body-traits predicates + raw fields; a notable condition replaces the family's signature lead (never stacks), always 2–3 words, no single body type
 sidebar/
   sidebar.ts            Sidebar: persistent full-height right-edge panel — AppController-owned, rendered by the active scene. Turn header (count + Next Turn) over a swappable contextual region
   context.ts            SidebarContext: the interface for the contextual region below the header (paint + hit-test against absolute canvas coords)
   galaxy-context.ts     GalaxyContext: the galaxy view's region — civ summary (per-type facility tallies) + selected-system rows (relocated info-card content) + per-system economy nets with a next-turn forecast cue + View System / Focus pills
-  system-context.ts     SystemContext: the system view's region — system name + the selected body's facilities list + economy rows (with a next-turn inbound forecast cue) + Add pills (a vertical stack; owns SelectedBodyInfo)
+  system-context.ts     SystemContext: the system view's region — system name + EITHER the selected body's facilities list + economy rows (next-turn inbound cue) + Add pills (owns SelectedBodyInfo) OR a selected fleet ship's read-only card: name / class / status (owns SelectedShipInfo); the two are mutually exclusive
   shared.ts             Cross-painter helpers shared by the sidebar + both contexts: Rect, inRect, fmtMilli (rect hit-test + milli-unit formatting)
 ```
 

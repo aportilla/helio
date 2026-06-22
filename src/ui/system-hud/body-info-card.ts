@@ -1,6 +1,8 @@
 // BodyInfoCard — transient on-hover tooltip for the system view. One
-// instance lives on SystemHud; SystemScene calls setTarget() each
-// pointer move with the picker's result (star, planet, moon, or null).
+// instance lives on SystemHud, fed the picker's catalog-backed result
+// (star / planet / moon / belt / ring, or null) each pointer move. A ship
+// pick is filtered out upstream by SystemHud — a ship has no catalog row to
+// describe, so it shows in the sidebar's ship card instead.
 //
 // Visually mirrors the rest of the HUD panel family — paintSurface bg,
 // yellow title in EspySans 15, Monaco 11 key/value body rows — but
@@ -12,7 +14,7 @@
 // file is just the BasePanel that measures and lays those rows out.
 
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
-import { picksEqual, type DiagramPick } from '../../diagram-pick';
+import { picksEqual, type BodyOrStarPick } from '../../diagram-pick';
 import { BasePanel } from '../base-panel';
 import { paintSurface } from '../painter';
 import { colors, fonts, sizes } from '../theme';
@@ -22,9 +24,9 @@ export class BodyInfoCard extends BasePanel {
   // Track current target so successive setTarget() calls with the same
   // pick are a no-op — the cursor moves continuously within a disc, but
   // we only need to rebuild the canvas when the picked body changes.
-  private current: DiagramPick | null = null;
+  private current: BodyOrStarPick | null = null;
 
-  setTarget(pick: DiagramPick): void {
+  setTarget(pick: BodyOrStarPick): void {
     if (picksEqual(pick, this.current)) return;
     this.current = pick;
     this.rebuild();

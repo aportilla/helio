@@ -5,7 +5,9 @@
 // construction control when the body has a shipyard (a Build-ship pill when idle,
 // or an in-progress readout + Cancel while a build is in flight), and one "Add
 // <type>" pill per buildable facility type, stacked vertically down the narrow
-// column. SystemScene drives it through setBody() (selection changed / facilities
+// column. A selected fleet **ship** swaps that whole body block for a read-only ship
+// card (name / class / status); the body and ship selections are mutually exclusive.
+// SystemScene drives it through setBody() / setShip() (selection changed / facilities
 // or builds mutated) and routes the clicked controls back through onAddFacility /
 // onRemoveFacility / onBuildShip / onCancelBuild.
 //
@@ -43,6 +45,20 @@ export interface SelectedBodyInfo {
   // (completesOnTurn - turn), never stored, and refreshes on selection / each turn.
   readonly build: { readonly shipId: string; readonly classLabel: string; readonly turnsLeft: number } | null;
 }
+
+// A selected ship, as the context renders it. Mutually exclusive with SelectedBodyInfo
+// (a click selects a body OR a ship). Read-only in v1 — a ready ship has no actions yet
+// (movement/combat land later), so this is a plain readout, no controls.
+export interface SelectedShipInfo {
+  readonly name: string;
+  readonly classLabel: string;
+  readonly status: 'building' | 'ready';
+}
+
+const SHIP_STATUS_LABEL: Record<SelectedShipInfo['status'], string> = {
+  building: 'Building',
+  ready: 'Ready',
+};
 
 const KIND_LABEL: Record<BodyKind, string> = {
   planet: 'planet', moon: 'moon', belt: 'belt', ring: 'ring',
@@ -86,7 +102,10 @@ function paintRemoveX(g: CanvasRenderingContext2D, x: number, y: number, color: 
 }
 
 export class SystemContext implements SidebarContext {
+  // At most one selection at a time: a body (with its facility/economy/build controls)
+  // or a ship (a read-only card). The setters keep them mutually exclusive.
   private info: SelectedBodyInfo | null = null;
+  private ship: SelectedShipInfo | null = null;
   private hovered: HoverHit = null;
   // Cached hit-rects in absolute canvas coords, rebuilt every paint().
   private addRects: Array<{ type: FacilityType; rect: Rect }> = [];
@@ -109,6 +128,13 @@ export class SystemContext implements SidebarContext {
 
   setBody(info: SelectedBodyInfo | null): void {
     this.info = info;
+    this.ship = null;
+    this.hovered = null;
+  }
+
+  setShip(ship: SelectedShipInfo | null): void {
+    this.ship = ship;
+    this.info = null;
     this.hovered = null;
   }
 
@@ -124,8 +150,21 @@ export class SystemContext implements SidebarContext {
     drawPixelText(g, this.systemName, x0, y, colors.starName, fonts.cardName);
     y += getFont(fonts.cardName).lineHeight + sizes.cardNameGap;
 
+    // A selected ship is a read-only card (no controls in v1), painted in place of the
+    // body block. Returns before the body rect-bearing rows below, so the cached
+    // hit-rects (reset at the top of paint) stay empty and every hit method is inert.
+    if (this.ship) {
+      const lineH = getFont(fonts.body).lineHeight;
+      drawPixelText(g, this.ship.name, x0, y, colors.textBody, fonts.body);
+      y += lineH + ROW_GAP;
+      drawPixelText(g, this.ship.classLabel, x0, y, colors.titleDim, fonts.body);
+      y += lineH + ROW_GAP;
+      drawPixelText(g, SHIP_STATUS_LABEL[this.ship.status], x0, y, colors.textKey, fonts.body);
+      return;
+    }
+
     if (!this.info) {
-      drawPixelText(g, 'Select a body', x0, y, colors.textKey, fonts.body);
+      drawPixelText(g, 'Select a body or ship', x0, y, colors.textKey, fonts.body);
       return;
     }
 
