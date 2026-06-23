@@ -85,6 +85,7 @@ type HoverHit =
   | { kind: 'build' }
   | { kind: 'cancel' }
   | { kind: 'devOpponent' }
+  | { kind: 'devOpponentBody' }
   | null;
 
 function hoverEqual(a: HoverHit, b: HoverHit): boolean {
@@ -92,7 +93,8 @@ function hoverEqual(a: HoverHit, b: HoverHit): boolean {
   if (!a || !b || a.kind !== b.kind) return false;
   if (a.kind === 'remove' && b.kind === 'remove') return a.id === b.id;
   if (a.kind === 'add' && b.kind === 'add') return a.type === b.type;
-  // 'build' / 'cancel' / 'devOpponent' are singletons — same kind means the same control.
+  // 'build' / 'cancel' / 'devOpponent' / 'devOpponentBody' are singletons — same kind means
+  // the same control.
   return true;
 }
 
@@ -123,6 +125,9 @@ export class SystemContext implements SidebarContext {
   // regardless of selection. Zero-size (inert) in a production build, where the paint
   // branch is dead-code-eliminated.
   private devOpponentRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
+  // DEV-only "make this body an opponent's" debug pill — body-scoped (painted only when a
+  // body is selected), so an enemy colony is exercisable for the M3 body-as-target path.
+  private devOpponentBodyRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
 
   // Fired from the controls; SystemScene routes these to the game-state store,
   // then re-pushes the updated body via setBody so the list stays in sync.
@@ -132,6 +137,9 @@ export class SystemContext implements SidebarContext {
   onCancelBuild: (shipId: string) => void = () => {};
   // DEV-only: drop a ready opponent ship into this system (no body arg — system-scoped).
   onAddOpponentShip: () => void = () => {};
+  // DEV-only: flip the SELECTED body to an opponent faction (the body twin of
+  // onAddOpponentShip). SystemScene reads the current selection — no body arg needed.
+  onAddOpponentBody: () => void = () => {};
 
   // The system name is fixed for the life of the view (the diagram never changes
   // system mid-life), so it's a constructor arg, not part of the per-selection DTO.
@@ -155,6 +163,7 @@ export class SystemContext implements SidebarContext {
     this.buildRect = { x: 0, y: 0, w: 0, h: 0 };
     this.cancelRect = { x: 0, y: 0, w: 0, h: 0 };
     this.devOpponentRect = { x: 0, y: 0, w: 0, h: 0 };
+    this.devOpponentBodyRect = { x: 0, y: 0, w: 0, h: 0 };
     const x0 = region.x;
     let y = region.y;
 
@@ -172,6 +181,14 @@ export class SystemContext implements SidebarContext {
       const { w, h } = paintPillButton(g, x0, y, '+ opponent ship', { hover: devHover });
       this.devOpponentRect = { x: x0, y, w, h };
       y += h + sizes.cardActionGap;
+      // The body twin — painted only when a body is selected (it flips THAT body to an
+      // opponent), so the M3 body-as-target path (an enemy colony) is exercisable.
+      if (this.info) {
+        const bodyHover = this.hovered?.kind === 'devOpponentBody';
+        const body = paintPillButton(g, x0, y, '+ opponent body', { hover: bodyHover });
+        this.devOpponentBodyRect = { x: x0, y, w: body.w, h: body.h };
+        y += body.h + sizes.cardActionGap;
+      }
     }
 
     // A selected ship is a read-only card (no controls in v1), painted in place of the
@@ -320,7 +337,8 @@ export class SystemContext implements SidebarContext {
       || this.removeRects.some((r) => inRect(cx, cy, r.rect))
       || inRect(cx, cy, this.buildRect)
       || inRect(cx, cy, this.cancelRect)
-      || inRect(cx, cy, this.devOpponentRect);
+      || inRect(cx, cy, this.devOpponentRect)
+      || inRect(cx, cy, this.devOpponentBodyRect);
   }
 
   handleClick(cx: number, cy: number): void {
@@ -328,6 +346,7 @@ export class SystemContext implements SidebarContext {
     // The rect is zero-size in production (the paint branch is stripped), so this is
     // inert there even without the env guard.
     if (inRect(cx, cy, this.devOpponentRect)) { this.onAddOpponentShip(); return; }
+    if (inRect(cx, cy, this.devOpponentBodyRect)) { this.onAddOpponentBody(); return; }
     if (this.info) {
       if (inRect(cx, cy, this.buildRect)) { this.onBuildShip(this.info.bodyId); return; }
       if (this.info.build && inRect(cx, cy, this.cancelRect)) { this.onCancelBuild(this.info.build.shipId); return; }
@@ -353,6 +372,7 @@ export class SystemContext implements SidebarContext {
     if (!next && inRect(cx, cy, this.buildRect)) next = { kind: 'build' };
     if (!next && inRect(cx, cy, this.cancelRect)) next = { kind: 'cancel' };
     if (!next && inRect(cx, cy, this.devOpponentRect)) next = { kind: 'devOpponent' };
+    if (!next && inRect(cx, cy, this.devOpponentBodyRect)) next = { kind: 'devOpponentBody' };
     if (hoverEqual(next, this.hovered)) return false;
     this.hovered = next;
     return true;

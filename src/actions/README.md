@@ -90,8 +90,12 @@ encounter modality (E-phases) claims.
   effect stubs; the `BodyOwnership` overlay + `ownerFactionId` + DEBUG `addOpponentBody` (with the
   economy fan-in ownership-gated so an enemy body can't feed the player); the neutral
   `bodies-to-actors.ts` projector. All pure/node-tested; no scene wiring yet.
-- **Next — M3b (scene):** a public `bodyCenter(bodyIdx)` anchor accessor, the `syncActionMenu`
-  rewrite (accept body picks, a real def-aware resolver over one flat ship+body candidate list,
-  namespace-dispatched anchors), and the actor-ring broadening to bodies — so a belt can be mined
-  and an enemy colony bombarded live. Then the encounter consumes the menu
-  (`4x-encounter-combat-system.md` E1–E5) over this already-even-handed substrate.
+- **M3b (shipped):** bodies as **live** actors/targets in the scene. `SystemDiagram.bodyCenter(bodyIdx)`
+  (the body anchor twin of `fleetSlotCenter`); the `syncActionMenu` rewrite (opens on a controlled
+  facility-bearing body, mints one flat ship+body candidate list with per-actor allegiance + tags,
+  namespace-dispatches the anchor); the actor ring broadened to ships-then-bodies. The combat `attack`
+  (and `bombard`) gained an enemy `targets` predicate; `mine`/`establish` are self-targeted bones. A
+  DEV "+ opponent body" pill flips the selected body so the body-as-target path is exercisable. Select
+  your colony/belt → its menu opens; select a ship → Attack now brackets enemy ships **and** enemy bodies.
+- **Next:** the encounter consumes the menu (`4x-encounter-combat-system.md` E1–E5) over this
+  already-even-handed substrate; the world verbs' effect stubs gain real mechanics behind their seams.

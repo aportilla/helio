@@ -12,6 +12,13 @@
 // An 'immediate' action with no handler registered here (flee / pass — combat/decline verbs
 // that resolve elsewhere or simply end a turn) falls through to SystemScene's DEV
 // placeholder log; only the non-combat WORLD verbs register a handler.
+//
+// SEAM CONTRACT for the real handlers: intent.targetIds carry ENTITY ids, not raw save keys.
+// A body target is entity-id-encoded ('body:<bodyIdx>') and a self-targeted body verb's
+// target is the actor's own body id — so decode with parseEntityId(id) → bodyIdx →
+// BODIES[bodyIdx].id before keying game-state (facilities/ownership) by raw Body.id, exactly
+// as system-scene's slotCenterForEntity / pickForActorId already do. A ship target is the
+// bare Ship.id.
 
 import type { ActionIntent, ActionType } from '../../actions/types';
 

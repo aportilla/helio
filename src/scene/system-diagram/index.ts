@@ -55,6 +55,12 @@ export class SystemDiagram {
   // beneath it (see pickAt), driving the sidebar's ship card.
   private readonly fleet: FleetLayer;
 
+  // The retained bodyIdx → on-screen center index from the last layout — the source for
+  // bodyCenter() (the action menu's body anchor / target bracket) and laidOutBodyIndices()
+  // (the candidate/actor body universe). Rebuilt each layout + syncFacilities pass (the
+  // same centers; a facility edit doesn't move bodies).
+  private bodyCenters: BodyCenterIndex = new Map();
+
   // Two independent outline channels that share one visual (the 1-px rim):
   // the transient hover follows the cursor, the persistent selection is set by
   // a click and survives pointer movement. A body is lit when it is hovered OR
@@ -113,9 +119,9 @@ export class SystemDiagram {
     // content-rect bounds to the ships layer, so cargo dots spawn/aim at any
     // body kind and re-track across a resize. The facility chips anchor to the
     // same centers (a body's top rim / belt center), re-read from game-state.
-    const bodyCenters = this.buildBodyCenters(centers);
-    this.ships.setLayout(bodyCenters, this.contentW, this.bufferH);
-    this.facilities.layout(bodyCenters);
+    this.bodyCenters = this.buildBodyCenters(centers);
+    this.ships.setLayout(this.bodyCenters, this.contentW, this.bufferH);
+    this.facilities.layout(this.bodyCenters);
     // The fleet isn't body-anchored — it formations off the content rect only.
     this.fleet.layout(this.contentW, this.bufferH);
 
@@ -153,7 +159,8 @@ export class SystemDiagram {
   // is untouched, so only the facilities layer re-runs (against the centers the
   // last layout published) — no full diagram relayout.
   syncFacilities(): void {
-    this.facilities.layout(this.buildBodyCenters(this.planets.getCenterIndex()));
+    this.bodyCenters = this.buildBodyCenters(this.planets.getCenterIndex());
+    this.facilities.layout(this.bodyCenters);
   }
 
   // Hand the fleet layer this system's READY ships (the caller pre-filters). A pure
@@ -167,6 +174,21 @@ export class SystemDiagram {
   // fleet layer, which owns the laid-out per-ship centers.
   fleetSlotCenter(shipId: string): { cx: number; cy: number; r: number } | null {
     return this.fleet.slotCenterFor(shipId);
+  }
+
+  // The on-screen center of a body (content-buffer px), or null if it isn't laid out — the
+  // body twin of fleetSlotCenter. The anchor the action menu pins to (a body actor) and the
+  // target bracket rides (a body target); shape-identical to a fleet slot center, so the
+  // chrome's slotCenterFor seam dispatches to either by id namespace.
+  bodyCenter(bodyIdx: number): { cx: number; cy: number; r: number } | null {
+    return this.bodyCenters.get(bodyIdx) ?? null;
+  }
+
+  // Every body laid out in this cluster, by catalog index (planets + moons + belts — the
+  // facility-eligible kinds; never stars/rings). The candidate/actor body universe the
+  // controller filters by ownership + facilities. Empty until the first layout.
+  laidOutBodyIndices(): readonly number[] {
+    return [...this.bodyCenters.keys()];
   }
 
   // Open the cargo overlay already at steady state (one-shot). Call once, after the

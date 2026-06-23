@@ -33,6 +33,10 @@ const DEFS = {
     category: 'attack',
     targeting: 'single',
     kind: 'encounter',
+    // Enemy-only: the controller mints ALL system entities as candidates (ships AND bodies),
+    // so this predicate is what keeps Attack pointed at opposing-faction targets — and, for
+    // free, lets it bracket an enemy-held BODY, not just enemy ships.
+    targets: (c) => c.allegiance === 'enemy',
   },
   // FLEE — disengage. A NAVIGATION command whose real resolution is the encounter reducer.
   // A live-view ship DOES list it (DEFAULT_SHIP_COMMANDS), so a Navigation → Flee drill
@@ -67,27 +71,32 @@ const DEFS = {
   // (mine ⇒ a mineable body, establish ⇒ an unowned body, bombard ⇒ an enemy-held body)
   // lands with the mechanics, not the skeleton.
   //
-  // MINE — draw minerals from the locked target body. SUPPORT/industry.
+  // MINE — work the body's own deposits. SUPPORT/industry. SELF-targeted for the bones: the
+  // bracket lands on the acting body itself, so the menu is exercisable without deciding the
+  // cross-entity targeting semantics (does a mine reach another belt?) — that arrives with
+  // the mechanics. The body projector grants this to a mining-base body.
   mine: {
     type: 'mine',
     label: 'Mine',
     color: MINE_ACTION_COLOR,
     category: 'support',
-    targeting: 'single',
+    targeting: 'self',
     kind: 'immediate',
   },
-  // ESTABLISH — claim an unowned target body for the controlled faction. SUPPORT/civic.
+  // ESTABLISH — settle / develop the body. SUPPORT/civic. SELF-targeted for the bones (same
+  // rationale as Mine); the body projector grants this to a colony body.
   establish: {
     type: 'establish',
     label: 'Establish',
     color: ESTABLISH_ACTION_COLOR,
     category: 'support',
-    targeting: 'single',
+    targeting: 'self',
     kind: 'immediate',
   },
   // BOMBARD — strike an enemy-held target body. An ATTACK-category WORLD verb; its 'immediate'
-  // kind keeps it on the effect-handler path (no encounter). Whether a body strike eventually
-  // becomes an 'encounter' is a later mechanics call, not a bones decision.
+  // kind keeps it on the effect-handler path (no encounter). Enemy-only, like Attack. No actor
+  // lists it yet (it rides an attacker's loadout with the mechanics) — the def + predicate are
+  // ready ahead of that.
   bombard: {
     type: 'bombard',
     label: 'Bombard',
@@ -95,6 +104,7 @@ const DEFS = {
     category: 'attack',
     targeting: 'single',
     kind: 'immediate',
+    targets: (c) => c.allegiance === 'enemy',
   },
 } satisfies Record<ActionType, ActionDef>;
 

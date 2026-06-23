@@ -11,10 +11,12 @@ import { addableTypesFor } from '../facilities';
 import type { EconomyBridge } from '../facilities/economy-bridge';
 import {
   addFacility,
+  addOpponentBody,
   addOpponentShip,
   buildingShipAtYard,
   facilitiesOnBody,
   getGameState,
+  ownerFactionId,
   removeFacility,
   removeShip,
   shipsInSystem,
@@ -23,8 +25,9 @@ import {
 import { CONTROLLED_FACTION_ID, factionColor, factionLabel } from '../factions/registry';
 import { buildTurns, DEFAULT_SHIP_CLASS, shipClassLabel } from '../ships/registry';
 import { shipToActor } from '../actions/ships-to-actors';
-import type { TargetResolver } from '../actions/menu';
-import type { TargetCandidate } from '../actions/types';
+import { bodyToActor } from '../actions/bodies-to-actors';
+import { encodeBodyEntityId, parseEntityId } from '../actions/entity-id';
+import type { Actor, TargetAllegiance, TargetCandidate } from '../actions/types';
 import { SystemActionMenu } from './actions/system-action-menu';
 import { EFFECT_HANDLERS } from './actions/effect-handlers';
 import { SystemHud } from '../ui/system-hud';
@@ -144,6 +147,22 @@ export class SystemScene implements Screen {
       this.context.onAddOpponentShip = () => {
         addOpponentShip(systemIdForCluster(this.clusterIdx));
         this.refreshFleet();
+      };
+      // DEV-only: flip the SELECTED body to an opponent faction, so the M3 body-as-target
+      // path (an enemy colony to Attack) is exercisable before live capture verbs exist.
+      this.context.onAddOpponentBody = () => {
+        const pick = this.selectedPick;
+        if (!pick || pick.kind === 'ship' || pick.kind === 'star') return;
+        addOpponentBody(BODIES[pick.bodyIdx]!.id);
+        // Mirror the facility-edit reconcile so the flip lands everywhere: re-project the
+        // economy (the ownership gate runs at build() time and now drops this body), redraw
+        // chips + lanes, re-sync the menu (an enemy body is no longer a commandable actor,
+        // so its menu closes), and refresh the sidebar.
+        this.bridge.syncFacilities();
+        this.diagram.syncFacilities();
+        this.refreshFlows();
+        this.syncActionMenu(pick);
+        this.pushSelectionToSidebar();
       };
     }
 
@@ -279,59 +298,130 @@ export class SystemScene implements Screen {
     this.pushSelectionToSidebar();
   }
 
-  // Open the anchored action menu when a ship is selected, close it otherwise. The menu
-  // reads the actor's commands from the neutral ship→actor adapter, draws its targets from
-  // the opposing-faction ready ships, and anchors to the ship's live fleet slot (re-read
-  // each place, so it tracks resizes and self-closes if the ship vanishes).
+  // Open the anchored action menu when a commandable actor is selected, close it otherwise.
+  // Both a fleet SHIP and a CONTROLLED facility-bearing BODY are actors (the neutral ship /
+  // body adapters give each its commands); the menu anchors to the entity's live on-screen
+  // center (ship slot or body disc, re-read each place so it tracks resizes / self-closes if
+  // the entity vanishes). A body opens only for the controlled side; an enemy/empty body is
+  // inspected via the sidebar, never commanded.
   private syncActionMenu(pick: DiagramPick | null): void {
-    if (!pick || pick.kind !== 'ship') {
+    const actor = pick ? this.actorForPick(pick) : null;
+    if (!actor) {
       this.actionMenu.close();
       return;
     }
-    const ships = shipsInSystem(systemIdForCluster(this.clusterIdx)).filter((s) => s.status === 'ready');
-    const ship = ships.find((s) => s.id === pick.shipId);
-    if (!ship) {
-      this.actionMenu.close();
-      return;
-    }
-    // 'self'-targeted commands are resolved inside the menu; this mints the opposing-faction
-    // ready ships as candidates the offensive commands point at. M3a keeps this ship-only
-    // (kind 'ship', allegiance 'enemy'); M3b broadens it to a flat ship+body candidate list.
-    // The menu applies each def's TargetCriteria to whatever this returns, so a richer mint
-    // here needs no menu change.
-    const candidates: readonly TargetCandidate[] = ships
-      .filter((s) => s.factionId !== ship.factionId)
-      .map((s): TargetCandidate => ({ id: s.id, kind: 'ship', allegiance: 'enemy', tags: [] }));
-    const resolveTargets: TargetResolver = () => candidates;
+    // The candidate set is minted ONCE per open (the actor is fixed): all ready ships + all
+    // facility-bearing / enemy bodies in this system, each tagged with its allegiance to the
+    // actor. The menu applies each def's TargetCriteria to this flat list, so ships-as-targets
+    // and bodies-as-targets fall out of one pass (Attack ⇒ enemies; a self verb ⇒ the actor).
+    const candidates = this.targetCandidatesFor(actor);
     this.actionMenu.openFor({
-      actor: shipToActor(ship),
-      title: ship.name,
-      resolveTargets,
-      // Live slot center of any ship — the actor anchors the panel, a target rides the bracket.
-      slotCenterFor: (id) => this.diagram.fleetSlotCenter(id),
+      actor: actor.actor,
+      title: actor.title,
+      resolveTargets: () => candidates,
+      slotCenterFor: (id) => this.slotCenterForEntity(id),
     });
   }
 
-  // The actor focus ring — the controlled faction's ready ships in this system, in fleet order.
-  // The horizontal axis at the menu's category level cycles through these (you command your own
-  // side); clicking any ship still opens its menu for inspection, but the keyboard walks the ring.
+  // Resolve a pick into a commandable actor (+ its display title and owning faction), or null
+  // if it can't be commanded. A ship opens for ANY faction (inspection, the M2 idiom). A body
+  // opens only when CONTROLLED and its facilities grant ≥1 command — an enemy/bare body returns
+  // null (sidebar inspection only).
+  private actorForPick(pick: DiagramPick): { actor: Actor; title: string; factionId: string } | null {
+    if (pick.kind === 'ship') {
+      const ship = this.readyShips().find((s) => s.id === pick.shipId);
+      return ship ? { actor: shipToActor(ship), title: ship.name, factionId: ship.factionId } : null;
+    }
+    if (pick.kind === 'star') return null;
+    const body = BODIES[pick.bodyIdx];
+    if (!body) return null;
+    const factionId = ownerFactionId(body.id);
+    if (factionId !== CONTROLLED_FACTION_ID) return null;
+    const actor = bodyToActor({ bodyIdx: pick.bodyIdx, factionId, facilities: facilitiesOnBody(body.id) });
+    return actor.commands.length > 0 ? { actor, title: body.name, factionId } : null;
+  }
+
+  // Mint every targetable entity in this system as a rich TargetCandidate, each with its
+  // allegiance to the acting actor (self = the actor itself, ally = same faction, enemy =
+  // other). Tags are an open set the criteria predicates read (body kind + facility types).
+  // Returns the FULL set; the menu filters it by the cursored command's TargetCriteria.
+  private targetCandidatesFor(actor: { actor: Actor; factionId: string }): readonly TargetCandidate[] {
+    const allegiance = (faction: string, id: string): TargetAllegiance =>
+      id === actor.actor.id ? 'self' : faction === actor.factionId ? 'ally' : 'enemy';
+    const out: TargetCandidate[] = [];
+    for (const s of this.readyShips()) {
+      out.push({ id: s.id, kind: 'ship', allegiance: allegiance(s.factionId, s.id), tags: [] });
+    }
+    for (const bodyIdx of this.diagram.laidOutBodyIndices()) {
+      const body = BODIES[bodyIdx];
+      if (!body) continue;
+      const facilities = facilitiesOnBody(body.id);
+      const owner = ownerFactionId(body.id);
+      // A bare, player-owned rock is no one's target; facility-bearing or enemy bodies are.
+      if (facilities.length === 0 && owner === CONTROLLED_FACTION_ID) continue;
+      const id = encodeBodyEntityId(bodyIdx);
+      out.push({ id, kind: 'body', allegiance: allegiance(owner, id), tags: [body.kind, ...facilities.map((f) => f.type)] });
+    }
+    return out;
+  }
+
+  // The live on-screen center of any entity id (content-buffer px) — the action menu's anchor
+  // + target-bracket seam, dispatched by id namespace (body ⇒ disc center, ship ⇒ fleet slot).
+  private slotCenterForEntity(id: string): { cx: number; cy: number; r: number } | null {
+    const ref = parseEntityId(id);
+    return ref.kind === 'body' ? this.diagram.bodyCenter(ref.bodyIdx) : this.diagram.fleetSlotCenter(ref.shipId);
+  }
+
+  // This system's ready ships (the actor + ship-candidate source). Pre-filtered to 'ready'
+  // (building ships aren't in the field), keyed by the stable system handle.
+  private readyShips() {
+    return shipsInSystem(systemIdForCluster(this.clusterIdx)).filter((s) => s.status === 'ready');
+  }
+
+  // The actor focus ring — the controlled faction's commandable actors in this system: ready
+  // SHIPS first, then facility-commandable BODIES (ships-first keeps the ←/→ "my side" cycle
+  // legible). Clicking any ship/body still opens its menu for inspection; the keyboard walks
+  // this ring. A body with no commands is not in it.
   private commandableActorIds(): readonly string[] {
-    return shipsInSystem(systemIdForCluster(this.clusterIdx))
-      .filter((s) => s.status === 'ready' && s.factionId === CONTROLLED_FACTION_ID)
-      .map((s) => s.id);
+    const ships = this.readyShips().filter((s) => s.factionId === CONTROLLED_FACTION_ID).map((s) => s.id);
+    const bodies: string[] = [];
+    for (const bodyIdx of this.diagram.laidOutBodyIndices()) {
+      const body = BODIES[bodyIdx];
+      if (!body || ownerFactionId(body.id) !== CONTROLLED_FACTION_ID) continue;
+      const actor = bodyToActor({ bodyIdx, factionId: CONTROLLED_FACTION_ID, facilities: facilitiesOnBody(body.id) });
+      if (actor.commands.length > 0) bodies.push(actor.id);
+    }
+    return [...ships, ...bodies];
+  }
+
+  // The entity id of the current selection when it is an actor-shaped pick (ship or body),
+  // else null — so cycleActor can locate the selection within the ring across both kinds.
+  private selectedActorId(): string | null {
+    const p = this.selectedPick;
+    if (!p || p.kind === 'star') return null;
+    return p.kind === 'ship' ? p.shipId : encodeBodyEntityId(p.bodyIdx);
   }
 
   // Cycle the focused actor by delta (the category-level ←/→). Steps within the ring of your
-  // commandable actors, wrapping; if the current pick isn't one of yours (an opponent clicked for
-  // inspection, or nothing), it jumps into the ring. Re-selecting re-opens the menu on that ship.
+  // commandable actors, wrapping; if the current pick isn't one of yours (an opponent clicked
+  // for inspection, or nothing), it jumps into the ring. Re-selecting re-opens the menu.
   private cycleActor(delta: number): void {
     const ring = this.commandableActorIds();
     if (ring.length === 0) return;
-    const current = this.selectedPick?.kind === 'ship' ? this.selectedPick.shipId : null;
-    const idx = current ? ring.indexOf(current) : -1;
+    const current = this.selectedActorId();
+    const idx = current !== null ? ring.indexOf(current) : -1;
     const from = idx >= 0 ? idx : (delta > 0 ? -1 : 0); // not in the ring → enter at an end
     const next = ring[((from + delta) % ring.length + ring.length) % ring.length]!;
-    this.select({ kind: 'ship', shipId: next });
+    this.select(this.pickForActorId(next));
+  }
+
+  // Map an actor entity id back to its DiagramPick (the selection currency). A body id resolves
+  // its precise kind (planet/moon/belt) from the catalog — the codec returns only the coarse
+  // body/bodyIdx, so the precise kind is looked up here.
+  private pickForActorId(id: string): DiagramPick {
+    const ref = parseEntityId(id);
+    if (ref.kind === 'ship') return { kind: 'ship', shipId: ref.shipId };
+    return { kind: BODIES[ref.bodyIdx]!.kind, bodyIdx: ref.bodyIdx };
   }
 
   // A pick is selectable if it's a ship, or a facility-eligible body. Body eligibility
@@ -477,7 +567,7 @@ export class SystemScene implements Screen {
     if (!this.selectedPick && isDirectionalKey(e)) {
       const ring = this.commandableActorIds();
       if (ring.length > 0) {
-        this.select({ kind: 'ship', shipId: ring[0]! });
+        this.select(this.pickForActorId(ring[0]!));
         return;
       }
     }
