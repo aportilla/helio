@@ -19,21 +19,21 @@ const body = (bodyIdx: number, factionId: string, types: readonly FacilityType[]
 const ids = (input: BodyActorInput) => bodyToActor(input).commands.map((c) => c.id);
 
 test('a body Actor is id-namespaced under body:; commands are derived from facility grants', () => {
-  const a = bodyToActor(body(7, 'player', ['mining-base']));
+  const a = bodyToActor(body(7, 'player', ['railgun-battery']));
   assert.equal(a.id, encodeBodyEntityId(7));
-  assert.deepEqual(a.commands.map((c) => c.id), ['mining-base:mine']);
-  assert.equal(a.commands[0]!.grant.label, 'Mine');
+  assert.deepEqual(a.commands.map((c) => c.id), ['railgun-battery:railgun']);
+  assert.equal(a.commands[0]!.grant.label, 'Railgun');
 });
 
 test('a body Actor always carries the Attack + Support category palette', () => {
   // The menu shape is stable per actor TYPE: a body shows Attack + Support even when a
   // category is empty (the menu greys it), so the palette rides every body regardless of loadout.
-  assert.deepEqual(bodyToActor(body(7, 'player', ['mining-base'])).categories, ['attack', 'support']);
+  assert.deepEqual(bodyToActor(body(7, 'player', ['railgun-battery'])).categories, ['attack', 'support']);
   assert.deepEqual(bodyToActor(body(8, 'player', ['farm'])).categories, ['attack', 'support']);
 });
 
-test('a colony grants establish; a facility with no grants (farm) grants no command', () => {
-  assert.deepEqual(ids(body(1, 'player', ['colony'])), ['colony:establish']);
+test('economy-only facilities (colony, farm) grant no command', () => {
+  assert.deepEqual(ids(body(1, 'player', ['colony'])), []);
   assert.deepEqual(ids(body(2, 'player', ['farm'])), []);
 });
 
@@ -51,18 +51,18 @@ test('military / service facilities each grant their one command, with coherent 
 });
 
 test('identical facilities merge their grant into ONE scaled command (D2), first-seen order', () => {
-  // maxPerBody=1 keeps this from happening live, but the merge rule is uniform — two colonies
-  // stack their establish into a single command with count 2, mirroring identical ship components.
-  const a = bodyToActor(body(4, 'player', ['colony', 'mining-base', 'colony']));
-  assert.deepEqual(a.commands.map((c) => c.id), ['colony:establish', 'mining-base:mine']);
-  assert.equal(a.commands.find((c) => c.id === 'colony:establish')?.count, 2);
+  // maxPerBody=1 keeps this from happening live, but the merge rule is uniform — two railgun
+  // batteries stack their railgun into one command with count 2, mirroring identical ship components.
+  const a = bodyToActor(body(4, 'player', ['railgun-battery', 'sensor-network', 'railgun-battery']));
+  assert.deepEqual(a.commands.map((c) => c.id), ['railgun-battery:railgun', 'sensor-network:recon']);
+  assert.equal(a.commands.find((c) => c.id === 'railgun-battery:railgun')?.count, 2);
 });
 
 test('splits by ownership, preserving first-seen order and marking the controlled side', () => {
   const sides = bodiesToActors([
-    body(1, 'player', ['mining-base']),
-    body(2, 'rival', ['colony']),
-    body(3, 'player', ['colony']),
+    body(1, 'player', ['railgun-battery']),
+    body(2, 'rival', ['railgun-battery']),
+    body(3, 'player', ['sensor-network']),
   ]);
   assert.deepEqual(sides.map((s) => s.factionId), ['player', 'rival']);
   assert.equal(sides.find((s) => s.factionId === 'player')?.controlled, true);
@@ -73,7 +73,7 @@ test('splits by ownership, preserving first-seen order and marking the controlle
 test('a body with no commandable facilities is omitted from its side', () => {
   const sides = bodiesToActors([
     body(1, 'player', ['farm']),       // no grant → omitted
-    body(2, 'player', ['mining-base']),
+    body(2, 'player', ['railgun-battery']),
   ]);
   assert.equal(sides.length, 1);
   assert.deepEqual(sides[0]!.actors.map((a) => a.id), [encodeBodyEntityId(2)]);

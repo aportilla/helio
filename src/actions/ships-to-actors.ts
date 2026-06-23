@@ -46,9 +46,9 @@ const STUB_SHIP_PROVIDERS: readonly GrantProvider[] = [
   { id: 'stub-drive', grants: [FLEE_GRANT] },
 ];
 
-// The bones loadout every ship gets: the derived attack + flee commands (Pass is menu-injected,
-// not a command). Content — the encounter (E1) / the build flow (Phase 3) derive the real loadout
-// from each ship's components; until then every ship offers this same placeholder pair.
+// The bones loadout every ship gets: the derived attack + flee commands. Content — the encounter
+// (E1) / the build flow (Phase 3) derive the real loadout from each ship's components; until then
+// every ship offers this same placeholder pair.
 export const STUB_SHIP_COMMANDS: readonly ActionCommand[] = deriveCommands(STUB_SHIP_PROVIDERS);
 
 // One ship → one Actor. `commands` defaults to the bones loadout; a caller (the encounter) passes

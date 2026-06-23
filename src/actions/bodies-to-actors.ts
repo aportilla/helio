@@ -51,8 +51,8 @@ function bodyProviders(facilities: readonly PlacedFacility[]): readonly GrantPro
 
 // One body → one Actor (id in the `body:` namespace so it shares the ship keyspace without
 // collision). Commands are derived from its facilities' grants; a body whose facilities grant
-// none yields an Actor with an empty command list (still openable — it offers only the
-// menu-injected Pass).
+// none yields an Actor with an empty command list, which bodiesToActors drops (a command-less
+// body is not a menu actor).
 export function bodyToActor(input: BodyActorInput): Actor {
   return {
     id: encodeBodyEntityId(input.bodyIdx),

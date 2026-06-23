@@ -1,7 +1,7 @@
 // ActionMenu state-machine invariants — the two-level stack (category → command) with the
-// orthogonal target LOCK on the command level (vertical = command, horizontal = target), the
-// always-present Pass, and the two shipped targeting descriptors (single = player-picked among
-// candidates, self = forced to the actor). After the inversion the actor carries RESOLVED
+// orthogonal target LOCK on the command level (vertical = command, horizontal = target), and the
+// two shipped targeting descriptors (single = player-picked among candidates, self = forced to the
+// actor). After the inversion the actor carries RESOLVED
 // ActionCommands (id + grant + count + totalCost); the menu reads them inline, no central lookup.
 // Runs under `node --test` type-stripping.
 //
@@ -33,12 +33,11 @@ const resolve: TargetResolver = (command) => (command.grant.targeting === 'singl
 
 const keys = (m: ActionMenu) => m.view().rows.map((r) => r.key);
 
-test('opens at the category level with the spanned categories + an always-present Pass', () => {
+test('opens at the category level with the spanned categories', () => {
   const m = new ActionMenu(actor, resolve);
   const v = m.view();
   assert.equal(v.level, 'category');
-  assert.deepEqual(keys(m), ['attack', 'navigation', 'pass']);
-  assert.equal(v.rows.at(-1)?.isPass, true);
+  assert.deepEqual(keys(m), ['attack', 'navigation']);
   assert.equal(v.targets, undefined, 'no target axis at the category level');
 });
 
@@ -115,20 +114,20 @@ test('a self-targeted command locks onto the actor, never calling the resolver',
   assert.deepEqual(m.confirm(), { actorId: 'a1', actionId: 'flee', targetIds: ['a1'] });
 });
 
-test('Pass commits from the category level (confirm and enter)', () => {
-  const viaConfirm = new ActionMenu(actor, resolve);
-  viaConfirm.setCursor(2);
-  assert.deepEqual(viaConfirm.confirm(), { actorId: 'a1', actionId: 'pass', targetIds: [] });
-
-  const viaEnter = new ActionMenu(actor, resolve);
-  viaEnter.setCursor(2);
-  assert.deepEqual(viaEnter.enter(), { actorId: 'a1', actionId: 'pass', targetIds: [] });
+test('confirm at the category level commits nothing — you drill into a command first', () => {
+  const m = new ActionMenu(actor, resolve);
+  assert.equal(m.confirm(), null, 'no command to fire at the category level');
+  assert.equal(m.closed, false, 'and the menu stays open');
+  // enter on an enabled category drills in rather than committing an intent.
+  assert.equal(m.enter(), null, 'enter drills, returning no intent');
+  assert.equal(m.view().level, 'command');
 });
 
-test('an actor with no commands still offers Pass', () => {
+test('an actor with no commands (and no palette) shows no rows and commits nothing', () => {
   const m = new ActionMenu({ id: 'a2', commands: [] }, resolve);
-  assert.deepEqual(keys(m), ['pass']);
-  assert.deepEqual(m.confirm(), { actorId: 'a2', actionId: 'pass', targetIds: [] });
+  assert.deepEqual(keys(m), []);
+  assert.equal(m.confirm(), null);
+  assert.equal(m.enter(), null);
 });
 
 test('moveTarget is inert at the category level (no target axis there)', () => {
@@ -163,20 +162,20 @@ test('a merged command (count > 1) renders "(xN)" in its menu row', () => {
 // -- the category palette (always-show, greyed when empty) -------------
 
 // A body-shaped actor: it declares a fixed Attack + Support palette and carries only a
-// Support command (establish), so Attack is an empty-but-shown category.
-const establishCmd = cmd('colony:establish', grant({ key: 'establish', label: 'Establish', category: 'support', targeting: 'self' }));
+// Support command (recon), so Attack is an empty-but-shown category.
+const reconCmd = cmd('sensor-network:recon', grant({ key: 'recon', label: 'Tactical Data', category: 'support', targeting: 'self' }));
 const palettedActor: Actor = {
   id: 'body:5',
-  commands: [establishCmd],
+  commands: [reconCmd],
   categories: ['attack', 'support'],
 };
 
-test('a category palette shows ALL its categories (greyed when empty) + Pass', () => {
+test('a category palette shows ALL its categories (greyed when empty)', () => {
   const m = new ActionMenu(palettedActor, resolve);
   const v = m.view();
-  assert.deepEqual(v.rows.map((r) => r.key), ['attack', 'support', 'pass']);
+  assert.deepEqual(v.rows.map((r) => r.key), ['attack', 'support']);
   assert.equal(v.rows.find((r) => r.key === 'attack')?.enabled, false, 'empty Attack is greyed');
-  assert.equal(v.rows.find((r) => r.key === 'support')?.enabled, true, 'Support has establish');
+  assert.equal(v.rows.find((r) => r.key === 'support')?.enabled, true, 'Support has recon');
 });
 
 test('a greyed (empty) palette category cannot be drilled', () => {
@@ -184,7 +183,7 @@ test('a greyed (empty) palette category cannot be drilled', () => {
   m.setCursor(0); // Attack — empty
   assert.equal(m.enter(), null, 'entering an empty category is a no-op');
   assert.equal(m.view().level, 'category', 'stayed at the category level');
-  m.setCursor(1); // Support — has establish
+  m.setCursor(1); // Support — has recon
   m.enter();
   assert.equal(m.view().level, 'command', 'a non-empty palette category still drills');
 });

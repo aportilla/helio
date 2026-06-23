@@ -24,8 +24,6 @@ import {
   MINE_MINERALS_PRODUCE_MILLI,
 } from './tuning.ts';
 import {
-  ESTABLISH_ACTION_COLOR,
-  MINE_ACTION_COLOR,
   MISSILE_ACTION_COLOR,
   RAILGUN_ACTION_COLOR,
   REPAIR_ACTION_COLOR,
@@ -70,7 +68,6 @@ const DEFS = {
       c.consume(EconResource.Minerals, COLONY_MINERALS_CONSUME_MILLI);
       return c.build();
     },
-    grants: [{ key: 'establish', label: 'Establish', color: ESTABLISH_ACTION_COLOR, category: 'support', targeting: 'self', kind: 'immediate' }],
   },
   'mining-base': {
     type: 'mining-base',
@@ -88,7 +85,6 @@ const DEFS = {
       c.consume(EconResource.Food, MINE_FOOD_CONSUME_MILLI);
       return c.build();
     },
-    grants: [{ key: 'mine', label: 'Mine', color: MINE_ACTION_COLOR, category: 'support', targeting: 'self', kind: 'immediate' }],
   },
   farm: {
     type: 'farm',

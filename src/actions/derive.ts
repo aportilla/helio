@@ -20,12 +20,12 @@ export interface GrantProvider {
   readonly grants?: readonly ActionGrant[];
 }
 
-// The grant KEY out of a composed command id — the provider-agnostic verb identity ('mine' from
-// 'mining-base:mine'). The app-side effect handlers key on this so a verb's effect is one entry
-// regardless of which provider grants it. Splits on the LAST colon: a provider id MAY be
+// The grant KEY out of a composed command id — the provider-agnostic verb identity ('railgun'
+// from 'railgun-battery:railgun'). The app-side effect handlers key on this so a verb's effect is
+// one entry regardless of which provider grants it. Splits on the LAST colon: a provider id MAY be
 // namespaced (contain a colon — e.g. a future 'weapon:railgun' component id), but a grant key
 // must NOT, so the suffix after the final colon is always exactly the key. A bare id with no ':'
-// (the menu-injected `pass`) maps to itself. A node test pins every shipped grant key colon-free.
+// maps to itself. A node test pins every shipped grant key colon-free.
 export function grantKeyOf(id: string): string {
   const i = id.lastIndexOf(':');
   return i < 0 ? id : id.slice(i + 1);
@@ -62,10 +62,9 @@ export function deriveCommands(providers: readonly GrantProvider[]): readonly Ac
 }
 
 // The actor's resolved command matching a committed intent's actionId, or undefined when none
-// does — notably the menu-injected Pass (id 'pass'), which is not a provider command. The
-// live-view dispatcher reads `.grant.kind` off this to fork immediate vs encounter; factored out
-// (pure, no scene) so that fork is node-testable without a DOM. Pass / an unknown id ⇒ undefined ⇒
-// the immediate path, which is correct (Pass simply ends a turn).
+// does. The live-view dispatcher reads `.grant.kind` off this to fork immediate vs encounter;
+// factored out (pure, no scene) so that fork is node-testable without a DOM. An unknown id ⇒
+// undefined ⇒ the immediate path.
 export function commandFor(actor: Actor, actionId: string): ActionCommand | undefined {
   return actor.commands.find((c) => c.id === actionId);
 }

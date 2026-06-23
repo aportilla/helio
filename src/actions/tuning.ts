@@ -17,15 +17,9 @@ export const ATTACK_ACTION_COLOR = '#e0644e';
 // the ship's drive (D9).
 export const FLEE_ACTION_COLOR = '#c9b46b';
 
-// The non-combat WORLD verbs + the body weapon / support verbs — each granted by a facility (see
-// ../facilities/registry.ts). PROVISIONAL accents, each a distinct hue so a body actor's menu rows
-// read at a glance, loosely echoing the facility palette they act on/with.
-
-// — Mine: extract minerals. An ore tan, the minerals family. (mining-base)
-export const MINE_ACTION_COLOR = '#d7b070';
-
-// — Establish: claim / develop a world. A civic cyan, the colony/settle hue. (colony)
-export const ESTABLISH_ACTION_COLOR = '#5ec8ff';
+// The body weapon / support verbs — each granted by a facility (see ../facilities/registry.ts).
+// PROVISIONAL accents, each a distinct hue so a body actor's menu rows read at a glance, loosely
+// echoing the facility palette they act on/with.
 
 // — Bombard: strike an enemy-held body. A hostile crimson, hotter than the attack red. RESERVED:
 // no facility grants bombard yet (it rides an attacker's loadout with the mechanics), so this
@@ -42,6 +36,5 @@ export const MISSILE_ACTION_COLOR = '#ffb24d';
 // — Repair: mend a friendly ship. A heal green, distinct from the farm's food green. (shipyard)
 export const REPAIR_ACTION_COLOR = '#6ad6a0';
 
-// — Tactical Data: the sensor sweep. A recon teal, distinct from the establish/colony cyan.
-// (sensor-network)
+// — Tactical Data: the sensor sweep. A recon teal, distinct from the colony cyan. (sensor-network)
 export const TACTICAL_DATA_ACTION_COLOR = '#5ed8e0';

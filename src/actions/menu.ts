@@ -12,7 +12,7 @@
 // menu row. See ./README.md.
 
 import type { Actor, ActionCategory, ActionCommand, ActionIntent, TargetCandidate, TargetCriteria } from './types.ts';
-import { PASS_ACTION_ID, PASS_LABEL, commandLabel } from './registry.ts';
+import { commandLabel } from './registry.ts';
 
 export type MenuLevel = 'category' | 'command';
 
@@ -40,7 +40,6 @@ export interface MenuRow {
   readonly key: string;
   readonly label: string;
   readonly enabled: boolean;
-  readonly isPass: boolean; // the always-present decline verb (category level only)
 }
 
 export interface MenuView {
@@ -136,20 +135,16 @@ export class ActionMenu {
   private rows(): readonly MenuRow[] {
     const f = this.frame;
     if (f.level === 'category') {
-      const rows: MenuRow[] = this.categories().map((c) => ({
+      return this.categories().map((c) => ({
         key: c,
         label: categoryLabel(c),
         enabled: this.commandsIn(c).some((command) => this.isAvailable(command)),
-        isPass: false,
       }));
-      rows.push({ key: PASS_ACTION_ID, label: PASS_LABEL, enabled: true, isPass: true });
-      return rows;
     }
     return this.commandsIn(f.category).map((command) => ({
       key: command.id,
       label: commandLabel(command),
       enabled: this.isAvailable(command),
-      isPass: false,
     }));
   }
 
@@ -212,8 +207,8 @@ export class ActionMenu {
   // -- navigation -------------------------------------------------------
 
   // Drill in (category → command, auto-locking the first target) or, at the command level,
-  // FIRE the cursored command at the locked target. Returns a committed intent only when an
-  // action resolves (Pass, or a fire); null when we just drilled a level.
+  // FIRE the cursored command at the locked target. Returns a committed intent only when a
+  // command fires; null when we just drilled a level (or the row is empty / unavailable).
   enter(): ActionIntent | null {
     if (this.done) return null;
     const f = this.frame;
@@ -222,7 +217,6 @@ export class ActionMenu {
     if (!row) return null;
 
     if (f.level === 'category') {
-      if (row.isPass) return this.commitPass();
       if (!row.enabled) return null;
       this.stack.push({ level: 'command', cursor: 0, category: row.key as ActionCategory, targetCursor: 0 });
       return null;
@@ -240,14 +234,12 @@ export class ActionMenu {
     this.done = true;
   }
 
-  // Explicit commit — fire the cursored command at the locked target (command level), or
-  // commit Pass when the Pass row is cursored at the category level.
+  // Explicit commit — fire the cursored command at the locked target. Only the command level
+  // can commit; at the category level there is no command to fire, so it is a no-op (you drill
+  // into a command first).
   confirm(): ActionIntent | null {
     if (this.done) return null;
-    const f = this.frame;
-    if (f.level === 'command') return this.commit();
-    const row = this.rows()[f.cursor];
-    return row?.isPass ? this.commitPass() : null;
+    return this.frame.level === 'command' ? this.commit() : null;
   }
 
   private commit(): ActionIntent | null {
@@ -262,11 +254,6 @@ export class ActionMenu {
       : [candidates[clamp((this.frame as Extract<Frame, { level: 'command' }>).targetCursor, candidates.length)]!];
     this.done = true;
     return { actorId: this.actor.id, actionId: command.id, targetIds };
-  }
-
-  private commitPass(): ActionIntent {
-    this.done = true;
-    return { actorId: this.actor.id, actionId: PASS_ACTION_ID, targetIds: [] };
   }
 }
 

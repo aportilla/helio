@@ -21,8 +21,7 @@
 // next. The grant KEY half rests on discipline for now (no FROZEN_GRANT_KEYS guard yet), and no
 // ActionIntent is serialized anywhere today — so the wire-id freeze is FORWARD-LOOKING: it begins
 // to bite only when a replay / encounter log persists an actionId. The `body:` target namespace
-// keeps its own guard (./entity-id). `pass` is the one exception — a menu-injected UI primitive
-// (./registry), not a provider grant.
+// keeps its own guard (./entity-id).
 
 // The top-level menu split. Data, not hardcoded: the menu derives its category rows from
 // the categories an actor's commands span (./menu). For a ship that reads ATTACK /
@@ -78,10 +77,9 @@ export type ActionKind = 'immediate' | 'encounter';
 // (the immediate effect or the encounter reducer is the consumer's content). Mirrors the
 // thinness of v1 ShipClassDef / FactionDef.
 export interface ActionGrant {
-  // Stable WITHIN the provider, naming the capability not its discharge ('railgun' / 'mine' /
-  // 'flee', never a loaded verb like 'fire'). The serializable command id is
-  // `"<providerId>:<key>"` (./derive) — the provider id is the durable thing, the key
-  // disambiguates a multi-grant module.
+  // Stable WITHIN the provider, naming the capability not its discharge ('railgun' / 'flee',
+  // never a loaded verb like 'fire'). The serializable command id is `"<providerId>:<key>"`
+  // (./derive) — the provider id is the durable thing, the key disambiguates a multi-grant module.
   readonly key: string;
   readonly label: string;            // 'Railgun' — single source for menu rows
   readonly color: string;            // literal sRGB hex menu-row accent, rendered verbatim (ColorManagement is OFF)
@@ -119,8 +117,8 @@ export interface ActionCommand {
 // Deliberately body-agnostic: a fleet SHIP, a PLANET / MOON / BELT carrying player
 // facilities, and an in-encounter Combatant (src/encounter/, later) all conform — each
 // offers whatever commands its loadout grants (a ship's weapons; a body's orbital-railgun
-// or a colony ship's establish-colony). That conformance is the seam that lets the SAME
-// menu drive the system view and combat rounds, for ships and bodies alike.
+// or sensor sweep). That conformance is the seam that lets the SAME menu drive the system
+// view and combat rounds, for ships and bodies alike.
 // `stats` is a deliberately opaque, extensible bag (hull/energy/shields/… are content
 // decisions, not skeleton); the bones display whatever keys are present. Scene-side
 // anchoring identity (a fleet slot, a body disc) is NOT here — that is the consumer's
@@ -154,9 +152,9 @@ export interface ActorSide {
 
 // What the menu emits on confirm — the uniform hand-off to the execute dispatch (live-view
 // immediate/encounter) or the encounter reducer. Effect-free: it names WHO acts, WHICH action,
-// and the chosen target ids. `actionId` is the composed `"<providerId>:<grant.key>"` (or the bare
-// `pass`); the live-view dispatcher resolves the action's `kind` from the actor's own command
-// (no central lookup), and an app-side effect handler keys on its grant key (grantKeyOf, ./derive).
+// and the chosen target ids. `actionId` is the composed `"<providerId>:<grant.key>"`; the
+// live-view dispatcher resolves the action's `kind` from the actor's own command (no central
+// lookup), and an app-side effect handler keys on its grant key (grantKeyOf, ./derive).
 export interface ActionIntent {
   readonly actorId: string;
   readonly actionId: string;

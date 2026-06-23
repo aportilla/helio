@@ -18,7 +18,7 @@ const shipGrants = STUB_SHIP_COMMANDS.map((c) => ({ provider: 'ship-stub', grant
 const allGrants = [...facilityGrants, ...shipGrants];
 
 test('there is at least one shipped grant to sweep (the test is wired up)', () => {
-  assert.ok(allGrants.length >= 7, `expected the 6 facility grants + ship stub, got ${allGrants.length}`);
+  assert.ok(allGrants.length >= 5, `expected the 4 facility grants + ship stub, got ${allGrants.length}`);
 });
 
 test('every shipped grant carries a well-formed sRGB hex accent', () => {
@@ -44,12 +44,10 @@ test('grant keys are colon-free, so the composed id round-trips through grantKey
   }
 });
 
-test('the body weapons enter an encounter; the world / service verbs resolve immediately', () => {
+test('the body weapons enter an encounter; the service verbs resolve immediately', () => {
   const kindOf = (type: FacilityType) => FACILITY_BY_TYPE.get(type)?.grants?.[0]?.kind;
   assert.equal(kindOf('railgun-battery'), 'encounter');
   assert.equal(kindOf('missile-battery'), 'encounter');
-  assert.equal(kindOf('mining-base'), 'immediate');
-  assert.equal(kindOf('colony'), 'immediate');
   assert.equal(kindOf('shipyard'), 'immediate');
   assert.equal(kindOf('sensor-network'), 'immediate');
 });

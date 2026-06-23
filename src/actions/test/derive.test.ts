@@ -81,26 +81,26 @@ test('a multi-grant provider yields one command per grant', () => {
   assert.deepEqual(deriveCommands(providers).map((c) => c.id), ['deck:recon', 'deck:command']);
 });
 
-test('grantKeyOf extracts the capability identity; a bare id (pass) maps to itself; splits on the LAST colon', () => {
-  assert.equal(grantKeyOf('mining-base:mine'), 'mine');
+test('grantKeyOf extracts the capability identity; a bare id maps to itself; splits on the LAST colon', () => {
+  assert.equal(grantKeyOf('sensor-network:recon'), 'recon');
   assert.equal(grantKeyOf('railgun-battery:railgun'), 'railgun');
-  assert.equal(grantKeyOf('pass'), 'pass');
+  assert.equal(grantKeyOf('solo'), 'solo', 'a colon-free id maps to itself');
   // A future namespaced provider id ('turret:dorsal') keeps the key intact via last-colon split.
   assert.equal(grantKeyOf('turret:dorsal:railgun'), 'railgun');
 });
 
-test('commandFor resolves the command behind an intent; Pass / unknown ⇒ undefined (the dispatch fork)', () => {
+test('commandFor resolves the command behind an intent; an unknown id ⇒ undefined (the dispatch fork)', () => {
   // This is the pure helper the SCENE dispatch (system-action-menu) reads `.grant.kind` off to
   // fork immediate vs encounter — pinned here so the fork is covered without a DOM.
   const actor: Actor = {
     id: 'a1',
     commands: deriveCommands([
       { id: 'missile-battery', grants: [grant({ key: 'missile', label: 'Missile Launcher', kind: 'encounter' })] },
-      { id: 'mining-base', grants: [grant({ key: 'mine', category: 'support', targeting: 'self' })] }, // helper defaults kind 'immediate'
+      { id: 'sensor-network', grants: [grant({ key: 'recon', category: 'support', targeting: 'self' })] }, // helper defaults kind 'immediate'
     ]),
   };
   assert.equal(commandFor(actor, 'missile-battery:missile')?.grant.kind, 'encounter', 'an encounter command ⇒ onEnterEncounter');
-  assert.equal(commandFor(actor, 'mining-base:mine')?.grant.kind, 'immediate', 'an immediate command ⇒ onImmediate');
-  assert.equal(commandFor(actor, 'pass'), undefined, 'menu-injected Pass is not a command ⇒ immediate path');
-  assert.equal(commandFor(actor, 'nope:nope'), undefined, 'an unknown id ⇒ immediate path');
+  assert.equal(commandFor(actor, 'sensor-network:recon')?.grant.kind, 'immediate', 'an immediate command ⇒ onImmediate');
+  assert.equal(commandFor(actor, 'unknown'), undefined, 'a bare unknown id ⇒ the immediate path');
+  assert.equal(commandFor(actor, 'nope:nope'), undefined, 'an unknown composed id ⇒ the immediate path');
 });

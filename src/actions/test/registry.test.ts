@@ -1,15 +1,12 @@
-// The action vocabulary's central remainder after the inversion — the menu-injected Pass
-// primitive, the per-actor-TYPE category palettes, and the grant-keyed display helpers. There is
-// no longer an ACTION_DEFS registry / ActionType union to guard; the frozen wire contract now
-// lives on the providers (FacilityType + each grant key) and is exercised by their suites. Runs
-// under `node --test` (type-stripping): the ActionCommand import is erased, so only the node-pure
-// registry leaf loads.
+// The action vocabulary's central remainder after the inversion — the per-actor-TYPE category
+// palettes and the grant-keyed display helpers. There is no longer an ACTION_DEFS registry /
+// ActionType union to guard; the frozen wire contract now lives on the providers (FacilityType +
+// each grant key) and is exercised by their suites. Runs under `node --test` (type-stripping): the
+// ActionCommand import is erased, so only the node-pure registry leaf loads.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  PASS_ACTION_ID,
-  PASS_LABEL,
   SHIP_CATEGORIES,
   BODY_CATEGORIES,
   commandLabel,
@@ -22,11 +19,6 @@ const command = (count: number): ActionCommand => ({
   grant: { key: 'missile', label: 'Missile', color: '#ffb24d', category: 'attack', targeting: 'single', kind: 'encounter' },
   count,
   totalCost: 0,
-});
-
-test('Pass is a bare, provider-less id with a stable label', () => {
-  assert.equal(PASS_ACTION_ID, 'pass', 'the injected decline verb keeps its plain wire form');
-  assert.equal(PASS_LABEL, 'Pass');
 });
 
 test('the category palettes are well-formed subsets of the category vocabulary', () => {

@@ -240,8 +240,8 @@ export class SystemActionMenu {
 
   private dispatch(intent: ActionIntent): void {
     // Resolve the action's kind from the actor's OWN resolved command (commandFor) — there is no
-    // central registry after the inversion. The menu-injected Pass is not a command (⇒ undefined),
-    // so it routes to the immediate path, as it always has. Read before close() nulls `opts`.
+    // central registry after the inversion. An unknown actionId resolves to undefined ⇒ the
+    // immediate path. Read before close() nulls `opts`.
     const kind = this.opts ? commandFor(this.opts.actor, intent.actionId)?.grant.kind : undefined;
     this.close();
     if (kind === 'encounter') this.onEnterEncounter(intent);
