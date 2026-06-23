@@ -63,6 +63,30 @@ test('skip-on-missing: a facility whose body the catalog dropped is discarded', 
   assert.equal(droppedFacilities, 1);
 });
 
+test('body ownership: valid records survive; malformed/unknown-faction dropped; missing-body pruned', () => {
+  const raw = blob({
+    version: 1, turn: 1, seq: 0,
+    ownership: [
+      { bodyId: 'earth', factionId: 'rival' },
+      { bodyId: 'luna', factionId: 'no-such-faction' }, // unknown faction → dropped
+      { factionId: 'rival' },                            // missing bodyId → dropped
+      { bodyId: 'gone', factionId: 'rival' },            // valid shape, but body pruned below
+    ],
+  });
+  // Every body exists EXCEPT 'gone' (a catalog rebuild dropped it).
+  const { state, droppedOwnership } = parseGameState(raw, (id) => id !== 'gone', anySystem);
+  assert.deepEqual(state.ownership.map((o) => o.bodyId), ['earth']);
+  assert.deepEqual(state.ownership.map((o) => o.factionId), ['rival']);
+  assert.equal(droppedOwnership, 3);
+});
+
+test('an old save with no ownership key loads unowned (empty overlay, nothing dropped)', () => {
+  const raw = blob({ version: 1, turn: 2, seq: 0, facilities: [] });
+  const { state, droppedOwnership } = parseGameState(raw, anyBody, anySystem);
+  assert.deepEqual(state.ownership, []);
+  assert.equal(droppedOwnership, 0);
+});
+
 test('turn/seq are floored and validated; bad values read as defaults', () => {
   assert.equal(parseGameState(blob({ turn: 9.7 }), anyBody, anySystem).state.turn, 9);
   assert.equal(parseGameState(blob({ turn: 0 }), anyBody, anySystem).state.turn, 1);  // turns are 1-based

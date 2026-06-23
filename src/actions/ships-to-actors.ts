@@ -10,20 +10,12 @@
 
 import type { Ship } from '../game-state-codec.ts';
 import { CONTROLLED_FACTION_ID } from '../factions/registry.ts';
-import type { Actor, ActionRef } from './types.ts';
+import type { Actor, ActionRef, ActorSide } from './types.ts';
 
 // The bones loadout every ship gets: an ATTACK category and a NAVIGATION flee (Pass is
 // menu-injected, not a command). Content — the encounter (E1) derives the real loadout
 // from each ship's ShipClassDef; until then every ship offers the same placeholder pair.
 export const DEFAULT_SHIP_COMMANDS: readonly ActionRef[] = [{ id: 'attack' }, { id: 'flee' }];
-
-// One faction's actors in a system. `controlled` marks the local player's side ("my side"
-// = factionId === CONTROLLED_FACTION_ID) without baking a player flag into the data.
-export interface ActorSide {
-  readonly factionId: string;
-  readonly controlled: boolean;
-  readonly actors: readonly Actor[];
-}
 
 // One ship → one Actor. `commands` defaults to the bones loadout; a caller (the encounter)
 // passes a per-class set. Ship stats stay opaque/empty here — the stat bag is content the

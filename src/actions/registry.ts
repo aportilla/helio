@@ -9,7 +9,14 @@
 // Pass. Non-combat verbs (establish-colony, move) are additive 'immediate' members.
 
 import type { ActionDef, ActionType } from './types.ts';
-import { ATTACK_ACTION_COLOR, FLEE_ACTION_COLOR, PASS_ACTION_COLOR } from './tuning.ts';
+import {
+  ATTACK_ACTION_COLOR,
+  BOMBARD_ACTION_COLOR,
+  ESTABLISH_ACTION_COLOR,
+  FLEE_ACTION_COLOR,
+  MINE_ACTION_COLOR,
+  PASS_ACTION_COLOR,
+} from './tuning.ts';
 
 // The registry, keyed by ActionType. `satisfies Record<ActionType, ...>` is the compile
 // layer of the frozen-key guard: adding a literal to the union without a def here fails to
@@ -27,9 +34,11 @@ const DEFS = {
     targeting: 'single',
     kind: 'encounter',
   },
-  // FLEE — disengage. A NAVIGATION command resolved only inside an encounter (the reducer
-  // is its sink), so its live-view `kind` is the inert 'immediate' default — it never
-  // reaches the live dispatcher because no live-view ship lists it. Self-targeted.
+  // FLEE — disengage. A NAVIGATION command whose real resolution is the encounter reducer.
+  // A live-view ship DOES list it (DEFAULT_SHIP_COMMANDS), so a Navigation → Flee drill
+  // reaches the dispatcher as an 'immediate' intent — but no EFFECT_HANDLERS entry claims it,
+  // so today it no-ops there (a DEV 'no handler' log) until the encounter consumes it.
+  // Self-targeted.
   flee: {
     type: 'flee',
     label: 'Flee',
@@ -49,6 +58,42 @@ const DEFS = {
     color: PASS_ACTION_COLOR,
     category: 'navigation',
     targeting: 'self',
+    kind: 'immediate',
+  },
+  // The first non-combat WORLD verbs (M3) — additive 'immediate' members that route to an
+  // app-side effect handler (no-op stubs today). Each is a SUPPORT/ATTACK command on a
+  // facility-bearing body (the body projector grants them; see ../actions/bodies-to-actors).
+  // `targets` is left ABSENT (permissive) for the bones — the criteria a verb really wants
+  // (mine ⇒ a mineable body, establish ⇒ an unowned body, bombard ⇒ an enemy-held body)
+  // lands with the mechanics, not the skeleton.
+  //
+  // MINE — draw minerals from the locked target body. SUPPORT/industry.
+  mine: {
+    type: 'mine',
+    label: 'Mine',
+    color: MINE_ACTION_COLOR,
+    category: 'support',
+    targeting: 'single',
+    kind: 'immediate',
+  },
+  // ESTABLISH — claim an unowned target body for the controlled faction. SUPPORT/civic.
+  establish: {
+    type: 'establish',
+    label: 'Establish',
+    color: ESTABLISH_ACTION_COLOR,
+    category: 'support',
+    targeting: 'single',
+    kind: 'immediate',
+  },
+  // BOMBARD — strike an enemy-held target body. An ATTACK-category WORLD verb; its 'immediate'
+  // kind keeps it on the effect-handler path (no encounter). Whether a body strike eventually
+  // becomes an 'encounter' is a later mechanics call, not a bones decision.
+  bombard: {
+    type: 'bombard',
+    label: 'Bombard',
+    color: BOMBARD_ACTION_COLOR,
+    category: 'attack',
+    targeting: 'single',
     kind: 'immediate',
   },
 } satisfies Record<ActionType, ActionDef>;
@@ -86,7 +131,7 @@ export function actionColor(type: ActionType): string {
 // quietly re-green the guard under compiler pressure. The CI test (test/registry.test.ts)
 // asserts each entry is still a live type (ACTION_TYPES.has), so removing OR renaming a
 // shipped id fails, protecting any saved action log from a compiler-invisible "cleanup".
-export const FROZEN_ACTION_IDS: readonly string[] = ['attack', 'flee', 'pass'];
+export const FROZEN_ACTION_IDS: readonly string[] = ['attack', 'flee', 'pass', 'mine', 'establish', 'bombard'];
 
 // DEV-only module-load invariant: each def's `type` equals its registry key, and every
 // frozen id is still a live type. Mirrors the ships + factions + facilities + catalog

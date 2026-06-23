@@ -12,7 +12,7 @@ import { CONTROLLED_FACTION_ID, FACTION_TYPES } from './factions/registry.ts';
 import type { FactionType } from './factions/types.ts';
 import { SHIP_CLASS_TYPES } from './ships/registry.ts';
 import type { ShipClassType } from './ships/types.ts';
-import { pruneMissingBodies } from './world-overlay.ts';
+import { pruneMissingBodies, type BodyKeyed } from './world-overlay.ts';
 
 export interface Facility {
   // Unique within this save (allocated from GameState.seq).
@@ -20,6 +20,17 @@ export interface Facility {
   // The catalog Body.id this facility sits on — stable, serializable.
   readonly bodyId: string;
   readonly type: FacilityType;
+}
+
+// Which faction OWNS a body — the gating overlay M3 adds so a body can be enemy-held (an
+// enemy colony to bombard) and so the economy fan-in can refuse to feed a body the player
+// doesn't control. Rides the BodyKeyed primitives (pruneMissingBodies / recordsOnBody)
+// exactly like Facility. Player INTENT (a placed facility) stays SEPARATE from ALLEGIANCE:
+// factionId lives here, never on Facility — conflating them would force an economy branch on
+// the wrong field. A body with no record reads as controlled-by-player (see
+// game-state.ts ownerFactionId), so an old save with no `ownership` key keeps working.
+export interface BodyOwnership extends BodyKeyed {
+  readonly factionId: FactionType;
 }
 
 // A built or in-progress ship. Durable player intent, like Facility — but keyed to
@@ -64,9 +75,13 @@ export interface GameState {
   seq: number;
   facilities: readonly Facility[];
   ships: readonly Ship[];
+  // Per-body ownership overlay (M3). A body with no record reads as controlled-by-player
+  // (game-state.ts ownerFactionId), so an old save with no `ownership` key — and any body
+  // never explicitly flipped — keeps the single-player economy working untouched.
+  ownership: readonly BodyOwnership[];
 }
 
-export const DEFAULTS: GameState = { version: 1, turn: 1, seq: 0, facilities: [], ships: [] };
+export const DEFAULTS: GameState = { version: 1, turn: 1, seq: 0, facilities: [], ships: [], ownership: [] };
 
 function isValidFacility(f: unknown): f is Facility {
   if (!f || typeof f !== 'object') return false;
@@ -74,6 +89,16 @@ function isValidFacility(f: unknown): f is Facility {
   return typeof o.id === 'string'
     && typeof o.bodyId === 'string'
     && typeof o.type === 'string' && FACILITY_TYPES.has(o.type);
+}
+
+function isValidBodyOwnership(o: unknown): o is BodyOwnership {
+  if (!o || typeof o !== 'object') return false;
+  const r = o as Record<string, unknown>;
+  // An unknown factionId is DROPPED rather than defaulted: a dropped record reads as
+  // "unowned → player", the same safe single-player default a missing record gives, so
+  // there is nothing to merge toward (unlike a ship, which must survive with a defaulted side).
+  return typeof r.bodyId === 'string'
+    && typeof r.factionId === 'string' && FACTION_TYPES.has(r.factionId);
 }
 
 const isCompletionTurn = (v: unknown): v is number =>
@@ -112,8 +137,8 @@ export function parseGameState(
   raw: string | null,
   bodyExists: (bodyId: string) => boolean,
   systemExists: (systemId: string) => boolean,
-): { state: GameState; droppedFacilities: number; droppedShips: number } {
-  if (!raw) return { state: { ...DEFAULTS }, droppedFacilities: 0, droppedShips: 0 };
+): { state: GameState; droppedFacilities: number; droppedShips: number; droppedOwnership: number } {
+  if (!raw) return { state: { ...DEFAULTS }, droppedFacilities: 0, droppedShips: 0, droppedOwnership: 0 };
   try {
     const parsed = JSON.parse(raw) as Partial<GameState>;
     const rawFacilities = Array.isArray(parsed.facilities) ? parsed.facilities : [];
@@ -141,14 +166,20 @@ export function parseGameState(
       .filter((s) => systemExists(s.systemId)
         && (s.status !== 'building' || (s.shipyardBodyId !== undefined && bodyExists(s.shipyardBodyId))));
     const droppedShips = rawShips.length - ships.length;
+    // Body ownership: the same shape gate + skip-on-missing prune as facilities (a missing
+    // `ownership` key reads as the empty overlay → every body player-owned). droppedOwnership
+    // counts malformed + unknown-faction + unknown-body together.
+    const rawOwnership = Array.isArray(parsed.ownership) ? parsed.ownership : [];
+    const ownership = pruneMissingBodies(rawOwnership.filter(isValidBodyOwnership), bodyExists);
+    const droppedOwnership = rawOwnership.length - ownership.length;
     // Turns are 1-based; seq is a non-negative counter. A corrupt/missing value
     // reads as the default (validate-and-merge), so an old save lacking a field
     // is fine.
     const seq = typeof parsed.seq === 'number' && parsed.seq >= 0 ? Math.floor(parsed.seq) : 0;
     const turn = typeof parsed.turn === 'number' && parsed.turn >= 1 ? Math.floor(parsed.turn) : 1;
-    return { state: { version: 1, turn, seq, facilities, ships }, droppedFacilities, droppedShips };
+    return { state: { version: 1, turn, seq, facilities, ships, ownership }, droppedFacilities, droppedShips, droppedOwnership };
   } catch {
-    return { state: { ...DEFAULTS }, droppedFacilities: 0, droppedShips: 0 };
+    return { state: { ...DEFAULTS }, droppedFacilities: 0, droppedShips: 0, droppedOwnership: 0 };
   }
 }
 

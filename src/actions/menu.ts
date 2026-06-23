@@ -11,14 +11,30 @@
 // NO separate target tier; the target is shown in the field by the controller, never as a
 // menu row. See plans/4x-system-action-menu.md.
 
-import type { Actor, ActionCategory, ActionDef, ActionIntent } from './types.ts';
+import type { Actor, ActionCategory, ActionDef, ActionIntent, TargetCandidate, TargetCriteria } from './types.ts';
 import { ACTION_BY_ID, PASS_ACTION, actionLabel } from './registry.ts';
 
 export type MenuLevel = 'category' | 'command';
 
-// Who a command may point at, supplied by the controller (which alone knows sides/allies).
-// 'self' targeting is resolved internally to [actor], never through this.
-export type TargetResolver = (def: ActionDef, actor: Actor) => readonly string[];
+// Who a command may point at, supplied by the controller (which alone knows real sides and
+// real bodies). It mints the FULL candidate set as rich descriptors; the menu then SELECTS
+// among them with the def's own TargetCriteria (filterCandidates below). 'self' targeting is
+// resolved internally to [actor], never through this.
+export type TargetResolver = (def: ActionDef, actor: Actor) => readonly TargetCandidate[];
+
+// The pure target matcher — a def's TargetCriteria applied to the controller's minted
+// candidates (absent criteria ⇒ permissive, every candidate). Factored out and exported so
+// it is node-tested directly and so ships-as-targets and bodies-as-targets fall out as
+// different predicate results of ONE pass, never two code paths. It SELECTS only; the menu
+// maps the survivors to ids and `targeting` cardinality decides how many commit.
+export function filterCandidates(
+  candidates: readonly TargetCandidate[],
+  criteria: TargetCriteria | undefined,
+  actor: Actor,
+): readonly TargetCandidate[] {
+  if (!criteria) return candidates;
+  return candidates.filter((c) => criteria(c, actor));
+}
 
 export interface MenuRow {
   readonly key: string;
@@ -91,9 +107,12 @@ export class ActionMenu {
   }
 
   // The candidate target ids the cursored command admits. 'self' resolves to the actor (the
-  // bracket lands on your own ship); everything else asks the controller's resolver.
+  // bracket lands on your own ship). Otherwise the controller mints ALL candidates and the
+  // def's TargetCriteria selects among them (absent ⇒ permissive); the view/commit work in
+  // plain ids, so the survivors are mapped to their ids here.
   private candidatesFor(def: ActionDef): readonly string[] {
-    return def.targeting === 'self' ? [this.actor.id] : this.resolveTargets(def, this.actor);
+    if (def.targeting === 'self') return [this.actor.id];
+    return filterCandidates(this.resolveTargets(def, this.actor), def.targets, this.actor).map((c) => c.id);
   }
 
   // The def under the command-level cursor (or null off the command level / out of range).

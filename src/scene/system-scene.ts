@@ -24,7 +24,9 @@ import { CONTROLLED_FACTION_ID, factionColor, factionLabel } from '../factions/r
 import { buildTurns, DEFAULT_SHIP_CLASS, shipClassLabel } from '../ships/registry';
 import { shipToActor } from '../actions/ships-to-actors';
 import type { TargetResolver } from '../actions/menu';
+import type { TargetCandidate } from '../actions/types';
 import { SystemActionMenu } from './actions/system-action-menu';
+import { EFFECT_HANDLERS } from './actions/effect-handlers';
 import { SystemHud } from '../ui/system-hud';
 import { Sidebar } from '../ui/sidebar/sidebar';
 import { SystemContext } from '../ui/sidebar/system-context';
@@ -145,15 +147,25 @@ export class SystemScene implements Screen {
       };
     }
 
-    // The action menu's execute DISPATCH (Menu M2). 'immediate' actions resolve in place;
-    // 'encounter' actions hand off to the encounter modality — both are deferred content
-    // (E-phases), so for now they only log in DEV. The menu itself (select → drill → target
-    // → confirm) is fully live; this is the seam its committed intent flows into.
+    // The action menu's execute DISPATCH (Menu M2). 'immediate' actions route to an app-side
+    // effect handler keyed by actionId (EFFECT_HANDLERS) that mutates the save now — today a
+    // no-op stub, so this is the live ROUTING with deferred mechanics; an immediate verb with
+    // no handler (flee/pass) falls through to a DEV log. 'encounter' actions hand off to the
+    // encounter modality (E-phases, deferred), still a DEV stub. The menu itself (select →
+    // drill → target → confirm) is fully live; this is the seam its intent flows into.
+    this.actionMenu.onImmediate = (intent) => {
+      const handler = EFFECT_HANDLERS.get(intent.actionId);
+      if (handler) {
+        handler(intent);
+        // A real effect mutates helio.game; when one lands it must also kick the
+        // facility-edit reconcile chain here so the diagram + economy re-read.
+        return;
+      }
+      if (import.meta.env.DEV) console.debug('[actions] immediate action (no handler):', intent);
+    };
     if (import.meta.env.DEV) {
       this.actionMenu.onEnterEncounter = (intent) =>
         console.debug('[actions] would enter encounter (stub):', intent);
-      this.actionMenu.onImmediate = (intent) =>
-        console.debug('[actions] immediate action (placeholder):', intent);
     }
     // The outer focus axis: ←/→ at the category level cycles the active actor (the menu re-opens
     // on the next ship). The controller routes the key; the actor ring lives here (game-state).
@@ -282,10 +294,15 @@ export class SystemScene implements Screen {
       this.actionMenu.close();
       return;
     }
-    const targetIds = ships.filter((s) => s.factionId !== ship.factionId).map((s) => s.id);
-    // 'self'-targeted commands are resolved inside the menu; this only supplies the
-    // opposing-ship candidate set the offensive commands point at.
-    const resolveTargets: TargetResolver = () => targetIds;
+    // 'self'-targeted commands are resolved inside the menu; this mints the opposing-faction
+    // ready ships as candidates the offensive commands point at. M3a keeps this ship-only
+    // (kind 'ship', allegiance 'enemy'); M3b broadens it to a flat ship+body candidate list.
+    // The menu applies each def's TargetCriteria to whatever this returns, so a richer mint
+    // here needs no menu change.
+    const candidates: readonly TargetCandidate[] = ships
+      .filter((s) => s.factionId !== ship.factionId)
+      .map((s): TargetCandidate => ({ id: s.id, kind: 'ship', allegiance: 'enemy', tags: [] }));
+    const resolveTargets: TargetResolver = () => candidates;
     this.actionMenu.openFor({
       actor: shipToActor(ship),
       title: ship.name,

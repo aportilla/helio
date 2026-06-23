@@ -21,19 +21,24 @@ stays node-pure.
 An `Actor` is `{ id, commands, stats? }` — deliberately body-agnostic. A fleet **ship**, and a
 **planet / moon / belt that carries player facilities**, are both actors: each opens the same
 anchored menu and offers the commands its loadout grants (a ship's weapons; a body's
-orbital-railgun, a colony ship's "establish colony"). The menu, registry, and dispatch never
-assume a ship. v1 ships the **ship** adapter (`ships-to-actors.ts`); the **body** projector
-(`combatRoleFor`, facilities → actor) lands with the encounter's ship-to-planet phase
-(`4x-encounter-combat-system.md` E5).
+orbital-railgun, a colony's "establish"). The menu, registry, and dispatch never assume a ship.
+Both adapters ship as neutral leaves: `ships-to-actors.ts` (the fleet) and `bodies-to-actors.ts`
+(facility-bearing bodies, facility-gated commands). They share one keyspace — `entity-id.ts`
+mints `body:<bodyIdx>` ids while ship ids stay un-prefixed — so one resolver, one anchor lookup,
+and one `ActionIntent` route both kinds. The encounter's later ship-to-planet phase
+*specializes* `bodies-to-actors` (adding a combat stat bag), it does not re-invent a body→actor
+path.
 
 ## Files
 
 | File | What it owns |
 |---|---|
-| `types.ts` | The vocabulary leaf — `ActionType` (frozen), `ActionCategory`, `ActionTargeting`, `ActionKind`, and the `ActionDef` / `ActionRef` / `Actor` / `ActionIntent` shapes. Effect-free: enough to build and run the menu, never what an action *does*. |
-| `registry.ts` | `ACTION_DEFS` — one frozen-key object per action (the `satisfies Record` + `FROZEN_ACTION_IDS` + DEV-assert guard, mirroring the other registries). v1 content is combat-first: `attack` (enters an encounter), `flee`, and the menu-injected `pass`. |
-| `menu.ts` | `ActionMenu` — the mechanics-agnostic state machine: a **two-level** stack (category → command) with an orthogonal **target lock** on the command level (`moveCursor` = vertical/command, `moveTarget` / `setTargetById` = horizontal/target), `enter` / `back` / `cancel` / `confirm`, categories derived from the actor's commands, greyed-not-hidden empties, an always-present Pass, emitting one effect-free `ActionIntent` aimed at the locked target. |
+| `types.ts` | The vocabulary leaf — `ActionType` (frozen), `ActionCategory`, `ActionTargeting`, `ActionKind`, the **target-predicate** axis (`TargetCandidate` / `TargetCriteria` / `TargetAllegiance`), and the `ActionDef` / `ActionRef` / `Actor` / `ActorSide` / `ActionIntent` shapes. Effect-free: enough to build and run the menu, never what an action *does*. |
+| `registry.ts` | `ACTION_DEFS` — one frozen-key object per action (the `satisfies Record` + `FROZEN_ACTION_IDS` + DEV-assert guard, mirroring the other registries). Content: combat-first `attack` (enters an encounter), `flee`, the menu-injected `pass`, and the non-combat **world verbs** `mine` / `establish` / `bombard` (additive `'immediate'` members). |
+| `menu.ts` | `ActionMenu` — the mechanics-agnostic state machine: a **two-level** stack (category → command) with an orthogonal **target lock** on the command level (`moveCursor` = vertical/command, `moveTarget` / `setTargetById` = horizontal/target), `enter` / `back` / `cancel` / `confirm`, categories derived from the actor's commands, greyed-not-hidden empties, an always-present Pass, emitting one effect-free `ActionIntent` aimed at the locked target. Also exports the pure `filterCandidates` matcher (applies a def's `TargetCriteria` to the controller's minted candidates). |
+| `entity-id.ts` | The pure id codec — `encodeBodyEntityId` / `parseEntityId` over the frozen `body:` namespace, so ships (un-prefixed) and bodies (`body:<bodyIdx>`) share one keyspace without collision. |
 | `ships-to-actors.ts` | Projects ready fleet ships into menu `Actor`s split by faction (`ActorSide`, `controlled` flag). Pure; the caller scopes ships to a system first. |
+| `bodies-to-actors.ts` | Projects facility-bearing bodies into menu `Actor`s split by ownership — the body twin of `ships-to-actors`, ids in the `body:` namespace, placeholder facility-gated commands. Pure; the caller resolves each body's `bodyIdx` + owning faction. |
 | `tuning.ts` | Hoisted menu-row accent colors (and a home for the later timing/availability knobs). |
 
 ## The execute dispatch (the fork)
@@ -59,9 +64,11 @@ routes pointer + keyboard through the same chrome chain the sidebar/HUD use (`ha
 through the `ActionMenuPanel` + the in-field `TargetBracket`
 ([`src/ui/action-menu.ts`](../ui/action-menu.ts)) — the bracket rides the locked target while
 you choose a command, and a click on (or ←/→ over) an enemy moves it. On a committed intent the
-**execute dispatch** routes by `ActionDef.kind` — `onImmediate` /
-`onEnterEncounter` — both filled by `SystemScene` (today: deferred placeholders; the
-`'encounter'` hand-off is the seam the encounter modality, E-phases, claims).
+**execute dispatch** routes by `ActionDef.kind` — `onImmediate` / `onEnterEncounter`, both
+filled by `SystemScene`. `onImmediate` routes to an app-side **effect-handler registry**
+(`src/scene/actions/effect-handlers.ts`) keyed by `actionId` — today a no-op stub per world
+verb (the routing, not the mechanics); the `'encounter'` hand-off stays a DEV stub, the seam the
+encounter modality (E-phases) claims.
 
 ## Status
 
@@ -77,5 +84,14 @@ you choose a command, and a click on (or ←/→ over) an enemy moves it. On a c
   tap from idle focuses the first actor (keyboard-first), and Esc ascends one level (target →
   category → idle). A SystemScene/controller concern (`onCycleActor` + the actor ring); the headless
   `ActionMenu` is unchanged.
-- **Next:** the encounter consumes the menu (`4x-encounter-combat-system.md` E1–E5) — and non-combat
-  `'immediate'` verbs (establish-colony, move) land as additive `ActionDef` content.
+- **M3a (shipped):** bodies as even-handed actors/targets, headless. The `body:` entity-id codec
+  (`entity-id.ts`); the `TargetCriteria` predicate seam on `ActionDef` (+ the pure `filterCandidates`
+  matcher); the non-combat world verbs `mine` / `establish` / `bombard` routed to app-side no-op
+  effect stubs; the `BodyOwnership` overlay + `ownerFactionId` + DEBUG `addOpponentBody` (with the
+  economy fan-in ownership-gated so an enemy body can't feed the player); the neutral
+  `bodies-to-actors.ts` projector. All pure/node-tested; no scene wiring yet.
+- **Next — M3b (scene):** a public `bodyCenter(bodyIdx)` anchor accessor, the `syncActionMenu`
+  rewrite (accept body picks, a real def-aware resolver over one flat ship+body candidate list,
+  namespace-dispatched anchors), and the actor-ring broadening to bodies — so a belt can be mined
+  and an enemy colony bombarded live. Then the encounter consumes the menu
+  (`4x-encounter-combat-system.md` E1–E5) over this already-even-handed substrate.

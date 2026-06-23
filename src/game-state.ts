@@ -27,11 +27,13 @@ import {
   advanceShipBuilds,
   buildingShipAt,
   parseGameState,
+  type BodyOwnership,
   type Facility,
   type GameState,
   type Ship,
 } from './game-state-codec';
 import { CONTROLLED_FACTION_ID, FACTION_DEFS } from './factions/registry';
+import type { FactionType } from './factions/types';
 import { DEFAULT_SHIP_CLASS, shipClassLabel } from './ships/registry';
 import type { ShipClassType } from './ships/types';
 import { slotKey, readRaw, writeRaw } from './storage';
@@ -49,7 +51,7 @@ function readFromStorage(): GameState {
   // parseGameState handles a null raw (absent key / disabled storage) → defaults,
   // and applies the skip-on-missing gate: a facility whose body a catalog rebuild
   // (PROCGEN_VERSION bump / CSV id change) no longer contains is dropped, never fatal.
-  const { state, droppedFacilities, droppedShips } = parseGameState(
+  const { state, droppedFacilities, droppedShips, droppedOwnership } = parseGameState(
     readRaw(STORAGE_KEY),
     (id) => indexOfBodyId(id) >= 0,
     (id) => systemExists(id),
@@ -59,6 +61,9 @@ function readFromStorage(): GameState {
   }
   if (import.meta.env.DEV && droppedShips > 0) {
     console.warn(`[game-state] dropped ${droppedShips} ship${droppedShips === 1 ? '' : 's'} with a missing system or shipyard`);
+  }
+  if (import.meta.env.DEV && droppedOwnership > 0) {
+    console.warn(`[game-state] dropped ${droppedOwnership} body-ownership record${droppedOwnership === 1 ? '' : 's'} with an unknown body/faction`);
   }
   return state;
 }
@@ -75,6 +80,15 @@ export function getGameState(): Readonly<GameState> {
 
 export function facilitiesOnBody(bodyId: string): readonly Facility[] {
   return recordsOnBody(current.facilities, bodyId);
+}
+
+// Which faction owns a body. A body with NO ownership record reads as the CONTROLLED
+// faction (the single-player default): every facility-bearing body the player has built is
+// theirs unless an explicit record flips it, so the economy fan-in keeps working and only an
+// addOpponentBody (or a later capture) marks a body enemy-held. Mirrors the ship side, where
+// a pre-faction ship defaults to the controlled faction.
+export function ownerFactionId(bodyId: string): FactionType {
+  return recordsOnBody(current.ownership, bodyId)[0]?.factionId ?? CONTROLLED_FACTION_ID;
 }
 
 // Place a facility, or return null if the body is already at the per-(body, type)
@@ -189,6 +203,25 @@ export function addOpponentShip(systemId: string, classId: ShipClassType = DEFAU
   current = { ...current, seq, ships: [...current.ships, ship] };
   writeToStorage(current);
   return ship;
+}
+
+// DEBUG ONLY — mark a body as enemy-owned (the first non-controlled faction), the body twin
+// of addOpponentShip, so an enemy colony is exercisable before live ownership write-paths
+// exist. Bypasses any claim/capture flow; the caller is DEV-gated. The opponent-side pick
+// lives HERE in the debug path — the faction registry stays free of any "opponent" concept.
+// Replaces any existing record for the body (idempotent re-flip). Returns the record, or
+// null if the body is unknown to the catalog. NOTE: this writes the overlay ONLY — it does
+// not reproject the economy. The ownership gate runs at EconomyBridge.build() time, so a
+// caller that wants a flip reflected in the live/preview economy must also trigger the
+// facility-edit reconcile (bridge.syncFacilities), exactly as a facility add/remove does.
+export function addOpponentBody(bodyId: string): BodyOwnership | null {
+  if (indexOfBodyId(bodyId) < 0) return null;
+  const factionId = FACTION_DEFS.find((f) => f.id !== CONTROLLED_FACTION_ID)?.id ?? CONTROLLED_FACTION_ID;
+  const record: BodyOwnership = { bodyId, factionId };
+  const ownership = [...current.ownership.filter((o) => o.bodyId !== bodyId), record];
+  current = { ...current, ownership };
+  writeToStorage(current);
+  return record;
 }
 
 // Destroy a ship record — the write-back for a user-initiated build cancel (cost is

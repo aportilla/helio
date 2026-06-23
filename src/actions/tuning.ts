@@ -16,3 +16,16 @@ export const FLEE_ACTION_COLOR = '#c9b46b';
 
 // — Pass: decline to act. A muted slate grey — present but recessive, the SoS dimmed verb.
 export const PASS_ACTION_COLOR = '#8a93a0';
+
+// The first non-combat WORLD verbs (M3). PROVISIONAL accents, each a distinct hue so a body
+// actor's menu rows read at a glance; re-tuning is non-breaking (only the ActionType wire
+// string is a contract). Loosely echoing the facility palette they act on/with.
+
+// — Mine: extract minerals. An ore tan, the minerals family.
+export const MINE_ACTION_COLOR = '#d7b070';
+
+// — Establish: claim an unowned world. A civic cyan, the colony/settle hue.
+export const ESTABLISH_ACTION_COLOR = '#5ec8ff';
+
+// — Bombard: strike an enemy-held body. A hostile crimson, hotter than the attack red.
+export const BOMBARD_ACTION_COLOR = '#d23b3b';

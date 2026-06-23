@@ -35,7 +35,8 @@ import {
   type BalanceConfig,
   type WorldSkeleton,
 } from '../../sim/src/index.ts';
-import { getGameState, type Facility } from '../game-state.ts';
+import { getGameState, ownerFactionId, type Facility } from '../game-state.ts';
+import { CONTROLLED_FACTION_ID } from '../factions/registry.ts';
 import { appResourceTable, type EconResource } from './resource-vocab.ts';
 import { buildShipLanes, intraInboundByResource, foldInboundNextTurn, type ShipLane } from './economy-read.ts';
 import { captureArrivals, intraArrivals, buildTurnLog, type ArrivalRecord } from './economy-log.ts';
@@ -501,6 +502,13 @@ export class EconomyBridge {
 function facilitiesByBodyId(): Map<string, Facility[]> {
   const map = new Map<string, Facility[]>();
   for (const f of getGameState().facilities) {
+    // Ownership gate (M3): an enemy-held body's facilities must NOT feed the player's
+    // economy. A body with no ownership record reads as player-owned (ownerFactionId
+    // default), so this is a pure no-op until an addOpponentBody / capture flips a body.
+    // Applied only at build() time (ctor + syncFacilities), NOT per step() — so a future
+    // ownership flip must run the facility-edit reconcile (syncFacilities) to take effect;
+    // writing the BodyOwnership overlay alone leaves the projected world stale.
+    if (ownerFactionId(f.bodyId) !== CONTROLLED_FACTION_ID) continue;
     const list = map.get(f.bodyId);
     if (list) list.push(f);
     else map.set(f.bodyId, [f]);

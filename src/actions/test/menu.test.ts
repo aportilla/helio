@@ -7,12 +7,16 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ActionMenu, type TargetResolver } from '../menu.ts';
-import type { Actor } from '../types.ts';
+import { ActionMenu, filterCandidates, type TargetResolver } from '../menu.ts';
+import type { Actor, TargetCandidate } from '../types.ts';
 
 const actor: Actor = { id: 'a1', commands: [{ id: 'attack' }, { id: 'flee' }] };
-const enemies = ['e1', 'e2'];
-const resolve: TargetResolver = (def) => (def.targeting === 'single' ? enemies : []);
+const enemyCands: readonly TargetCandidate[] = [
+  { id: 'e1', kind: 'ship', allegiance: 'enemy', tags: [] },
+  { id: 'e2', kind: 'ship', allegiance: 'enemy', tags: [] },
+];
+const enemies = enemyCands.map((c) => c.id); // ['e1', 'e2'] — the ids the view exposes
+const resolve: TargetResolver = (def) => (def.targeting === 'single' ? enemyCands : []);
 
 const keys = (m: ActionMenu) => m.view().rows.map((r) => r.key);
 
@@ -129,4 +133,33 @@ test('a closed menu ignores further input', () => {
   m.moveCursor(1);
   m.moveTarget(1);
   assert.equal(m.view().closed, true);
+});
+
+// -- the target criteria seam (M3 §B) ----------------------------------
+
+const mixed: readonly TargetCandidate[] = [
+  { id: 'enemy-colony', kind: 'body', allegiance: 'enemy', tags: ['colony'] },
+  { id: 'my-colony', kind: 'body', allegiance: 'self', tags: ['colony'] },
+  { id: 'enemy-ship', kind: 'ship', allegiance: 'enemy', tags: [] },
+  { id: 'enemy-giant', kind: 'body', allegiance: 'enemy', tags: ['gas-giant'] },
+];
+
+test('filterCandidates: absent criteria is permissive (returns the candidates unchanged)', () => {
+  assert.equal(filterCandidates(mixed, undefined, actor), mixed);
+});
+
+test('filterCandidates: a predicate selects over rich descriptors (kind/allegiance/tags)', () => {
+  const enemyBodies = filterCandidates(mixed, (c) => c.allegiance === 'enemy' && c.kind === 'body', actor);
+  assert.deepEqual(enemyBodies.map((c) => c.id), ['enemy-colony', 'enemy-giant']);
+
+  // The open tag set drives arbitrarily specific rules — "only an opponent's gas giants".
+  const enemyGasGiants = filterCandidates(mixed, (c) => c.allegiance === 'enemy' && c.tags.includes('gas-giant'), actor);
+  assert.deepEqual(enemyGasGiants.map((c) => c.id), ['enemy-giant']);
+});
+
+test('filterCandidates: a criteria may also key off the acting actor', () => {
+  // The predicate receives the Actor, so a rule can compare actor vs. candidate (e.g. never
+  // target yourself) — exercised here by an id check.
+  const notSelfActor = filterCandidates(mixed, (c) => c.id !== actor.id, actor);
+  assert.equal(notSelfActor.length, mixed.length); // none of the mixed ids is 'a1'
 });
