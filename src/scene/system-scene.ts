@@ -22,6 +22,9 @@ import {
 } from '../game-state';
 import { factionColor, factionLabel } from '../factions/registry';
 import { buildTurns, DEFAULT_SHIP_CLASS, shipClassLabel } from '../ships/registry';
+import { shipToActor } from '../actions/ships-to-actors';
+import type { TargetResolver } from '../actions/menu';
+import { SystemActionMenu } from './actions/system-action-menu';
 import { SystemHud } from '../ui/system-hud';
 import { Sidebar } from '../ui/sidebar/sidebar';
 import { SystemContext } from '../ui/sidebar/system-context';
@@ -37,6 +40,10 @@ export class SystemScene implements Screen {
 
   private readonly diagram: SystemDiagram;
   private readonly hud: SystemHud;
+  // The anchored system action menu — a SystemScene-owned chrome layer (its own ortho
+  // scene), opened on a ship selection, routed FIRST in the chrome chain. See
+  // src/scene/actions/ + plans/4x-system-action-menu.md (M2).
+  private readonly actionMenu = new SystemActionMenu();
   // Persistent sidebar, owned by AppController (shared with the galaxy view).
   // Rendered + input-routed here, but not owned. Consulted before the HUD.
   private readonly sidebar: Sidebar;
@@ -138,6 +145,17 @@ export class SystemScene implements Screen {
       };
     }
 
+    // The action menu's execute DISPATCH (Menu M2). 'immediate' actions resolve in place;
+    // 'encounter' actions hand off to the encounter modality — both are deferred content
+    // (E-phases), so for now they only log in DEV. The menu itself (select → drill → target
+    // → confirm) is fully live; this is the seam its committed intent flows into.
+    if (import.meta.env.DEV) {
+      this.actionMenu.onEnterEncounter = (intent) =>
+        console.debug('[actions] would enter encounter (stub):', intent);
+      this.actionMenu.onImmediate = (intent) =>
+        console.debug('[actions] immediate action (placeholder):', intent);
+    }
+
     // DPR boundary crossings (zoom, monitor swap) re-trigger resize so the
     // pixel-ratio + buffer dims pick up the new integer N.
     this.viewport.subscribe(() => {
@@ -183,6 +201,7 @@ export class SystemScene implements Screen {
     this.sidebar.setContext(null);
     this.diagram.dispose();
     this.hud.dispose();
+    this.actionMenu.dispose();
     this.viewport.dispose();
   }
 
@@ -211,6 +230,8 @@ export class SystemScene implements Screen {
     this.viewport.clientToHud(e.clientX, e.clientY, this._hudPt);
     if (this.sidebar.handleClick(this._hudPt.x, this._hudPt.y)) return;
     if (this.hud.handleClick(this._hudPt.x, this._hudPt.y)) return;
+    // The open action menu claims clicks ahead of the diagram (drill / fire / absorb).
+    if (this.actionMenu.handleClick(this._hudPt.x, this._hudPt.y)) return;
 
     // A click on the diagram (or empty space): pick under it (null over chrome).
     const hit = this.pickAt(this._hudPt.x, this._hudPt.y);
@@ -239,7 +260,36 @@ export class SystemScene implements Screen {
     if (picksEqual(next, this.selectedPick)) return;
     this.selectedPick = next;
     this.diagram.setSelected(next);
+    this.syncActionMenu(next);
     this.pushSelectionToSidebar();
+  }
+
+  // Open the anchored action menu when a ship is selected, close it otherwise. The menu
+  // reads the actor's commands from the neutral ship→actor adapter, draws its targets from
+  // the opposing-faction ready ships, and anchors to the ship's live fleet slot (re-read
+  // each place, so it tracks resizes and self-closes if the ship vanishes).
+  private syncActionMenu(pick: DiagramPick | null): void {
+    if (!pick || pick.kind !== 'ship') {
+      this.actionMenu.close();
+      return;
+    }
+    const ships = shipsInSystem(systemIdForCluster(this.clusterIdx)).filter((s) => s.status === 'ready');
+    const ship = ships.find((s) => s.id === pick.shipId);
+    if (!ship) {
+      this.actionMenu.close();
+      return;
+    }
+    const targetIds = ships.filter((s) => s.factionId !== ship.factionId).map((s) => s.id);
+    // 'self'-targeted commands are resolved inside the menu; this only supplies the
+    // opposing-ship candidate set the offensive commands point at.
+    const resolveTargets: TargetResolver = () => targetIds;
+    this.actionMenu.openFor({
+      actor: shipToActor(ship),
+      title: ship.name,
+      resolveTargets,
+      // Live slot center of any ship — the actor anchors the panel, a target rides the bracket.
+      slotCenterFor: (id) => this.diagram.fleetSlotCenter(id),
+    });
   }
 
   // A pick is selectable if it's a ship, or a facility-eligible body. Body eligibility
@@ -334,6 +384,9 @@ export class SystemScene implements Screen {
   private refreshFleet(): void {
     const systemId = systemIdForCluster(this.clusterIdx);
     this.diagram.syncFleet(shipsInSystem(systemId).filter((s) => s.status === 'ready'));
+    // The fleet just relaid out (slots may have moved or a ship may be gone); re-place the
+    // open menu against the fresh slots, or let it self-close if its ship vanished.
+    this.actionMenu.refreshAnchor();
   }
 
   private onPointerMove(e: PointerEvent): void {
@@ -343,12 +396,13 @@ export class SystemScene implements Screen {
     this.viewport.clientToHud(e.clientX, e.clientY, this._hudPt);
     const onSidebar = this.sidebar.handlePointerMove(this._hudPt.x, this._hudPt.y);
     const onButton = this.hud.handlePointerMove(this._hudPt.x, this._hudPt.y);
+    const onMenu = this.actionMenu.handlePointerMove(this._hudPt.x, this._hudPt.y);
     const pick = this.pickAt(this._hudPt.x, this._hudPt.y);
     this.diagram.setHovered(pick);
     this.hud.setHoveredBody(pick, this._hudPt.x, this._hudPt.y);
     // A ship has no hover rim or info card yet, so the pointer cursor is its hover
     // affordance — the cue that it's clickable. Bodies rely on their rim + card instead.
-    this.canvas.style.cursor = (onSidebar || onButton || pick?.kind === 'ship') ? 'pointer' : '';
+    this.canvas.style.cursor = (onSidebar || onButton || onMenu || pick?.kind === 'ship') ? 'pointer' : '';
   }
 
   // Pick the disc under a HUD-space point, skipping the picker when the
@@ -356,7 +410,8 @@ export class SystemScene implements Screen {
   // can't appear under the chrome the user is aiming at.
   private pickAt(bufX: number, bufY: number): DiagramPick | null {
     const overChrome = this.sidebar.hitTest(bufX, bufY) !== 'transparent'
-      || this.hud.hitTest(bufX, bufY) !== 'transparent';
+      || this.hud.hitTest(bufX, bufY) !== 'transparent'
+      || this.actionMenu.hitTest(bufX, bufY) !== 'transparent';
     return overChrome ? null : this.diagram.pickAt(bufX, bufY);
   }
 
@@ -371,6 +426,10 @@ export class SystemScene implements Screen {
   }
 
   private onKeyDown(e: KeyboardEvent): void {
+    // The open action menu claims arrows / Enter / ← and a drilled-in Escape (back out one
+    // level). Escape at the menu's top level is NOT claimed, so it falls through to clear
+    // the selection (which closes the menu) — one Escape per level, then one to deselect.
+    if (this.actionMenu.handleKey(e)) return;
     if (e.key !== 'Escape') return;
     // Escape clears a body selection first; a second press (nothing selected)
     // exits the system view.
@@ -393,6 +452,10 @@ export class SystemScene implements Screen {
     this.diagram.resize(this.viewport.contentBufferW, this.viewport.bufferH);
     this.hud.resize(this.viewport.bufferW, this.viewport.bufferH);
     this.sidebar.resize(this.viewport.bufferW, this.viewport.bufferH);
+    // Full-buffer camera so the menu's content-buffer anchor coords land correctly; it
+    // clamps itself to the content width (left of the sidebar strip) and re-reads the
+    // ship's slot center, so a resize re-anchors it for free.
+    this.actionMenu.resize(this.viewport.bufferW, this.viewport.bufferH, this.viewport.contentBufferW);
   }
 
   private tick = (): void => {
@@ -413,6 +476,9 @@ export class SystemScene implements Screen {
     this.renderer.setScissorTest(false);
     this.renderer.setViewport(0, 0, cssW, cssH);
     this.renderer.render(this.hud.scene, this.hud.camera);
+    // The anchored action menu composites over the diagram + hud (its own full-buffer ortho
+    // scene), under the sidebar which it never overlaps (clamped to the content width).
+    this.renderer.render(this.actionMenu.scene, this.actionMenu.camera);
     this.renderer.render(this.sidebar.scene, this.sidebar.camera);
     this.renderer.autoClear = true;
     this.rafId = requestAnimationFrame(this.tick);

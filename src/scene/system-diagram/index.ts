@@ -162,6 +162,13 @@ export class SystemDiagram {
     this.fleet.setFleet(ships);
   }
 
+  // The on-screen slot center of a ready ship (content-buffer px), or null if it isn't
+  // currently rendered — the anchor the system action menu pins to. Pass-through to the
+  // fleet layer, which owns the laid-out per-ship centers.
+  fleetSlotCenter(shipId: string): { cx: number; cy: number; r: number } | null {
+    return this.fleet.slotCenterFor(shipId);
+  }
+
   // Open the cargo overlay already at steady state (one-shot). Call once, after the
   // layout + lanes have resolved and before the first frame — see ShipsLayer.prime.
   prime(): void {

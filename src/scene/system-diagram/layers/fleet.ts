@@ -158,6 +158,17 @@ export class FleetLayer {
     return shipId === null ? null : { pick: { kind: 'ship', shipId }, z: Z_FLEET };
   }
 
+  // The on-screen slot center (content-buffer px, parity-snapped) of a given ship, or
+  // null if it isn't a currently-rendered ready ship — the anchor source for the system
+  // action menu. Walks the same pick-target list relayout built, so it tracks resizes for
+  // free; a vanished ship (re-selected after a fleet change) returns null and the menu closes.
+  slotCenterFor(shipId: string): { cx: number; cy: number; r: number } | null {
+    for (const t of this.pickTargets) {
+      if (t.shipId === shipId) return { cx: t.cx, cy: t.cy, r: t.r };
+    }
+    return null;
+  }
+
   private spriteRadius(ship: Ship): number {
     return SHIP_CLASS_BY_TYPE.get(ship.classId)?.spriteSizePx ?? 4;
   }
