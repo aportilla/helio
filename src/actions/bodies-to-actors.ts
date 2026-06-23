@@ -5,22 +5,31 @@
 // targets); the encounter's later ship-to-planet phase SPECIALIZES this (adding a combatId +
 // a stat bag), it does not re-invent a body→actor path.
 //
-// Pure and node-testable: it imports only the erased PlacedFacility type, the entity-id
-// codec, the controlled-faction pointer, and the action vocabulary — no catalog, no save, no
-// DOM. The CALLER resolves the two things only it can know and hands them in per body: the
-// BODIES index (the scene anchor key the entity id encodes) and the owning factionId
-// (ownerFactionId(bodyId)).
+// Pure and node-testable, and SIM-FREE: it reads a body's grants off the facility defs
+// (FACILITY_BY_TYPE), and the facility registry is itself sim-free (its contribute() needs only
+// the EconResource ids, not the sim-built table), so importing it here drags no economy core.
+// It imports only the FacilityType/PlacedFacility types (erased), the entity-id codec, the
+// controlled-faction pointer, the facility registry, and the action vocabulary — no catalog,
+// no save, no DOM, no sim. The CALLER resolves the two things only it can know and hands them in
+// per body: the BODIES index (the scene anchor key the entity id encodes) and the owning
+// factionId (ownerFactionId(bodyId)).
 //
-// Commands are FACILITY-GATED and, for the bones, PLACEHOLDER: a facility type maps to a
-// fixed command set (mining-base ⇒ mine, colony ⇒ establish). The real per-facility loadouts
-// — and which verbs are actor commands vs. target-only verbs (bombard targets an enemy body;
-// no body offers it as an actor in the bones) — arrive with the mechanics; this wires only
-// the projection seam.
+// Commands are DERIVED, not enumerated: each facility DECLARES the actions it grants inline on its
+// FacilityDef (`grants`), and deriveCommands collects + merges them across the body's facilities
+// (plans/4x-modular-ship-components.md §2) — the same projection ships-to-actors runs over a
+// ship's components. No central facility→command map in the action vocabulary.
 
 import { encodeBodyEntityId } from './entity-id.ts';
 import { CONTROLLED_FACTION_ID } from '../factions/registry.ts';
-import type { FacilityType, PlacedFacility } from '../facilities/types.ts';
-import type { Actor, ActionRef, ActorSide } from './types.ts';
+import { FACILITY_BY_TYPE } from '../facilities/registry.ts';
+import type { PlacedFacility } from '../facilities/types.ts';
+import type { Actor, ActorSide } from './types.ts';
+import { BODY_CATEGORIES } from './registry.ts';
+import { deriveCommands, type GrantProvider } from './derive.ts';
+
+// A body always presents the Attack + Support category palette (BODY_CATEGORIES), greyed when no
+// facility grants a command in one, so the menu's shape reads the same on every body (a body
+// never navigates, so Navigation is absent). The menu honors this palette (Actor.categories).
 
 // One facility-bearing body's projection input. The caller mints these from the catalog +
 // the save: `bodyIdx` is the BODIES index (== DiagramPick.bodyIdx, the anchor key encoded
@@ -32,33 +41,24 @@ export interface BodyActorInput {
   readonly facilities: readonly PlacedFacility[];
 }
 
-// Placeholder facility → command mapping (the bones). A type absent from the map grants no
-// command; a body whose facilities grant none is not a commandable actor (omitted from its
-// side — it can still be a TARGET, which is a separate candidate-mint concern). Kept here,
-// not on FacilityDef, so the action grammar owns the verb set and src/facilities/ stays
-// economy-only.
-const FACILITY_COMMANDS: Partial<Record<FacilityType, readonly ActionRef[]>> = {
-  'mining-base': [{ id: 'mine' }],
-  colony: [{ id: 'establish' }],
-};
-
-// The distinct commands a body's facilities grant, de-duplicated by id in first-seen order,
-// so a body's menu is stable.
-function commandsForFacilities(facilities: readonly PlacedFacility[]): readonly ActionRef[] {
-  const byId = new Map<string, ActionRef>();
-  for (const f of facilities) {
-    for (const ref of FACILITY_COMMANDS[f.type] ?? []) {
-      if (!byId.has(ref.id)) byId.set(ref.id, ref);
-    }
-  }
-  return [...byId.values()];
+// A body's facilities as grant-providers: each placed facility is one provider whose id is its
+// type and whose grants are the FacilityDef's declared grants. Two facilities of the same type
+// (when a cap rises above 1) merge their grant into one scaled command, exactly as identical ship
+// components do — today maxPerBody=1, so stacking is moot, but the rule is uniform.
+function bodyProviders(facilities: readonly PlacedFacility[]): readonly GrantProvider[] {
+  return facilities.map((f) => ({ id: f.type, grants: FACILITY_BY_TYPE.get(f.type)?.grants }));
 }
 
 // One body → one Actor (id in the `body:` namespace so it shares the ship keyspace without
-// collision). Commands are facility-gated; a body whose facilities grant none yields an Actor
-// with an empty command list (still openable — it offers only the menu-injected Pass).
+// collision). Commands are derived from its facilities' grants; a body whose facilities grant
+// none yields an Actor with an empty command list (still openable — it offers only the
+// menu-injected Pass).
 export function bodyToActor(input: BodyActorInput): Actor {
-  return { id: encodeBodyEntityId(input.bodyIdx), commands: commandsForFacilities(input.facilities) };
+  return {
+    id: encodeBodyEntityId(input.bodyIdx),
+    commands: deriveCommands(bodyProviders(input.facilities)),
+    categories: BODY_CATEGORIES,
+  };
 }
 
 // Facility-bearing bodies → ownership sides. Only bodies that grant at least one command

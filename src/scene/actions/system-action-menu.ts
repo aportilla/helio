@@ -11,15 +11,16 @@
 // target-selection modality — VERTICAL input (↑/↓ / W/S, or hovering a row) moves through the
 // commands; HORIZONTAL input (←/→ / A/D, or clicking an enemy) moves the locked target, shown
 // by a bracket on a ship in the field. Confirming a command fires it at the locked target.
-// On a committed ActionIntent the execute DISPATCH routes by ActionDef.kind — 'immediate'
-// resolves in place, 'encounter' hands off to the (not-yet-built) encounter modality.
+// On a committed ActionIntent the execute DISPATCH routes by the action's kind, resolved from
+// the actor's own resolved command (no central registry) — 'immediate' resolves in place,
+// 'encounter' hands off to the (not-yet-built) encounter modality.
 
 import { OrthographicCamera, Scene } from 'three';
 import { ActionMenuPanel, TargetBracket } from '../../ui/action-menu';
 import type { HitResult } from '../../ui/hit-test';
 import { sizes } from '../../ui/theme';
 import { ActionMenu, type TargetResolver } from '../../actions/menu';
-import { ACTION_BY_ID } from '../../actions/registry';
+import { commandFor } from '../../actions/derive';
 import type { Actor, ActionIntent } from '../../actions/types';
 
 // Gap (env px) between the anchored sprite's edge and the menu panel.
@@ -56,7 +57,7 @@ export class SystemActionMenu {
   private bufH = 1;
   private contentW = 1;
 
-  // The execute dispatch seam, routed by ActionDef.kind on confirm. SystemScene fills both;
+  // The execute dispatch seam, routed by the command's kind on confirm. SystemScene fills both;
   // 'encounter' is the hand-off the encounter modality (E-phases) will claim.
   onImmediate: (intent: ActionIntent) => void = () => {};
   onEnterEncounter: (intent: ActionIntent) => void = () => {};
@@ -238,9 +239,12 @@ export class SystemActionMenu {
   }
 
   private dispatch(intent: ActionIntent): void {
-    const def = ACTION_BY_ID.get(intent.actionId);
+    // Resolve the action's kind from the actor's OWN resolved command (commandFor) — there is no
+    // central registry after the inversion. The menu-injected Pass is not a command (⇒ undefined),
+    // so it routes to the immediate path, as it always has. Read before close() nulls `opts`.
+    const kind = this.opts ? commandFor(this.opts.actor, intent.actionId)?.grant.kind : undefined;
     this.close();
-    if (def?.kind === 'encounter') this.onEnterEncounter(intent);
+    if (kind === 'encounter') this.onEnterEncounter(intent);
     else this.onImmediate(intent);
   }
 

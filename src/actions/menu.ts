@@ -11,18 +11,18 @@
 // NO separate target tier; the target is shown in the field by the controller, never as a
 // menu row. See ./README.md.
 
-import type { Actor, ActionCategory, ActionDef, ActionIntent, TargetCandidate, TargetCriteria } from './types.ts';
-import { ACTION_BY_ID, PASS_ACTION, actionLabel } from './registry.ts';
+import type { Actor, ActionCategory, ActionCommand, ActionIntent, TargetCandidate, TargetCriteria } from './types.ts';
+import { PASS_ACTION_ID, PASS_LABEL, commandLabel } from './registry.ts';
 
 export type MenuLevel = 'category' | 'command';
 
 // Who a command may point at, supplied by the controller (which alone knows real sides and
 // real bodies). It mints the FULL candidate set as rich descriptors; the menu then SELECTS
-// among them with the def's own TargetCriteria (filterCandidates below). 'self' targeting is
-// resolved internally to [actor], never through this.
-export type TargetResolver = (def: ActionDef, actor: Actor) => readonly TargetCandidate[];
+// among them with the command grant's own TargetCriteria (filterCandidates below). 'self'
+// targeting is resolved internally to [actor], never through this.
+export type TargetResolver = (command: ActionCommand, actor: Actor) => readonly TargetCandidate[];
 
-// The pure target matcher — a def's TargetCriteria applied to the controller's minted
+// The pure target matcher — a grant's TargetCriteria applied to the controller's minted
 // candidates (absent criteria ⇒ permissive, every candidate). Factored out and exported so
 // it is node-tested directly and so ships-as-targets and bodies-as-targets fall out as
 // different predicate results of ONE pass, never two code paths. It SELECTS only; the menu
@@ -83,49 +83,53 @@ export class ActionMenu {
     return this.stack[this.stack.length - 1]!;
   }
 
-  // The categories the actor's commands span, in CATEGORY_ORDER. Stable per actor.
+  // The top-level category rows, in CATEGORY_ORDER. If the actor declares a category PALETTE
+  // the menu shows exactly those — always, greyed when empty (rows() marks enablement) — so a
+  // body always offers Attack + Support even before it has a weapon. Absent ⇒ derive from the
+  // categories the actor's commands actually span (the original behavior). Either way the order
+  // is CATEGORY_ORDER, so the menu never reshuffles.
   private categories(): readonly ActionCategory[] {
-    const present = new Set<ActionCategory>();
-    for (const ref of this.actor.commands) {
-      const def = ACTION_BY_ID.get(ref.id);
-      if (def) present.add(def.category);
+    if (this.actor.categories) {
+      const palette = this.actor.categories;
+      return CATEGORY_ORDER.filter((c) => palette.includes(c));
     }
+    const present = new Set<ActionCategory>();
+    for (const command of this.actor.commands) present.add(command.grant.category);
     return CATEGORY_ORDER.filter((c) => present.has(c));
   }
 
-  private commandsIn(category: ActionCategory): readonly ActionDef[] {
-    const defs: ActionDef[] = [];
-    for (const ref of this.actor.commands) {
-      const def = ACTION_BY_ID.get(ref.id);
-      if (def && def.category === category) defs.push(def);
-    }
-    return defs;
+  private commandsIn(category: ActionCategory): readonly ActionCommand[] {
+    return this.actor.commands.filter((c) => c.grant.category === category);
   }
 
-  private isAvailable(def: ActionDef): boolean {
-    return def.isAvailable ? def.isAvailable(this.actor) : true;
+  // A command is available iff the actor can pay its energy cost (D6). ABSENT energy ⇒
+  // permissive: the bones carry no energy model yet (no `stats.energy`), so every command is
+  // available, exactly as before the inversion. The Phase-2 energy model populates `energy` and
+  // greys a command the actor can't afford — no menu change needed.
+  private isAvailable(command: ActionCommand): boolean {
+    const energy = this.actor.stats?.energy;
+    return energy === undefined || energy >= command.totalCost;
   }
 
   // The candidate target ids the cursored command admits. 'self' resolves to the actor (the
-  // bracket lands on the acting entity itself — your own ship or body). Otherwise the
-  // controller mints ALL candidates and the
-  // def's TargetCriteria selects among them (absent ⇒ permissive); the view/commit work in
-  // plain ids, so the survivors are mapped to their ids here.
-  private candidatesFor(def: ActionDef): readonly string[] {
-    if (def.targeting === 'self') return [this.actor.id];
-    return filterCandidates(this.resolveTargets(def, this.actor), def.targets, this.actor).map((c) => c.id);
+  // bracket lands on the acting entity itself — your own ship or body). Otherwise the controller
+  // mints ALL candidates and the grant's TargetCriteria selects among them (absent ⇒ permissive);
+  // the view/commit work in plain ids, so the survivors are mapped to their ids here.
+  private candidatesFor(command: ActionCommand): readonly string[] {
+    if (command.grant.targeting === 'self') return [this.actor.id];
+    return filterCandidates(this.resolveTargets(command, this.actor), command.grant.targets, this.actor).map((c) => c.id);
   }
 
-  // The def under the command-level cursor (or null off the command level / out of range).
-  private cursoredCommand(): ActionDef | null {
+  // The command under the command-level cursor (or null off the command level / out of range).
+  private cursoredCommand(): ActionCommand | null {
     const f = this.frame;
     if (f.level !== 'command') return null;
     return this.commandsIn(f.category)[f.cursor] ?? null;
   }
 
   private currentCandidates(): readonly string[] {
-    const def = this.cursoredCommand();
-    return def ? this.candidatesFor(def) : [];
+    const command = this.cursoredCommand();
+    return command ? this.candidatesFor(command) : [];
   }
 
   // The rows at the current level.
@@ -135,16 +139,16 @@ export class ActionMenu {
       const rows: MenuRow[] = this.categories().map((c) => ({
         key: c,
         label: categoryLabel(c),
-        enabled: this.commandsIn(c).some((d) => this.isAvailable(d)),
+        enabled: this.commandsIn(c).some((command) => this.isAvailable(command)),
         isPass: false,
       }));
-      rows.push({ key: PASS_ACTION, label: actionLabel(PASS_ACTION), enabled: true, isPass: true });
+      rows.push({ key: PASS_ACTION_ID, label: PASS_LABEL, enabled: true, isPass: true });
       return rows;
     }
-    return this.commandsIn(f.category).map((d) => ({
-      key: d.type,
-      label: d.label,
-      enabled: this.isAvailable(d),
+    return this.commandsIn(f.category).map((command) => ({
+      key: command.id,
+      label: commandLabel(command),
+      enabled: this.isAvailable(command),
       isPass: false,
     }));
   }
@@ -247,21 +251,22 @@ export class ActionMenu {
   }
 
   private commit(): ActionIntent | null {
-    const def = this.cursoredCommand();
-    if (!def || !this.isAvailable(def)) return null;
-    const candidates = this.candidatesFor(def);
+    const command = this.cursoredCommand();
+    if (!command || !this.isAvailable(command)) return null;
+    const candidates = this.candidatesFor(command);
     if (candidates.length === 0) return null; // nothing to fire at
+    const targeting = command.grant.targeting;
     const targetIds =
-      def.targeting === 'self' ? [this.actor.id]
-      : def.targeting === 'all' || def.targeting === 'multi' ? [...candidates]
+      targeting === 'self' ? [this.actor.id]
+      : targeting === 'all' || targeting === 'multi' ? [...candidates]
       : [candidates[clamp((this.frame as Extract<Frame, { level: 'command' }>).targetCursor, candidates.length)]!];
     this.done = true;
-    return { actorId: this.actor.id, actionId: def.type, targetIds };
+    return { actorId: this.actor.id, actionId: command.id, targetIds };
   }
 
   private commitPass(): ActionIntent {
     this.done = true;
-    return { actorId: this.actor.id, actionId: PASS_ACTION, targetIds: [] };
+    return { actorId: this.actor.id, actionId: PASS_ACTION_ID, targetIds: [] };
   }
 }
 

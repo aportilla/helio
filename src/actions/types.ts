@@ -9,19 +9,20 @@
 // category → command → target, execute. Combat is one consumer; non-combat verbs are
 // peers. See ./README.md.
 
-// FROZEN serialized contract. These exact strings are the wire format if action logs are
-// ever saved (the encounter replay seam), so they earn the freeze from day one. Adding a
-// member is safe; renaming/removing a shipped member breaks a saved log — three guards
-// defend it (registry FROZEN_ACTION_IDS + its CI test, the DEV module-load assert, and
-// this literal union forcing every Record over it to update). Mirrors FacilityType /
-// ShipClassType / FactionType discipline.
+// The action VOCABULARY is OPEN, not a closed union. An actor's commands are DERIVED from the
+// modular providers it carries — a ship's components, a body's facilities — each of which
+// DECLARES the actions it grants (ActionGrant below); the menu collects and merges those grants
+// (./derive). There is no central ActionType enum to thread a new capability through: adding a
+// "plasma lance" is one ActionGrant on the module that grants it, nothing else.
 //
-// The v1 content is combat-first (the unblocked frontier): a placeholder ATTACK, a
-// NAVIGATION flee, and the always-present Pass. M3 adds the first non-combat WORLD verbs as
-// additive 'immediate' members — `mine` (a belt / mineral world), `establish` (claim an
-// unowned body), `bombard` (strike an enemy-held body); each routes to an app-side effect
-// handler that is a no-op stub today (bones: the routing, not the mechanics).
-export type ActionType = 'attack' | 'flee' | 'pass' | 'mine' | 'establish' | 'bombard';
+// A command's serializable wire id is composed as `"<providerId>:<grant.key>"` (./derive). Its
+// PROVIDER half is genuinely frozen — FacilityType is guarded by FROZEN_FACILITY_IDS + a CI test
+// (load-bearing TODAY: facility types persist in helio.game saves), and ShipComponentDef.id is
+// next. The grant KEY half rests on discipline for now (no FROZEN_GRANT_KEYS guard yet), and no
+// ActionIntent is serialized anywhere today — so the wire-id freeze is FORWARD-LOOKING: it begins
+// to bite only when a replay / encounter log persists an actionId. The `body:` target namespace
+// keeps its own guard (./entity-id). `pass` is the one exception — a menu-injected UI primitive
+// (./registry), not a provider grant.
 
 // The top-level menu split. Data, not hardcoded: the menu derives its category rows from
 // the categories an actor's commands span (./menu). For a ship that reads ATTACK /
@@ -71,39 +72,47 @@ export type TargetCriteria = (candidate: TargetCandidate, actor: Actor) => boole
 // action folds through applyCommand uniformly). So `kind` is purely the live-view fork.
 export type ActionKind = 'immediate' | 'encounter';
 
-// One action's static design — enough to BUILD AND RUN THE MENU, deliberately EFFECT-FREE
-// (no damage/resolve/cost). What confirm() ultimately does is reached through the execute
-// dispatch (the immediate effect or the encounter reducer) and is deferred content. Each
-// of those lands with the consumer that reads it, so this stays a leaf with no edge into
-// combat or the economy. Mirrors the thinness of v1 ShipClassDef / FactionDef.
-export interface ActionDef {
-  readonly type: ActionType;          // === its registry key; a DEV assert pins def.type === key
-  readonly label: string;            // 'Attack' — single source for menu rows
+// One action a PROVIDER grants — the full static design, owned by the component / facility that
+// grants it (there is no central registry of these). Deliberately EFFECT-FREE: enough to BUILD
+// AND RUN THE MENU (label / category / targeting / kind / predicate), never what the action DOES
+// (the immediate effect or the encounter reducer is the consumer's content). Mirrors the
+// thinness of v1 ShipClassDef / FactionDef.
+export interface ActionGrant {
+  // Stable WITHIN the provider, naming the capability not its discharge ('railgun' / 'mine' /
+  // 'flee', never a loaded verb like 'fire'). The serializable command id is
+  // `"<providerId>:<key>"` (./derive) — the provider id is the durable thing, the key
+  // disambiguates a multi-grant module.
+  readonly key: string;
+  readonly label: string;            // 'Railgun' — single source for menu rows
   readonly color: string;            // literal sRGB hex menu-row accent, rendered verbatim (ColorManagement is OFF)
   readonly category: ActionCategory; // drives the top-level menu split
   readonly targeting: ActionTargeting; // drives the target step
   readonly kind: ActionKind;         // the live-view dispatch fork (above)
-  // isAvailable gates a command greyed/unselectable without the bones knowing WHY (energy
-  // cost, cooldown — the seam later mechanics gate on). Default true. The `world` arg
-  // (encounter state / system view) is added when that state exists; the bones pass none.
-  readonly isAvailable?: (actor: Actor) => boolean;
-  // The optional timing-mechanic seam (a timed hit). Shipped IGNORED in the bones; a
-  // later experiment reads it to open a reticle. Its presence must not reshape the menu.
+  // Energy cost per STACKED unit (integer); derive-and-merge sums it to a command's totalCost
+  // (D3: a weapon's cost == its own battery). ABSENT ⇒ 0 for the bones, which carry no energy
+  // model yet — the Phase-2 energy model makes this load-bearing (and adds the per-weapon
+  // scaling-curve seam over the linear `count × costPerUnit`).
+  readonly costPerUnit?: number;
+  // The optional timing-mechanic seam (a timed hit). Shipped IGNORED in the bones; a later
+  // experiment reads it to open a reticle. Its presence must not reshape the menu.
   readonly wantsTiming?: boolean;
-  // Optional target predicate — ABSENT ⇒ permissive (every minted candidate admitted).
-  // The menu filters the controller's candidate list by this (filterCandidates in ./menu);
-  // cardinality (`targeting`) then shapes how many of the survivors commit. Effect-free: it
-  // selects WHICH targets a command admits, never what hitting them does. Bones defs leave
-  // it absent; the creative predicates arrive with the verbs that need them.
+  // Optional target predicate — ABSENT ⇒ permissive (every minted candidate admitted). The menu
+  // filters the controller's candidate list by this (filterCandidates in ./menu); cardinality
+  // (`targeting`) then shapes how many of the survivors commit. Effect-free: it selects WHICH
+  // targets a command admits, never what hitting them does.
   readonly targets?: TargetCriteria;
 }
 
-// A reference an Actor holds into the registry. Carries only the id; the menu resolves the
-// def (category/targeting/availability) from the registry, so a ref can never drift from
-// its def. An interface (not a bare ActionType) so a ref can later carry per-actor overlay
-// data (a posted cooldown, a charge count) without touching every call site.
-export interface ActionRef {
-  readonly id: ActionType;
+// A RESOLVED, merged command an Actor carries — the derive-and-merge output (./derive) the menu
+// reads inline, with NO central lookup. Identical providers stack into one scaled command:
+// `count` is how many merged (D2: Missile x3 ⇒ 3); `totalCost` is `count × grant.costPerUnit`
+// (D7: linear for v1). `id` is the stable `"<providerId>:<grant.key>"` wire id — what an
+// ActionIntent carries and a saved log would persist.
+export interface ActionCommand {
+  readonly id: string;
+  readonly grant: ActionGrant;
+  readonly count: number;
+  readonly totalCost: number;
 }
 
 // The minimal thing that can open a menu — anything the player selects and commands.
@@ -118,8 +127,19 @@ export interface ActionRef {
 // concern, kept out of this rules leaf.
 export interface Actor {
   readonly id: string;
-  readonly commands: readonly ActionRef[];
+  readonly commands: readonly ActionCommand[];
+  // The menu reads `stats.energy` to gate availability — a command is drillable iff
+  // `energy >= command.totalCost` (D6). ABSENT energy ⇒ permissive (the bones carry no energy
+  // model yet, so every command is available, as before). The rest of the bag (hull / shields /
+  // …) stays opaque content the bones merely display.
   readonly stats?: Readonly<Record<string, number>>;
+  // The category PALETTE this actor always shows — the menu renders exactly these top-level
+  // rows (in CATEGORY_ORDER), greying any with no available command, so the menu's SHAPE is
+  // stable per actor TYPE rather than per loadout (a body always offers Attack + Support even
+  // before it has a weapon facility). ABSENT ⇒ the menu derives the rows from the categories
+  // the actor's commands span (the original behavior). A display concern only — it never adds
+  // commands or changes what can be drilled.
+  readonly categories?: readonly ActionCategory[];
 }
 
 // One faction's actors in a system — the unit both the ship adapter (ships-to-actors) and
@@ -133,10 +153,12 @@ export interface ActorSide {
 }
 
 // What the menu emits on confirm — the uniform hand-off to the execute dispatch (live-view
-// immediate/encounter) or the encounter reducer. Effect-free: it names WHO acts, WHICH
-// action, and the chosen target ids. Resolving it is the consumer's job.
+// immediate/encounter) or the encounter reducer. Effect-free: it names WHO acts, WHICH action,
+// and the chosen target ids. `actionId` is the composed `"<providerId>:<grant.key>"` (or the bare
+// `pass`); the live-view dispatcher resolves the action's `kind` from the actor's own command
+// (no central lookup), and an app-side effect handler keys on its grant key (grantKeyOf, ./derive).
 export interface ActionIntent {
   readonly actorId: string;
-  readonly actionId: ActionType;
+  readonly actionId: string;
   readonly targetIds: readonly string[];
 }

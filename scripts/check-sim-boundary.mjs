@@ -8,7 +8,7 @@
 //      a single `../../src` import would couple it to the browser bundle and
 //      break the planned WASM port.
 //   2. src/** imports the sim ONLY from src/facilities/. The projector
-//      (src/facilities/project.ts) + the resource-vocab bridge are the one
+//      (src/facilities/project.ts) + the resource-table bridge are the one
 //      quarantined seam; a second importer elsewhere silently erodes it.
 //
 // This node script — not a lint rule — owns the sim wall. It's the spiritual

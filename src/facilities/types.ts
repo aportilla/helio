@@ -5,13 +5,21 @@
 // declaration leaf that node can load without the catalog or the DOM.
 
 import type { Body } from '../data/stars.ts';
+import type { ActionGrant } from '../actions/types.ts';
 
 // FROZEN serialized contract. These exact strings persist in 'helio.game'
 // (keyed by Body.id, value `{id, bodyId, type}`). Adding a member is safe;
 // renaming/removing a shipped member breaks old saves — three guards defend
 // it (registry FROZEN_FACILITY_IDS + its CI test, the DEV module-load assert,
 // and this literal union forcing every switch/Record to update).
-export type FacilityType = 'colony' | 'mining-base' | 'farm' | 'shipyard';
+export type FacilityType =
+  | 'colony'
+  | 'mining-base'
+  | 'farm'
+  | 'shipyard'
+  | 'railgun-battery'
+  | 'missile-battery'
+  | 'sensor-network';
 
 // Body → its transport-graph node (the value that becomes PlanetSpec.star). In
 // the shipped model that node is the body's CLUSTER — one node per cluster, a
@@ -74,6 +82,15 @@ export interface FacilityDef {
   // Pure, deterministic, integer-milli. The projector sums these with no
   // facility-type branch (the kernel never sees facility identity).
   readonly contribute: (body: Body, ctx: ProjectionCtx) => Contribution;
+
+  // The action-menu commands this facility GRANTS its body — the inverted action model
+  // (plans/4x-modular-ship-components.md §2): a facility is a capability PROVIDER, and
+  // bodies-to-actors derives a body's command list by collecting and merging these across its
+  // facilities (no central FACILITY_COMMANDS map). ABSENT ⇒ grants none (a pure-economy
+  // facility). The action vocabulary is a type-only import, so this stays sim-free and the def
+  // gains a capability axis without becoming "economy + actions" coupled — the grants are plain
+  // declarations the actions leaf reads. (The Phase-2 energy model adds battery?/recharge? here.)
+  readonly grants?: readonly ActionGrant[];
 }
 
 // A zero Contribution of the right width — the cold-start identity the

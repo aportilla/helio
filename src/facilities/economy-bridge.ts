@@ -37,7 +37,8 @@ import {
 } from '../../sim/src/index.ts';
 import { getGameState, ownerFactionId, type Facility } from '../game-state.ts';
 import { CONTROLLED_FACTION_ID } from '../factions/registry.ts';
-import { appResourceTable, type EconResource } from './resource-vocab.ts';
+import { appResourceTable } from './resource-table.ts';
+import type { EconResource } from './resource-vocab.ts';
 import { buildShipLanes, intraInboundByResource, foldInboundNextTurn, type ShipLane } from './economy-read.ts';
 import { captureArrivals, intraArrivals, buildTurnLog, type ArrivalRecord } from './economy-log.ts';
 import { cloneWorldForSpeculation } from './speculation.ts';

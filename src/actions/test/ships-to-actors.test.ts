@@ -1,11 +1,13 @@
 // ships-to-actors adapter invariants — ready ships split by faction into sides, the
-// controlled-side flag, the 'building' filter, and the loadout override. Runs under `node
-// --test` type-stripping: the Ship import is a type (erased), so only node-pure modules
-// load (the factions registry's DEV block is skipped — import.meta.env is undefined).
+// controlled-side flag, the 'building' filter, and the loadout override. After the inversion an
+// Actor carries RESOLVED ActionCommands derived from a stub loadout (until ShipComponentDef
+// lands). Runs under `node --test` type-stripping: the Ship import is a type (erased), so only
+// node-pure modules load (the factions registry's DEV block is skipped — import.meta.env is
+// undefined). Unlike the body adapter, this pulls in no sim.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shipsToActors, shipToActor, DEFAULT_SHIP_COMMANDS } from '../ships-to-actors.ts';
+import { shipsToActors, shipToActor, STUB_SHIP_COMMANDS } from '../ships-to-actors.ts';
 import type { Ship } from '../../game-state-codec.ts';
 
 const ship = (id: string, factionId: Ship['factionId'], status: Ship['status'] = 'ready'): Ship => ({
@@ -41,15 +43,33 @@ test("'building' ships are excluded (not in the field yet)", () => {
   assert.deepEqual(sides[0]!.actors.map((a) => a.id), ['p1']);
 });
 
+test('a ship Actor always carries the Attack + Navigation category palette', () => {
+  // The menu shows these two top-level rows on every ship (greying one if its loadout is
+  // empty there); a ship never shows Support — that palette is the body's.
+  assert.deepEqual(shipToActor(ship('p1', 'player')).categories, ['attack', 'navigation']);
+});
+
+test('the stub loadout derives an attack (encounter) + flee (immediate), via the SAME projection', () => {
+  // Until ShipComponentDef lands, every ship gets the stub: a weapon → ATTACK that enters an
+  // encounter, the drive → NAVIGATION flee (D9). The wire ids are the composed provider:key.
+  assert.deepEqual(STUB_SHIP_COMMANDS.map((c) => c.id), ['stub-weapon:attack', 'stub-drive:flee']);
+  const attack = STUB_SHIP_COMMANDS.find((c) => c.grant.category === 'attack')!;
+  const flee = STUB_SHIP_COMMANDS.find((c) => c.grant.category === 'navigation')!;
+  assert.equal(attack.grant.kind, 'encounter', 'attack enters the encounter modality');
+  assert.equal(flee.grant.kind, 'immediate');
+  assert.deepEqual([attack.count, attack.totalCost], [1, 0], 'no stacking, no energy cost in the bones');
+});
+
 test('an actor gets the bones loadout by default', () => {
   const a = shipToActor(ship('p1', 'player'));
-  assert.deepEqual(a.commands, DEFAULT_SHIP_COMMANDS);
+  assert.deepEqual(a.commands, STUB_SHIP_COMMANDS);
   assert.equal(a.id, 'p1');
 });
 
 test('commandsFor overrides the per-ship loadout', () => {
-  const sides = shipsToActors([ship('p1', 'player')], () => [{ id: 'attack' }]);
-  assert.deepEqual(sides[0]!.actors[0]!.commands, [{ id: 'attack' }]);
+  const only = STUB_SHIP_COMMANDS.slice(0, 1); // just the attack command
+  const sides = shipsToActors([ship('p1', 'player')], () => only);
+  assert.deepEqual(sides[0]!.actors[0]!.commands, only);
 });
 
 test('no ready ships → no sides', () => {

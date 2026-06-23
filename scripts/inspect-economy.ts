@@ -22,7 +22,7 @@ import {
   EconomyEngine, makeWorld, defaultBalance, starDistance, asStar,
 } from '../sim/src/index.ts';
 import { buildGeometry, LY_TO_SIM_UNITS } from '../src/facilities/sim-geometry.ts';
-import { appResourceTable } from '../src/facilities/resource-vocab.ts';
+import { appResourceTable } from '../src/facilities/resource-table.ts';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const numArg = (key: string, dflt: number): number => {

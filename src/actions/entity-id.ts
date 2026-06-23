@@ -6,8 +6,9 @@
 // already-shipped ship intent is byte-unchanged and no migration is needed.
 //
 // FROZEN wire vocabulary. `body:` can enter a serialized ActionIntent.targetIds via the
-// replay seam, so it earns the freeze from day one exactly like the ActionType strings
-// (./types): adding a namespace is safe; renaming/removing `body:` would break a saved log.
+// replay seam, so it earns the freeze from day one exactly like a command's composed
+// `<providerId>:<grant.key>` id (./derive): adding a namespace is safe; renaming/removing
+// `body:` would break a saved log.
 //
 // A pure leaf — it imports nothing (no catalog), so it cannot and must not reconstruct a
 // body's precise planet/moon/belt/ring kind: it returns the COARSE body-vs-ship

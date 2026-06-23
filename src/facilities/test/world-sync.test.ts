@@ -10,7 +10,7 @@ import {
   EconomyEngine, makeGeometry, makeWorld, serialize, deserialize, defaultBalance,
   type PlanetSpec, type World,
 } from '../../../sim/src/index.ts';
-import { appResourceTable } from '../resource-vocab.ts';
+import { appResourceTable } from '../resource-table.ts';
 import { buildGeometry } from '../sim-geometry.ts';
 import { sameBodyIds, transplantLiveState } from '../world-sync.ts';
 

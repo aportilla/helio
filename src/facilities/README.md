@@ -6,9 +6,12 @@ facility like the `shipyard`, into a **capability** the rest of the game queries
 Adding a facility is **one `FacilityDef` object plus one literal in the
 `FacilityType` union** — its save-key, UI label, display color (the sidebar +
 on-body icon swatch, via `facilityColor`), Add-button order, build cap,
-body-eligibility predicate, economic projection, and any capability flags (e.g.
+body-eligibility predicate, economic projection, any capability flags (e.g.
 `enablesShipbuilding`, read via `facilityHasShipbuilding` to gate the Build-ship
-action — a shipyard contributes nothing to the sim) all flow from that one edit.
+action), and **the action-menu commands it grants** (`grants` — read by
+`src/actions/bodies-to-actors` to derive a body's menu; a military / service
+facility grants commands but contributes nothing to the sim) all flow from that
+one edit.
 This replaced a definition that used to be smeared across `game-state.ts`, the
 system-view facilities UI, and `system-scene.ts`.
 
@@ -44,10 +47,11 @@ no body physics scales it. The only thing a body's data gates is *eligibility*
 
 | Module | Role |
 |---|---|
-| `types.ts` | `FacilityDef`, `FacilityType` (the frozen save union), `Contribution`, `ProjectionCtx`, `PlacedFacility`, and the `ContributionBuilder` / `emptyContribution` helpers. No sim, no DOM. |
+| `types.ts` | `FacilityDef` (incl. `grants?` — the action-menu commands a facility provides, a type-only import of the `src/actions/` vocab), `FacilityType` (the frozen save union), `Contribution`, `ProjectionCtx`, `PlacedFacility`, and the `ContributionBuilder` / `emptyContribution` helpers. No sim, no DOM. |
 | `tuning.ts` | Hoisted economic tunables (per-facility **flat** rates). Symbol-named — referenced by name, never by value. |
-| `resource-vocab.ts` | `EconResource` (const-object + derived union) and `appResourceTable()`, built via the sim's own `makeResourceTable`. The sim owns the table *type*; the app owns the *instance*. |
-| `registry.ts` | `FACILITY_DEFS` + derived lookups (`FACILITY_BY_TYPE`, `FACILITY_TYPES`, `ADD_ORDER`, `facilityLabel`), `FROZEN_FACILITY_IDS`, and a DEV module-load invariant. |
+| `resource-vocab.ts` | `EconResource` (const-object + derived union) — the resource ids. **Sim-free** (a plain const), so importing the vocabulary never drags the sim. |
+| `resource-table.ts` | `appResourceTable()` — the sim-built `ResourceTable` *instance* (rows must match the `EconResource` ordinals; `makeResourceTable` asserts it). The sim owns the table *type* + constructor, the app owns the instance. The one vocab-side module that **imports the sim**. |
+| `registry.ts` | `FACILITY_DEFS` (each def declares its action `grants` **inline** — a type-only import of the `src/actions/` vocab + the accent palette) + derived lookups (`FACILITY_BY_TYPE`, `FACILITY_TYPES`, `ADD_ORDER`, `facilityLabel`), `FROZEN_FACILITY_IDS`, and a DEV module-load invariant. **Sim-free** — `contribute()` needs only the `EconResource` ids, not the table — so the action adapter that reads a body's grants stays sim-free too. |
 | `eligibility.ts` | `addableTypesFor(body, current)` — which Add buttons a body shows, gated by predicate **and** build cap; plus `facilityHasShipbuilding(current)` — the registry-driven gate (the `enablesShipbuilding` flag) for the Build-ship action. |
 | `project.ts` | `projectBody` / `projectWorld` — THE projection adapter (body intent → `PlanetSpec`). Sim-importing, node-pure (catalog is type-only). |
 | `sim-geometry.ts` | `buildGeometry` — catalog coords → the sim's integer geometry (the float→int round for transport — `Math.round`, for symmetric error). Sim-importing, node-pure. |
@@ -60,12 +64,16 @@ no body physics scales it. The only thing a body's data gates is *eligibility*
 | `economy-bridge.ts` | `EconomyBridge` — the live engine owner: build/restore/reconcile the world, step, persist (`helio.sim`), read back. The **app-glue** module: imports the sim AND the catalog (`BODIES`/`STAR_CLUSTERS`) + `localStorage`, so it is NOT node-testable (its pure parts live in the modules above). |
 | `index.ts` | Public barrel. |
 
-The sim is imported only from `project.ts`, `resource-vocab.ts`, `sim-geometry.ts`,
+The sim is imported only from `project.ts`, `resource-table.ts`, `sim-geometry.ts`,
 `world-sync.ts`, `speculation.ts`, `economy-read.ts`, `economy-log.ts`, and
 `economy-bridge.ts` — all under this package, the one quarter the boundary guard
-permits.
+permits. The `registry` and `resource-vocab` are deliberately OUT of that set: the
+facility defs (incl. their inline action `grants`) and the resource-id vocabulary stay
+sim-free, so `src/actions/bodies-to-actors` can read a body's grants off `FACILITY_BY_TYPE`
+without crossing the wall.
 
-Dependency direction: `project → registry → {resource-vocab, types, tuning}`.
+Dependency direction: `project → registry → {resource-vocab, types, tuning, ../actions/tuning}`;
+`appResourceTable` (the sim-built instance) lives apart in `resource-table → resource-vocab`.
 Every module except `economy-bridge.ts` imports `Body` from
 `../data/stars` **as a type only**, so the projection/geometry/reconcile logic
 node-tests without dragging in the DOM-coupled catalog. `economy-bridge.ts` is the

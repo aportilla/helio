@@ -1,22 +1,35 @@
 // ActionMenu state-machine invariants — the two-level stack (category → command) with the
 // orthogonal target LOCK on the command level (vertical = command, horizontal = target), the
 // always-present Pass, and the two shipped targeting descriptors (single = player-picked among
-// candidates, self = forced to the actor). Runs under `node --test` type-stripping.
+// candidates, self = forced to the actor). After the inversion the actor carries RESOLVED
+// ActionCommands (id + grant + count + totalCost); the menu reads them inline, no central lookup.
+// Runs under `node --test` type-stripping.
 //
-// Seams not yet exercised by content: isAvailable greying, and 'all'/'multi'/'ally' targeting.
+// Seams not yet exercised by content: energy-cost greying, and 'all'/'multi'/'ally' targeting.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ActionMenu, filterCandidates, type TargetResolver } from '../menu.ts';
-import type { Actor, TargetCandidate } from '../types.ts';
+import type { Actor, ActionCommand, ActionGrant, TargetCandidate } from '../types.ts';
 
-const actor: Actor = { id: 'a1', commands: [{ id: 'attack' }, { id: 'flee' }] };
+const grant = (over: Partial<ActionGrant> & Pick<ActionGrant, 'key' | 'category' | 'targeting'>): ActionGrant => ({
+  label: over.key,
+  color: '#ffffff',
+  kind: 'immediate',
+  ...over,
+});
+const cmd = (id: string, g: ActionGrant): ActionCommand => ({ id, grant: g, count: 1, totalCost: 0 });
+
+const attackCmd = cmd('attack', grant({ key: 'attack', label: 'Attack', category: 'attack', targeting: 'single', kind: 'encounter' }));
+const fleeCmd = cmd('flee', grant({ key: 'flee', label: 'Flee', category: 'navigation', targeting: 'self' }));
+const actor: Actor = { id: 'a1', commands: [attackCmd, fleeCmd] };
+
 const enemyCands: readonly TargetCandidate[] = [
   { id: 'e1', kind: 'ship', allegiance: 'enemy', tags: [] },
   { id: 'e2', kind: 'ship', allegiance: 'enemy', tags: [] },
 ];
 const enemies = enemyCands.map((c) => c.id); // ['e1', 'e2'] — the ids the view exposes
-const resolve: TargetResolver = (def) => (def.targeting === 'single' ? enemyCands : []);
+const resolve: TargetResolver = (command) => (command.grant.targeting === 'single' ? enemyCands : []);
 
 const keys = (m: ActionMenu) => m.view().rows.map((r) => r.key);
 
@@ -35,7 +48,7 @@ test('drilling a category scopes into the command list with a target auto-locked
   const v = m.view();
   assert.equal(v.level, 'command');
   assert.equal(v.selectedCategory, 'attack');
-  assert.deepEqual(keys(m), ['attack']); // the weapon, not a target list
+  assert.deepEqual(keys(m), ['attack']); // the weapon (its command id), not a target list
   assert.deepEqual(v.targets, enemies, 'candidate targets are live on the command level');
   assert.equal(v.targetCursor, 0, 'first target auto-locked on entry');
 });
@@ -89,9 +102,9 @@ test('back pops command → category, then cancels at the top', () => {
 
 test('a self-targeted command locks onto the actor, never calling the resolver', () => {
   let resolverCalls = 0;
-  const counting: TargetResolver = (def) => {
+  const counting: TargetResolver = (command) => {
     resolverCalls += 1;
-    return resolve(def, actor);
+    return resolve(command, actor);
   };
   const m = new ActionMenu(actor, counting);
   m.setCursor(1); // navigation category
@@ -135,7 +148,66 @@ test('a closed menu ignores further input', () => {
   assert.equal(m.view().closed, true);
 });
 
-// -- the target criteria seam (M3 §B) ----------------------------------
+// -- a merged command shows its stack count in the row label (D2) ------
+
+test('a merged command (count > 1) renders "(xN)" in its menu row', () => {
+  const stacked: Actor = {
+    id: 's1',
+    commands: [{ ...attackCmd, count: 3 }],
+  };
+  const m = new ActionMenu(stacked, resolve);
+  m.enter(); // attack → command
+  assert.deepEqual(m.view().rows.map((r) => r.label), ['Attack (x3)']);
+});
+
+// -- the category palette (always-show, greyed when empty) -------------
+
+// A body-shaped actor: it declares a fixed Attack + Support palette and carries only a
+// Support command (establish), so Attack is an empty-but-shown category.
+const establishCmd = cmd('colony:establish', grant({ key: 'establish', label: 'Establish', category: 'support', targeting: 'self' }));
+const palettedActor: Actor = {
+  id: 'body:5',
+  commands: [establishCmd],
+  categories: ['attack', 'support'],
+};
+
+test('a category palette shows ALL its categories (greyed when empty) + Pass', () => {
+  const m = new ActionMenu(palettedActor, resolve);
+  const v = m.view();
+  assert.deepEqual(v.rows.map((r) => r.key), ['attack', 'support', 'pass']);
+  assert.equal(v.rows.find((r) => r.key === 'attack')?.enabled, false, 'empty Attack is greyed');
+  assert.equal(v.rows.find((r) => r.key === 'support')?.enabled, true, 'Support has establish');
+});
+
+test('a greyed (empty) palette category cannot be drilled', () => {
+  const m = new ActionMenu(palettedActor, resolve);
+  m.setCursor(0); // Attack — empty
+  assert.equal(m.enter(), null, 'entering an empty category is a no-op');
+  assert.equal(m.view().level, 'category', 'stayed at the category level');
+  m.setCursor(1); // Support — has establish
+  m.enter();
+  assert.equal(m.view().level, 'command', 'a non-empty palette category still drills');
+});
+
+// -- energy-cost availability (D6) -------------------------------------
+
+test('a command the actor cannot afford is greyed; an actor with no energy stat is permissive', () => {
+  const costly: ActionCommand = { ...attackCmd, totalCost: 5 };
+  const broke: Actor = { id: 'b1', commands: [costly], stats: { energy: 3 } };
+  const flush: Actor = { id: 'b2', commands: [costly], stats: { energy: 5 } };
+  const noModel: Actor = { id: 'b3', commands: [costly] }; // no stats ⇒ the bones default
+
+  assert.equal(new ActionMenu(broke, resolve).view().rows.find((r) => r.key === 'attack')?.enabled, false);
+  assert.equal(new ActionMenu(flush, resolve).view().rows.find((r) => r.key === 'attack')?.enabled, true);
+  assert.equal(new ActionMenu(noModel, resolve).view().rows.find((r) => r.key === 'attack')?.enabled, true);
+
+  // A greyed (unaffordable) command refuses to commit.
+  const m = new ActionMenu(broke, resolve);
+  m.enter(); // drill attack
+  assert.equal(m.confirm(), null, 'an unaffordable command does not fire');
+});
+
+// -- the target criteria seam ------------------------------------------
 
 const mixed: readonly TargetCandidate[] = [
   { id: 'enemy-colony', kind: 'body', allegiance: 'enemy', tags: ['colony'] },

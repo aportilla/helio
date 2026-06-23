@@ -11,7 +11,7 @@
 import { STORAGE_UNCAPPED, type PlanetSpec } from '../../sim/src/index.ts';
 import type { Body } from '../data/stars.ts';
 import { FACILITY_BY_TYPE } from './registry.ts';
-import { appResourceTable } from './resource-vocab.ts';
+import { appResourceTable } from './resource-table.ts';
 import type { Contribution, FacilityDef, PlacedFacility, ProjectionCtx, SimStarResolver } from './types.ts';
 
 // Combine two storage ceilings. Inputs use the sim sentinel:

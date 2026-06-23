@@ -18,7 +18,8 @@ import {
 } from '../../../sim/src/index.ts';
 import type { Body } from '../../data/stars.ts';
 import { projectBody, projectWorld } from '../project.ts';
-import { EconResource, appResourceTable } from '../resource-vocab.ts';
+import { EconResource } from '../resource-vocab.ts';
+import { appResourceTable } from '../resource-table.ts';
 import {
   COLONY_FOOD_CONSUME_MILLI,
   COLONY_MINERALS_CONSUME_MILLI,

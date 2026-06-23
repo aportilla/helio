@@ -1,31 +1,47 @@
-// Hoisted action tunables — the menu-row accent colors, and a home for the timing /
-// availability knobs the mechanics phase will add. Kept in one place so a palette pass
-// never hunts through def bodies, and so docs reference them by NAME, never by value (a
-// hex in prose rots the instant it's re-tuned). Re-tuning is non-breaking — the only
-// serialized action contract is the ActionType wire string, never these colors.
+// Hoisted action accent colors — the menu-row hue each ActionGrant carries (grant.color), and a
+// home for the timing / availability knobs the mechanics phase will add. Kept in one place so a
+// palette pass never hunts through the grant authoring sites (the ship stub loadout and the
+// facility registry, which import these), and so docs reference them by NAME, never by value (a
+// hex in prose rots the instant it's re-tuned). Re-tuning is non-breaking — the serialized action
+// contract is the composed `"<providerId>:<grant.key>"` id (./derive), never these colors.
 //
-// PROVISIONAL: the bones ship a placeholder combat triad; these accents are an early
-// interpretation, distinct hues so a menu row reads at a glance. The fleet sprite tints by
-// FACTION, never by these — the action color is reserved for the menu row / later pill.
+// PROVISIONAL: an early interpretation, distinct hues so a menu row reads at a glance. The fleet
+// sprite tints by FACTION, never by these — the action color is reserved for the menu row / later
+// pill (no consumer paints it yet).
 
-// — Attack: offensive. A warm red-orange, hostile against the cyan/steel palette.
+// — Attack: offensive. A warm red-orange, hostile against the cyan/steel palette. The ship stub
+// loadout's placeholder weapon.
 export const ATTACK_ACTION_COLOR = '#e0644e';
 
-// — Flee: evasive navigation. An amber distinct from the attack red and the cyan UI.
+// — Flee: evasive navigation. An amber distinct from the attack red and the cyan UI. Granted by
+// the ship's drive (D9).
 export const FLEE_ACTION_COLOR = '#c9b46b';
 
-// — Pass: decline to act. A muted slate grey — present but recessive, the SoS dimmed verb.
-export const PASS_ACTION_COLOR = '#8a93a0';
+// The non-combat WORLD verbs + the body weapon / support verbs — each granted by a facility (see
+// ../facilities/registry.ts). PROVISIONAL accents, each a distinct hue so a body actor's menu rows
+// read at a glance, loosely echoing the facility palette they act on/with.
 
-// The first non-combat WORLD verbs (M3). PROVISIONAL accents, each a distinct hue so a body
-// actor's menu rows read at a glance; re-tuning is non-breaking (only the ActionType wire
-// string is a contract). Loosely echoing the facility palette they act on/with.
-
-// — Mine: extract minerals. An ore tan, the minerals family.
+// — Mine: extract minerals. An ore tan, the minerals family. (mining-base)
 export const MINE_ACTION_COLOR = '#d7b070';
 
-// — Establish: claim an unowned world. A civic cyan, the colony/settle hue.
+// — Establish: claim / develop a world. A civic cyan, the colony/settle hue. (colony)
 export const ESTABLISH_ACTION_COLOR = '#5ec8ff';
 
-// — Bombard: strike an enemy-held body. A hostile crimson, hotter than the attack red.
+// — Bombard: strike an enemy-held body. A hostile crimson, hotter than the attack red. RESERVED:
+// no facility grants bombard yet (it rides an attacker's loadout with the mechanics), so this
+// accent is dormant until that provider lands.
 export const BOMBARD_ACTION_COLOR = '#d23b3b';
+
+// — Railgun: a body's kinetic weapon. A hot orange, the offensive family. (railgun-battery)
+export const RAILGUN_ACTION_COLOR = '#ff7a4d';
+
+// — Missile Launcher: a body's guided ordnance. An amber, distinct from the railgun orange.
+// (missile-battery)
+export const MISSILE_ACTION_COLOR = '#ffb24d';
+
+// — Repair: mend a friendly ship. A heal green, distinct from the farm's food green. (shipyard)
+export const REPAIR_ACTION_COLOR = '#6ad6a0';
+
+// — Tactical Data: the sensor sweep. A recon teal, distinct from the establish/colony cyan.
+// (sensor-network)
+export const TACTICAL_DATA_ACTION_COLOR = '#5ed8e0';

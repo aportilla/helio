@@ -26,6 +26,7 @@ import { CONTROLLED_FACTION_ID, factionColor, factionLabel } from '../factions/r
 import { buildTurns, DEFAULT_SHIP_CLASS, shipClassLabel } from '../ships/registry';
 import { shipToActor } from '../actions/ships-to-actors';
 import { bodyToActor } from '../actions/bodies-to-actors';
+import { grantKeyOf } from '../actions/derive';
 import { encodeBodyEntityId, parseEntityId } from '../actions/entity-id';
 import type { Actor, TargetAllegiance, TargetCandidate } from '../actions/types';
 import { SystemActionMenu } from './actions/system-action-menu';
@@ -171,13 +172,13 @@ export class SystemScene implements Screen {
     }
 
     // The action menu's execute DISPATCH (Menu M2). 'immediate' actions route to an app-side
-    // effect handler keyed by actionId (EFFECT_HANDLERS) that mutates the save now — today a
-    // no-op stub, so this is the live ROUTING with deferred mechanics; an immediate verb with
-    // no handler (flee/pass) falls through to a DEV log. 'encounter' actions hand off to the
+    // effect handler keyed by GRANT KEY (grantKeyOf(actionId), EFFECT_HANDLERS) that mutates the
+    // save now — today a no-op stub, so this is the live ROUTING with deferred mechanics; an
+    // immediate verb with no handler (flee/pass) falls through to a DEV log. 'encounter' actions hand off to the
     // encounter modality (E-phases, deferred), still a DEV stub. The menu itself (select →
     // drill → target → confirm) is fully live; this is the seam its intent flows into.
     this.actionMenu.onImmediate = (intent) => {
-      const handler = EFFECT_HANDLERS.get(intent.actionId);
+      const handler = EFFECT_HANDLERS.get(grantKeyOf(intent.actionId));
       if (handler) {
         handler(intent);
         // A real effect mutates helio.game; when one lands it must also kick the

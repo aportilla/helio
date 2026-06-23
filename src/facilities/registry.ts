@@ -1,8 +1,15 @@
 // FACILITY_DEFS — the single source of truth for every facility type. Adding a
 // facility is one object here plus one literal in the FacilityType union: its
 // save-key, UI label, Add-button order, build cap, body-eligibility predicate,
-// and economic projection all flow from that one edit. This collapses what used
-// to be smeared across game-state.ts, the system-view facilities UI, and system-scene.ts.
+// economic projection, AND the action-menu commands it grants all live in the one
+// def, so a facility reads top-to-bottom in one place. This collapses what used to
+// be smeared across game-state.ts, the system-view facilities UI, and system-scene.ts.
+//
+// SIM-FREE: contribute() needs only the EconResource ids (a plain const) + the
+// sim-free ContributionBuilder, so this module never imports the sim. That keeps
+// the action adapter that reads a body's grants (src/actions/bodies-to-actors)
+// sim-free too — it imports FACILITY_BY_TYPE from here without dragging the
+// economy core.
 
 import type { Body } from '../data/stars.ts';
 import type { FacilityDef, FacilityType } from './types.ts';
@@ -16,6 +23,14 @@ import {
   MINE_FOOD_CONSUME_MILLI,
   MINE_MINERALS_PRODUCE_MILLI,
 } from './tuning.ts';
+import {
+  ESTABLISH_ACTION_COLOR,
+  MINE_ACTION_COLOR,
+  MISSILE_ACTION_COLOR,
+  RAILGUN_ACTION_COLOR,
+  REPAIR_ACTION_COLOR,
+  TACTICAL_DATA_ACTION_COLOR,
+} from '../actions/tuning.ts';
 
 // The one eligibility rule, authored once: a solid body you can place a facility
 // on (planet, moon, or belt — never a star or a ring). A static STRUCTURAL gate,
@@ -27,10 +42,17 @@ function isSolidSite(body: Body): boolean {
 }
 
 // The registry, keyed by FacilityType. `satisfies Record<FacilityType, ...>` is
-// the compile layer of the frozen-key guard: adding a literal to
-// the FacilityType union without adding a def here fails to compile, and a key
-// that isn't a FacilityType is rejected. The key IS the save id; the DEV assert
-// below pins each def's own `type` field to its key.
+// the compile layer of the frozen-key guard: adding a literal to the FacilityType
+// union without adding a def here fails to compile, and a key that isn't a
+// FacilityType is rejected. The key IS the save id; the DEV assert below pins each
+// def's own `type` field to its key.
+//
+// `grants` declares the action-menu commands a facility provides to its body, INLINE
+// on the def (bodies-to-actors collects + merges them). A grant `key` names the
+// CAPABILITY, not how it discharges ('railgun' / 'missile', never a loaded, weapon-
+// shared verb like 'fire' — an attack might be a railgun shot, a missile, or an
+// unleashed swarm). Weapons enter an encounter (their enemy-only predicate keeps the
+// bracket on opposing ships/bodies); world / service verbs are 'immediate'.
 const DEFS = {
   colony: {
     type: 'colony',
@@ -48,6 +70,7 @@ const DEFS = {
       c.consume(EconResource.Minerals, COLONY_MINERALS_CONSUME_MILLI);
       return c.build();
     },
+    grants: [{ key: 'establish', label: 'Establish', color: ESTABLISH_ACTION_COLOR, category: 'support', targeting: 'self', kind: 'immediate' }],
   },
   'mining-base': {
     type: 'mining-base',
@@ -65,6 +88,7 @@ const DEFS = {
       c.consume(EconResource.Food, MINE_FOOD_CONSUME_MILLI);
       return c.build();
     },
+    grants: [{ key: 'mine', label: 'Mine', color: MINE_ACTION_COLOR, category: 'support', targeting: 'self', kind: 'immediate' }],
   },
   farm: {
     type: 'farm',
@@ -75,7 +99,7 @@ const DEFS = {
     canBuildOn: isSolidSite,
     // A food provider: a FAUCET that grows food on demand (up to its per-turn
     // rating) and draws a little minerals for tooling. It holds nothing at rest —
-    // a farm with no buyer makes nothing, so surplus never gluts.
+    // a farm with no buyer makes nothing, so surplus never gluts. Grants no command.
     contribute: (_body: Body, ctx) => {
       const c = new ContributionBuilder(ctx.R);
       c.produce(EconResource.Food, FARM_FOOD_PRODUCE_MILLI);
@@ -96,6 +120,42 @@ const DEFS = {
     // folds nothing onto the body's stock/flows — including the speculative
     // next-turn preview — and the build stepper can never perturb the economy.
     contribute: (_body: Body, ctx) => emptyContribution(ctx.R),
+    // REPAIR mends a FRIENDLY SHIP: ally/self SHIPS only, so the bracket lands on a
+    // docked friendly, never on a body or an enemy.
+    grants: [{ key: 'repair', label: 'Repair', color: REPAIR_ACTION_COLOR, category: 'support', targeting: 'single', kind: 'immediate', targets: (c) => c.kind === 'ship' && (c.allegiance === 'ally' || c.allegiance === 'self') }],
+  },
+  // MILITARY / service facilities — they grant a body its ACTION-menu commands, never an
+  // economy flow. Like the shipyard they emit the zero Contribution, so placing one can't
+  // perturb stock/flows or the next-turn preview.
+  'railgun-battery': {
+    type: 'railgun-battery',
+    label: 'Railgun battery',
+    color: '#d9583e', // gun-metal red — the offensive/kinetic family
+    addOrder: 4,
+    maxPerBody: 1,
+    canBuildOn: isSolidSite,
+    contribute: (_body: Body, ctx) => emptyContribution(ctx.R),
+    grants: [{ key: 'railgun', label: 'Railgun', color: RAILGUN_ACTION_COLOR, category: 'attack', targeting: 'single', kind: 'encounter', targets: (c) => c.allegiance === 'enemy' }],
+  },
+  'missile-battery': {
+    type: 'missile-battery',
+    label: 'Missile battery',
+    color: '#e08a3a', // ordnance amber — offensive, distinct from the railgun red
+    addOrder: 5,
+    maxPerBody: 1,
+    canBuildOn: isSolidSite,
+    contribute: (_body: Body, ctx) => emptyContribution(ctx.R),
+    grants: [{ key: 'missile', label: 'Missile Launcher', color: MISSILE_ACTION_COLOR, category: 'attack', targeting: 'single', kind: 'encounter', targets: (c) => c.allegiance === 'enemy' }],
+  },
+  'sensor-network': {
+    type: 'sensor-network',
+    label: 'Sensor network',
+    color: '#3fb0c0', // sensor teal — recon/support, distinct from the colony cyan
+    addOrder: 6,
+    maxPerBody: 1,
+    canBuildOn: isSolidSite,
+    contribute: (_body: Body, ctx) => emptyContribution(ctx.R),
+    grants: [{ key: 'recon', label: 'Tactical Data', color: TACTICAL_DATA_ACTION_COLOR, category: 'support', targeting: 'self', kind: 'immediate' }],
   },
 } satisfies Record<FacilityType, FacilityDef>;
 
@@ -140,7 +200,15 @@ export function facilityColor(type: FacilityType): string {
 // shipped id fails — protecting old saves from a compiler-invisible "cleanup". A
 // retired type stays here AND in the registry as a `retired: true` tombstone def,
 // never deleted outright.
-export const FROZEN_FACILITY_IDS: readonly string[] = ['colony', 'mining-base', 'farm', 'shipyard'];
+export const FROZEN_FACILITY_IDS: readonly string[] = [
+  'colony',
+  'mining-base',
+  'farm',
+  'shipyard',
+  'railgun-battery',
+  'missile-battery',
+  'sensor-network',
+];
 
 // DEV-only module-load invariant: each def's `type` field equals its registry key,
 // and every frozen id is still a live type. Mirrors the catalog drift check in
