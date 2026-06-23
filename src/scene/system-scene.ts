@@ -148,16 +148,20 @@ export class SystemScene implements Screen {
         addOpponentShip(systemIdForCluster(this.clusterIdx));
         this.refreshFleet();
       };
-      // DEV-only: flip the SELECTED body to an opponent faction, so the M3 body-as-target
-      // path (an enemy colony to Attack) is exercisable before live capture verbs exist.
-      this.context.onAddOpponentBody = () => {
+      // DEV-only: claim the SELECTED body for an opponent by placing an opponent COLONY on it
+      // — a colony facility (so it's a real colony, not a bare body) plus an ownership flip,
+      // the facility being what claims it. Makes the M3 body-as-target path (an enemy colony
+      // to Attack) exercisable before the live capture/colonize verbs exist.
+      this.context.onAddOpponentColony = () => {
         const pick = this.selectedPick;
         if (!pick || pick.kind === 'ship' || pick.kind === 'star') return;
-        addOpponentBody(BODIES[pick.bodyIdx]!.id);
-        // Mirror the facility-edit reconcile so the flip lands everywhere: re-project the
-        // economy (the ownership gate runs at build() time and now drops this body), redraw
-        // chips + lanes, re-sync the menu (an enemy body is no longer a commandable actor,
-        // so its menu closes), and refresh the sidebar.
+        const bodyId = BODIES[pick.bodyIdx]!.id;
+        addFacility(bodyId, 'colony'); // no-op at the per-body cap (already has one) — fine
+        addOpponentBody(bodyId);       // flip ownership: the colony is now the opponent's
+        // Mirror the facility-edit reconcile so the claim lands everywhere: re-project the
+        // economy (the ownership gate runs at build() time and now drops this enemy body),
+        // redraw chips + lanes, re-sync the menu (an enemy body is no longer a commandable
+        // actor, so its menu closes), and refresh the sidebar.
         this.bridge.syncFacilities();
         this.diagram.syncFacilities();
         this.refreshFlows();

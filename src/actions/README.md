@@ -95,7 +95,8 @@ encounter modality (E-phases) claims.
   facility-bearing body, mints one flat ship+body candidate list with per-actor allegiance + tags,
   namespace-dispatches the anchor); the actor ring broadened to ships-then-bodies. The combat `attack`
   (and `bombard`) gained an enemy `targets` predicate; `mine`/`establish` are self-targeted bones. A
-  DEV "+ opponent body" pill flips the selected body so the body-as-target path is exercisable. Select
-  your colony/belt → its menu opens; select a ship → Attack now brackets enemy ships **and** enemy bodies.
+  DEV "+ opponent colony" pill places an opponent colony on the selected body (a facility + an ownership
+  flip — the facility claims it) so the body-as-target path is exercisable. Select your colony/belt → its
+  menu opens; select a ship → Attack now brackets enemy ships **and** enemy bodies.
 - **Next:** the encounter consumes the menu (`4x-encounter-combat-system.md` E1–E5) over this
   already-even-handed substrate; the world verbs' effect stubs gain real mechanics behind their seams.
