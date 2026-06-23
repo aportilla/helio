@@ -61,6 +61,12 @@ export class SystemActionMenu {
   onImmediate: (intent: ActionIntent) => void = () => {};
   onEnterEncounter: (intent: ActionIntent) => void = () => {};
 
+  // The OUTER focus axis: at the category level, ←/→ cycle the active ACTOR (the SoS ◄ ►),
+  // which SystemScene fills by re-opening the menu on the next commandable actor. Inert at the
+  // command level, where ←/→ moves the target instead (the inner focus). See
+  // plans/4x-system-action-menu.md "The focus hierarchy".
+  onCycleActor: (delta: number) => void = () => {};
+
   constructor() {
     this.panel.addTo(this.scene);
     this.bracket.addTo(this.scene);
@@ -161,13 +167,21 @@ export class SystemActionMenu {
         return true;
       case 'arrowleft':
       case 'a':
-        this.menu.moveTarget(-1);
-        this.refresh();
+        if (this.menu.view().level === 'command') {
+          this.menu.moveTarget(-1); // inner focus: cycle the target
+          this.refresh();
+        } else {
+          this.onCycleActor(-1); // outer focus: cycle the actor (re-opens the menu)
+        }
         return true;
       case 'arrowright':
       case 'd':
-        this.menu.moveTarget(1);
-        this.refresh();
+        if (this.menu.view().level === 'command') {
+          this.menu.moveTarget(1);
+          this.refresh();
+        } else {
+          this.onCycleActor(1);
+        }
         return true;
       case 'enter':
         this.commit(this.menu.enter());

@@ -20,7 +20,7 @@ import {
   shipsInSystem,
   startShipBuild,
 } from '../game-state';
-import { factionColor, factionLabel } from '../factions/registry';
+import { CONTROLLED_FACTION_ID, factionColor, factionLabel } from '../factions/registry';
 import { buildTurns, DEFAULT_SHIP_CLASS, shipClassLabel } from '../ships/registry';
 import { shipToActor } from '../actions/ships-to-actors';
 import type { TargetResolver } from '../actions/menu';
@@ -155,6 +155,9 @@ export class SystemScene implements Screen {
       this.actionMenu.onImmediate = (intent) =>
         console.debug('[actions] immediate action (placeholder):', intent);
     }
+    // The outer focus axis: ←/→ at the category level cycles the active actor (the menu re-opens
+    // on the next ship). The controller routes the key; the actor ring lives here (game-state).
+    this.actionMenu.onCycleActor = (delta) => this.cycleActor(delta);
 
     // DPR boundary crossings (zoom, monitor swap) re-trigger resize so the
     // pixel-ratio + buffer dims pick up the new integer N.
@@ -290,6 +293,28 @@ export class SystemScene implements Screen {
       // Live slot center of any ship — the actor anchors the panel, a target rides the bracket.
       slotCenterFor: (id) => this.diagram.fleetSlotCenter(id),
     });
+  }
+
+  // The actor focus ring — the controlled faction's ready ships in this system, in fleet order.
+  // The horizontal axis at the menu's category level cycles through these (you command your own
+  // side); clicking any ship still opens its menu for inspection, but the keyboard walks the ring.
+  private commandableActorIds(): readonly string[] {
+    return shipsInSystem(systemIdForCluster(this.clusterIdx))
+      .filter((s) => s.status === 'ready' && s.factionId === CONTROLLED_FACTION_ID)
+      .map((s) => s.id);
+  }
+
+  // Cycle the focused actor by delta (the category-level ←/→). Steps within the ring of your
+  // commandable actors, wrapping; if the current pick isn't one of yours (an opponent clicked for
+  // inspection, or nothing), it jumps into the ring. Re-selecting re-opens the menu on that ship.
+  private cycleActor(delta: number): void {
+    const ring = this.commandableActorIds();
+    if (ring.length === 0) return;
+    const current = this.selectedPick?.kind === 'ship' ? this.selectedPick.shipId : null;
+    const idx = current ? ring.indexOf(current) : -1;
+    const from = idx >= 0 ? idx : (delta > 0 ? -1 : 0); // not in the ring → enter at an end
+    const next = ring[((from + delta) % ring.length + ring.length) % ring.length]!;
+    this.select({ kind: 'ship', shipId: next });
   }
 
   // A pick is selectable if it's a ship, or a facility-eligible body. Body eligibility
@@ -430,6 +455,15 @@ export class SystemScene implements Screen {
     // level). Escape at the menu's top level is NOT claimed, so it falls through to clear
     // the selection (which closes the menu) — one Escape per level, then one to deselect.
     if (this.actionMenu.handleKey(e)) return;
+    // Keyboard-first actor focus: a directional tap from idle (nothing selected) enters the
+    // commandable-actor ring and opens the first actor's menu, so an order is issuable mouse-free.
+    if (!this.selectedPick && isDirectionalKey(e)) {
+      const ring = this.commandableActorIds();
+      if (ring.length > 0) {
+        this.select({ kind: 'ship', shipId: ring[0]! });
+        return;
+      }
+    }
     if (e.key !== 'Escape') return;
     // Escape clears a body selection first; a second press (nothing selected)
     // exits the system view.
@@ -483,4 +517,11 @@ export class SystemScene implements Screen {
     this.renderer.autoClear = true;
     this.rafId = requestAnimationFrame(this.tick);
   };
+}
+
+// The directional keys that drive actor focus from idle — arrows + WASD (the same set the menu's
+// own navigation uses), so any nav tap on an empty system view jumps into your fleet.
+const DIRECTIONAL_KEYS = new Set(['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'w', 'a', 's', 'd']);
+function isDirectionalKey(e: KeyboardEvent): boolean {
+  return DIRECTIONAL_KEYS.has(e.key.toLowerCase());
 }

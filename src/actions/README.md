@@ -71,5 +71,11 @@ you choose a command, and a click on (or ←/→ over) an enemy moves it. On a c
   → confirm fires at the locked target, mouse + keyboard parity (incl. WASD), the dispatch seam
   wired (placeholder effects, encounter hand-off stubbed). The de-risking milestone: the hardest
   UX, validated outside the combat turn loop.
-- **Next:** the encounter consumes both (`4x-encounter-combat-system.md` E1–E5) — and non-combat
+- **M2c (shipped):** the nested focus hierarchy. Actor selection is an **outer focus** mirroring
+  the inner target focus — at the category level ←/→ cycle the active **actor** (your commandable
+  ships, the menu re-opening on each); at the command level ←/→ cycle the **target**. A directional
+  tap from idle focuses the first actor (keyboard-first), and Esc ascends one level (target →
+  category → idle). A SystemScene/controller concern (`onCycleActor` + the actor ring); the headless
+  `ActionMenu` is unchanged.
+- **Next:** the encounter consumes the menu (`4x-encounter-combat-system.md` E1–E5) — and non-combat
   `'immediate'` verbs (establish-colony, move) land as additive `ActionDef` content.
