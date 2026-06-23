@@ -43,7 +43,7 @@ export type PlanetCenterIndex = ReadonlyMap<number, PlanetCenter>;
 export interface BodyCenter {
   cx: number;
   cy: number;
-  // On-screen radius (px) — the scatter radius for cargo emit/arrive points.
+  // On-screen radius (px) of the body.
   r: number;
 }
 export type BodyCenterIndex = ReadonlyMap<number, BodyCenter>;

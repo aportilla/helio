@@ -9,7 +9,7 @@
 // HORIZONTALLY through the candidate targets — a 'select' bracket riding one enemy in the
 // field, auto-locked on entry. Confirming a command fires it at the locked target. There is
 // NO separate target tier; the target is shown in the field by the controller, never as a
-// menu row. See plans/4x-system-action-menu.md.
+// menu row. See ./README.md.
 
 import type { Actor, ActionCategory, ActionDef, ActionIntent, TargetCandidate, TargetCriteria } from './types.ts';
 import { ACTION_BY_ID, PASS_ACTION, actionLabel } from './registry.ts';
@@ -49,7 +49,7 @@ export interface MenuView {
   readonly rows: readonly MenuRow[];
   readonly cursor: number; // vertical: index into rows
   readonly selectedCategory?: ActionCategory; // set at the command level
-  // The live target axis (command level only). `targets` are the candidate combatant ids
+  // The live target axis (command level only). `targets` are the candidate target ids (ship or body)
   // the cursored command admits; `targetCursor` is the locked one — the controller draws a
   // bracket on `targets[targetCursor]`. Empty `targets` = nothing to fire at.
   readonly targets?: readonly string[];
@@ -107,7 +107,8 @@ export class ActionMenu {
   }
 
   // The candidate target ids the cursored command admits. 'self' resolves to the actor (the
-  // bracket lands on your own ship). Otherwise the controller mints ALL candidates and the
+  // bracket lands on the acting entity itself — your own ship or body). Otherwise the
+  // controller mints ALL candidates and the
   // def's TargetCriteria selects among them (absent ⇒ permissive); the view/commit work in
   // plain ids, so the survivors are mapped to their ids here.
   private candidatesFor(def: ActionDef): readonly string[] {
@@ -194,7 +195,7 @@ export class ActionMenu {
     f.targetCursor = wrap(f.targetCursor + delta, n);
   }
 
-  // Lock a specific target by id (a click on a candidate ship). No-op off the command level
+  // Lock a specific target by id (a click on a candidate ship or body). No-op off the command level
   // or for a non-candidate id.
   setTargetById(id: string): void {
     if (this.done) return;

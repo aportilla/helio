@@ -47,7 +47,7 @@ export class SystemScene implements Screen {
   private readonly hud: SystemHud;
   // The anchored system action menu — a SystemScene-owned chrome layer (its own ortho
   // scene), opened on a ship selection, routed FIRST in the chrome chain. See
-  // src/scene/actions/ + plans/4x-system-action-menu.md (M2).
+  // src/scene/actions/ + src/actions/README.md (the as-built menu).
   private readonly actionMenu = new SystemActionMenu();
   // Persistent sidebar, owned by AppController (shared with the galaxy view).
   // Rendered + input-routed here, but not owned. Consulted before the HUD.

@@ -205,15 +205,16 @@ export function addOpponentShip(systemId: string, classId: ShipClassType = DEFAU
   return ship;
 }
 
-// DEBUG ONLY — mark a body as enemy-owned (the first non-controlled faction), the body twin
-// of addOpponentShip, so an enemy colony is exercisable before live ownership write-paths
-// exist. Bypasses any claim/capture flow; the caller is DEV-gated. The opponent-side pick
-// lives HERE in the debug path — the faction registry stays free of any "opponent" concept.
-// Replaces any existing record for the body (idempotent re-flip). Returns the record, or
-// null if the body is unknown to the catalog. NOTE: this writes the overlay ONLY — it does
-// not reproject the economy. The ownership gate runs at EconomyBridge.build() time, so a
-// caller that wants a flip reflected in the live/preview economy must also trigger the
-// facility-edit reconcile (bridge.syncFacilities), exactly as a facility add/remove does.
+// DEBUG ONLY — mark a body as enemy-owned (the first non-controlled faction): the OWNERSHIP
+// half of an opponent claim, the body twin of addOpponentShip. It does NOT add a facility —
+// the DEV caller composes it with addFacility('colony') to produce a real enemy colony.
+// Bypasses any claim/capture flow; the caller is DEV-gated. The opponent-side pick lives HERE
+// in the debug path — the faction registry stays free of any "opponent" concept. Replaces any
+// existing record for the body (idempotent re-flip). Returns the record, or null if the body
+// is unknown to the catalog. NOTE: this writes the overlay ONLY — it does not reproject the
+// economy. The ownership gate runs at EconomyBridge.build() time, so a caller that wants a flip
+// reflected in the live/preview economy must also trigger the facility-edit reconcile
+// (bridge.syncFacilities), exactly as a facility add/remove does.
 export function addOpponentBody(bodyId: string): BodyOwnership | null {
   if (indexOfBodyId(bodyId) < 0) return null;
   const factionId = FACTION_DEFS.find((f) => f.id !== CONTROLLED_FACTION_ID)?.id ?? CONTROLLED_FACTION_ID;

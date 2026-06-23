@@ -4,7 +4,7 @@
 // src/ships/registry.ts and src/factions/registry.ts exactly, deliberately, so the
 // frozen-key discipline reads identically across the registries.
 //
-// v1 content is COMBAT-FIRST (the unblocked frontier, per plans/4x-system-action-menu.md):
+// v1 content is COMBAT-FIRST (the unblocked frontier, per ./README.md):
 // a placeholder ATTACK that enters an encounter, a NAVIGATION flee, and the always-present
 // Pass. Non-combat verbs (establish-colony, move) are additive 'immediate' members.
 

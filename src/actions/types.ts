@@ -7,7 +7,7 @@
 //
 // This is the GENERAL interaction grammar of the system view — select an actor, drill
 // category → command → target, execute. Combat is one consumer; non-combat verbs are
-// peers. See plans/4x-system-action-menu.md.
+// peers. See ./README.md.
 
 // FROZEN serialized contract. These exact strings are the wire format if action logs are
 // ever saved (the encounter replay seam), so they earn the freeze from day one. Adding a

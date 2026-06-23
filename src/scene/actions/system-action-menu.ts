@@ -64,7 +64,7 @@ export class SystemActionMenu {
   // The OUTER focus axis: at the category level, ←/→ cycle the active ACTOR (the SoS ◄ ►),
   // which SystemScene fills by re-opening the menu on the next commandable actor. Inert at the
   // command level, where ←/→ moves the target instead (the inner focus). See
-  // plans/4x-system-action-menu.md "The focus hierarchy".
+  // src/actions/README.md (the focus hierarchy).
   onCycleActor: (delta: number) => void = () => {};
 
   constructor() {

@@ -2,8 +2,9 @@
 
 The neutral **faction registry** — one `FactionDef` per faction, the static design
 data the rest of the game reads for *ownership*. A pure leaf: it imports nothing
-app-side and nothing from the (not-yet-built) combat package. The ownership write-path
-(a ship's `factionId`) and, later, combat consume it; it depends on neither.
+app-side and nothing from the (not-yet-built) combat package. The ownership write-paths
+(a ship's `factionId`, and a **body's** `BodyOwnership` record read via `ownerFactionId`)
+and, later, combat consume it; it depends on none of them.
 
 It is a deliberate twin of [`src/ships/`](../ships/README.md): a frozen string-union
 (`FactionType`) keyed `DEFS` object guarded three ways — the
@@ -20,9 +21,10 @@ A faction is a **side that owns things**, modelled deliberately narrow:
   orthogonal concern that attaches elsewhere and never reshapes this registry.
 - **Player-agnostic.** There is no "is-human" flag on a faction. *Which* faction the
   local player commands is a separate pointer, `CONTROLLED_FACTION_ID`, kept out of the
-  faction record so the records stay symmetric. Combat reads that pointer as "my side"
-  (`factionId === CONTROLLED_FACTION_ID`); it is also the validate-and-merge default
-  for any ship saved before factions existed.
+  faction record so the records stay symmetric. The action-menu actor/target allegiance,
+  the economy fan-in ownership gate, and (later) combat all read that pointer as "my side"
+  (`factionId === CONTROLLED_FACTION_ID`); it is also the validate-and-merge default for any
+  ship — and any body — saved before factions existed.
 
 The shipped ids (`player`, `rival`) are **placeholders** for a real faction system —
 a bootstrap pair so opponent ships can be dropped into any system to exercise the

@@ -7,7 +7,8 @@ through the commands while a **'select' bracket** rides one target in the field,
 horizontally (←/→ / A/D / click), and confirming a command fires it at the locked target. This
 is *how you act on the world* — not combat chrome. Combat is one **consumer** (an offensive
 action that enters the encounter modality); non-combat verbs (establish-colony, move) are peers.
-Design + roadmap: `plans/4x-system-action-menu.md`.
+This README is the as-built source of truth (the menu shipped through M3); the combat consumer's
+forward design lives in `plans/4x-encounter-combat-system.md`.
 
 A neutral **leaf**, the deliberate twin of [`src/ships/`](../ships/README.md) and
 [`src/factions/`](../factions/README.md): the vocabulary, registry, and menu import nothing

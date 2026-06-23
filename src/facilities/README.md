@@ -109,6 +109,14 @@ destination body the edit removed lands as stock on a same-cluster holding plane
 vanishing. A plain reload instead adopts the persisted world untouched (full
 fidelity, in-flight cargo kept) when the facility set is unchanged.
 
+### Ownership gate
+
+The bridge's facility fan-in skips any body whose `ownerFactionId` (`game-state.ts`) isn't the
+controlled faction: an enemy-held body's facilities never enter the player's projected economy. A
+body with no ownership record defaults to player-owned, so this is a no-op until a body is flipped;
+and because the gate runs at build/reconcile time (not per step), an ownership flip must go through
+`syncFacilities` to take effect.
+
 ## Status
 
 - **Shipped:** the registry + both seams, and the live engine bridge.

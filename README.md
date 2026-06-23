@@ -65,7 +65,7 @@ One deep doc per subsystem. Start in the root for orientation, then open the doc
 | `src/data/` | Runtime catalog API + types, cluster/naming model, bundled bitmap fonts | [src/data/README.md](src/data/README.md) |
 | `src/facilities/` | Facility registry (one object per type) + the economy-sim projection seam + the live engine bridge | [src/facilities/README.md](src/facilities/README.md) |
 | `src/ships/` | Neutral ship-class registry (one `ShipClassDef` per type) — consumed by the sidebar build flow + the fleet render layer | [src/ships/README.md](src/ships/README.md) |
-| `src/factions/` | Neutral faction registry (one `FactionDef` per side) — ship *ownership*; consumed by the fleet tint + ship card, and (later) combat sides | [src/factions/README.md](src/factions/README.md) |
+| `src/factions/` | Neutral faction registry (one `FactionDef` per side) — *ownership* of ships and facility-bearing bodies; consumed by the fleet tint + ship card, the action-menu allegiance + economy ownership gate, and (later) combat sides | [src/factions/README.md](src/factions/README.md) |
 | `scripts/` | Star-data tooling + the catalog/procgen **build pipeline** that emits the JSON; `scripts/lib/` is also a shared kernel the runtime consumes (body-traits / PRNG / gas-potency), so it isn't build-only | [scripts/README.md](scripts/README.md) |
 | `sim/` | Standalone deterministic economy/logistics sim | [sim/README.md](sim/README.md) |
 | `docs/` | Game-systems status + roadmap; dev/verification tooling | [docs/game-systems.md](docs/game-systems.md), [docs/dev-tooling.md](docs/dev-tooling.md) |

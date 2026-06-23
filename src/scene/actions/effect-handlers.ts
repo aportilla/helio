@@ -25,13 +25,13 @@ import type { ActionIntent, ActionType } from '../../actions/types';
 export type EffectHandler = (intent: ActionIntent) => void;
 
 export const EFFECT_HANDLERS: ReadonlyMap<ActionType, EffectHandler> = new Map<ActionType, EffectHandler>([
-  // MINE — extract minerals from the locked target body (a belt / mineral world). Will
-  // credit a one-shot yield (or flip a depleted-deposit overlay) on the target bodyId via
-  // game-state, then run the facility-edit reconcile so the economy re-reads.
+  // MINE — work the acting body's OWN deposits (self-targeted; the target is the actor's own
+  // bodyId). Will credit a one-shot yield (or flip a depleted-deposit overlay) on that body
+  // via game-state, then run the facility-edit reconcile so the economy re-reads.
   ['mine', (_intent) => { /* no-op stub: mineral-yield write-back lands with mechanics */ }],
-  // ESTABLISH — claim an unowned target body for the controlled faction. Will write a
-  // BodyOwnership record (ownerFactionId = CONTROLLED_FACTION_ID) for the target bodyId.
-  ['establish', (_intent) => { /* no-op stub: ownership-claim write-back lands with mechanics */ }],
+  // ESTABLISH — settle / develop the acting (colony) body itself (self-targeted). Will write
+  // back to that body via game-state (facilities / development state), then reconcile.
+  ['establish', (_intent) => { /* no-op stub: develop-body write-back lands with mechanics */ }],
   // BOMBARD — strike an enemy-held target body. Will flip its BodyOwnership and/or raze
   // facilities (all-or-nothing-now vs. partial body-damage is an open call — see the plan).
   ['bombard', (_intent) => { /* no-op stub: body-damage write-back lands with mechanics */ }],
