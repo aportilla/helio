@@ -1,24 +1,24 @@
 // Every SHIPPED action grant is well-formed — the universal sweep the pre-inversion ACTION_DEFS
 // color + kind checks used to provide, restored over the DERIVED grants now that there is no
-// central registry. It walks every facility grant (declared inline on each FacilityDef) plus the
-// ship stub loadout (STUB_SHIP_COMMANDS), so a malformed color, an out-of-vocabulary kind, or a
-// colon-bearing key on ANY shipped grant fails CI — not just the few spot-checked ones. The
-// facility registry is sim-free (its contribute() needs only the EconResource ids, not the
+// central registry. It walks every grant declared inline on a provider — each FacilityDef (body
+// side) AND each ShipComponentDef (ship side) — so a malformed color, an out-of-vocabulary kind, or
+// a colon-bearing key on ANY shipped grant fails CI, not just the few spot-checked ones. Both
+// registries are sim-free (their definitions need only the action vocab + EconResource ids, not the
 // sim-built table), so this runs in the actions suite without loading the economy core.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FACILITY_DEFS, FACILITY_BY_TYPE } from '../../facilities/registry.ts';
 import type { FacilityType } from '../../facilities/types.ts';
-import { STUB_SHIP_COMMANDS } from '../ships-to-actors.ts';
+import { SHIP_COMPONENT_DEFS } from '../../ships/components/registry.ts';
 import { grantKeyOf } from '../derive.ts';
 
 const facilityGrants = FACILITY_DEFS.flatMap((d) => (d.grants ?? []).map((grant) => ({ provider: d.type, grant })));
-const shipGrants = STUB_SHIP_COMMANDS.map((c) => ({ provider: 'ship-stub', grant: c.grant }));
-const allGrants = [...facilityGrants, ...shipGrants];
+const componentGrants = SHIP_COMPONENT_DEFS.flatMap((d) => (d.grants ?? []).map((grant) => ({ provider: d.type, grant })));
+const allGrants = [...facilityGrants, ...componentGrants];
 
 test('there is at least one shipped grant to sweep (the test is wired up)', () => {
-  assert.ok(allGrants.length >= 5, `expected the 4 facility grants + ship stub, got ${allGrants.length}`);
+  assert.ok(allGrants.length >= 6, `expected the facility grants + the ship component grants, got ${allGrants.length}`);
 });
 
 test('every shipped grant carries a well-formed sRGB hex accent', () => {

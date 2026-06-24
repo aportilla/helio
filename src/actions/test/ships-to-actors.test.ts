@@ -1,13 +1,14 @@
 // ships-to-actors adapter invariants — ready ships split by faction into sides, the
 // controlled-side flag, the 'building' filter, and the loadout override. After the inversion an
-// Actor carries RESOLVED ActionCommands derived from a stub loadout (until ShipComponentDef
-// lands). Runs under `node --test` type-stripping: the Ship import is a type (erased), so only
-// node-pure modules load (the factions registry's DEV block is skipped — import.meta.env is
-// undefined). Unlike the body adapter, this pulls in no sim.
+// Actor carries RESOLVED ActionCommands derived from its class's component loadout
+// (ShipClassDef.components → each ShipComponentDef's grants). Runs under `node --test`
+// type-stripping: the Ship import is a type (erased), so only node-pure modules load (the registry
+// DEV blocks are skipped — import.meta.env is undefined). Unlike the body adapter, this pulls in no
+// sim.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shipsToActors, shipToActor, STUB_SHIP_COMMANDS } from '../ships-to-actors.ts';
+import { shipsToActors, shipToActor, shipLoadout } from '../ships-to-actors.ts';
 import type { Ship } from '../../game-state-codec.ts';
 
 const ship = (id: string, factionId: Ship['factionId'], status: Ship['status'] = 'ready'): Ship => ({
@@ -49,25 +50,26 @@ test('a ship Actor always carries the Attack + Navigation category palette', () 
   assert.deepEqual(shipToActor(ship('p1', 'player')).categories, ['attack', 'navigation']);
 });
 
-test('the stub loadout derives an attack (encounter) + flee (immediate), via the SAME projection', () => {
-  // Until ShipComponentDef lands, every ship gets the stub: a weapon → ATTACK that enters an
-  // encounter, the drive → NAVIGATION flee (D9). The wire ids are the composed provider:key.
-  assert.deepEqual(STUB_SHIP_COMMANDS.map((c) => c.id), ['stub-weapon:attack', 'stub-drive:flee']);
-  const attack = STUB_SHIP_COMMANDS.find((c) => c.grant.category === 'attack')!;
-  const flee = STUB_SHIP_COMMANDS.find((c) => c.grant.category === 'navigation')!;
-  assert.equal(attack.grant.kind, 'encounter', 'attack enters the encounter modality');
+test("the corvette loadout derives flee (immediate) + laser (encounter), via the SAME projection", () => {
+  // A corvette flies a small-engine + small-laser: the engine grants NAVIGATION flee (D9), the
+  // laser an ATTACK that enters an encounter. The wire ids are the composed `<componentId>:<key>`,
+  // in loadout order (engine before laser).
+  assert.deepEqual(shipLoadout(ship('p1', 'player')).map((c) => c.id), ['small-engine:flee', 'small-laser:laser']);
+  const laser = shipLoadout(ship('p1', 'player')).find((c) => c.grant.category === 'attack')!;
+  const flee = shipLoadout(ship('p1', 'player')).find((c) => c.grant.category === 'navigation')!;
+  assert.equal(laser.grant.kind, 'encounter', 'the laser enters the encounter modality');
   assert.equal(flee.grant.kind, 'immediate');
-  assert.deepEqual([attack.count, attack.totalCost], [1, 0], 'no stacking, no energy cost in the bones');
+  assert.deepEqual([laser.count, laser.totalCost], [1, 0], 'one laser, no energy model yet ⇒ zero cost');
 });
 
-test('an actor gets the bones loadout by default', () => {
+test('an actor gets its class loadout by default', () => {
   const a = shipToActor(ship('p1', 'player'));
-  assert.deepEqual(a.commands, STUB_SHIP_COMMANDS);
+  assert.deepEqual(a.commands, shipLoadout(ship('p1', 'player')));
   assert.equal(a.id, 'p1');
 });
 
 test('commandsFor overrides the per-ship loadout', () => {
-  const only = STUB_SHIP_COMMANDS.slice(0, 1); // just the attack command
+  const only = shipLoadout(ship('p1', 'player')).slice(0, 1); // just the flee command
   const sides = shipsToActors([ship('p1', 'player')], () => only);
   assert.deepEqual(sides[0]!.actors[0]!.commands, only);
 });

@@ -15,7 +15,7 @@
     "test:sim": "node --test 'sim/test/**/*.test.ts'",
     "typecheck:sim": "tsc -p sim/tsconfig.json",
     "test:facilities": "node --test 'src/facilities/test/**/*.test.ts'",
-    "test:ships": "node --test 'src/ships/test/**/*.test.ts'",
+    "test:ships": "node --test 'src/ships/**/test/**/*.test.ts'",
     "test:factions": "node --test 'src/factions/test/**/*.test.ts'",
     "test:actions": "node --test 'src/actions/test/**/*.test.ts'",
     "test:data": "node --test 'src/data/test/**/*.test.ts'",

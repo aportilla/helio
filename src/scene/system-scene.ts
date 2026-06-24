@@ -174,7 +174,7 @@ export class SystemScene implements Screen {
     // The action menu's execute DISPATCH (Menu M2). 'immediate' actions route to an app-side
     // effect handler keyed by GRANT KEY (grantKeyOf(actionId), EFFECT_HANDLERS) that mutates the
     // save now — today a no-op stub, so this is the live ROUTING with deferred mechanics; an
-    // immediate verb with no handler (flee/repair) falls through to a DEV log. 'encounter' actions hand off to the
+    // immediate verb with no handler (flee/repair/recon) falls through to a DEV log. 'encounter' actions hand off to the
     // encounter modality (E-phases, deferred), still a DEV stub. The menu itself (select →
     // drill → target → confirm) is fully live; this is the seam its intent flows into.
     this.actionMenu.onImmediate = (intent) => {

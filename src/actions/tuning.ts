@@ -1,7 +1,7 @@
 // Hoisted action accent colors — the menu-row hue each ActionGrant carries (grant.color), and a
 // home for the timing / availability knobs the mechanics phase will add. Kept in one place so a
-// palette pass never hunts through the grant authoring sites (the ship stub loadout and the
-// facility registry, which import these), and so docs reference them by NAME, never by value (a
+// palette pass never hunts through the grant authoring sites (the ship component + facility
+// registries, which import these), and so docs reference them by NAME, never by value (a
 // hex in prose rots the instant it's re-tuned). Re-tuning is non-breaking — the serialized action
 // contract is the composed `"<providerId>:<grant.key>"` id (./derive), never these colors.
 //
@@ -9,12 +9,12 @@
 // sprite tints by FACTION, never by these — the action color is reserved for the menu row / later
 // pill (no consumer paints it yet).
 
-// — Attack: offensive. A warm red-orange, hostile against the cyan/steel palette. The ship stub
-// loadout's placeholder weapon.
-export const ATTACK_ACTION_COLOR = '#e0644e';
+// — Laser: a ship's beam weapon. A warm red-orange, hostile against the cyan/steel palette, in the
+// offensive family with (but distinct from) the body railgun orange / missile amber. (small-laser)
+export const LASER_ACTION_COLOR = '#e0644e';
 
-// — Flee: evasive navigation. An amber distinct from the attack red and the cyan UI. Granted by
-// the ship's drive (D9).
+// — Flee: evasive navigation. An amber distinct from the laser red and the cyan UI. Granted by the
+// ship's engine (D9: every ship has a drive ⇒ every ship can flee). (small-engine)
 export const FLEE_ACTION_COLOR = '#c9b46b';
 
 // The body weapon / support verbs — each granted by a facility (see ../facilities/registry.ts).

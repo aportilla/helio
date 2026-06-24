@@ -18,6 +18,9 @@ const DEFS = {
     color: '#b9c4d0', // steel — a hull grey distinct from the facility chip hues
     buildTurns: CORVETTE_BUILD_TURNS,
     spriteSizePx: CORVETTE_SPRITE_SIZE_PX,
+    // The v1 basic loadout every corvette flies with (no build UI yet): a small engine (NAVIGATION
+    // flee) + a small laser (ATTACK). These component ids back the ship's derived action ids.
+    components: ['small-engine', 'small-laser'],
   },
 } satisfies Record<ShipClassType, ShipClassDef>;
 

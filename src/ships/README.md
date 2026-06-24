@@ -1,6 +1,6 @@
 # src/ships/
 
-The neutral **ship-class registry** — one `ShipClassDef` per class, the static design data the rest of the game reads. A pure leaf: it imports nothing app-side and nothing from the (not-yet-built) combat package. Both the ship-build flow and, later, combat consume it; it depends on neither.
+The neutral **ship-class registry** — one `ShipClassDef` per class, the static design data the rest of the game reads. A near-pure leaf: its only app-side dependency is a **type-only** import of the action vocabulary (via the component loadout — see below), the same dependency `src/facilities/` takes; it pulls in nothing from the DOM/catalog and nothing from the (not-yet-built) combat package. Both the ship-build flow and, later, combat consume it; it depends on neither.
 
 It is a deliberate twin of [`src/facilities/`](../facilities/README.md): a frozen string-union (`ShipClassType`) keyed `DEFS` object guarded three ways — the `satisfies Record<ShipClassType, ShipClassDef>` compile guard, the `FROZEN_SHIP_CLASS_IDS` list + its CI test, and a DEV module-load `def.type === key` assert. Adding a class is one literal in the union plus one object in `DEFS`; every derived lookup (`SHIP_CLASS_DEFS`, `SHIP_CLASS_BY_TYPE`, `SHIP_CLASS_TYPES`) flows from that.
 
@@ -8,15 +8,20 @@ It is a deliberate twin of [`src/facilities/`](../facilities/README.md): a froze
 
 A built ship persists its `classId` in `helio.game` (see [the game save](../../docs/game-systems.md)). So `ShipClassType` is a **serialized wire contract**: renaming or removing a shipped class breaks old saves. `FROZEN_SHIP_CLASS_IDS` records every id that has ever shipped, and the CI guard asserts each is still live — the same discipline `FROZEN_FACILITY_IDS` enforces. A removed class becomes a retired tombstone, never a deletion.
 
-## Deliberately thin (v1)
+## Deliberately thin
 
-A v1 `ShipClassDef` carries only `{ type, label, color, buildTurns, spriteSizePx }`. The combat stat block (hull / energy / speed), a minerals cost, and abilities are **not** here yet — each lands with the consumer that reads it, so the leaf keeps zero dependency on combat. Tunables live in `tuning.ts` and are referenced by symbol, never baked into prose.
+A `ShipClassDef` stays thin — identity + display fields, a build time, a sprite budget, and a **default component loadout** (the source of its menu actions, see below). Still **not** here: an inline combat stat block (hull / energy / speed) or a minerals cost — the stat block derives from the components (the energy model, a later phase), and each remaining concern lands with the consumer that reads it, so the leaf keeps zero dependency on combat. Tunables live in `tuning.ts` and are referenced by symbol, never baked into prose.
+
+## Components & loadout (`components/`)
+
+A ship is a **platform carrying modules**, the ship-side twin of a body carrying facilities ([modular-components plan](../../plans/4x-modular-ship-components.md) §5). [`components/`](components/README.md) is the **`ShipComponentDef` registry** — one def per component (today: `small-engine` → NAVIGATION flee, `small-laser` → ATTACK), each declaring the `ActionGrant`s it provides, exactly as a `FacilityDef` does. A class's `components` array is its default loadout; [`ships-to-actors`](../actions/README.md) derives a ship's menu commands from those components' grants through the **same** `deriveCommands` projection a body runs over its facilities. There is no ship builder yet, so every ship of a class shares its class preset (per-ship `components[]` serialization is a later phase).
 
 ## Map
 
 | File | What's there |
 |---|---|
-| `types.ts` | `ShipClassType` union + the `ShipClassDef` interface |
+| `types.ts` | `ShipClassType` union + the `ShipClassDef` interface (incl. the default `components` loadout) |
 | `registry.ts` | `DEFS` + the derived lookups, the `shipClassLabel`/`shipClassColor`/`buildTurns` accessors, the frozen-id list + DEV assert |
 | `tuning.ts` | hoisted per-class numbers (build time, sprite budget) |
-| `test/registry.test.ts` | the frozen-id + color + accessor guards (`npm run test:ships`) |
+| `components/` | the `ShipComponentDef` registry — a ship's modules + the actions they grant ([README](components/README.md)) |
+| `test/` + `components/test/` | the frozen-id + color + accessor + grant-shape guards (`npm run test:ships` sweeps both) |

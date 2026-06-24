@@ -16,11 +16,14 @@ A neutral **core leaf**, the deliberate twin of [`src/ships/`](../ships/README.m
 app-side, nothing from the DOM/catalog, nothing from the (not-yet-built) encounter package — so
 every consumer can read the action grammar without pulling in a consumer. The two **adapters**
 reach sideways into the durable stores they project — but both stay **sim-free**: `ships-to-actors`
-into the fleet (an erased `import type { Ship }`), `bodies-to-actors` into the facility registry
-(`FACILITY_BY_TYPE`) to read each facility's inline `grants`. That import stays sim-free because the
-registry itself is sim-free — its `contribute()` needs only the `EconResource` ids (a plain const),
-not the sim-built `ResourceTable` (which lives in `facilities/resource-table.ts`). The whole package
-stays node-pure; the adapters are where the grammar meets the world.
+into the fleet (an erased `import type { Ship }`) + the ship-class / component registries (to resolve
+a ship's loadout and read each component's inline `grants`), `bodies-to-actors` into the facility
+registry (`FACILITY_BY_TYPE`) to read each facility's inline `grants`. Those registry imports stay
+sim-free because the registries themselves are — a facility's `contribute()` needs only the
+`EconResource` ids (a plain const), not the sim-built `ResourceTable` (which lives in
+`facilities/resource-table.ts`), and a component carries no economy at all. Both adapters end on the
+shared `actorSides` split (`sides.ts`). The whole package stays node-pure; the adapters are where the
+grammar meets the world.
 
 ## Actions are DERIVED, not enumerated
 
@@ -45,12 +48,13 @@ specified in `plans/4x-modular-ship-components.md` §2 (Phase 1 of the modular-c
 
 ## Actors are ships **and** bodies
 
-An `Actor` is `{ id, commands, stats? }` — deliberately body-agnostic. A fleet **ship**, and a
+An `Actor` is a minimal, **body-agnostic** handle — an id plus the commands its loadout grants (with optional stats / category palette). A fleet **ship**, and a
 **planet / moon / belt that carries player facilities**, are both actors: each opens the same
 anchored menu and offers the commands its loadout grants (a ship's weapons; a body's
 orbital-railgun or sensor sweep). The menu, registry, and dispatch never assume a ship.
-Both adapters ship as neutral, sim-free leaves: `ships-to-actors.ts` (the fleet) and `bodies-to-actors.ts`
-(facility-bearing bodies, commands derived from each facility's grants). They share one keyspace — `entity-id.ts`
+Both adapters ship as neutral, sim-free leaves: `ships-to-actors.ts` (the fleet, commands derived from each
+ship's component loadout) and `bodies-to-actors.ts` (facility-bearing bodies, commands derived from each
+facility's grants) — one `deriveCommands` projection over both. They share one keyspace — `entity-id.ts`
 mints `body:<bodyIdx>` ids while ship ids stay un-prefixed — so one resolver, one anchor lookup,
 and one `ActionIntent` route both kinds. The encounter's later ship-to-planet phase
 *specializes* `bodies-to-actors` (adding a combat stat bag), it does not re-invent a body→actor
@@ -65,9 +69,10 @@ path.
 | `registry.ts` | The vocabulary's small central remainder after the inversion (no `ACTION_DEFS`): the per-actor-TYPE **category palettes** (`SHIP_CATEGORIES` Attack+Navigation / `BODY_CATEGORIES` Attack+Support), and the grant-keyed display helpers (`commandLabel`, which suffixes `(xN)` for a merged command; `commandColor`). |
 | `menu.ts` | `ActionMenu` — the mechanics-agnostic state machine: a **two-level** stack (category → command) with an orthogonal **target lock** on the command level (`moveCursor` = vertical/command, `moveTarget` / `setTargetById` = horizontal/target), `enter` / `back` / `cancel` / `confirm`, the top-level rows taken from the actor's **category palette** (`Actor.categories`) or, absent one, derived from its commands' categories — empties shown greyed-not-hidden, emitting one effect-free `ActionIntent` aimed at the locked target. Reads the actor's **resolved commands inline** (no central lookup); availability is the energy check `stats.energy >= command.totalCost` (permissive when no energy stat). Also exports the pure `filterCandidates` matcher (applies a grant's `TargetCriteria` to the controller's minted candidates). |
 | `entity-id.ts` | The pure id codec — `encodeBodyEntityId` / `parseEntityId` over the frozen `body:` namespace, so ships (un-prefixed) and bodies (`body:<bodyIdx>`) share one keyspace without collision. |
-| `ships-to-actors.ts` | Projects ready fleet ships into menu `Actor`s split by faction (`ActorSide`, `controlled` flag). Commands come from a **stub loadout** (a synthetic weapon → Attack, the drive → Flee) run through `deriveCommands`, until `ShipComponentDef` lands. Pure; the caller scopes ships to a system first. |
+| `ships-to-actors.ts` | Projects ready fleet ships into menu `Actor`s split by faction (`ActorSide`, `controlled` flag). Commands are **derived + merged from the ship's component loadout** — its `ShipClassDef.components` (today the corvette's `small-engine` → Flee + `small-laser` → Laser), each component's inline `grants` run through `deriveCommands`, the same projection the body adapter uses. Pure; the caller scopes ships to a system first. |
 | `bodies-to-actors.ts` | Projects facility-bearing bodies into menu `Actor`s split by ownership — the body twin of `ships-to-actors`, ids in the `body:` namespace. Commands are **derived + merged from each facility's own inline grants** (read via `FACILITY_BY_TYPE`; the registry is sim-free, so the adapter stays sim-free) — no central facility→command map; every body carries the **Attack + Support** category palette. The caller resolves each body's `bodyIdx` + owning faction. |
-| `tuning.ts` | Hoisted grant accent colors (and a home for the later timing/availability knobs), imported by the grant authoring sites (the ship stub + the facility registry). |
+| `sides.ts` | `actorSides(entries)` — the shared faction/ownership split both adapters end on: groups `(factionId, actor)` entries into `ActorSide`s, marks the `controlled` side, preserves first-seen faction order. Extracted so that rule lives in one place as the platform→actor pattern extends (the encounter's combatant sides reuse it). Each adapter does its own domain filtering first; `actorSides` only groups. |
+| `tuning.ts` | Hoisted grant accent colors (and a home for the later timing/availability knobs), imported by the grant authoring sites (the ship **component** + facility registries). |
 
 ## The execute dispatch (the fork)
 
@@ -144,6 +149,13 @@ encounter modality (E-phases) claims.
   wire contract moved onto the providers + grant keys (composed id `"<providerId>:<grant.key>"`).
   `isAvailable` became an energy check, `costPerUnit` rides each grant (absent ⇒ 0) ahead of the
   Phase-2 energy model. Pure refactor — behavior unchanged (every suite green).
+- **Ship component loadouts (shipped — Phase 2 of `4x-modular-ship-components.md`, action side):**
+  the ship **stub loadout is gone**. [`src/ships/components/`](../ships/README.md) is now a real
+  `ShipComponentDef` registry (`small-engine` → Flee, `small-laser` → Laser); a ship's commands
+  derive from its class's `components` loadout through the same `deriveCommands` as a body's
+  facilities. The byte-identical faction-split both adapters carried was extracted to `sides.ts`
+  (`actorSides`). **Deferred:** the energy model (`battery`/`recharge`/`costPerUnit`), size-class
+  budget, component rendering, and per-ship loadout serialization (Phases 2-energy→4).
 - **Next:** the encounter consumes the menu (`4x-encounter-combat-system.md` E1–E5) over this
-  even-handed, **derived** substrate; ship components + the energy model (`4x-modular-ship-components.md`
-  Phases 2–5) flesh out the stub loadout; the world verbs' effect stubs gain real mechanics.
+  even-handed, **derived** substrate; the energy model + loadout build flow (`4x-modular-ship-components.md`
+  Phases 2-energy–5) make components combat-load-bearing; the world verbs' effect stubs gain real mechanics.

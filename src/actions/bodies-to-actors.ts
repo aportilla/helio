@@ -8,11 +8,9 @@
 // Pure and node-testable, and SIM-FREE: it reads a body's grants off the facility defs
 // (FACILITY_BY_TYPE), and the facility registry is itself sim-free (its contribute() needs only
 // the EconResource ids, not the sim-built table), so importing it here drags no economy core.
-// It imports only the FacilityType/PlacedFacility types (erased), the entity-id codec, the
-// controlled-faction pointer, the facility registry, and the action vocabulary — no catalog,
-// no save, no DOM, no sim. The CALLER resolves the two things only it can know and hands them in
-// per body: the BODIES index (the scene anchor key the entity id encodes) and the owning
-// factionId (ownerFactionId(bodyId)).
+// Nothing from the catalog, save, DOM, or sim — a pure leaf node can load. The CALLER resolves the
+// two things only it can know and hands them in per body: the BODIES index (the scene anchor key the
+// entity id encodes) and the owning factionId (ownerFactionId(bodyId)).
 //
 // Commands are DERIVED, not enumerated: each facility DECLARES the actions it grants inline on its
 // FacilityDef (`grants`), and deriveCommands collects + merges them across the body's facilities
@@ -20,12 +18,12 @@
 // ship's components. No central facility→command map in the action vocabulary.
 
 import { encodeBodyEntityId } from './entity-id.ts';
-import { CONTROLLED_FACTION_ID } from '../factions/registry.ts';
 import { FACILITY_BY_TYPE } from '../facilities/registry.ts';
 import type { PlacedFacility } from '../facilities/types.ts';
 import type { Actor, ActorSide } from './types.ts';
 import { BODY_CATEGORIES } from './registry.ts';
 import { deriveCommands, type GrantProvider } from './derive.ts';
+import { actorSides } from './sides.ts';
 
 // A body always presents the Attack + Support category palette (BODY_CATEGORIES), greyed when no
 // facility grants a command in one, so the menu's shape reads the same on every body (a body
@@ -61,24 +59,14 @@ export function bodyToActor(input: BodyActorInput): Actor {
   };
 }
 
-// Facility-bearing bodies → ownership sides. Only bodies that grant at least one command
-// become actors (a body with no commandable facilities isn't a menu actor). Sides follow
-// first-seen factionId order, mirroring shipsToActors, so the split is deterministic.
+// Facility-bearing bodies → ownership sides. Only bodies that grant at least one command become
+// actors (a body with no commandable facilities isn't a menu actor) — that domain filter is this
+// adapter's job; the deterministic first-seen faction split is the shared actorSides helper (the
+// same one shipsToActors ends on).
 export function bodiesToActors(bodies: readonly BodyActorInput[]): readonly ActorSide[] {
-  const byFaction = new Map<string, Actor[]>();
-  for (const body of bodies) {
-    const actor = bodyToActor(body);
-    if (actor.commands.length === 0) continue; // not a commandable actor
-    let actors = byFaction.get(body.factionId);
-    if (!actors) {
-      actors = [];
-      byFaction.set(body.factionId, actors);
-    }
-    actors.push(actor);
-  }
-  return [...byFaction].map(([factionId, actors]) => ({
-    factionId,
-    controlled: factionId === CONTROLLED_FACTION_ID,
-    actors,
-  }));
+  return actorSides(
+    bodies
+      .map((body) => ({ factionId: body.factionId, actor: bodyToActor(body) }))
+      .filter((entry) => entry.actor.commands.length > 0), // a command-less body isn't a menu actor
+  );
 }
