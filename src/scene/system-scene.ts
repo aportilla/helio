@@ -304,11 +304,11 @@ export class SystemScene implements Screen {
   }
 
   // Open the anchored action menu when a commandable actor is selected, close it otherwise.
-  // Both a fleet SHIP and a CONTROLLED facility-bearing BODY are actors (the neutral ship /
+  // A CONTROLLED fleet SHIP and a CONTROLLED facility-bearing BODY are actors (the neutral ship /
   // body adapters give each its commands); the menu anchors to the entity's live on-screen
   // center (ship slot or body disc, re-read each place so it tracks resizes / self-closes if
-  // the entity vanishes). A body opens only for the controlled side; an enemy/empty body is
-  // inspected via the sidebar, never commanded.
+  // the entity vanishes). Only the controlled side is commandable; an opponent ship or an
+  // enemy/empty body is inspected via the sidebar, never commanded.
   private syncActionMenu(pick: DiagramPick | null): void {
     const actor = pick ? this.actorForPick(pick) : null;
     if (!actor) {
@@ -329,13 +329,15 @@ export class SystemScene implements Screen {
   }
 
   // Resolve a pick into a commandable actor (+ its display title and owning faction), or null
-  // if it can't be commanded. A ship opens for ANY faction (inspection, the M2 idiom). A body
-  // opens only when CONTROLLED and its facilities grant ≥1 command — an enemy/bare body returns
-  // null (sidebar inspection only).
+  // if it can't be commanded. Only the CONTROLLED faction's entities are commandable: an
+  // opponent ship — like an enemy or bare body — returns null, inspected via the sidebar card
+  // but never opening a menu (it stays a bracketable TARGET when you command one of your own).
+  // A body additionally needs its facilities to grant ≥1 command.
   private actorForPick(pick: DiagramPick): { actor: Actor; title: string; factionId: string } | null {
     if (pick.kind === 'ship') {
       const ship = this.readyShips().find((s) => s.id === pick.shipId);
-      return ship ? { actor: shipToActor(ship), title: ship.name, factionId: ship.factionId } : null;
+      if (!ship || ship.factionId !== CONTROLLED_FACTION_ID) return null;
+      return { actor: shipToActor(ship), title: ship.name, factionId: ship.factionId };
     }
     if (pick.kind === 'star') return null;
     const body = BODIES[pick.bodyIdx];
@@ -385,8 +387,8 @@ export class SystemScene implements Screen {
 
   // The actor focus ring — the controlled faction's commandable actors in this system: ready
   // SHIPS first, then facility-commandable BODIES (ships-first keeps the ←/→ "my side" cycle
-  // legible). Clicking any ship/body still opens its menu for inspection; the keyboard walks
-  // this ring. A body with no commands is not in it.
+  // legible). Clicking one of these directly opens its menu; the keyboard ←/→ walks the same
+  // ring (opponents are never in it). A body with no commands is not in it.
   private commandableActorIds(): readonly string[] {
     const ships = this.readyShips().filter((s) => s.factionId === CONTROLLED_FACTION_ID).map((s) => s.id);
     const bodies: string[] = [];
@@ -407,9 +409,10 @@ export class SystemScene implements Screen {
     return p.kind === 'ship' ? p.shipId : encodeBodyEntityId(p.bodyIdx);
   }
 
-  // Cycle the focused actor by delta (the category-level ←/→). Steps within the ring of your
-  // commandable actors, wrapping; if the current pick isn't one of yours (an opponent clicked
-  // for inspection, or nothing), it jumps into the ring. Re-selecting re-opens the menu.
+  // Cycle the focused actor by delta (the category-level ←/→ of an open menu). Steps within the
+  // ring of your commandable actors, wrapping. The menu only opens on one of yours, so the
+  // current pick is normally already in the ring; the jump-to-an-end is a defensive fallback.
+  // Re-selecting re-opens the menu.
   private cycleActor(delta: number): void {
     const ring = this.commandableActorIds();
     if (ring.length === 0) return;
@@ -567,9 +570,12 @@ export class SystemScene implements Screen {
     // level). Escape at the menu's top level is NOT claimed, so it falls through to clear
     // the selection (which closes the menu) — one Escape per level, then one to deselect.
     if (this.actionMenu.handleKey(e)) return;
-    // Keyboard-first actor focus: a directional tap from idle (nothing selected) enters the
-    // commandable-actor ring and opens the first actor's menu, so an order is issuable mouse-free.
-    if (!this.selectedPick && isDirectionalKey(e)) {
+    // Keyboard-first actor focus: a directional tap while no menu is open — nothing selected,
+    // or a non-commandable pick being inspected (an opponent ship, a bare buildable body) —
+    // enters the commandable-actor ring and opens the first actor's menu, so an order is
+    // issuable mouse-free. When one of YOUR actors is selected its menu is open and already
+    // claimed the key above.
+    if (!this.actionMenu.isOpen && isDirectionalKey(e)) {
       const ring = this.commandableActorIds();
       if (ring.length > 0) {
         this.select(this.pickForActorId(ring[0]!));
