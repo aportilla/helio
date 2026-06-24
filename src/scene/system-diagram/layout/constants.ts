@@ -373,28 +373,50 @@ export const RENDER_ORDER_SHIP_THRUST = 29;
 
 // --- Fleet (built ships) ---
 //
-// A system's ready ships, parked as TWO opposing formations in the lower field — the
-// player's side at left facing right, opponents at right facing left, so the two
-// read as a stand-off across the open battlefield. They render ABOVE the cargo dots
-// — foreground actors, not background traffic — and (like the cargo pool) rely on
-// depthTest:false + renderOrder for layering, not z. The gap above RENDER_ORDER_FLEET
-// is reserved for the eventual combat-sprite block (Appendix A10).
+// A system's ready ships, drawn up as TWO opposing JRPG battle lines in the open field
+// below the planet dome — the player's side in the left half facing right, opponents in
+// the right half facing left, so the two read as a stand-off across the open battlefield.
+// Each side forms a vertical arc bowed AWAY from the enemy (the FLEET_ARC_* knobs below
+// + FleetLayer.layoutGroup own the shape). They render ABOVE the cargo dots — foreground
+// actors, not background traffic — and (like the cargo pool) rely on depthTest:false +
+// renderOrder for layering, not z. The gap above RENDER_ORDER_FLEET is reserved for the
+// eventual combat-sprite block (Appendix A10).
 export const RENDER_ORDER_FLEET = 35;
 export const Z_FLEET = 0.006;
 // Hard ceiling on simultaneously-rendered fleet sprites. Ready ships have no exit
 // path in v1 (no movement/combat), so the rendered count is capped rather than
 // growing unbounded; surplus ships beyond this are simply not drawn.
 export const MAX_FLEET_SPRITES = 32;
-// The fleet's baseline height as a fraction of the buffer, measured UP from the
-// bottom — low in the open field, clear of the planet row above. Rows stack upward.
-export const FLEET_BASELINE_FRAC = 0.16;
-// Gap in buffer px between adjacent fleet sprites in the formation grid.
-export const FLEET_SPRITE_GAP = 4;
-// The two sides' formation centers, as fractions of the content width: the player's
-// fleet is centered in the left half, opponents in the right half, so a wide gap of
-// open field sits between them. Each side grids within its own half.
-export const FLEET_MINE_CENTER_FRAC = 0.25;
-export const FLEET_THEIRS_CENTER_FRAC = 0.75;
+// The fleet's RESERVED BAND — the open field below the planets the two formations
+// spread to fill. Its TOP tracks the dome edge baseline (domeBaselineY, the lowest
+// planet) minus this gap, so it sits just under the planets on any viewport; its
+// BOTTOM is this pad above the content-rect bottom. Each side arranges its ships as a
+// single vertical ARC (JRPG party row) bowed toward the enemy, fanning into extra
+// side-by-side arcs only when one column would overcrowd (see FleetLayer.layoutGroup).
+export const FLEET_AREA_TOP_GAP = 64;
+export const FLEET_AREA_BOTTOM_PAD = 28;
+// Half-width (env-px) of the no-man's-land at the content centerline: each side's
+// muster box stops this far short of center, so the two opposing formations face off
+// across an open gutter rather than meeting in the middle.
+export const FLEET_CENTER_GUTTER = 24;
+// Arc depth: how deep the crescent cups, as a fraction of a column's vertical SPAN (top
+// ship to bottom ship). POSITIVE cups AWAY from the enemy in the center — the flanks
+// (top + bottom) lead toward the foe, the middle hangs back by the same amount — so no
+// friendly hull screens another's line of fire and the two sides read as `( )`. (The
+// flanks lead by half this, the middle trails by half.) 0 is a straight vertical line;
+// NEGATIVE bows the other way (convex, `) (`).
+export const FLEET_ARC_DEPTH_FRAC = 0.3;
+// When does one arc become several? A single column holds as many ships as fit at a
+// vertical pitch of at least this multiple of the sprite size; past that the fleet fans
+// into side-by-side arcs (ceil division), keeping each column's ships from crowding.
+export const FLEET_ARC_MIN_PITCH_FACTOR = 1.5;
+// PREFERRED horizontal gap (env-px) between adjacent arc columns. The fanned columns
+// center in the side's box at this gap but SQUEEZE below it — the horizontal twin of the
+// vertical spread — whenever more columns than fit would otherwise march past the box
+// edge, so the two sides never spread off-screen or into each other. The actual (possibly
+// squeezed) gap also caps each column's bow, so neighbouring crescents never cross.
+// Irrelevant to the common single-arc case.
+export const FLEET_ARC_COLUMN_GAP = 56;
 
 // --- Cargo ships (economy traffic) ---
 //

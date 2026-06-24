@@ -9,7 +9,9 @@
 // — Corvette: the v1 starter ship. A small hull built in a handful of galaxy turns.
 export const CORVETTE_BUILD_TURNS = 3;
 
-// Fleet-sprite radius in content-buffer px. The fleet draws Mesh quads on the
-// makeStarMeshMaterial path — the same disc primitive the system view's bodies use,
-// shared with the eventual combat sprites — not GL_POINTS.
-export const CORVETTE_SPRITE_SIZE_PX = 5;
+// Fleet-sprite radius in content-buffer px (HALF the triangle's edge — the sprite is a
+// d×d quad, d = 2·radius). 25 → a 50-px-wide hull: a readable ship parked in the field
+// below the planets, not a stand-in icon. The fleet draws Mesh quads on the
+// makeFleetTriangleMaterial path — the same parity-snapped per-pixel SDF discipline the
+// system view's star disc uses, shared with the eventual combat sprites — not GL_POINTS.
+export const CORVETTE_SPRITE_SIZE_PX = 25;

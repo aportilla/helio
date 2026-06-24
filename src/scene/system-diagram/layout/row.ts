@@ -136,16 +136,10 @@ export function layoutRow(items: RowSlot[], bufferW: number, bufferH: number): v
   const sumD = items.reduce((s, r) => s + r.widthPx, 0);
   const gap = (availW - sumD) / (N + 1);
 
-  // Lerp the dome's height over viewport area, then derive the baseline
-  // from the (fixed) peak position. Peak anchored = top of the arc
-  // stays the same distance from the stars; edges drop as the screen
-  // grows.
-  const area = bufferW * bufferH;
-  const areaT = Math.max(0, Math.min(1,
-    (area - DOME_AREA_MIN) / (DOME_AREA_MAX - DOME_AREA_MIN)));
-  const peakHeight = DOME_PEAK_MIN_PX + areaT * (DOME_PEAK_MAX_PX - DOME_PEAK_MIN_PX);
-  const peakY = bufferH - PLANET_PEAK_FROM_TOP;
-  const baselineY = peakY - peakHeight;
+  // The dome's height lerps over viewport area; the baseline derives from the
+  // (fixed) peak position. Peak anchored = top of the arc stays the same distance
+  // from the stars; edges drop as the screen grows.
+  const { baselineY, peakHeight } = domeArc(bufferW, bufferH);
 
   let cursor = xLeft + gap;
   for (let i = 0; i < N; i++) {
@@ -165,4 +159,24 @@ export function sumOf(arr: readonly number[]): number {
   let s = 0;
   for (const n of arr) s += n;
   return s;
+}
+
+// The dome arc's two anchors for a given viewport: the peak (fixed
+// PLANET_PEAK_FROM_TOP below the top, where the middle planet rides) and the
+// baseline (the EDGE planets, peakHeight below the peak — the lowest point of the
+// arc). peakHeight lerps over viewport area so bigger screens get a deeper arc.
+function domeArc(bufferW: number, bufferH: number): { baselineY: number; peakHeight: number } {
+  const area = bufferW * bufferH;
+  const areaT = Math.max(0, Math.min(1,
+    (area - DOME_AREA_MIN) / (DOME_AREA_MAX - DOME_AREA_MIN)));
+  const peakHeight = DOME_PEAK_MIN_PX + areaT * (DOME_PEAK_MAX_PX - DOME_PEAK_MIN_PX);
+  const peakY = bufferH - PLANET_PEAK_FROM_TOP;
+  return { baselineY: peakY - peakHeight, peakHeight };
+}
+
+// The dome edge baseline (content-buffer px) — the lowest point of the planet arc.
+// Shared by layoutRow (which rides the arc off it) and the fleet layer (which reserves
+// the open field BELOW it for the two ship formations).
+export function domeBaselineY(bufferW: number, bufferH: number): number {
+  return domeArc(bufferW, bufferH).baselineY;
 }
