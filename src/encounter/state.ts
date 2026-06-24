@@ -60,3 +60,49 @@ export interface CombatantSide {
   readonly controlled: boolean;
   readonly combatants: readonly Combatant[];
 }
+
+// ── Encounter state (E2 bones) ───────────────────────────────────────────────
+
+// The bones placeholder HP stat key. The real model is an ordered POOL STACK (shields-then-hull, the
+// absorb-before-hull cascade) that lands with the effect substrate; until then a single integer
+// `hull` stat in the opaque bag carries the visible damage so the loop reads as combat with zero
+// committed math. It lives in `stats` (not a dedicated field) precisely so the pool stack can
+// supersede it without reshaping the Combatant.
+export const HULL_STAT = 'hull';
+
+// A combatant's remaining hull (the bones HP), or +∞ when it carries no hull stat — an unstatted
+// combatant (the effect-free real adapter output, before createEncounterState stamps a placeholder)
+// simply can't be downed.
+export function hullOf(combatant: Combatant): number {
+  return combatant.stats?.[HULL_STAT] ?? Infinity;
+}
+
+// Down = hull depleted. A downed combatant is MARKED, not removed (§3.3): it keeps its combatId slot
+// so the renderer can compact it and replay stays index-stable; it just offers no commands and the
+// turn cursor skips it.
+export function isDown(combatant: Combatant): boolean {
+  return hullOf(combatant) <= 0;
+}
+
+// One thing the reducer did that the renderer animates (§3.1) — a typed union dispatched by `kind`.
+// `source`/`target`/`combatId` are combatIds (the render anchor); `amount` is integer-milli hull.
+// The bones emit only damage + down; the mechanics phase adds {lockBroken}, {manaScattered}, … .
+export type EncounterEvent =
+  | { readonly kind: 'damage'; readonly source: number; readonly target: number; readonly amount: number }
+  | { readonly kind: 'down'; readonly combatId: number };
+
+// The transient, stepped combat state — the third state category, born from an EncounterSpec and
+// dead at encounter exit, NEVER serialized into either save (§6.1). The bones carry only the
+// skeleton: the live combatants (their mutated stats), whose turn it is, and the round counter. The
+// mana counts, lock rows, combo points, and PRNG words are deferred state the mechanics phase adds.
+export interface EncounterState {
+  // combatId === index, preserved from the spec. A combatant's stats mutate across steps (its hull
+  // falls), so the reducer replaces this array each step rather than mutating in place — it stays pure.
+  readonly combatants: readonly Combatant[];
+  // The combatId whose turn it is — the turn cursor (./turn-order) advances it; the renderer's
+  // timeline ribbon projects upcoming actors from it.
+  readonly activeId: number;
+  // 1-based; bumps when the cursor wraps a full pass through the living combatants. The event-driven
+  // round (§3.2) — an idle player burns none.
+  readonly round: number;
+}

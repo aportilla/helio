@@ -54,11 +54,19 @@ the rest of the project follows.
 - **E1 — the contract (shipped).** `state.ts` (the `Combatant` union + `CombatantSide`),
   `encounter-spec.ts` (`EncounterSpec` + `buildEncounterSpec`), and `ships-to-combatants.ts` (the
   combat specialization of the fleet adapter). Pure and node-tested; nothing renders yet.
-- **E2 — the headless reducer.** A pure `applyCommand(state, intent) → { state, events }` with a
-  round-robin `nextActor` and an action-exhaustion terminal, folding a flat placeholder effect over
-  the combatant set. The first real mechanic — the declared-effect substrate (effect-free
-  components/facilities *declaring* the effects a reducer folds uniformly, HP as an absorb-before-
-  hull pool stack) — lands on top of this reducer, not before it.
+- **E2 — the headless reducer (shipped).** `state.ts` adds the stepped `EncounterState` + the
+  `EncounterEvent` union; `step.ts` is the pure core — `createEncounterState(spec)` then
+  `applyCommand(state, intent) → { state, events }` — with `turn-order.ts` (`nextActor`,
+  round-robin by `combatId`), `terminal.ts` (`isTerminal`), and `tuning.ts` (placeholder magnitudes).
+  Zero gameplay math: a **flat placeholder effect** subtracts a fixed `hull` amount and emits a
+  `damage`/`down` event, so the loop reads as combat with no committed formula and no PRNG. The
+  terminal is **side elimination** (a downed combatant offers no commands; the plan's "mutual-pass"
+  clause is moot — the menu has no Pass verb). HP is a single placeholder `hull` *stat* here; the
+  real ordered pool stack arrives with the effect substrate below, which is the first real mechanic
+  that lands *on top of* this reducer — not before it.
+- **The effect substrate.** Components/facilities *declaring* the effects a reducer folds uniformly
+  (no per-effect-type branch), HP as an absorb-before-hull pool stack. The first real mechanic on the
+  E2 reducer — engine-recharge as the worked example, which deletes the would-be hardcoded step.
 - **E3 / E4 — the mode + the wire-up.** `SystemScene.enterEncounter` modality, then un-stubbing the
   `'encounter'` dispatch so a confirmed offensive action builds an `EncounterSpec` and the same
   anchored menu drives the round (its confirm sink swapped to the reducer). The first-playable beat.
