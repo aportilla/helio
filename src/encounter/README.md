@@ -51,6 +51,13 @@ mode on `SystemScene`) is the consumer, in `src/scene/`.
 Built phase-by-phase; combat shares the "build the UX bones first, defer the mechanics" discipline
 the rest of the project follows.
 
+> **Branch:** the E1 / E2 / effect-slice-1 commits live on `encounter-e1-combatant-contract`, not
+> yet merged to `main` — check that branch out before picking this up.
+>
+> **Next, in order:** effect-substrate **slice 2** (the substrate bullet below) FIRST, then **E3/E4** —
+> slice 2 is headless + test-guarded, so doing it first means E3/E4 renders the real pool-stack HP
+> from the start instead of the placeholder. (E5 body combatants can interleave.)
+
 - **E1 — the contract (shipped).** `state.ts` (the `Combatant` union + `CombatantSide`),
   `encounter-spec.ts` (`EncounterSpec` + `buildEncounterSpec`), and `ships-to-combatants.ts` (the
   combat specialization of the fleet adapter). Pure and node-tested; nothing renders yet.
@@ -77,7 +84,15 @@ the rest of the project follows.
   shield via `installsOnResolve`.
 - **E3 / E4 — the mode + the wire-up.** `SystemScene.enterEncounter` modality, then un-stubbing the
   `'encounter'` dispatch so a confirmed offensive action builds an `EncounterSpec` and the same
-  anchored menu drives the round (its confirm sink swapped to the reducer). The first-playable beat.
+  anchored menu drives the round. The first-playable beat. Seams: the dispatch STUB is
+  `onEnterEncounter` in `src/scene/system-scene.ts` (a DEV `console.debug`); the `grant.kind` fork is
+  `dispatch()` in `src/scene/actions/system-action-menu.ts`. Two items are real NEW work, not config
+  flips — `Screen.freezesTurn` is `readonly` (back it with a mode-flag getter), and there is no
+  swappable confirm sink (the fork is hardwired to `onImmediate`/`onEnterEncounter`, so E4 must ADD a
+  seam routing an in-encounter commit to `applyCommand`). Build the spec via
+  `buildEncounterSpec(shipsToCombatants(readyShips()), intent)`; the combat menu opens on the SEEDED
+  `EncounterState` combatant (it carries `energy`/`energyMax`, so the menu gate works) and reopens on
+  each new `activeId`. Note `applyCommand` DEV-asserts the intent's actor is the active combatant.
 - **E5 — body combatants.** The `body-role` producer + appending body-combatants to the spec.
 
 Until ship *movement* exists, opponents are placed by a DEV-only spawn action; the single
