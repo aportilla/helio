@@ -10,7 +10,7 @@ import { HULL_STAT, type Combatant, type EncounterState } from '../state.ts';
 const c = (combatId: number, factionId: Combatant['factionId'], hull = 100): Combatant => ({
   kind: 'ship', id: `c${combatId}`, combatId, factionId, classId: 'corvette', commands: [], stats: { [HULL_STAT]: hull },
 });
-const at = (combatants: readonly Combatant[], activeId: number): EncounterState => ({ combatants, activeId, round: 1 });
+const at = (combatants: readonly Combatant[], activeId: number): EncounterState => ({ combatants, activeId, round: 1, effects: [] });
 
 test('advances to the next combatId, cyclically', () => {
   const cs = [c(0, 'player'), c(1, 'rival'), c(2, 'player')];

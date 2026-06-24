@@ -64,9 +64,17 @@ the rest of the project follows.
   clause is moot — the menu has no Pass verb). HP is a single placeholder `hull` *stat* here; the
   real ordered pool stack arrives with the effect substrate below, which is the first real mechanic
   that lands *on top of* this reducer — not before it.
-- **The effect substrate.** Components/facilities *declaring* the effects a reducer folds uniformly
-  (no per-effect-type branch), HP as an absorb-before-hull pool stack. The first real mechanic on the
-  E2 reducer — engine-recharge as the worked example, which deletes the would-be hardcoded step.
+- **The effect substrate (slice 1 shipped).** `effects/` is the fourth registry-family member: a
+  provider DECLARES the effects it installs (`ShipComponentDef.installs?`) exactly as it declares
+  grants, and the reducer FOLDS them by hook PRESENCE with no per-effect-type branch — `installEffects`
+  (`collectInstalls` + `mintEffects`) is the pure twin of `deriveCommands`, and `tickCycleStart` runs
+  each combatant's `onCycleStart` effects at its own turn start. Worked example A is live:
+  `small-engine` declares a permanent `recharge` effect that tops energy toward `energyMax` each cycle
+  — a declared component effect, not a hardcoded reducer step. Stacking is **distinct instances** (two
+  of the same effect tick independently; a per-def override is deferred until content needs it).
+  *Deferred to slice 2:* HP as an ordered **pool stack** (the absorb-before-hull cascade superseding
+  the placeholder `hull` stat) with the `onInstall`/`onExpire` hooks, and worked example B — a timed
+  shield via `installsOnResolve`.
 - **E3 / E4 — the mode + the wire-up.** `SystemScene.enterEncounter` modality, then un-stubbing the
   `'encounter'` dispatch so a confirmed offensive action builds an `EncounterSpec` and the same
   anchored menu drives the round (its confirm sink swapped to the reducer). The first-playable beat.

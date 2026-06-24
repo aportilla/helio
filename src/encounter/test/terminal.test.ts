@@ -9,7 +9,7 @@ import { HULL_STAT, type Combatant, type EncounterState } from '../state.ts';
 const c = (combatId: number, factionId: Combatant['factionId'], hull = 100): Combatant => ({
   kind: 'ship', id: `c${combatId}`, combatId, factionId, classId: 'corvette', commands: [], stats: { [HULL_STAT]: hull },
 });
-const roster = (combatants: readonly Combatant[]): EncounterState => ({ combatants, activeId: 0, round: 1 });
+const roster = (combatants: readonly Combatant[]): EncounterState => ({ combatants, activeId: 0, round: 1, effects: [] });
 
 test('not terminal while two factions each field a living combatant', () => {
   assert.equal(isTerminal(roster([c(0, 'player'), c(1, 'rival')])), false);

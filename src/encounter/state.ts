@@ -15,6 +15,7 @@
 import type { FactionType } from '../factions/types.ts';
 import type { ShipClassType } from '../ships/types.ts';
 import type { Actor } from '../actions/types.ts';
+import type { ActiveEffect } from './effects/types.ts';
 
 // The combat identity every combatant carries on top of being an Actor.
 interface CombatantBase extends Actor {
@@ -70,6 +71,21 @@ export interface CombatantSide {
 // supersede it without reshaping the Combatant.
 export const HULL_STAT = 'hull';
 
+// The energy stat + its cap. Per the accepted axis split (§7.5), energy stays in the opaque stat bag
+// (NOT a pool) so the shipped menu availability gate `energy >= totalCost` reads it unchanged. The
+// `recharge` effect tops energy up toward energyMax each cycle; createEncounterState seeds a
+// placeholder energyMax (the real one is Σ battery — deferred with the cost model) and a charged
+// start (energy = energyMax).
+export const ENERGY_STAT = 'energy';
+export const ENERGY_MAX_STAT = 'energyMax';
+
+// A combatant with one stat key overwritten — the immutable update the pure reducer and the effect
+// fold both make (a NEW combatant, never a mutation). Spreading the union preserves the `kind`
+// discriminant; an absent `stats` bag becomes a one-key bag.
+export function withStat(combatant: Combatant, key: string, value: number): Combatant {
+  return { ...combatant, stats: { ...combatant.stats, [key]: value } };
+}
+
 // A combatant's remaining hull (the bones HP), or +∞ when it carries no hull stat — an unstatted
 // combatant (the effect-free real adapter output, before createEncounterState stamps a placeholder)
 // simply can't be downed.
@@ -85,11 +101,13 @@ export function isDown(combatant: Combatant): boolean {
 }
 
 // One thing the reducer did that the renderer animates (§3.1) — a typed union dispatched by `kind`.
-// `source`/`target`/`combatId` are combatIds (the render anchor); `amount` is integer-milli hull.
-// The bones emit only damage + down; the mechanics phase adds {lockBroken}, {manaScattered}, … .
+// `source`/`target`/`combatId` are combatIds (the render anchor); `amount`/`delta` are integer-milli.
+// `effect` is one applied per-cycle StatDelta (recharge, later DoT/HoT), emitted only when it
+// actually changed a stat. The mechanics phase adds {lockBroken}, {manaScattered}, … .
 export type EncounterEvent =
   | { readonly kind: 'damage'; readonly source: number; readonly target: number; readonly amount: number }
-  | { readonly kind: 'down'; readonly combatId: number };
+  | { readonly kind: 'down'; readonly combatId: number }
+  | { readonly kind: 'effect'; readonly combatId: number; readonly effectKey: string; readonly statKey: string; readonly delta: number };
 
 // The transient, stepped combat state — the third state category, born from an EncounterSpec and
 // dead at encounter exit, NEVER serialized into either save (§6.1). The bones carry only the
@@ -105,4 +123,8 @@ export interface EncounterState {
   // 1-based; bumps when the cursor wraps a full pass through the living combatants. The event-driven
   // round (§3.2) — an idle player burns none.
   readonly round: number;
+  // The live effects riding on the combatants — the only serialized half of the effect substrate
+  // (./effects), minted at build from provider declarations and folded at each combatant's turn
+  // start. Each is its own instance (distinct-instances stacking).
+  readonly effects: readonly ActiveEffect[];
 }

@@ -25,6 +25,11 @@ const DEFS = {
     // The drive grants NAVIGATION flee (D9: every ship has a drive ⇒ every ship can flee). It
     // targets self (the ship withdraws) and resolves immediately — no encounter, no target pick.
     grants: [{ key: 'flee', label: 'Flee', color: FLEE_ACTION_COLOR, category: 'navigation', targeting: 'self', kind: 'immediate' }],
+    // The drive DECLARES its per-cycle energy recharge as an effect (worked example A,
+    // 4x-encounter-combat-system §7.5) — not a hardcoded reducer step. `amount` is energy-milli
+    // restored at the ship's own turn start, clamped to energyMax. A second power component would
+    // install its own `recharge`; the instances simply sum in the one fold, no merge logic.
+    installs: [{ effectKey: 'recharge', remaining: -1, params: { amount: 3_000 } }],
   },
   'small-laser': {
     type: 'small-laser',

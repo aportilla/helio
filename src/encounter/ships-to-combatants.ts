@@ -12,7 +12,11 @@ import type { Ship } from '../game-state-codec.ts';
 import { groupByFaction } from '../actions/sides.ts';
 import { SHIP_CATEGORIES } from '../actions/registry.ts';
 import { shipLoadout } from '../actions/ships-to-actors.ts';
-import type { CombatantSide, ShipCombatant } from './state.ts';
+import { SHIP_CLASS_BY_TYPE } from '../ships/registry.ts';
+import { COMPONENT_BY_TYPE } from '../ships/components/registry.ts';
+import { collectInstalls } from './effects/fold.ts';
+import type { EffectInstall } from './effects/types.ts';
+import type { Combatant, CombatantSide, ShipCombatant } from './state.ts';
 
 // One ship → one combatant at its assigned combatId. Commands are the ship's derived loadout (the
 // SAME shipLoadout the system-view actor uses) and the palette is the shared SHIP_CATEGORIES, so a
@@ -28,6 +32,17 @@ export function shipToCombatant(ship: Ship, combatId: number): ShipCombatant {
     commands: shipLoadout(ship),
     categories: SHIP_CATEGORIES,
   };
+}
+
+// A combatant's DECLARED effect installs as the substrate sees them — the combat analog of
+// shipLoadout: for a ship, its class's components are the install PROVIDERS (each component may
+// declare `installs`), flattened through the same collectInstalls fold that mirrors deriveCommands.
+// createEncounterState feeds this to mintEffects to seed the encounter's ActiveEffects. A body has
+// no installs until its E5 producer lands.
+export function combatantInstalls(combatant: Combatant): readonly EffectInstall[] {
+  if (combatant.kind !== 'ship') return [];
+  const components = SHIP_CLASS_BY_TYPE.get(combatant.classId)?.components ?? [];
+  return collectInstalls(components.map((type) => ({ installs: COMPONENT_BY_TYPE.get(type)?.installs })));
 }
 
 // Ready ships → faction sides of combatants. Mirrors shipsToActors: drop 'building' ships (not in

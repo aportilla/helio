@@ -6,6 +6,7 @@
 // takes), nothing else app-side, nothing from the DOM/catalog or the (not-yet-built) encounter.
 
 import type { ActionGrant } from '../../actions/types.ts';
+import type { EffectInstall } from '../../encounter/effects/types.ts';
 
 // FROZEN serialized contract. A component id is the PROVIDER half of every action wire id it backs
 // (`"<componentId>:<grant.key>"`, ../../actions/derive.ts) and — once the loadout build flow lands
@@ -23,11 +24,11 @@ export type ShipComponentType = 'small-engine' | 'small-laser';
 export type ShipComponentKind = 'chassis' | 'drive' | 'weapon' | 'defense' | 'utility';
 
 // One ship component's static design — the ship-side peer of FacilityDef. Deliberately THIN: just
-// identity, role, and the actions it grants, mirroring how a facility grants its body commands.
-// The energy model (`battery` / `recharge`, and `costPerUnit` on the grant), D13's size-class mass
+// identity, role, the actions it grants, and the per-cycle/passive effects it installs in combat.
+// The energy COST model (`battery` capacity, and `costPerUnit` on the grant), D13's size-class mass
 // budget, and the render piece are deferred behind the SAME seam FacilityDef defers `battery?`
-// behind — each lands with the consumer that reads it (the encounter reducer / the loadout build
-// flow / the fleet render), exactly as ShipClassDef stayed thin until its consumers arrived.
+// behind — each lands with the consumer that reads it (the loadout build flow / the fleet render),
+// exactly as ShipClassDef stayed thin until its consumers arrived.
 export interface ShipComponentDef {
   readonly type: ShipComponentType;   // === its registry key; a DEV assert pins def.type === key
   readonly label: string;             // 'Small Laser' — single source for build rows + part labels
@@ -38,4 +39,10 @@ export interface ShipComponentDef {
   // the SAME deriveCommands that runs over a body's facilities. ABSENT ⇒ grants none (a chassis
   // grants no actions, D11). A type-only import of the action vocab keeps this leaf sim-/DOM-free.
   readonly grants?: readonly ActionGrant[];
+  // The combat effects this component INSTALLS on its ship — the effect-substrate twin of `grants`
+  // (4x-encounter-combat-system §7.5). PERMANENT effects, minted at encounter build by installEffects
+  // (the deriveCommands twin) and folded by the reducer with no per-effect-type branch. This is how a
+  // drive declares its per-cycle energy recharge as a DECLARED effect rather than a hardcoded step.
+  // ABSENT ⇒ installs none. A type-only import keeps this leaf sim-/DOM-free.
+  readonly installs?: readonly EffectInstall[];
 }

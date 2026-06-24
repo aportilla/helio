@@ -9,7 +9,7 @@ import { applyCommand, createEncounterState } from '../step.ts';
 import { shipsToCombatants } from '../ships-to-combatants.ts';
 import { buildEncounterSpec } from '../encounter-spec.ts';
 import { isTerminal } from '../terminal.ts';
-import { HULL_STAT, isDown, type EncounterState } from '../state.ts';
+import { ENERGY_STAT, HULL_STAT, isDown, type EncounterState } from '../state.ts';
 import { PLACEHOLDER_DAMAGE_MILLI, PLACEHOLDER_HULL_MILLI } from '../tuning.ts';
 import type { Ship } from '../../game-state-codec.ts';
 
@@ -74,6 +74,20 @@ test('a target reaching 0 hull is downed (event + isDown + terminal)', () => {
   assert.ok(events.some((e) => e.kind === 'down' && e.combatId === 1), 'a down event for r1');
   assert.equal(isDown(state.combatants.find((c) => c.id === 'r1')!), true);
   assert.equal(isTerminal(state), true, 'rival eliminated → terminal');
+});
+
+test('a combatant recharges energy at its own turn start (the declared engine effect)', () => {
+  // p1 (combatId 0) acts first on a charged start (no pre-tick). Drain p1, then run a full round so
+  // the cursor wraps back to p1 — its turn start ticks small-engine's declared recharge.
+  const base = encounterOf([ship('p1', 'player'), ship('r1', 'rival')]);
+  let s: EncounterState = {
+    ...base,
+    combatants: base.combatants.map((c) => (c.id === 'p1' ? { ...c, stats: { ...c.stats, [ENERGY_STAT]: 1000 } } : c)),
+  };
+  ({ state: s } = applyCommand(s, { actorId: 'p1', actionId: LASER, targetIds: ['r1'] })); // p1 acts → r1's turn
+  assert.equal(s.combatants.find((c) => c.id === 'p1')!.stats?.[ENERGY_STAT], 1000, "p1 doesn't recharge on r1's turn");
+  ({ state: s } = applyCommand(s, { actorId: 'r1', actionId: LASER, targetIds: ['p1'] })); // r1 acts → wraps to p1 → p1 ticks
+  assert.equal(s.combatants.find((c) => c.id === 'p1')!.stats?.[ENERGY_STAT], 4000, 'p1 recharged 3000 at its turn start');
 });
 
 test('runs a full encounter to the side-elimination terminal', () => {
