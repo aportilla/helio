@@ -14,7 +14,7 @@ import type { EffectInstall } from '../../encounter/effects/types.ts';
 // shipped one breaks old saves AND the action ids derived from it — three guards defend it
 // (registry FROZEN_COMPONENT_IDS + its CI test, the DEV module-load assert, and this literal union
 // forcing every Record over it to update). Mirrors FacilityType / ShipClassType discipline.
-export type ShipComponentType = 'small-engine' | 'small-laser';
+export type ShipComponentType = 'small-engine' | 'small-laser' | 'small-shield';
 
 // A component's structural family (the D13 taxonomy). It drives nothing in the menu today — the
 // grants do that — but names the part's ROLE so the deferred consumers can read it: a loadout
@@ -45,4 +45,10 @@ export interface ShipComponentDef {
   // drive declares its per-cycle energy recharge as a DECLARED effect rather than a hardcoded step.
   // ABSENT ⇒ installs none. A type-only import keeps this leaf sim-/DOM-free.
   readonly installs?: readonly EffectInstall[];
+  // The TIMED effects this component installs when one of its GRANTS resolves in an encounter, keyed by
+  // grant key — the on-resolve twin of build-time `installs`. Declared HERE (not on the neutral
+  // ActionGrant) so the action vocabulary stays a pure leaf with no encounter import; the reducer mints
+  // `installsOnResolve[grantKeyOf(actionId)]` when that action fires. A defense part's `raise-shields`
+  // grant maps to a timed `shield-segment` here. ABSENT ⇒ installs none on resolve.
+  readonly installsOnResolve?: Readonly<Record<string, readonly EffectInstall[]>>;
 }

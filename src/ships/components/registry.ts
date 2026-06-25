@@ -11,7 +11,7 @@
 // from ../../actions/tuning.ts mirrors the facility registry's import of the same hoisted palette.
 
 import type { ShipComponentDef, ShipComponentType } from './types.ts';
-import { LASER_ACTION_COLOR, FLEE_ACTION_COLOR } from '../../actions/tuning.ts';
+import { LASER_ACTION_COLOR, FLEE_ACTION_COLOR, SHIELD_ACTION_COLOR } from '../../actions/tuning.ts';
 
 // The registry, keyed by ShipComponentType. `satisfies Record<ShipComponentType, ...>` is the
 // compile layer of the frozen-key guard: adding a literal to the union without a def here fails to
@@ -40,6 +40,20 @@ const DEFS = {
     // missile batteries do — the same grant shape on the ship side of the symmetry.
     grants: [{ key: 'laser', label: 'Laser', color: LASER_ACTION_COLOR, category: 'attack', targeting: 'single', kind: 'encounter', targets: (c) => c.allegiance === 'enemy' }],
   },
+  'small-shield': {
+    type: 'small-shield',
+    label: 'Small Shield',
+    kind: 'defense',
+    // A defense part grants a SUPPORT verb that raises a temporary shield on the ship ITSELF. `kind`
+    // is the live-view dispatch fork only (immediate outside combat); inside an encounter the reducer
+    // folds it regardless of `kind`. On resolve it installs a 3-cycle `shield-segment` (worked example
+    // B, 4x-encounter-combat-system §7.5): onInstall splices a `shields` band above hull, the damage
+    // cascade absorbs into it first, onExpire pops it. `capacity` is shield-HP-milli; a re-cast stacks
+    // a second independent band (distinct-instances). The on-resolve install is keyed by grant key so a
+    // multi-grant component installs per verb.
+    grants: [{ key: 'raise-shields', label: 'Raise Shields', color: SHIELD_ACTION_COLOR, category: 'support', targeting: 'self', kind: 'immediate' }],
+    installsOnResolve: { 'raise-shields': [{ effectKey: 'shield-segment', remaining: 3, params: { capacity: 50_000 } }] },
+  },
 } satisfies Record<ShipComponentType, ShipComponentDef>;
 
 export const SHIP_COMPONENT_DEFS: readonly ShipComponentDef[] = Object.values(DEFS);
@@ -64,7 +78,7 @@ export function componentLabel(type: ShipComponentType): string {
 // a live type (SHIP_COMPONENT_TYPES.has), so removing OR renaming a shipped id fails — protecting
 // the action ids derived from it (and, from Phase 3, old ship saves) from a compiler-invisible
 // "cleanup". Mirrors FROZEN_FACILITY_IDS / FROZEN_SHIP_CLASS_IDS.
-export const FROZEN_COMPONENT_IDS: readonly string[] = ['small-engine', 'small-laser'];
+export const FROZEN_COMPONENT_IDS: readonly string[] = ['small-engine', 'small-laser', 'small-shield'];
 
 // DEV-only module-load invariant: each def's `type` equals its registry key, and every frozen id is
 // still a live type. Mirrors the facilities + ships drift checks — loud in dev, stripped in prod,

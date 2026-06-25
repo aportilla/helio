@@ -17,6 +17,10 @@ export const LASER_ACTION_COLOR = '#e0644e';
 // ship's engine (D9: every ship has a drive ⇒ every ship can flee). (small-engine)
 export const FLEE_ACTION_COLOR = '#c9b46b';
 
+// — Raise Shields: a ship's defensive SUPPORT verb. A protective blue, cooler than the cyan UI and
+// distinct from the offensive reds/ambers — reads as a deflector going up. (small-shield)
+export const SHIELD_ACTION_COLOR = '#5aa9d6';
+
 // The body weapon / support verbs — each granted by a facility (see ../facilities/registry.ts).
 // PROVISIONAL accents, each a distinct hue so a body actor's menu rows read at a glance, loosely
 // echoing the facility palette they act on/with.

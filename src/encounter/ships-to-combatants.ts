@@ -11,9 +11,11 @@
 import type { Ship } from '../game-state-codec.ts';
 import { groupByFaction } from '../actions/sides.ts';
 import { SHIP_CATEGORIES } from '../actions/registry.ts';
+import { grantKeyOf } from '../actions/derive.ts';
 import { shipLoadout } from '../actions/ships-to-actors.ts';
 import { SHIP_CLASS_BY_TYPE } from '../ships/registry.ts';
 import { COMPONENT_BY_TYPE } from '../ships/components/registry.ts';
+import type { ShipComponentType } from '../ships/components/types.ts';
 import { collectInstalls } from './effects/fold.ts';
 import type { EffectInstall } from './effects/types.ts';
 import type { Combatant, CombatantSide, ShipCombatant } from './state.ts';
@@ -43,6 +45,19 @@ export function combatantInstalls(combatant: Combatant): readonly EffectInstall[
   if (combatant.kind !== 'ship') return [];
   const components = SHIP_CLASS_BY_TYPE.get(combatant.classId)?.components ?? [];
   return collectInstalls(components.map((type) => ({ installs: COMPONENT_BY_TYPE.get(type)?.installs })));
+}
+
+// A ship's TIMED on-resolve installs for ONE resolved action — the on-resolve twin of combatantInstalls.
+// The action's wire id `"<componentId>:<grantKey>"` names the providing component directly, and the
+// reducer only reaches here once commandFor has confirmed the actor actually carries the command, so
+// this reads `installsOnResolve[grantKey]` straight off that component rather than re-deriving from the
+// class loadout (build-time `installs` come from ALL components; on-resolve installs come from the one
+// component whose grant fired). A body's on-resolve installs land with its E5 producer.
+export function combatantInstallsOnResolve(combatant: Combatant, actionId: string): readonly EffectInstall[] {
+  if (combatant.kind !== 'ship') return [];
+  const colon = actionId.lastIndexOf(':');
+  const providerId = colon < 0 ? actionId : actionId.slice(0, colon);
+  return COMPONENT_BY_TYPE.get(providerId as ShipComponentType)?.installsOnResolve?.[grantKeyOf(actionId)] ?? [];
 }
 
 // Ready ships → faction sides of combatants. Mirrors shipsToActors: drop 'building' ships (not in

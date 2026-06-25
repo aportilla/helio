@@ -7,8 +7,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shipsToCombatants, shipToCombatant } from '../ships-to-combatants.ts';
-import type { CombatantSide } from '../state.ts';
+import { shipsToCombatants, shipToCombatant, combatantInstallsOnResolve } from '../ships-to-combatants.ts';
+import type { Combatant, CombatantSide } from '../state.ts';
 import { shipLoadout } from '../../actions/ships-to-actors.ts';
 import type { Ship } from '../../game-state-codec.ts';
 
@@ -67,4 +67,23 @@ test('a combatant is an Actor + combat identity: kind, classId, palette, derived
 test('no ready ships → no sides', () => {
   assert.deepEqual(shipsToCombatants([]), []);
   assert.deepEqual(shipsToCombatants([ship('pb', 'player', 'building')]), []);
+});
+
+test('combatantInstallsOnResolve resolves a ship grant\'s timed installs by component, else empty', () => {
+  const s = shipToCombatant(ship('p1', 'player'), 0);
+  // The real shield grant on the small-shield component → its declared timed install.
+  assert.deepEqual(
+    combatantInstallsOnResolve(s, 'small-shield:raise-shields'),
+    [{ effectKey: 'shield-segment', remaining: 3, params: { capacity: 50_000 } }],
+  );
+  // A known component with NO installsOnResolve entry for that grant → empty.
+  assert.deepEqual(combatantInstallsOnResolve(s, 'small-laser:laser'), []);
+  // A no-colon id (whole id is the provider) and an unknown provider → empty, no throw.
+  assert.deepEqual(combatantInstallsOnResolve(s, 'flee'), []);
+  assert.deepEqual(combatantInstallsOnResolve(s, 'nonexistent:foo'), []);
+  // A namespaced provider id splits on the LAST colon (providerId 'a:b', key 'c') → unknown → empty.
+  assert.deepEqual(combatantInstallsOnResolve(s, 'a:b:c'), []);
+  // A body combatant has no ship components (its E5 producer adds bodies) → empty.
+  const body: Combatant = { kind: 'body', id: 'b1', combatId: 1, factionId: 'player', bodyId: 'sol-3', commands: [] };
+  assert.deepEqual(combatantInstallsOnResolve(body, 'small-shield:raise-shields'), []);
 });

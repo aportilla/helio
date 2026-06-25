@@ -33,10 +33,10 @@ spec's combatant array, assigned at spec build, ships first and body-combatants 
 is the turn-order tiebreak: the durable `id` (a ship's save handle) names *who*, but `combatId`
 alone orders the round, so replay / AI ordering is deterministic and independent of the id strings.
 
-The stat block is an **opaque, effect-free bag** and the command list carries no effect data — the
-bones know neither what a stat means nor what a command does. Health (an ordered pool stack) and the
-energy gate live behind that seam and arrive with the effect substrate, additively; the combatant
-shape stays stable while the mechanics stay fluid.
+The command list carries no effect data — the bones know neither what a command does. Combat HP is an
+ordered **pool stack** (`pools`, with the damage cascade in `pools.ts`); the energy gate lives in the
+opaque `stats` bag. Both attach to the combatant additively (an effect-free adapter ships neither —
+`createEncounterState` seeds them), so the shape stays stable while the mechanics stay fluid.
 
 ## Boundary
 
@@ -51,12 +51,12 @@ mode on `SystemScene`) is the consumer, in `src/scene/`.
 Built phase-by-phase; combat shares the "build the UX bones first, defer the mechanics" discipline
 the rest of the project follows.
 
-> **Branch:** the E1 / E2 / effect-slice-1 commits live on `encounter-e1-combatant-contract`, not
+> **Branch:** the E1 / E2 / effect-substrate commits live on `encounter-e1-combatant-contract`, not
 > yet merged to `main` — check that branch out before picking this up.
 >
-> **Next, in order:** effect-substrate **slice 2** (the substrate bullet below) FIRST, then **E3/E4** —
-> slice 2 is headless + test-guarded, so doing it first means E3/E4 renders the real pool-stack HP
-> from the start instead of the placeholder. (E5 body combatants can interleave.)
+> **Next:** **E3/E4** (the scene wiring below). The headless reducer and the full effect substrate
+> (pool-stack HP + the declared shield) are in and test-guarded, so E3/E4 renders the real pool HP
+> from the start instead of a placeholder. (E5 body combatants can interleave.)
 
 - **E1 — the contract (shipped).** `state.ts` (the `Combatant` union + `CombatantSide`),
   `encounter-spec.ts` (`EncounterSpec` + `buildEncounterSpec`), and `ships-to-combatants.ts` (the
@@ -68,20 +68,23 @@ the rest of the project follows.
   Zero gameplay math: a **flat placeholder effect** subtracts a fixed `hull` amount and emits a
   `damage`/`down` event, so the loop reads as combat with no committed formula and no PRNG. The
   terminal is **side elimination** (a downed combatant offers no commands; the plan's "mutual-pass"
-  clause is moot — the menu has no Pass verb). HP is a single placeholder `hull` *stat* here; the
-  real ordered pool stack arrives with the effect substrate below, which is the first real mechanic
-  that lands *on top of* this reducer — not before it.
-- **The effect substrate (slice 1 shipped).** `effects/` is the fourth registry-family member: a
-  provider DECLARES the effects it installs (`ShipComponentDef.installs?`) exactly as it declares
-  grants, and the reducer FOLDS them by hook PRESENCE with no per-effect-type branch — `installEffects`
-  (`collectInstalls` + `mintEffects`) is the pure twin of `deriveCommands`, and `tickCycleStart` runs
-  each combatant's `onCycleStart` effects at its own turn start. Worked example A is live:
-  `small-engine` declares a permanent `recharge` effect that tops energy toward `energyMax` each cycle
-  — a declared component effect, not a hardcoded reducer step. Stacking is **distinct instances** (two
-  of the same effect tick independently; a per-def override is deferred until content needs it).
-  *Deferred to slice 2:* HP as an ordered **pool stack** (the absorb-before-hull cascade superseding
-  the placeholder `hull` stat) with the `onInstall`/`onExpire` hooks, and worked example B — a timed
-  shield via `installsOnResolve`.
+  clause is moot — the menu has no Pass verb). The attack path cascades the **pool stack** the effect
+  substrate (below) added on top of this reducer — `createEncounterState` seeds each combatant a
+  placeholder `hull` band; `dealt` (HP actually removed) drives the `damage` event.
+- **The effect substrate (shipped).** `effects/` is the fourth registry-family member: a provider
+  DECLARES the effects it installs exactly as it declares grants, and the reducer FOLDS them by hook
+  PRESENCE with no per-effect-type branch — `installEffects` (`collectInstalls` + mint) is the pure
+  twin of `deriveCommands`, and `tickCycleStart` runs each combatant's `onCycleStart` effects at its
+  own turn start. HP is an ordered **pool stack** (`pools.ts`): a hit cascades top→bottom, so a shield
+  is just a band spliced above `hull` and absorb-before-hull is pure stack order — no shield-specific
+  reducer code. Two worked examples are live: **A** — `small-engine` declares a permanent `recharge`
+  that tops energy toward `energyMax` each cycle (a declared component effect, not a hardcoded step);
+  **B** — `small-shield` grants `raise-shields`, whose **`installsOnResolve`** (declared on the
+  component def keyed by grant key — NOT on the neutral `ActionGrant`, which stays a pure leaf) mints a
+  3-cycle `shield-segment`: its `onInstall` splices the band, the cascade absorbs into it first, its
+  `onExpire` pops it. Both hooks RETURN a pool edit the fold applies (the `StatDelta` twin, never a
+  void mutation), and effect ids are a **monotonic counter** so an on-resolve mint never reuses a
+  freed id. Stacking is **distinct instances** (a re-cast is a second independent band).
 - **E3 / E4 — the mode + the wire-up.** `SystemScene.enterEncounter` modality, then un-stubbing the
   `'encounter'` dispatch so a confirmed offensive action builds an `EncounterSpec` and the same
   anchored menu drives the round. The first-playable beat. Seams: the dispatch STUB is

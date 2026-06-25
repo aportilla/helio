@@ -6,15 +6,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyCommand, createEncounterState } from '../step.ts';
-import { shipsToCombatants } from '../ships-to-combatants.ts';
+import { shipsToCombatants, shipToCombatant } from '../ships-to-combatants.ts';
 import { buildEncounterSpec } from '../encounter-spec.ts';
 import { isTerminal } from '../terminal.ts';
-import { ENERGY_STAT, HULL_STAT, isDown, type EncounterState } from '../state.ts';
+import { ENERGY_STAT, isDown, type EncounterEvent, type EncounterState, type ShipCombatant } from '../state.ts';
+import { deriveCommands } from '../../actions/derive.ts';
+import { SHIP_CATEGORIES } from '../../actions/registry.ts';
+import { COMPONENT_BY_TYPE } from '../../ships/components/registry.ts';
 import { PLACEHOLDER_DAMAGE_MILLI, PLACEHOLDER_HULL_MILLI } from '../tuning.ts';
 import type { Ship } from '../../game-state-codec.ts';
 
 const LASER = 'small-laser:laser'; // an ATTACK command on the corvette loadout
 const FLEE = 'small-engine:flee'; // a NAVIGATION command — the bones treat it as a turn pass
+const RAISE = 'small-shield:raise-shields'; // a SUPPORT command that installs a timed shield on resolve
 
 const ship = (id: string, factionId: Ship['factionId']): Ship => ({
   id, systemId: 'sol', factionId, classId: 'corvette', name: id, status: 'ready',
@@ -24,7 +28,8 @@ function encounterOf(ships: readonly Ship[], initiatorId = ships[0]!.id): Encoun
   const sides = shipsToCombatants(ships);
   return createEncounterState(buildEncounterSpec(sides, { actorId: initiatorId, actionId: LASER, targetIds: [] }));
 }
-const hullOf = (s: EncounterState, id: string) => s.combatants.find((c) => c.id === id)?.stats?.[HULL_STAT];
+// The hull POOL's current — the bones HP that an attack depletes (combatants here carry one band).
+const hullOf = (s: EncounterState, id: string) => s.combatants.find((c) => c.id === id)?.pools?.find((p) => p.key === 'hull')?.current;
 
 test('createEncounterState stamps placeholder hull and starts at the initiator', () => {
   const s = encounterOf([ship('p1', 'player'), ship('r1', 'rival')], 'r1');
@@ -67,13 +72,51 @@ test('a target reaching 0 hull is downed (event + isDown + terminal)', () => {
   const low: EncounterState = {
     ...base,
     combatants: base.combatants.map((c) =>
-      c.id === 'r1' ? { ...c, stats: { ...c.stats, [HULL_STAT]: PLACEHOLDER_DAMAGE_MILLI } } : c),
+      c.id === 'r1' ? { ...c, pools: [{ key: 'hull', current: PLACEHOLDER_DAMAGE_MILLI, max: PLACEHOLDER_HULL_MILLI }] } : c),
   };
   const { state, events } = applyCommand(low, { actorId: 'p1', actionId: LASER, targetIds: ['r1'] });
   assert.equal(hullOf(state, 'r1'), 0);
   assert.ok(events.some((e) => e.kind === 'down' && e.combatId === 1), 'a down event for r1');
   assert.equal(isDown(state.combatants.find((c) => c.id === 'r1')!), true);
   assert.equal(isTerminal(state), true, 'rival eliminated → terminal');
+});
+
+test('an attack on an unpooled target is a visible 0-damage hit that never downs it (the reducer stays total)', () => {
+  const base = encounterOf([ship('p1', 'player'), ship('r1', 'rival')]);
+  const unpooled: EncounterState = { ...base, combatants: base.combatants.map((c) => (c.id === 'r1' ? { ...c, pools: undefined } : c)) };
+  const { state, events } = applyCommand(unpooled, { actorId: 'p1', actionId: LASER, targetIds: ['r1'] });
+  assert.ok(events.some((e) => e.kind === 'damage' && e.target === 1 && e.amount === 0), 'a visible 0-damage hit');
+  assert.ok(!events.some((e) => e.kind === 'down'), 'no down event');
+  assert.equal(isDown(state.combatants.find((c) => c.id === 'r1')!), false, 'an unpooled target cannot be downed');
+});
+
+test('an attack with multiple targets hits each in target order', () => {
+  const s = encounterOf([ship('p1', 'player'), ship('r1', 'rival'), ship('r2', 'rival')]); // p1=0, r1=1, r2=2
+  const { state, events } = applyCommand(s, { actorId: 'p1', actionId: LASER, targetIds: ['r1', 'r2'] });
+  assert.equal(hullOf(state, 'r1'), PLACEHOLDER_HULL_MILLI - PLACEHOLDER_DAMAGE_MILLI);
+  assert.equal(hullOf(state, 'r2'), PLACEHOLDER_HULL_MILLI - PLACEHOLDER_DAMAGE_MILLI);
+  assert.deepEqual(events, [
+    { kind: 'damage', source: 0, target: 1, amount: PLACEHOLDER_DAMAGE_MILLI },
+    { kind: 'damage', source: 0, target: 2, amount: PLACEHOLDER_DAMAGE_MILLI },
+  ]);
+});
+
+test('an attack stacks duplicate target ids cumulatively (the per-target rebind, not a stale snapshot)', () => {
+  // r1 starts at exactly two hits of hull and is named twice in ONE intent → 0 hull, downed. If the
+  // loop re-read the original snapshot each iteration, the second hit would compute off 2×DMG too.
+  const base = encounterOf([ship('p1', 'player'), ship('r1', 'rival')]);
+  const low: EncounterState = {
+    ...base,
+    combatants: base.combatants.map((c) =>
+      c.id === 'r1' ? { ...c, pools: [{ key: 'hull', current: 2 * PLACEHOLDER_DAMAGE_MILLI, max: PLACEHOLDER_HULL_MILLI }] } : c),
+  };
+  const { state, events } = applyCommand(low, { actorId: 'p1', actionId: LASER, targetIds: ['r1', 'r1'] });
+  assert.equal(hullOf(state, 'r1'), 0, 'both hits landed cumulatively');
+  assert.deepEqual(events, [
+    { kind: 'damage', source: 0, target: 1, amount: PLACEHOLDER_DAMAGE_MILLI },
+    { kind: 'damage', source: 0, target: 1, amount: PLACEHOLDER_DAMAGE_MILLI },
+    { kind: 'down', combatId: 1 },
+  ]);
 });
 
 test('a combatant recharges energy at its own turn start (the declared engine effect)', () => {
@@ -88,6 +131,53 @@ test('a combatant recharges energy at its own turn start (the declared engine ef
   assert.equal(s.combatants.find((c) => c.id === 'p1')!.stats?.[ENERGY_STAT], 1000, "p1 doesn't recharge on r1's turn");
   ({ state: s } = applyCommand(s, { actorId: 'r1', actionId: LASER, targetIds: ['p1'] })); // r1 acts → wraps to p1 → p1 ticks
   assert.equal(s.combatants.find((c) => c.id === 'p1')!.stats?.[ENERGY_STAT], 4000, 'p1 recharged 3000 at its turn start');
+});
+
+test('a self shield absorbs before hull, then expires after 3 of its owner\'s cycles', () => {
+  // p1 flies a small-engine (flee = a turn pass) + a small-shield (raise-shields); r1 is a plain
+  // corvette (laser). Built inline so the corvette preset stays a flee+laser ship — the small-shield
+  // component is live in the registry, just not on the default loadout.
+  const p1Commands = deriveCommands([
+    { id: 'small-engine', grants: COMPONENT_BY_TYPE.get('small-engine')!.grants },
+    { id: 'small-shield', grants: COMPONENT_BY_TYPE.get('small-shield')!.grants },
+  ]);
+  const p1: ShipCombatant = { kind: 'ship', id: 'p1', combatId: 0, factionId: 'player', classId: 'corvette', commands: p1Commands, categories: SHIP_CATEGORIES };
+  const r1 = shipToCombatant(ship('r1', 'rival'), 1);
+  const spec = buildEncounterSpec(
+    [{ factionId: 'player', controlled: true, combatants: [p1] }, { factionId: 'rival', controlled: false, combatants: [r1] }],
+    { actorId: 'p1', actionId: RAISE, targetIds: [] },
+  );
+  let s = createEncounterState(spec);
+
+  // p1 raises shields → a `shields` band splices ABOVE hull, plus an install beat.
+  const raised = applyCommand(s, { actorId: 'p1', actionId: RAISE, targetIds: [] });
+  s = raised.state;
+  const shielded = s.combatants.find((c) => c.id === 'p1')!;
+  assert.deepEqual(shielded.pools?.map((p) => p.key), ['shields', 'hull'], 'the shield sits above hull (absorbs first)');
+  assert.ok(raised.events.some((e) => e.kind === 'install' && e.effectKey === 'shield-segment'), 'an install event fired');
+  const cap = shielded.pools!.find((p) => p.key === 'shields')!.max;
+
+  // r1 attacks p1 → the shield eats the hit; hull is untouched behind it.
+  ({ state: s } = applyCommand(s, { actorId: 'r1', actionId: LASER, targetIds: ['p1'] }));
+  const hit = s.combatants.find((c) => c.id === 'p1')!;
+  assert.equal(hit.pools?.find((p) => p.key === 'shields')?.current, cap - PLACEHOLDER_DAMAGE_MILLI, 'the shield absorbed the hit');
+  assert.equal(hit.pools?.find((p) => p.key === 'hull')?.current, PLACEHOLDER_HULL_MILLI, 'hull is untouched behind the shield');
+
+  // Run turns (p1 flees, r1 attacks) until the band is gone — it ticks at p1's turn starts and pops on
+  // the 3rd (3→2→1→0 → onExpire). p1 never re-shields, so exactly one band lives the whole time.
+  const expires: EncounterEvent[] = [];
+  let guard = 0;
+  while (s.combatants.find((c) => c.id === 'p1')!.pools!.some((p) => p.key === 'shields') && guard++ < 12) {
+    const active = s.combatants[s.activeId]!;
+    const res = active.id === 'p1'
+      ? applyCommand(s, { actorId: 'p1', actionId: FLEE, targetIds: [] })
+      : applyCommand(s, { actorId: 'r1', actionId: LASER, targetIds: ['p1'] });
+    s = res.state;
+    for (const e of res.events) if (e.kind === 'expire') expires.push(e);
+  }
+  assert.ok(expires.some((e) => e.kind === 'expire' && e.effectKey === 'shield-segment'), 'the shield expired');
+  assert.equal(s.combatants.find((c) => c.id === 'p1')!.pools!.some((p) => p.key === 'shields'), false, 'the band popped on expiry');
+  assert.ok(!isDown(s.combatants.find((c) => c.id === 'p1')!), 'p1 survived — the shield bought time');
 });
 
 test('runs a full encounter to the side-elimination terminal', () => {

@@ -22,6 +22,22 @@ const DEFS = {
     tags: ['buff'],
     onCycleStart: (ctx) => [{ statKey: 'energy', delta: ctx.params.amount ?? 0, clampToMaxKey: 'energyMax' }],
   },
+  // Worked example B (4x-encounter-combat-system §7.5): a timed shield as a DECLARED effect, minted
+  // when a defense component's `raise-shields` resolves (ShipComponentDef.installsOnResolve). onInstall
+  // splices a `shields` band directly above `hull`, so the dumb damage cascade absorbs into it FIRST —
+  // "absorb before hull" is purely this stack order, with NO shield-specific reducer code. onExpire
+  // pops the band (and any unspent capacity) when the instance counts out. The fold supplies the
+  // band's sourceEffectId, so two raised shields are two independent bands (distinct-instances stacking).
+  'shield-segment': {
+    key: 'shield-segment',
+    label: 'Shield',
+    color: '#5b8dd6',
+    tags: ['buff', 'shield'],
+    onInstall: (ctx) => [
+      { op: 'splice', pool: { key: 'shields', current: ctx.params.capacity ?? 0, max: ctx.params.capacity ?? 0 }, aboveKey: 'hull' },
+    ],
+    onExpire: () => [{ op: 'drop' }],
+  },
 } satisfies Record<EffectKey, EffectDef>;
 
 export const EFFECT_DEFS: readonly EffectDef[] = Object.values(DEFS);
@@ -38,7 +54,7 @@ export const EFFECT_KEYS: ReadonlySet<string> = new Set(Object.keys(DEFS));
 // deliberately NOT typed as the live union — so renaming a shipped effect can't quietly re-green the
 // guard. The CI test asserts each entry is still a live key (EFFECT_KEYS.has), so removing OR
 // renaming a shipped id fails, protecting old replays.
-export const FROZEN_EFFECT_IDS: readonly string[] = ['recharge'];
+export const FROZEN_EFFECT_IDS: readonly string[] = ['recharge', 'shield-segment'];
 
 // DEV-only module-load invariant: each def's `key` equals its registry key, and every frozen id is
 // still live. Mirrors the factions / ships / facilities drift checks — loud in dev, stripped in

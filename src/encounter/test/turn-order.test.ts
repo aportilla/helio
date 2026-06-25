@@ -4,13 +4,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { nextActor } from '../turn-order.ts';
-import { HULL_STAT, type Combatant, type EncounterState } from '../state.ts';
+import type { Combatant, EncounterState } from '../state.ts';
 
-// hull defaults to a living value; pass 0 for a downed combatant.
+// hull defaults to a living value; pass 0 for a downed combatant (an empty pool band reads as 0 HP).
 const c = (combatId: number, factionId: Combatant['factionId'], hull = 100): Combatant => ({
-  kind: 'ship', id: `c${combatId}`, combatId, factionId, classId: 'corvette', commands: [], stats: { [HULL_STAT]: hull },
+  kind: 'ship', id: `c${combatId}`, combatId, factionId, classId: 'corvette', commands: [], pools: [{ key: 'hull', current: hull, max: hull }],
 });
-const at = (combatants: readonly Combatant[], activeId: number): EncounterState => ({ combatants, activeId, round: 1, effects: [] });
+const at = (combatants: readonly Combatant[], activeId: number): EncounterState => ({ combatants, activeId, round: 1, effects: [], nextEffectId: 0 });
 
 test('advances to the next combatId, cyclically', () => {
   const cs = [c(0, 'player'), c(1, 'rival'), c(2, 'player')];

@@ -71,6 +71,24 @@ test('the small laser is a weapon granting an enemy-only encounter attack', () =
   assert.equal(beam.targets!(ally, actor), false, 'an ally is not');
 });
 
+test('the small shield is a defense part granting a self support verb that installs a timed shield on resolve', () => {
+  const shield = COMPONENT_BY_TYPE.get('small-shield')!;
+  assert.equal(shield.kind, 'defense');
+  const grants = shield.grants ?? [];
+  assert.equal(grants.length, 1);
+  const raise = grants[0]!;
+  assert.deepEqual(
+    [raise.key, raise.category, raise.targeting, raise.kind],
+    ['raise-shields', 'support', 'self', 'immediate'],
+  );
+  // The grant's resolve installs a timed shield-segment, keyed BY GRANT KEY on the component def (the
+  // on-resolve twin of build-time `installs`) — not a field on the neutral ActionGrant.
+  assert.deepEqual(
+    shield.installsOnResolve?.['raise-shields'],
+    [{ effectKey: 'shield-segment', remaining: 3, params: { capacity: 50_000 } }],
+  );
+});
+
 test('componentLabel resolves a def to its display label', () => {
   assert.equal(componentLabel('small-laser'), 'Small Laser');
   assert.equal(componentLabel('small-engine'), 'Small Engine');
