@@ -51,12 +51,12 @@ mode on `SystemScene`) is the consumer, in `src/scene/`.
 Built phase-by-phase; combat shares the "build the UX bones first, defer the mechanics" discipline
 the rest of the project follows.
 
-> **Branch:** the E1 / E2 / effect-substrate commits live on `encounter-e1-combatant-contract`, not
-> yet merged to `main` — check that branch out before picking this up.
+> **Branch:** the E1 / E2 / effect-substrate / E3 commits live on `encounter-e1-combatant-contract`,
+> not yet merged to `main` — check that branch out before picking this up.
 >
-> **Next:** **E3/E4** (the scene wiring below). The headless reducer and the full effect substrate
-> (pool-stack HP + the declared shield) are in and test-guarded, so E3/E4 renders the real pool HP
-> from the start instead of a placeholder. (E5 body combatants can interleave.)
+> **Next:** **E4** — swap the E3 spectator auto-play for the anchored menu driving the round (an
+> in-encounter confirm sink + reopen-per-`activeId` + animating the returned `EncounterEvent`s). E5
+> body combatants can interleave.
 
 - **E1 — the contract (shipped).** `state.ts` (the `Combatant` union + `CombatantSide`),
   `encounter-spec.ts` (`EncounterSpec` + `buildEncounterSpec`), and `ships-to-combatants.ts` (the
@@ -85,17 +85,24 @@ the rest of the project follows.
   `onExpire` pops it. Both hooks RETURN a pool edit the fold applies (the `StatDelta` twin, never a
   void mutation), and effect ids are a **monotonic counter** so an on-resolve mint never reuses a
   freed id. Stacking is **distinct instances** (a re-cast is a second independent band).
-- **E3 / E4 — the mode + the wire-up.** `SystemScene.enterEncounter` modality, then un-stubbing the
-  `'encounter'` dispatch so a confirmed offensive action builds an `EncounterSpec` and the same
-  anchored menu drives the round. The first-playable beat. Seams: the dispatch STUB is
-  `onEnterEncounter` in `src/scene/system-scene.ts` (a DEV `console.debug`); the `grant.kind` fork is
-  `dispatch()` in `src/scene/actions/system-action-menu.ts`. Two items are real NEW work, not config
-  flips — `Screen.freezesTurn` is `readonly` (back it with a mode-flag getter), and there is no
-  swappable confirm sink (the fork is hardwired to `onImmediate`/`onEnterEncounter`, so E4 must ADD a
-  seam routing an in-encounter commit to `applyCommand`). Build the spec via
-  `buildEncounterSpec(shipsToCombatants(readyShips()), intent)`; the combat menu opens on the SEEDED
-  `EncounterState` combatant (it carries `energy`/`energyMax`, so the menu gate works) and reopens on
-  each new `activeId`. Note `applyCommand` DEV-asserts the intent's actor is the active combatant.
+- **E3 — the mode (shipped).** Combat runs as a MODE on `SystemScene`, in place over the same diagram
+  (no second scene — combat is an extra render PASS). `EncounterController` (`src/scene/encounter-
+  controller.ts`) owns the transient `EncounterState` + its own overlay scene; `CombatOverlay`
+  (`encounter-overlay.ts`) paints a bordered HP bar (hull + shield bands), an active-turn marker, and
+  a downed dim over each combatant, anchored to the live fleet slots via `slotCenterForEntity`. The
+  galaxy turn freezes on BOTH paths — a `freezesTurn` getter backed by an `inEncounter` flag (since
+  `Screen.freezesTurn` is `readonly`) for the programmatic `nextTurn()`, and `setNextTurnEnabled(false)`
+  for the user click. `onEnterEncounter` is un-stubbed: a confirmed `'encounter'`-kind action builds
+  the spec via `buildEncounterSpec(shipsToCombatants(readyShips()), intent)` and enters. A DEV
+  spectator auto-play drives the reducer to side-elimination; Esc flees, terminal exits — both
+  unfreeze. A DEV `?demo-encounter` boot path makes the chrome reproducibly screenshot-able.
+- **E4 — the interactive loop (next).** Swap the spectator auto-play for the anchored menu driving the
+  round: add an in-encounter confirm sink (`onEncounterCommit` + a mode flag on `SystemActionMenu` —
+  its `dispatch()` only forks `onImmediate`/`onEnterEncounter`), open the menu on the SEEDED
+  `EncounterState` combatant at `state.activeId` (it carries `energy`/`energyMax`, so the gate works)
+  and REOPEN on each new `activeId` after `applyCommand` (which DEV-asserts the intent's actor IS the
+  active combatant), and animate the returned `EncounterEvent`s (damage tracer + number-pop, down,
+  shield install/expire chips).
 - **E5 — body combatants.** The `body-role` producer + appending body-combatants to the spec.
 
 Until ship *movement* exists, opponents are placed by a DEV-only spawn action; the single
