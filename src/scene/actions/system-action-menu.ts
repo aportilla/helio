@@ -53,6 +53,9 @@ export class SystemActionMenu {
   private readonly bracket = new TargetBracket(110);
   private menu: ActionMenu | null = null;
   private opts: OpenMenuOptions | null = null;
+  // Set while the menu is driving an encounter round (E4): flips dispatch from the live-view kind fork
+  // to onEncounterCommit. The same menu instance serves both the system view and combat.
+  private encounterMode = false;
 
   private bufH = 1;
   private contentW = 1;
@@ -61,6 +64,9 @@ export class SystemActionMenu {
   // 'encounter' is the hand-off the encounter modality (E-phases) will claim.
   onImmediate: (intent: ActionIntent) => void = () => {};
   onEnterEncounter: (intent: ActionIntent) => void = () => {};
+  // The IN-ENCOUNTER confirm sink (E4): while encounter mode is set, a committed intent routes HERE
+  // (into the reducer) instead of the live-view kind fork. The EncounterController fills it.
+  onEncounterCommit: (intent: ActionIntent) => void = () => {};
 
   // The OUTER focus axis: at the category level, ←/→ cycle the active ACTOR (the SoS ◄ ►),
   // which SystemScene fills by re-opening the menu on the next commandable actor. Inert at the
@@ -100,6 +106,12 @@ export class SystemActionMenu {
     this.opts = null;
     this.panel.reset();
     this.bracket.hide();
+  }
+
+  // Flip the confirm sink between the live-view kind fork (false) and the in-encounter reducer commit
+  // (true). The EncounterController raises it on enter, lowers it on exit.
+  setEncounterMode(on: boolean): void {
+    this.encounterMode = on;
   }
 
   // Re-place at the current anchor (after a fleet relayout that didn't change selection).
@@ -239,8 +251,16 @@ export class SystemActionMenu {
   }
 
   private dispatch(intent: ActionIntent): void {
-    // Resolve the action's kind from the actor's OWN resolved command (commandFor) — there is no
-    // central registry after the inversion. An unknown actionId resolves to undefined ⇒ the
+    // In an encounter the menu IS the round's input: a committed intent folds into the reducer via
+    // onEncounterCommit, NOT the live-view kind fork. Close first (the controller re-opens on the next
+    // active combatant).
+    if (this.encounterMode) {
+      this.close();
+      this.onEncounterCommit(intent);
+      return;
+    }
+    // Live view: resolve the action's kind from the actor's OWN resolved command (commandFor) — there
+    // is no central registry after the inversion. An unknown actionId resolves to undefined ⇒ the
     // immediate path. Read before close() nulls `opts`.
     const kind = this.opts ? commandFor(this.opts.actor, intent.actionId)?.grant.kind : undefined;
     this.close();

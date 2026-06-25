@@ -68,9 +68,14 @@ export class SystemScene implements Screen {
   private readonly context: SystemContext;
   private readonly viewport = new ViewportSizer(sizes.sidebarW);
 
-  // The encounter MODE (E3): a transient combat reducer + its overlay, run in place over this same
-  // diagram (no second scene). Anchors its chrome to the live fleet slots via slotCenterForEntity.
-  private readonly encounter = new EncounterController((id) => this.slotCenterForEntity(id));
+  // The encounter MODE (E3/E4): a transient combat reducer + its overlay + the menu-driven round, run
+  // in place over this same diagram (no second scene). Anchors its chrome to the live fleet slots via
+  // slotCenterForEntity, drives the round through the shared action menu, titles combatants by name.
+  private readonly encounter = new EncounterController(
+    (id) => this.slotCenterForEntity(id),
+    this.actionMenu,
+    (id) => this.combatantName(id),
+  );
   // True while combat is live. Backs the readonly Screen.freezesTurn (a getter is the only legal
   // backing) AND gates the overlay render + input branch, so the non-combat path is byte-identical
   // when it's down.
@@ -245,9 +250,12 @@ export class SystemScene implements Screen {
     // re-applied on the resizes/turns that re-resolve lanes).
     this.diagram.prime();
     this.tick();
-    // DEV visual-test affordance: ?demo-encounter boots straight into a combat overlay (spectator).
-    if (import.meta.env.DEV && new URLSearchParams(location.search).has('demo-encounter')) {
-      this.devDemoEncounter();
+    // DEV visual-test affordance: ?demo-encounter boots straight into a combat overlay. Bare = a
+    // spectator (auto-runs the whole fight); =play = playable (your menu opens + waits for input, the
+    // opponent auto-acts).
+    const demo = new URLSearchParams(location.search);
+    if (import.meta.env.DEV && demo.has('demo-encounter')) {
+      this.devDemoEncounter(demo.get('demo-encounter') !== 'play');
     }
   }
 
@@ -301,7 +309,7 @@ export class SystemScene implements Screen {
   // an opponent ready ship if this system lacks a two-side matchup, refresh the fleet so both carry
   // live slots, then launch from the friendly's first attack at the foe. A visual-test affordance for
   // iterating on the combat chrome; tree-shaken from prod.
-  private devDemoEncounter(): void {
+  private devDemoEncounter(autoPlay: boolean): void {
     const systemId = systemIdForCluster(this.clusterIdx);
     if (!this.readyShips().some((s) => s.factionId === CONTROLLED_FACTION_ID)) addFriendlyShip(systemId);
     if (!this.readyShips().some((s) => s.factionId !== CONTROLLED_FACTION_ID)) addOpponentShip(systemId);
@@ -312,6 +320,8 @@ export class SystemScene implements Screen {
     if (!mine || !foe) return;
     const attack = shipToActor(mine).commands.find((c) => c.grant.category === 'attack');
     if (!attack) return;
+    // Spectator demo auto-drives the player's side too (the playable demo leaves it to real input).
+    this.encounter.autoPlay = autoPlay;
     this.enterEncounter(buildEncounterSpec(shipsToCombatants(ships), { actorId: mine.id, actionId: attack.id, targetIds: [foe.id] }));
   }
 
@@ -459,6 +469,12 @@ export class SystemScene implements Screen {
     return shipsInSystem(systemIdForCluster(this.clusterIdx)).filter((s) => s.status === 'ready');
   }
 
+  // The display name for a combatant's durable id — its ship's name, the combat menu's title line. A
+  // body combatant's name lands with E5; an unknown id falls back to the id itself.
+  private combatantName(id: string): string {
+    return shipsInSystem(systemIdForCluster(this.clusterIdx)).find((s) => s.id === id)?.name ?? id;
+  }
+
   // The actor focus ring — the controlled faction's commandable actors in this system: ready
   // SHIPS first, then facility-commandable BODIES (ships-first keeps the ←/→ "my side" cycle
   // legible). Clicking one of these directly opens its menu; the keyboard ←/→ walks the same
@@ -488,6 +504,9 @@ export class SystemScene implements Screen {
   // current pick is normally already in the ring; the jump-to-an-end is a defensive fallback.
   // Re-selecting re-opens the menu.
   private cycleActor(delta: number): void {
+    // In combat the active combatant is fixed by turn order — ←/→ at the category level must NOT jump
+    // to a live-view actor (it cycles the target at the command level, which the menu handles itself).
+    if (this.inEncounter) return;
     const ring = this.commandableActorIds();
     if (ring.length === 0) return;
     const current = this.selectedActorId();
