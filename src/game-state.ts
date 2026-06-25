@@ -205,6 +205,26 @@ export function addOpponentShip(systemId: string, classId: ShipClassType = DEFAU
   return ship;
 }
 
+// DEBUG ONLY — drop a READY ship for the CONTROLLED faction into a system: the friendly twin of
+// addOpponentShip, so a DEV demo can stage a two-side fight (the player has no starting fleet). Same
+// build-free ready ship (no shipyard / completesOnTurn); DEV-gated caller. Returns the new ship, or
+// null if the system is unknown.
+export function addFriendlyShip(systemId: string, classId: ShipClassType = DEFAULT_SHIP_CLASS): Ship | null {
+  if (!systemExists(systemId)) return null;
+  const seq = current.seq + 1;
+  const ship: Ship = {
+    id: `s${seq}`,
+    systemId,
+    factionId: CONTROLLED_FACTION_ID,
+    classId,
+    name: `${shipClassLabel(classId)} ${seq}`,
+    status: 'ready',
+  };
+  current = { ...current, seq, ships: [...current.ships, ship] };
+  writeToStorage(current);
+  return ship;
+}
+
 // DEBUG ONLY — mark a body as enemy-owned (the first non-controlled faction): the OWNERSHIP
 // half of an opponent claim, the body twin of addOpponentShip. It does NOT add a facility —
 // the DEV caller composes it with addFacility('colony') to produce a real enemy colony.

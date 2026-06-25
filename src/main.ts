@@ -1,6 +1,7 @@
 import './styles.css';
 import { initFonts } from './data/font-provider';
 import { AppController } from './scene/app-controller';
+import { STARS, clusterIndexFor } from './data/stars';
 
 // Parse the bundled BDF fonts before any scene/HUD code constructs label
 // textures — pixel-font.ts looks them up by name via the registry.
@@ -11,6 +12,15 @@ document.body.appendChild(canvas);
 
 const controller = new AppController(canvas);
 controller.start();
+
+// DEV visual-test affordance: ?demo-encounter boots straight into the Sol system, whose SystemScene
+// then auto-launches a demo combat overlay — so the encounter mode is reproducibly screenshot-able
+// (scripts/screenshot.mjs --query=demo-encounter). Tree-shaken from prod.
+if (import.meta.env.DEV && new URLSearchParams(location.search).has('demo-encounter')) {
+  const sunIdx = STARS.findIndex((s) => s.id === 'sol');
+  const solCluster = sunIdx >= 0 ? clusterIndexFor(sunIdx) : -1;
+  if (solCluster >= 0) controller.enterSystem(solCluster);
+}
 
 // Splash markup is inlined in index.html so it paints before the bundle
 // loads; we just dismiss it once the scene is up.

@@ -11,6 +11,7 @@ import { addableTypesFor } from '../facilities';
 import type { EconomyBridge } from '../facilities/economy-bridge';
 import {
   addFacility,
+  addFriendlyShip,
   addOpponentBody,
   addOpponentShip,
   buildingShipAtYard,
@@ -31,6 +32,9 @@ import { encodeBodyEntityId, parseEntityId } from '../actions/entity-id';
 import type { Actor, TargetAllegiance, TargetCandidate } from '../actions/types';
 import { SystemActionMenu } from './actions/system-action-menu';
 import { EFFECT_HANDLERS } from './actions/effect-handlers';
+import { EncounterController } from './encounter-controller';
+import { buildEncounterSpec, type EncounterSpec } from '../encounter/encounter-spec';
+import { shipsToCombatants } from '../encounter/ships-to-combatants';
 import { SystemHud } from '../ui/system-hud';
 import { Sidebar } from '../ui/sidebar/sidebar';
 import { SystemContext } from '../ui/sidebar/system-context';
@@ -64,8 +68,23 @@ export class SystemScene implements Screen {
   private readonly context: SystemContext;
   private readonly viewport = new ViewportSizer(sizes.sidebarW);
 
+  // The encounter MODE (E3): a transient combat reducer + its overlay, run in place over this same
+  // diagram (no second scene). Anchors its chrome to the live fleet slots via slotCenterForEntity.
+  private readonly encounter = new EncounterController((id) => this.slotCenterForEntity(id));
+  // True while combat is live. Backs the readonly Screen.freezesTurn (a getter is the only legal
+  // backing) AND gates the overlay render + input branch, so the non-combat path is byte-identical
+  // when it's down.
+  private inEncounter = false;
+
   private rafId = 0;
   private running = false;
+
+  // Screen.freezesTurn is readonly; back it with the mode flag so a programmatic nextTurn() short-
+  // circuits (app-controller.ts) while combat runs on its own clock. The sidebar's Next Turn pill is
+  // gated separately (setNextTurnEnabled) for the user-click path — both are raised together on enter.
+  get freezesTurn(): boolean {
+    return this.inEncounter;
+  }
 
   private readonly _onPointerDown  = (e: PointerEvent) => this.onPointerDown(e);
   private readonly _onPointerMove  = (e: PointerEvent) => this.onPointerMove(e);
@@ -187,10 +206,13 @@ export class SystemScene implements Screen {
       }
       if (import.meta.env.DEV) console.debug('[actions] immediate action (no handler):', intent);
     };
-    if (import.meta.env.DEV) {
-      this.actionMenu.onEnterEncounter = (intent) =>
-        console.debug('[actions] would enter encounter (stub):', intent);
-    }
+    // A confirmed 'encounter'-kind action enters the combat MODE: build the launch spec from this
+    // system's ready ships (split by faction) + the launching intent, then run it in place over the
+    // same diagram. The DEV opponent-spawn supplies the enemy side until ship movement lands.
+    this.actionMenu.onEnterEncounter = (intent) =>
+      this.enterEncounter(buildEncounterSpec(shipsToCombatants(this.readyShips()), intent));
+    // The reducer reaching a terminal (or a flee) tells the mode to tear down + unfreeze the turn.
+    this.encounter.onExit = () => this.exitEncounter();
     // The outer focus axis: ←/→ at the category level cycles the active actor (the menu re-opens
     // on the next ship). The controller routes the key; the actor ring lives here (game-state).
     this.actionMenu.onCycleActor = (delta) => this.cycleActor(delta);
@@ -223,6 +245,10 @@ export class SystemScene implements Screen {
     // re-applied on the resizes/turns that re-resolve lanes).
     this.diagram.prime();
     this.tick();
+    // DEV visual-test affordance: ?demo-encounter boots straight into a combat overlay (spectator).
+    if (import.meta.env.DEV && new URLSearchParams(location.search).has('demo-encounter')) {
+      this.devDemoEncounter();
+    }
   }
 
   stop(): void {
@@ -235,13 +261,58 @@ export class SystemScene implements Screen {
   // Idempotent — safe to call after stop().
   dispose(): void {
     this.stop();
+    // Leaving the view mid-encounter (e.g. the back button) must not leave the SHARED sidebar pill
+    // disabled for the galaxy view — unfreeze before tearing down.
+    if (this.inEncounter) this.exitEncounter();
     // Detach this scene's context so the (shared, AppController-owned) sidebar
     // doesn't paint a disposed context once the galaxy view resumes.
     this.sidebar.setContext(null);
     this.diagram.dispose();
     this.hud.dispose();
     this.actionMenu.dispose();
+    this.encounter.dispose();
     this.viewport.dispose();
+  }
+
+  // -- encounter mode (E3) ----------------------------------------------
+
+  // Enter combat as a MODE on this view: freeze the galaxy turn (BOTH gates — the pill for the user
+  // click, the freezesTurn flag for the programmatic path), drop the live-view menu, and hand the spec
+  // to the controller. The system view keeps rendering; combat composites on top. Re-entry while
+  // already in an encounter is ignored.
+  private enterEncounter(spec: EncounterSpec): void {
+    if (this.inEncounter) return;
+    this.inEncounter = true;
+    this.actionMenu.close();
+    this.sidebar.setNextTurnEnabled(false);
+    this.encounter.enter(spec);
+  }
+
+  // Tear the mode down: lower the freeze flags and clear the overlay. The encounter ran within one
+  // galaxy turn, so selection + primed cargo are exactly as they were — nothing to restore.
+  private exitEncounter(): void {
+    if (!this.inEncounter) return;
+    this.inEncounter = false;
+    this.encounter.exit();
+    this.sidebar.setNextTurnEnabled(true);
+  }
+
+  // DEV-only: boot straight into a demo encounter (the ?demo-encounter URL path) — seed a friendly +
+  // an opponent ready ship if this system lacks a two-side matchup, refresh the fleet so both carry
+  // live slots, then launch from the friendly's first attack at the foe. A visual-test affordance for
+  // iterating on the combat chrome; tree-shaken from prod.
+  private devDemoEncounter(): void {
+    const systemId = systemIdForCluster(this.clusterIdx);
+    if (!this.readyShips().some((s) => s.factionId === CONTROLLED_FACTION_ID)) addFriendlyShip(systemId);
+    if (!this.readyShips().some((s) => s.factionId !== CONTROLLED_FACTION_ID)) addOpponentShip(systemId);
+    this.refreshFleet();
+    const ships = this.readyShips();
+    const mine = ships.find((s) => s.factionId === CONTROLLED_FACTION_ID);
+    const foe = ships.find((s) => s.factionId !== CONTROLLED_FACTION_ID);
+    if (!mine || !foe) return;
+    const attack = shipToActor(mine).commands.find((c) => c.grant.category === 'attack');
+    if (!attack) return;
+    this.enterEncounter(buildEncounterSpec(shipsToCombatants(ships), { actorId: mine.id, actionId: attack.id, targetIds: [foe.id] }));
   }
 
   // -- listeners --------------------------------------------------------
@@ -271,6 +342,9 @@ export class SystemScene implements Screen {
     if (this.hud.handleClick(this._hudPt.x, this._hudPt.y)) return;
     // The open action menu claims clicks ahead of the diagram (drill / fire / absorb).
     if (this.actionMenu.handleClick(this._hudPt.x, this._hudPt.y)) return;
+    // In combat, a click that missed chrome does NOT pick/select the diagram (combat owns the field).
+    // E4 routes a click on an enemy combatant to the menu's target lock via handleClick above.
+    if (this.inEncounter) return;
 
     // A click on the diagram (or empty space): pick under it (null over chrome).
     const hit = this.pickAt(this._hudPt.x, this._hudPt.y);
@@ -570,6 +644,13 @@ export class SystemScene implements Screen {
     // level). Escape at the menu's top level is NOT claimed, so it falls through to clear
     // the selection (which closes the menu) — one Escape per level, then one to deselect.
     if (this.actionMenu.handleKey(e)) return;
+    // Combat owns input while the mode is live: an Esc not claimed by a drilled combat menu flees
+    // (tears the mode down); every other key is inert (no live-view selection/menu mid-fight). E4's
+    // combat menu claims its drill/target/confirm keys via handleKey above, before this catch-all.
+    if (this.inEncounter) {
+      if (e.key === 'Escape') this.exitEncounter();
+      return;
+    }
     // Keyboard-first actor focus: a directional tap while no menu is open — nothing selected,
     // or a non-commandable pick being inspected (an opponent ship, a bare buildable body) —
     // enters the commandable-actor ring and opens the first actor's menu, so an order is
@@ -608,13 +689,20 @@ export class SystemScene implements Screen {
     // clamps itself to the content width (left of the sidebar strip) and re-reads the
     // ship's slot center, so a resize re-anchors it for free.
     this.actionMenu.resize(this.viewport.bufferW, this.viewport.bufferH, this.viewport.contentBufferW);
+    // The combat overlay anchors to the diagram's content-buffer slot centers, so it shares the
+    // diagram's content dims (NOT the full buffer the menu/hud use).
+    this.encounter.resize(this.viewport.contentBufferW, this.viewport.bufferH);
   }
 
   private tick = (): void => {
     if (!this.running) return;
+    const now = performance.now();
+    // The encounter mode advances its own clock (the E3 spectator auto-play) before the render — it
+    // may reach a terminal and exit here (lowering inEncounter), so the overlay pass below self-gates.
+    if (this.inEncounter) this.encounter.tick(now);
     // Advance the cargo-ship overlay before rendering — the system view's only
     // per-frame animation. Everything else in the diagram is static layout.
-    this.diagram.update(performance.now());
+    this.diagram.update(now);
     // One full-buffer clear (the reserved sidebar strip stays clear-color), then
     // the diagram clipped to the content rect so its pixel-snapped body materials
     // line up with the content-width uViewport; the HUD spans the full buffer.
@@ -625,6 +713,9 @@ export class SystemScene implements Screen {
     this.renderer.setScissor(0, 0, contentCssW, cssH);
     this.renderer.setScissorTest(true);
     this.renderer.render(this.diagram.scene, this.diagram.camera);
+    // Combat chrome composites over the diagram in the SAME content viewport/scissor (its slot anchors
+    // are content-buffer coords). Gated so the non-combat render path is byte-identical.
+    if (this.inEncounter) this.encounter.render(this.renderer);
     this.renderer.setScissorTest(false);
     this.renderer.setViewport(0, 0, cssW, cssH);
     this.renderer.render(this.hud.scene, this.hud.camera);

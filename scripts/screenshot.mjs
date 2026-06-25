@@ -26,6 +26,9 @@ const OUT = resolve(REPO, flag('out', 'screenshots/galaxy.png'));
 const WIDTH = Number(flag('width', 1280));
 const HEIGHT = Number(flag('height', 800));
 const WAIT_MS = Number(flag('wait', 3000));
+// Optional query string appended to the app URL — to capture a specific boot state (e.g.
+// --query=demo-encounter for the combat overlay). Empty = the default galaxy view.
+const QUERY = flag('query', '');
 
 mkdirSync(dirname(OUT), { recursive: true });
 
@@ -46,7 +49,8 @@ try {
   const page = await browser.newPage();
   await page.setViewport({ width: WIDTH, height: HEIGHT, deviceScaleFactor: 1 });
   page.on('pageerror', (e) => console.warn('[page error]', e.message));
-  await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
+  const target = QUERY ? `${url}${url.includes('?') ? '&' : '?'}${QUERY}` : url;
+  await page.goto(target, { waitUntil: 'networkidle0', timeout: 30000 });
   await page.waitForSelector('canvas', { timeout: 15000 });
   // Let the scene settle: auto-select animation, shader warm, first frames.
   await new Promise((r) => setTimeout(r, WAIT_MS));
