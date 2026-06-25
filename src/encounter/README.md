@@ -54,9 +54,10 @@ the rest of the project follows.
 > **Branch:** the E1 / E2 / effect-substrate / E3 commits live on `encounter-e1-combatant-contract`,
 > not yet merged to `main` — check that branch out before picking this up.
 >
-> **Next:** **E4** — swap the E3 spectator auto-play for the anchored menu driving the round (an
-> in-encounter confirm sink + reopen-per-`activeId` + animating the returned `EncounterEvent`s). E5
-> body combatants can interleave.
+> **Next:** combat is **first-playable** (E1–E4). The remaining frontier: animate the
+> `EncounterEvent`s (the hit / heal / shield juice — the overlay updates statically per commit today),
+> a real opponent **AI** (§3.7 — a placeholder auto-attacks now), and **E5** (body combatants — the
+> `body-role` producer appends planet/moon/belt combatants to the spec).
 
 - **E1 — the contract (shipped).** `state.ts` (the `Combatant` union + `CombatantSide`),
   `encounter-spec.ts` (`EncounterSpec` + `buildEncounterSpec`), and `ships-to-combatants.ts` (the
@@ -96,13 +97,15 @@ the rest of the project follows.
   the spec via `buildEncounterSpec(shipsToCombatants(readyShips()), intent)` and enters. A DEV
   spectator auto-play drives the reducer to side-elimination; Esc flees, terminal exits — both
   unfreeze. A DEV `?demo-encounter` boot path makes the chrome reproducibly screenshot-able.
-- **E4 — the interactive loop (next).** Swap the spectator auto-play for the anchored menu driving the
-  round: add an in-encounter confirm sink (`onEncounterCommit` + a mode flag on `SystemActionMenu` —
-  its `dispatch()` only forks `onImmediate`/`onEnterEncounter`), open the menu on the SEEDED
-  `EncounterState` combatant at `state.activeId` (it carries `energy`/`energyMax`, so the gate works)
-  and REOPEN on each new `activeId` after `applyCommand` (which DEV-asserts the intent's actor IS the
-  active combatant), and animate the returned `EncounterEvent`s (damage tracer + number-pop, down,
-  shield install/expire chips).
+- **E4 — the interactive loop (shipped).** The same `SystemActionMenu` drives the round: an
+  `onEncounterCommit` sink + `setEncounterMode` flip its `dispatch()` from the live-view kind fork into
+  the reducer. `EncounterController` opens the menu on the active **CONTROLLED** combatant (its derived
+  loadout + seeded `energy`/`energyMax` gate, anchored by durable id), folds a confirm through
+  `applyCommand`, and REOPENS on the new `activeId` in lockstep with the reducer's active-combatant
+  assertion. You command only your side — an opponent's turn opens no menu and is auto-driven (a
+  placeholder for the deferred AI, §3.7); a NAVIGATION command is flee-to-exit; side-elimination
+  auto-exits; actor-cycling is inert in combat. *Deferred:* animating the returned `EncounterEvent`s
+  (damage tracer + number-pop, shield chips) — the overlay updates statically per commit today.
 - **E5 — body combatants.** The `body-role` producer + appending body-combatants to the spec.
 
 Until ship *movement* exists, opponents are placed by a DEV-only spawn action; the single
