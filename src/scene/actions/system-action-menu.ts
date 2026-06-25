@@ -13,7 +13,8 @@
 // by a bracket on a ship in the field. Confirming a command fires it at the locked target.
 // On a committed ActionIntent the execute DISPATCH routes by the action's kind, resolved from
 // the actor's own resolved command (no central registry) — 'immediate' resolves in place,
-// 'encounter' hands off to the (not-yet-built) encounter modality.
+// 'encounter' hands off to the combat MODE (onEnterEncounter → SystemScene.enterEncounter),
+// run in place over the same diagram.
 
 import { OrthographicCamera, Scene } from 'three';
 import { ActionMenuPanel, TargetBracket } from '../../ui/action-menu';
@@ -61,7 +62,7 @@ export class SystemActionMenu {
   private contentW = 1;
 
   // The execute dispatch seam, routed by the command's kind on confirm. SystemScene fills both;
-  // 'encounter' is the hand-off the encounter modality (E-phases) will claim.
+  // 'encounter' is the hand-off into the combat mode — SystemScene fills onEnterEncounter to enter.
   onImmediate: (intent: ActionIntent) => void = () => {};
   onEnterEncounter: (intent: ActionIntent) => void = () => {};
   // The IN-ENCOUNTER confirm sink (E4): while encounter mode is set, a committed intent routes HERE

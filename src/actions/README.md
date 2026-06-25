@@ -13,7 +13,7 @@ forward design lives in `plans/4x-encounter-combat-system.md`.
 A neutral **core leaf**, the deliberate twin of [`src/ships/`](../ships/README.md) and
 [`src/factions/`](../factions/README.md): the vocabulary (`types`), the central remainder
 (`registry`), the menu (`menu`), and the derive-and-merge projection (`derive`) import nothing
-app-side, nothing from the DOM/catalog, nothing from the (not-yet-built) encounter package — so
+app-side, nothing from the DOM/catalog, nothing from the encounter package — so
 every consumer can read the action grammar without pulling in a consumer. The two **adapters**
 reach sideways into the durable stores they project — but both stay **sim-free**: `ships-to-actors`
 into the fleet (an erased `import type { Ship }`) + the ship-class / component registries (to resolve
@@ -103,8 +103,10 @@ you choose a command, and a click on (or ←/→ over) an enemy moves it. On a c
 filled by `SystemScene`. `onImmediate` routes to an app-side **effect-handler registry**
 (`src/scene/actions/effect-handlers.ts`) keyed by **grant key** (`grantKeyOf(actionId)`, so a
 verb's effect is one entry regardless of which provider grants it) — today a no-op stub per world
-verb (the routing, not the mechanics); the `'encounter'` hand-off stays a DEV stub, the seam the
-encounter modality (E-phases) claims.
+verb (the routing, not the mechanics). The `'encounter'` hand-off is **live**: `onEnterEncounter`
+builds an `EncounterSpec` and enters the combat mode on `SystemScene` (E3/E4 shipped). And while in
+an encounter the menu's confirm folds through a third sink, `onEncounterCommit`, into the reducer —
+the `kind` fork is skipped (flipped on via `setEncounterMode`).
 
 ## Status
 
@@ -156,6 +158,8 @@ encounter modality (E-phases) claims.
   facilities. The byte-identical faction-split both adapters carried was extracted to `sides.ts`
   (`actorSides`). **Deferred:** the energy model (`battery`/`recharge`/`costPerUnit`), size-class
   budget, component rendering, and per-ship loadout serialization (Phases 2-energy→4).
-- **Next:** the encounter consumes the menu (`4x-encounter-combat-system.md` E1–E5) over this
-  even-handed, **derived** substrate; the energy model + loadout build flow (`4x-modular-ship-components.md`
-  Phases 2-energy–5) make components combat-load-bearing; the world verbs' effect stubs gain real mechanics.
+- **Next:** the encounter **consumes the menu — first-playable** (`4x-encounter-combat-system.md`
+  E1–E4 + the effect substrate shipped; see [src/encounter/README.md](../encounter/README.md)) over this
+  even-handed, **derived** substrate; E5 body combatants, opponent AI, and event animation remain. The
+  energy model + loadout build flow (`4x-modular-ship-components.md` Phases 2-energy–5) make components
+  combat-load-bearing; the world verbs' effect stubs gain real mechanics.

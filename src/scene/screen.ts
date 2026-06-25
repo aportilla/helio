@@ -18,9 +18,10 @@ export interface Screen {
   afterTurnAdvance?(): void;
   // When true on the live screen, the outer galaxy turn is suspended: nextTurn()
   // short-circuits so neither a programmatic call nor a turn phase can step the
-  // economy/turn scalar while it's up. The seam the encounter modal sets to run
-  // its own round loop within a single galaxy turn (combat plan §8.2); the
-  // galaxy/system/test screens leave it unset, so the turn advances normally
-  // there. The sidebar's Next Turn pill is gated separately (setNextTurnEnabled).
+  // economy/turn scalar while it's up. The seam the encounter mode sets to run its
+  // own round loop within a single galaxy turn (combat plan §8.2): SystemScene's freezesTurn
+  // getter returns its inEncounter flag, so the system screen raises it only while combat runs;
+  // the galaxy/test screens leave it unset and the turn advances normally. The sidebar's Next
+  // Turn pill is gated separately (setNextTurnEnabled).
   readonly freezesTurn?: boolean;
 }

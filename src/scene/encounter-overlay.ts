@@ -4,7 +4,7 @@
 // each combatant's HP bar anchored to its live slot center, with an active-turn marker and a downed
 // dim. Repainted only when the EncounterState changes (once per applyCommand), so the full-buffer
 // canvas cost is negligible at combat cadence. Richer chrome (tracers, number-pops, shield chips) lands
-// with the E4 event animation; this is the readable static-state baseline.
+// with the deferred event animation; this is the readable static-state baseline.
 
 import { Widget } from '../ui/widget';
 import { factionColor } from '../factions/registry';

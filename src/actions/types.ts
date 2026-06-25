@@ -1,7 +1,7 @@
-// Action vocabulary — the contract the system action menu, the dispatcher, and (later)
-// the encounter reducer all satisfy. A pure declaration leaf, the deliberate twin of
+// Action vocabulary — the contract the system action menu, the dispatcher, and the
+// encounter reducer all satisfy. A pure declaration leaf, the deliberate twin of
 // src/ships/types.ts and src/factions/types.ts: it imports nothing app-side, nothing
-// from the DOM or catalog, nothing from the (not-yet-built) encounter package. The menu
+// from the DOM or catalog, nothing from the encounter package. The menu
 // (./menu) and registry (./registry) read their shapes from here; consumers must never
 // make src/actions/ depend on them (it stays a true leaf).
 //
@@ -115,7 +115,7 @@ export interface ActionCommand {
 
 // The minimal thing that can open a menu — anything the player selects and commands.
 // Deliberately body-agnostic: a fleet SHIP, a PLANET / MOON / BELT carrying player
-// facilities, and an in-encounter Combatant (src/encounter/, later) all conform — each
+// facilities, and an in-encounter Combatant (src/encounter/) all conform — each
 // offers whatever commands its loadout grants (a ship's weapons; a body's orbital-railgun
 // or sensor sweep). That conformance is the seam that lets the SAME menu drive the system
 // view and combat rounds, for ships and bodies alike.

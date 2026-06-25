@@ -1,6 +1,6 @@
 # src/ships/
 
-The neutral **ship-class registry** — one `ShipClassDef` per class, the static design data the rest of the game reads. A near-pure leaf: its only app-side dependency is a **type-only** import of the action vocabulary (via the component loadout — see below), the same dependency `src/facilities/` takes; it pulls in nothing from the DOM/catalog and nothing from the (not-yet-built) combat package. Both the ship-build flow and, later, combat consume it; it depends on neither.
+The neutral **ship-class registry** — one `ShipClassDef` per class, the static design data the rest of the game reads. A near-pure leaf: its only app-side dependency is a **type-only** import of the action vocabulary (via the component loadout — see below), the same dependency `src/facilities/` takes; it pulls in nothing from the DOM/catalog and nothing from the combat package. Both the ship-build flow and combat consume it; it depends on neither.
 
 It is a deliberate twin of [`src/facilities/`](../facilities/README.md): a frozen string-union (`ShipClassType`) keyed `DEFS` object guarded three ways — the `satisfies Record<ShipClassType, ShipClassDef>` compile guard, the `FROZEN_SHIP_CLASS_IDS` list + its CI test, and a DEV module-load `def.type === key` assert. Adding a class is one literal in the union plus one object in `DEFS`; every derived lookup (`SHIP_CLASS_DEFS`, `SHIP_CLASS_BY_TYPE`, `SHIP_CLASS_TYPES`) flows from that.
 

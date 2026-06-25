@@ -1,7 +1,7 @@
 // Faction vocabulary — whose a ship (and, later, a planet) is. A pure declaration
 // leaf, the deliberate twin of src/ships/types.ts: it imports nothing app-side,
-// nothing from the (not-yet-built) combat package, and nothing from the DOM or
-// catalog. Both the ownership write-path and, later, combat read their per-faction
+// nothing from the combat package, and nothing from the DOM or
+// catalog. Both the ownership write-path and combat read their per-faction
 // data from here; src/factions/ must never depend on those consumers (it stays a
 // true leaf).
 //

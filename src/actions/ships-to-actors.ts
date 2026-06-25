@@ -33,8 +33,8 @@ function shipProviders(ship: Ship): readonly GrantProvider[] {
 }
 
 // The commands a ship offers — its loadout's grants, derived + merged (the same projection the body
-// adapter runs). A ship's commands ARE its components'; the encounter (later) may pass a per-ship
-// override via commandsFor, but absent that this is the source.
+// adapter runs). A ship's commands ARE its components'; a consumer may pass a per-ship override via
+// commandsFor (the seam exists for varying a loadout per ship), but absent that this is the source.
 export function shipLoadout(ship: Ship): readonly ActionCommand[] {
   return deriveCommands(shipProviders(ship));
 }

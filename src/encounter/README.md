@@ -51,9 +51,6 @@ mode on `SystemScene`) is the consumer, in `src/scene/`.
 Built phase-by-phase; combat shares the "build the UX bones first, defer the mechanics" discipline
 the rest of the project follows.
 
-> **Branch:** the E1 / E2 / effect-substrate / E3 commits live on `encounter-e1-combatant-contract`,
-> not yet merged to `main` — check that branch out before picking this up.
->
 > **Next:** combat is **first-playable** (E1–E4). The remaining frontier: animate the
 > `EncounterEvent`s (the hit / heal / shield juice — the overlay updates statically per commit today),
 > a real opponent **AI** (§3.7 — a placeholder auto-attacks now), and **E5** (body combatants — the

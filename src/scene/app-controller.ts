@@ -105,9 +105,10 @@ export class AppController {
   // phases (AI, research, events) attach here, not in a sidebar closure.
   private nextTurn(): void {
     // Belt-and-suspenders to the sidebar's setNextTurnEnabled gate: a screen that
-    // suspends the outer game (the encounter modal, combat plan §8.2) freezes the turn
+    // suspends the outer game (the encounter mode, combat plan §8.2) freezes the turn
     // even against a programmatic caller, since bridge.step()/advanceTurn() below
-    // are unconditional. The galaxy/system/test screens leave freezesTurn unset.
+    // are unconditional. The system screen raises freezesTurn while in an encounter; the
+    // galaxy/test screens leave it unset.
     if (this.current.freezesTurn) return;
     this.bridge.step();
     const turn = advanceTurn();

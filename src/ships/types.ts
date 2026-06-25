@@ -2,8 +2,8 @@
 // consumers satisfy. A pure declaration leaf: its only app-side dependency is a
 // type-only import of the neutral action vocabulary (via ShipComponentType, for the
 // default loadout) — the same dependency facilities/types.ts takes; nothing from the
-// (not-yet-built) combat package, nothing from the DOM or catalog. Both the ship-build
-// flow and, later, combat read their per-class data from here; src/ships/ must never
+// combat package, nothing from the DOM or catalog. Both the ship-build
+// flow and combat read their per-class data from here; src/ships/ must never
 // depend on those consumers (it stays a true leaf).
 
 import type { ShipComponentType } from './components/types.ts';

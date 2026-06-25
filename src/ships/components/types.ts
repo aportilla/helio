@@ -1,9 +1,10 @@
 // Ship-component vocabulary — the contract every module in src/ships/components/ and its
 // consumers satisfy. The ship-side twin of FacilityDef: a component is a capability PROVIDER a
 // ship's chassis carries, exactly as a facility is one a body carries (plans/4x-modular-ship-
-// components.md §5 — ship↔body symmetry). A pure declaration leaf: it imports only the action
-// vocabulary (a type-only import of that neutral leaf, the same dependency facilities/types.ts
-// takes), nothing else app-side, nothing from the DOM/catalog or the (not-yet-built) encounter.
+// components.md §5 — ship↔body symmetry). A pure declaration leaf: its only app-side imports are
+// TYPE-ONLY — the action vocabulary (ActionGrant) and the effect vocabulary (EffectInstall, the
+// substrate's neutral leaf), the same kind of dependency facilities/types.ts takes; nothing from
+// the DOM/catalog and nothing from the encounter RUNTIME (it stays a leaf the reducer reads).
 
 import type { ActionGrant } from '../../actions/types.ts';
 import type { EffectInstall } from '../../encounter/effects/types.ts';
