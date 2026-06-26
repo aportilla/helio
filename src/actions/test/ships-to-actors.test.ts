@@ -57,7 +57,7 @@ test('the corvette loadout derives just the laser (encounter), via the SAME proj
   assert.deepEqual(shipLoadout(ship('p1', 'player')).map((c) => c.id), ['small-laser:laser']);
   const laser = shipLoadout(ship('p1', 'player')).find((c) => c.grant.category === 'attack')!;
   assert.equal(laser.grant.kind, 'encounter', 'the laser enters the encounter modality');
-  assert.deepEqual([laser.count, laser.totalCost], [1, 0], 'one laser, no energy model yet ⇒ zero cost');
+  assert.deepEqual([laser.count, laser.totalCost], [1, 9000], 'one laser, its full-charge salvo cost (costPerUnit == placeholder energyMax)');
 });
 
 test('an actor gets its class loadout by default', () => {

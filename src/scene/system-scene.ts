@@ -33,6 +33,7 @@ import type { Actor, TargetAllegiance, TargetCandidate } from '../actions/types'
 import { SystemActionMenu } from './actions/system-action-menu';
 import { EFFECT_HANDLERS } from './actions/effect-handlers';
 import { EncounterController } from './encounter-controller';
+import { ENCOUNTER_BAR_HEIGHT } from '../ui/encounter-hud';
 import { buildEncounterSpec, type EncounterSpec } from '../encounter/encounter-spec';
 import { shipsToCombatants } from '../encounter/ships-to-combatants';
 import { SystemHud } from '../ui/system-hud';
@@ -293,6 +294,9 @@ export class SystemScene implements Screen {
     this.inEncounter = true;
     this.actionMenu.close();
     this.sidebar.setNextTurnEnabled(false);
+    // Lift the fleet formation clear of the bottom encounter bar (EB, §15) before the chrome anchors to
+    // the slots; exitEncounter drops it back.
+    this.diagram.setFleetBottomReserve(ENCOUNTER_BAR_HEIGHT);
     this.encounter.enter(spec);
   }
 
@@ -302,6 +306,7 @@ export class SystemScene implements Screen {
     if (!this.inEncounter) return;
     this.inEncounter = false;
     this.encounter.exit();
+    this.diagram.setFleetBottomReserve(0);
     this.sidebar.setNextTurnEnabled(true);
   }
 
@@ -356,6 +361,9 @@ export class SystemScene implements Screen {
     // choice (§3.8). An enemy click was already claimed by the menu's target lock (handleClick above); a
     // click on anything else is absorbed (combat owns the field — no diagram selection).
     if (this.inEncounter) {
+      // The encounter bar is display-only chrome: a click on its band is absorbed, never falling
+      // through to combatant targeting / the free actor choice.
+      if (this.encounter.pointerOverBar(this._hudPt.x, this._hudPt.y)) return;
       const pick = this.pickAt(this._hudPt.x, this._hudPt.y);
       if (pick?.kind === 'ship') this.encounter.selectActorByEntityId(pick.shipId);
       return;

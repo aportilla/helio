@@ -1,9 +1,9 @@
 // Effect-fold invariants — collectInstalls (the deriveCommands twin), installEffects (monotonic ids,
-// self-sourced, install handler pool splice + install beat), tickTurnStart (recharge tops energy toward
-// energyMax, emits only on a real change, ticks only the active owner; a timed instance counts down,
-// and on expiry runs the expire handler to pop its shield band and emits an expire beat — even alongside
-// a co-located recharge), and foldPhaseStart (a side's phaseStart SideDeltas fold into its pool,
-// presence-not-count, living carriers only). Pure; synthetic combatants + effects.
+// self-sourced, install handler pool splice + install beat), tickTurnStart (a timed instance counts
+// down, and on expiry runs the expire handler to pop its shield band + emit an expire beat, touching
+// ONLY the active owner; a permanent one rides on), and foldPhaseStart (a side's phaseStart outcomes:
+// recharge tops EVERY living same-side ship's energy toward energyMax + emits a beat each; SideDeltas
+// fold into the pool presence-not-count, living carriers only). Pure; synthetic combatants + effects.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -61,72 +61,74 @@ test('ids stay monotonic across a drop — an on-resolve mint never reuses a fre
   assert.equal(resolved.slice.effects[0]!.id, 1, 'the new band took id 1, not the freed id 0');
 });
 
-test('recharge tops energy toward energyMax and emits an effect event', () => {
-  const combatants = [c(0, 'player', { [ENERGY_STAT]: 1000, [ENERGY_MAX_STAT]: 9000 })];
-  const { slice } = selfMint(combatants, () => [RECHARGE(3000)]);
-  const { state, events } = tickTurnStart(stateOf(slice.combatants, slice.effects, slice.nextEffectId), 0);
-  assert.equal(energy(state, 0), 4000);
-  assert.deepEqual(events, [{ kind: 'effect', combatId: 0, effectKey: 'recharge', statKey: ENERGY_STAT, delta: 3000 }]);
-});
-
-test('recharge clamps at energyMax and emits NO event once nothing changes', () => {
-  const combatants = [c(0, 'player', { [ENERGY_STAT]: 8000, [ENERGY_MAX_STAT]: 9000 })];
-  const r1 = tickTurnStart(stateOf(combatants, [{ id: 0, key: 'recharge', ownerId: 0, sourceId: 0, remainingCycles: -1, params: { amount: 3000 } }]), 0);
-  assert.equal(energy(r1.state, 0), 9000); // 8000 + 3000 clamped to 9000
-  assert.equal(r1.events.length, 1); // applied 1000 → one event
-  const r2 = tickTurnStart(r1.state, 0);
-  assert.equal(energy(r2.state, 0), 9000);
-  assert.deepEqual(r2.events, []); // already full → no change → no event
-});
-
-test('only the active combatant\'s effects tick', () => {
+test('foldPhaseStart: recharge tops EVERY living same-side ship toward energyMax, a beat per change', () => {
+  // recharge is a phaseStart effect: when a side's phase opens, every one of its ships recharges at once
+  // (the per-owner stat outcome the fold applies to each carrier), each clamped to energyMax and emitting
+  // an `effect` beat on a real change. The other side is untouched (only the entering side folds).
   const combatants = [
     c(0, 'player', { [ENERGY_STAT]: 1000, [ENERGY_MAX_STAT]: 9000 }),
-    c(1, 'rival', { [ENERGY_STAT]: 1000, [ENERGY_MAX_STAT]: 9000 }),
+    c(1, 'player', { [ENERGY_STAT]: 8000, [ENERGY_MAX_STAT]: 9000 }),
+    c(2, 'rival', { [ENERGY_STAT]: 1000, [ENERGY_MAX_STAT]: 9000 }),
   ];
   const effects: readonly ActiveEffect[] = [
     { id: 0, key: 'recharge', ownerId: 0, sourceId: 0, remainingCycles: -1, params: { amount: 3000 } },
     { id: 1, key: 'recharge', ownerId: 1, sourceId: 1, remainingCycles: -1, params: { amount: 3000 } },
+    { id: 2, key: 'recharge', ownerId: 2, sourceId: 2, remainingCycles: -1, params: { amount: 3000 } },
+  ];
+  const { state, events } = foldPhaseStart(stateOf(combatants, effects), 'player');
+  assert.equal(energy(state, 0), 4000, 'player ship 0: 1000 + 3000');
+  assert.equal(energy(state, 1), 9000, 'player ship 1: 8000 + 3000 clamped to energyMax');
+  assert.equal(energy(state, 2), 1000, 'the rival ship does NOT recharge on the player phase');
+  assert.equal(events.filter((e) => e.kind === 'effect' && e.effectKey === 'recharge').length, 2, 'one beat per player ship that changed');
+});
+
+test('foldPhaseStart: recharge emits NO beat for a ship already at energyMax', () => {
+  const combatants = [c(0, 'player', { [ENERGY_STAT]: 9000, [ENERGY_MAX_STAT]: 9000 })];
+  const full = [{ id: 0, key: 'recharge', ownerId: 0, sourceId: 0, remainingCycles: -1, params: { amount: 3000 } }] as const;
+  const { state, events } = foldPhaseStart(stateOf(combatants, full), 'player');
+  assert.equal(energy(state, 0), 9000, 'already full → the clamp swallows the delta');
+  assert.deepEqual(events, [], 'no real change → no beat');
+});
+
+test('tickTurnStart counts down ONLY the active owner\'s timed effects', () => {
+  // tickTurnStart runs at a combatant's own activation: it touches only THAT owner's effects. Two 2-cycle
+  // shields, one per ship; ticking ship 1 decrements only ship 1's band.
+  const band = (id: number) => ({ key: 'shields' as const, current: 50, max: 50, sourceEffectId: id });
+  const combatants = [
+    c(0, 'player', {}, [band(0), { key: 'hull', current: 100, max: 100 }]),
+    c(1, 'rival', {}, [band(1), { key: 'hull', current: 100, max: 100 }]),
+  ];
+  const effects: readonly ActiveEffect[] = [
+    { id: 0, key: 'shield-segment', ownerId: 0, sourceId: 0, remainingCycles: 2, params: { capacity: 50 } },
+    { id: 1, key: 'shield-segment', ownerId: 1, sourceId: 1, remainingCycles: 2, params: { capacity: 50 } },
   ];
   const { state } = tickTurnStart(stateOf(combatants, effects), 1); // tick combatId 1 only
-  assert.equal(energy(state, 0), 1000); // untouched
-  assert.equal(energy(state, 1), 4000); // recharged
+  assert.equal(state.effects.find((e) => e.id === 0)!.remainingCycles, 2, 'owner 0 untouched');
+  assert.equal(state.effects.find((e) => e.id === 1)!.remainingCycles, 1, 'owner 1 decremented');
 });
 
-test('a timed effect applies, then counts down and drops at 0; a permanent one persists', () => {
-  const combatants = [c(0, 'player', { [ENERGY_STAT]: 1000, [ENERGY_MAX_STAT]: 9000 })];
-  const timed: ActiveEffect = { id: 0, key: 'recharge', ownerId: 0, sourceId: 0, remainingCycles: 1, params: { amount: 1000 } };
-  const perm: ActiveEffect = { id: 1, key: 'recharge', ownerId: 0, sourceId: 0, remainingCycles: -1, params: { amount: 1000 } };
-  const { state } = tickTurnStart(stateOf(combatants, [timed, perm]), 0);
-  assert.deepEqual(state.effects.map((e) => e.id), [1], 'timed dropped at 0, permanent remains');
-  assert.equal(energy(state, 0), 3000, 'both applied this cycle (1000 + 1000 + 1000)');
-});
-
-test('a multi-cycle timed effect decrements but stays', () => {
-  const combatants = [c(0, 'player', { [ENERGY_STAT]: 1000, [ENERGY_MAX_STAT]: 9000 })];
-  const timed: ActiveEffect = { id: 0, key: 'recharge', ownerId: 0, sourceId: 0, remainingCycles: 3, params: { amount: 1000 } };
-  const { state } = tickTurnStart(stateOf(combatants, [timed]), 0);
-  assert.equal(state.effects[0]!.remainingCycles, 2);
-});
-
-test('a shield expiring runs its expire handler (pops its band) alongside a co-located recharge in one tick', () => {
-  // The owner carries BOTH a permanent recharge and a 1-cycle shield band: one tick must apply the
-  // recharge AND pop the shield band (expire on the evolving owner, not a stale snapshot) AND emit
-  // both beats — the substrate's "turnStart then expire then drop" order under co-location.
-  const combatants = [c(0, 'player', { [ENERGY_STAT]: 1000, [ENERGY_MAX_STAT]: 9000 }, [
+test('tickTurnStart: a timed effect counts down and drops at 0 (running expire); a permanent one persists', () => {
+  // A 1-cycle shield drops on this tick — its expire pops the band — while a co-located PERMANENT effect
+  // (a tactical-command; its phaseStart does nothing in a turn tick) rides on untouched.
+  const combatants = [c(0, 'player', {}, [
     { key: 'shields', current: 50, max: 50, sourceEffectId: 1 },
     { key: 'hull', current: 100, max: 100 },
   ])];
   const effects: readonly ActiveEffect[] = [
-    { id: 0, key: 'recharge', ownerId: 0, sourceId: 0, remainingCycles: -1, params: { amount: 3000 } },
+    TACTICAL(0, 0),
     { id: 1, key: 'shield-segment', ownerId: 0, sourceId: 0, remainingCycles: 1, params: { capacity: 50 } },
   ];
   const { state, events } = tickTurnStart(stateOf(combatants, effects), 0);
-  assert.equal(energy(state, 0), 4000, 'the recharge still applied this tick');
-  assert.deepEqual(state.combatants[0]!.pools!.map((p) => p.key), ['hull'], 'the shield band popped, hull remains');
-  assert.deepEqual(state.effects.map((e) => e.id), [0], 'the shield instance dropped; recharge persists');
-  assert.ok(events.some((e) => e.kind === 'effect' && e.effectKey === 'recharge'), 'a recharge beat');
+  assert.deepEqual(state.effects.map((e) => e.id), [0], 'the timed shield dropped; the permanent tactical-command persists');
+  assert.deepEqual(state.combatants[0]!.pools!.map((p) => p.key), ['hull'], 'the shield band popped on expiry');
   assert.ok(events.some((e) => e.kind === 'expire' && e.effectId === 1), 'an expire beat for the shield');
+});
+
+test('tickTurnStart: a multi-cycle timed effect decrements but stays', () => {
+  const combatants = [c(0, 'player', {}, [{ key: 'shields', current: 50, max: 50, sourceEffectId: 0 }, { key: 'hull', current: 100, max: 100 }])];
+  const timed: ActiveEffect = { id: 0, key: 'shield-segment', ownerId: 0, sourceId: 0, remainingCycles: 3, params: { capacity: 50 } };
+  const { state } = tickTurnStart(stateOf(combatants, [timed]), 0);
+  assert.equal(state.effects[0]!.remainingCycles, 2);
 });
 
 test('foldPhaseStart: a presence side-effect adds one icon to the side pool, regardless of carrier count', () => {

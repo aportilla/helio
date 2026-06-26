@@ -11,17 +11,19 @@ import type { EffectDef, EffectKey } from './types.ts';
 // rejected. The key IS the replay-binding id; the DEV assert below pins each def's `key` to its
 // registry key.
 const DEFS = {
-  // Worked example A (4x-encounter-combat-system §7.5): the engine's per-turn energy recharge as a
-  // DECLARED effect, not a hardcoded reducer step. The amount rides on the INSTALL's params, so a
-  // second power component simply installs its own `recharge` instance — the two sum in the one fold,
-  // with no merge logic. A `turnStart` handler returning ONE stat outcome, clamped at the energyMax stat.
+  // Worked example A (4x-encounter-combat-system §7.5/§3.8.5): the engine's energy recharge as a DECLARED
+  // effect, not a hardcoded reducer step. The amount rides on the INSTALL's params, so a second power
+  // component simply installs its own `recharge` instance — the two sum in the one fold, with no merge
+  // logic. A `phaseStart` handler returning ONE stat outcome, clamped at the energyMax stat: it folds at
+  // the owner's SIDE phase start (foldPhaseStart), so when the baton passes to a side EVERY one of its
+  // ships recharges AT ONCE — never mid-phase between activations, never only the ships that acted.
   recharge: {
     key: 'recharge',
     label: 'Recharge',
     color: '#3fd2ff',
     tags: ['buff'],
     on: {
-      turnStart: (ctx) => [{ kind: 'stat', statKey: 'energy', delta: ctx.params.amount ?? 0, clampToMaxKey: 'energyMax' }],
+      phaseStart: (ctx) => [{ kind: 'stat', statKey: 'energy', delta: ctx.params.amount ?? 0, clampToMaxKey: 'energyMax' }],
     },
   },
   // Worked example B (4x-encounter-combat-system §7.5): a timed shield as a DECLARED effect, minted

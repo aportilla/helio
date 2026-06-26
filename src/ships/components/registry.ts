@@ -35,8 +35,13 @@ const DEFS = {
     kind: 'weapon',
     // A weapon grants an ATTACK that enters an encounter against a single enemy. The enemy-only
     // predicate keeps the target bracket on opposing ships/bodies, exactly as the body railgun /
-    // missile batteries do — the same grant shape on the ship side of the symmetry.
-    grants: [{ key: 'laser', label: 'Laser', color: LASER_ACTION_COLOR, category: 'attack', targeting: 'single', kind: 'encounter', targets: (c) => c.allegiance === 'enemy' }],
+    // missile batteries do — the same grant shape on the ship side of the symmetry. `costPerUnit` is
+    // the salvo's energy cost (D3: a weapon's cost == its own battery): 9_000 matches the placeholder
+    // energyMax, so a full charge fires ONE laser, then the engine's 3_000/turn recharge refills it
+    // over ~3 turns — the canonical all-or-nothing-salvo cadence. A bones placeholder (declared here,
+    // not imported from the encounter package, to keep ships ↛ encounter), superseded by the real
+    // Σ-battery cost model.
+    grants: [{ key: 'laser', label: 'Laser', color: LASER_ACTION_COLOR, category: 'attack', targeting: 'single', kind: 'encounter', costPerUnit: 9_000, targets: (c) => c.allegiance === 'enemy' }],
   },
   'small-shield': {
     type: 'small-shield',

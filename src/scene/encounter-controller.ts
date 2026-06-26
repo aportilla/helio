@@ -27,12 +27,13 @@ import { OrthographicCamera, Scene, type WebGLRenderer } from 'three';
 import { applyCommand, createEncounterState, endPhase, selectActor } from '../encounter/step';
 import { neighborActor } from '../encounter/turn-order';
 import { isTerminal } from '../encounter/terminal';
-import { isDown, type Combatant, type EncounterEvent, type EncounterState } from '../encounter/state';
+import { ENERGY_STAT, isDown, type Combatant, type EncounterEvent, type EncounterState } from '../encounter/state';
 import type { EncounterSpec } from '../encounter/encounter-spec';
 import type { ActionCommand, ActionIntent, TargetAllegiance, TargetCandidate } from '../actions/types';
 import { commandFor } from '../actions/derive';
 import { CONTROLLED_FACTION_ID } from '../factions/registry';
 import { CombatOverlay } from './encounter-overlay';
+import { EncounterHud } from '../ui/encounter-hud';
 import { CombatTracers, vfxForCommand, type Bolt } from './encounter-tracers';
 import type { SlotCenter, SystemActionMenu } from './actions/system-action-menu';
 
@@ -50,6 +51,7 @@ export class EncounterController {
   readonly scene = new Scene();
   readonly camera = new OrthographicCamera(0, 1, 1, 0, -1, 1);
   private readonly overlay = new CombatOverlay();
+  private readonly bar = new EncounterHud();
   private readonly tracers: CombatTracers;
 
   private state: EncounterState | null = null;
@@ -78,6 +80,7 @@ export class EncounterController {
   ) {
     this.tracers = new CombatTracers(this.slotCenterFor);
     this.overlay.addTo(this.scene);
+    this.bar.addTo(this.scene);
     this.tracers.addTo(this.scene);
   }
 
@@ -117,6 +120,7 @@ export class EncounterController {
     this.playback = null; // drop any in-flight beat so it can't gate a re-entered encounter's tick
     this.tracers.clearBolts();
     this.overlay.hide();
+    this.bar.hide();
   }
 
   resize(contentBufferW: number, bufferH: number): void {
@@ -366,7 +370,12 @@ export class EncounterController {
   private autoIntent(state: EncounterState): ActionIntent | null {
     const actor = state.combatants[state.activeId];
     if (!actor) return null;
-    const attack = actor.commands.find((c) => c.grant.category === 'attack');
+    // Respect the same energy gate the player's menu enforces: pick an attack the ship can AFFORD
+    // (energy >= its salvo cost). A depleted ship yields no intent → the driver ends the phase
+    // (auto-pass), so the opponent's energy bar drains and recharges just like the player's, instead of
+    // firing for free. An actor with no energy stat (no cost model) stays permissively affordable.
+    const energy = actor.stats?.[ENERGY_STAT] ?? Infinity;
+    const attack = actor.commands.find((c) => c.grant.category === 'attack' && c.totalCost <= energy);
     if (!attack) return null;
     const enemy = state.combatants.find((c) => c.factionId !== actor.factionId && !isDown(c));
     if (!enemy) return null;
@@ -378,16 +387,22 @@ export class EncounterController {
     this.overlay.paint(
       this.state.combatants,
       this.state.activeId,
-      this.state.initiative,
-      this.state.phaseSide,
       this.slotCenterFor,
       this.contentW,
       this.bufH,
     );
+    this.bar.paint(this.state.combatants, this.state.initiative, this.state.phaseSide, this.contentW);
+  }
+
+  // True when a HUD-space point lands on the encounter bar band (display-only chrome): SystemScene
+  // consults this so a click on the bar is absorbed, never falling through to combatant targeting.
+  pointerOverBar(x: number, y: number): boolean {
+    return this.bar.bounds.contains(x, y);
   }
 
   dispose(): void {
     this.overlay.dispose();
+    this.bar.dispose();
     this.tracers.dispose();
   }
 }

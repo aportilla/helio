@@ -70,6 +70,9 @@ export class FleetLayer {
   private ships: readonly Ship[] = [];
   private contentW = 1;
   private bufferH = 1;
+  // Extra space reserved at the BOTTOM of the muster band (env-px), raised during an encounter so the
+  // formation clears the bottom encounter bar (EB, §15); 0 outside combat.
+  private bottomReserve = 0;
   // Hit-test targets for pickAt — one entry per visible sprite, rebuilt in relayout
   // (the only place the formation changes). Reused in place so a pick (or a hover,
   // which pickAt also serves) allocates nothing.
@@ -103,6 +106,14 @@ export class FleetLayer {
     this.relayout();
   }
 
+  // Reserve extra space at the BOTTOM of the muster band (env-px) so the formation clears the bottom
+  // encounter bar during combat (EB, §15). Idempotent; relayouts only on a real change. 0 = normal.
+  setBottomReserve(px: number): void {
+    if (this.bottomReserve === px) return;
+    this.bottomReserve = px;
+    this.relayout();
+  }
+
   // Split the ready ships by side and spread each across its muster box: the player's
   // (the controlled faction) in the left half facing right, every other faction in the
   // right half facing left. The TOTAL is capped first, so the two sides together never
@@ -119,7 +130,7 @@ export class FleetLayer {
     // The reserved band's vertical extent. Top tracks the lowest planet so the fleet
     // sits just under the dome on any viewport; bottom is a pad above the content edge.
     const yTop = domeBaselineY(this.contentW, this.bufferH) - FLEET_AREA_TOP_GAP;
-    const yBottom = FLEET_AREA_BOTTOM_PAD;
+    const yBottom = FLEET_AREA_BOTTOM_PAD + this.bottomReserve;
     const center = this.contentW / 2;
 
     let next = this.layoutGroup(mine, sizes.edgePad, center - FLEET_CENTER_GUTTER, yBottom, yTop, 1, 0);

@@ -10,14 +10,14 @@
 // of its ships (turn-order's within-side walk) until its pool is spent or it ends its phase, then the
 // phase passes to the next side, whose pool is re-derived from its living roster (I5). One full pass is
 // a `round`. Initiative (the side's activation budget) is orthogonal to energy (the per-ship salvo
-// gate, §3.8.5) — the recharge effect still ticks per activation, unchanged.
+// gate, §3.8.5) — the recharge effect folds at the SIDE's phase start, topping up all its ships at once.
 
 import type { ActionIntent } from '../actions/types.ts';
 import { commandFor } from '../actions/derive.ts';
 import { CONTROLLED_FACTION_ID } from '../factions/registry.ts';
 import type { EncounterSpec } from './encounter-spec.ts';
 import type { EncounterEvent, EncounterState, Combatant } from './state.ts';
-import { ENERGY_MAX_STAT, ENERGY_STAT, isDown, withPools } from './state.ts';
+import { ENERGY_MAX_STAT, ENERGY_STAT, isDown, withPools, withStat } from './state.ts';
 import { HULL_POOL, cascadeDamage } from './pools.ts';
 import { combatantInstalls, combatantInstallsOnResolve } from './ships-to-combatants.ts';
 import { foldPhaseStart, installEffects, tickTurnStart, type MintRequest } from './effects/fold.ts';
@@ -150,9 +150,24 @@ export function applyCommand(state: EncounterState, intent: ActionIntent): StepR
     events.push(...minted.events);
   }
 
-  // The action spent one initiative icon (§3.8.3) — flat per activation, whatever the command does.
-  // Energy (the salvo gate) is a separate per-ship clock (§3.8.5), folded by the recharge effect at the
-  // owner's turn start, not here.
+  // Spend the salvo's energy (§3.8.5): the command's totalCost leaves the ACTING ship's energy bag,
+  // clamped at 0 — the per-ship salvo gate. The menu already greys an unaffordable command
+  // (energy >= totalCost) and the opponent auto-driver only picks one it can afford, so a committed
+  // action is normally affordable; the clamp guards a future non-menu intent, and a 0-cost command (no
+  // energy model yet) is a pass-through. Find the actor in the LATEST combatants (a self-effect resolve
+  // above may have replaced it), keyed by combatId.
+  if (command.totalCost > 0) {
+    const aIdx = combatants.findIndex((c) => c.combatId === actor.combatId);
+    const acting = combatants[aIdx];
+    if (acting) {
+      const spent = Math.max(0, (acting.stats?.[ENERGY_STAT] ?? 0) - command.totalCost);
+      combatants = combatants.map((c, i) => (i === aIdx ? withStat(acting, ENERGY_STAT, spent) : c));
+    }
+  }
+
+  // The action spent one initiative icon (§3.8.3) — flat per activation — and its salvo's energy
+  // (above). Initiative is the SIDE's tempo budget; energy is the per-ship salvo gate (§3.8.5),
+  // recharged at its SIDE's phase start (foldPhaseStart — all the side's ships at once), not here. Orthogonal.
   const initiative = { ...state.initiative, [state.phaseSide]: Math.max(0, state.initiative[state.phaseSide] - 1) };
   const advanced: EncounterState = {
     ...state,
@@ -179,8 +194,9 @@ export function endPhase(state: EncounterState): StepResult {
 // Re-point the active cursor to a chosen living combatant on the CURRENT phase side — the player's free
 // in-phase actor choice (§3.8): you spend your initiative across whichever of YOUR actors you pick, in any
 // order, not a forced round-robin. A pure CURSOR move — it spends NO icon and ticks NO turn-start effect
-// (selection is not an activation; a ship's recharge stays tied to advanceTurn's landing cadence — how
-// recharge meshes with free choice is a P-Experiment energy-model decision, not a bones concern). An
+// (selection is not an activation; recharge is decoupled from activation — it folds at the SIDE's phase
+// start for ALL its ships (foldPhaseStart, §3.8.5), so free in-phase actor choice never changes who or
+// when recharges). An
 // illegal pick (out of range, an enemy, or a downed ship) returns the state UNCHANGED by reference, so a
 // stale/garbage selection can't desync the reducer (the AI/replay source of truth). Energy + action
 // availability still gate each ACTION (applyCommand / the menu's greyed rows) — selecting a tapped-out
@@ -194,8 +210,9 @@ export function selectActor(state: EncounterState, combatId: number): EncounterS
 
 // Advance off the (possibly mutated) roster. Stay in the active side's phase while it holds an icon AND
 // a living ship to offer (nextActor); otherwise hand the phase to the next living side (beginNextPhase).
-// The combatant we land on ticks its own per-cycle effects (its turn start), so a just-downed combatant
-// is never offered and a re-activated ship recharges again (§3.8.5). When no other side can act the
+// The combatant we land on ticks its own turn-start effects (timed-effect countdown — recharge now folds
+// per-SIDE at phase start (§3.8.5), NOT per activation), so a just-downed combatant is never offered, and
+// a re-activated ship does not re-recharge mid-phase. When no other side can act the
 // encounter is terminal (./terminal) — hold the cursor and skip the tick. Shared by applyCommand/endPhase.
 function advanceTurn(state: EncounterState, events: readonly EncounterEvent[]): StepResult {
   const next = nextActor(state);

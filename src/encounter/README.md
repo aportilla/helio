@@ -90,7 +90,7 @@ the rest of the project follows.
   timed instance down, running `expire` as it drops); `foldPhaseStart` runs a side's `phaseStart` when
   its Press-Turn phase begins. HP is an ordered **pool stack** (`pools.ts`): a hit cascades top→bottom,
   so a shield is just a band spliced above `hull` (absorb-before-hull is pure stack order). Worked
-  examples live: **A** — `small-engine` installs a permanent `recharge` (`turnStart` → a clamped energy
+  examples live: **A** — `small-engine` installs a permanent `recharge` (`phaseStart` → a clamped energy
   `StatDelta`); **B** — `small-shield`'s `raise-shields` mints (via `installsOnResolve`, keyed by grant
   key on the component def, NOT the neutral `ActionGrant`) a 3-cycle `shield-segment` (`install` splices
   the band, `expire` drops it — both `PoolEdit`s); **C** — `tactical-command-module` installs a permanent
@@ -120,15 +120,16 @@ the rest of the project follows.
   `applyCommand`, and REOPENS on the new `activeId`. Because the reducer keeps `activeId` on the
   controlled side until its icons are spent, the menu **stays on your side across multiple activations**
   within the phase; pressing **`R`** is the fleet-scoped **End Round** (`endPhase`, forfeit + pass).
-  `CombatOverlay` paints a per-side **initiative pip readout** (icons remaining, active side underlined)
-  beside the HP bars. You command only your side — an opponent's phase opens no menu and is auto-driven
+  `CombatOverlay` paints each combatant's **HP + energy gauges** (hull/shield bands + the amber salvo
+  bar) and the active-turn marker; the per-side **initiative readout** lives in the bottom **encounter
+  bar** (EB, below). You command only your side — an opponent's phase opens no menu and is auto-driven
   (a placeholder for the deferred AI, §3.7): the driver **loops one activation per interval until its
   pool is spent**, ending its phase if stranded. There is **no flee** — once in, ships fight to the
   terminal: side-elimination / mutual-disengage auto-exit (no menu action or key withdraws).
 - **Free in-phase actor choice (shipped), §3.8.** You spend your initiative across **any** of your living
   same-side actors, in any order — not a forced round-robin. `selectActor(state, combatId)` (`step.ts`) is
-  a pure cursor move (no icon spent, no turn-start tick — recharge stays tied to `advanceTurn`'s landing
-  cadence; energy + availability still gate each ACTION via the menu's greyed rows); `neighborActor`
+  a pure cursor move (no icon spent, no turn-start tick — recharge folds per-SIDE at phase start, decoupled
+  from which actor you pick; energy + availability still gate each ACTION via the menu's greyed rows); `neighborActor`
   (`turn-order.ts`) is the ◄ ► ring. `EncounterController.cycleActor` / `selectActorByEntityId` re-anchor
   the menu + the active-turn marker onto the chosen actor — **both ◄ ► (category-level) and a click on a
   friendly combatant** work, routed from `SystemScene` (`onCycleActor` → `cycleActor`; the in-encounter
@@ -146,6 +147,16 @@ the rest of the project follows.
   `drawPixelText` damage number, and a `down` turns its impact into a destruction burst. A no-beat action (a
   pass, a self-effect) opens no window and settles at once. *Forward (step 4's tail):* beats for the
   `effect` / `install` / `expire` events (heal / shield juice).
+- **EB — the encounter bar + energy (shipped), §15.** The PROMINENT per-side readout: a bottom
+  **encounter bar** (`src/ui/encounter-hud/`, a `ui/` HUD reading `encounter/` DTOs — controlled side
+  LEFT, opponent RIGHT, their initiative pips meeting at a center divider and dimming as spent, the
+  acting side lit + ship counts). It **supersedes** `CombatOverlay`'s old top-left corner pip strip
+  (removed); the overlay keeps the per-sprite gauges, now HP **plus a NEW energy bar** (amber,
+  `stats.energy/energyMax`). The **energy slice** makes that gauge live: `small-laser` carries a real
+  `costPerUnit` (== the placeholder `energyMax`, so a full charge fires ONE salvo), `applyCommand`
+  deducts it, and the opponent auto-driver only fires what it can afford — so a shot drains the bar and
+  the engine's `recharge` refills it ~⅓ at each of its side's phase starts. The fleet baseline lifts in-encounter (`setBottomReserve`)
+  to clear the band; the bar is display-only (`hitTest` opaque), owned + repainted by the controller.
 - **E5 — body combatants.** The `body-role` producer + appending body-combatants to the spec.
 
 Until ship *movement* exists, opponents are placed by a DEV-only spawn action; the single

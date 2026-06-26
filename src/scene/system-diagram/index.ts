@@ -169,6 +169,12 @@ export class SystemDiagram {
     this.fleet.setFleet(ships);
   }
 
+  // Reserve extra bottom space in the fleet muster band so the formation clears the encounter bar
+  // during combat (EB, §15). SystemScene raises it on enter, drops it to 0 on exit. Pass-through.
+  setFleetBottomReserve(px: number): void {
+    this.fleet.setBottomReserve(px);
+  }
+
   // The on-screen slot center of a ready ship (content-buffer px), or null if it isn't
   // currently rendered — the anchor the system action menu pins to. Pass-through to the
   // fleet layer, which owns the laid-out per-ship centers.

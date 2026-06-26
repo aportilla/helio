@@ -19,16 +19,16 @@ test('every frozen id is still a live key (a rename/removal fails here)', () => 
   }
 });
 
-test('recharge: a turnStart handler returns an energy stat outcome clamped to energyMax', () => {
+test('recharge: a phaseStart handler returns an energy stat outcome clamped to energyMax', () => {
   const recharge = EFFECT_BY_KEY.get('recharge')!;
   assert.equal(recharge.key, 'recharge');
-  const outcomes = recharge.on!.turnStart!({ params: { amount: 3000 }, owner: { stats: { energy: 1000, energyMax: 9000 } } });
+  const outcomes = recharge.on!.phaseStart!({ params: { amount: 3000 }, owner: { stats: { energy: 1000, energyMax: 9000 } } });
   assert.deepEqual(outcomes, [{ kind: 'stat', statKey: 'energy', delta: 3000, clampToMaxKey: 'energyMax' }]);
 });
 
 test('recharge: a missing amount param is a silent zero delta, not a throw', () => {
   const recharge = EFFECT_BY_KEY.get('recharge')!;
-  assert.deepEqual(recharge.on!.turnStart!({ params: {}, owner: {} }), [{ kind: 'stat', statKey: 'energy', delta: 0, clampToMaxKey: 'energyMax' }]);
+  assert.deepEqual(recharge.on!.phaseStart!({ params: {}, owner: {} }), [{ kind: 'stat', statKey: 'energy', delta: 0, clampToMaxKey: 'energyMax' }]);
 });
 
 test('shield-segment: install splices a shields band above hull, expire drops it; no turnStart', () => {

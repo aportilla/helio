@@ -9,7 +9,7 @@ import { applyCommand, createEncounterState, endPhase, selectActor } from '../st
 import { shipsToCombatants, shipToCombatant } from '../ships-to-combatants.ts';
 import { buildEncounterSpec } from '../encounter-spec.ts';
 import { isTerminal } from '../terminal.ts';
-import { ENERGY_STAT, isDown, type EncounterEvent, type EncounterState, type ShipCombatant } from '../state.ts';
+import { ENERGY_STAT, isDown, withStat, type EncounterEvent, type EncounterState, type ShipCombatant } from '../state.ts';
 import { deriveCommands } from '../../actions/derive.ts';
 import { SHIP_CATEGORIES } from '../../actions/registry.ts';
 import { COMPONENT_BY_TYPE } from '../../ships/components/registry.ts';
@@ -110,18 +110,33 @@ test('an attack stacks duplicate target ids cumulatively (the per-target rebind,
   ]);
 });
 
-test('a combatant recharges energy at its own turn start (the declared engine effect)', () => {
-  // p1 (combatId 0) acts first on a charged start (no pre-tick). Drain p1, then run a full round so
-  // the cursor wraps back to p1 — its turn start ticks small-engine's declared recharge.
-  const base = encounterOf([ship('p1', 'player'), ship('r1', 'rival')]);
-  let s: EncounterState = {
-    ...base,
-    combatants: base.combatants.map((c) => (c.id === 'p1' ? { ...c, stats: { ...c.stats, [ENERGY_STAT]: 1000 } } : c)),
-  };
-  ({ state: s } = applyCommand(s, { actorId: 'p1', actionId: LASER, targetIds: ['r1'] })); // p1 acts → r1's turn
-  assert.equal(s.combatants.find((c) => c.id === 'p1')!.stats?.[ENERGY_STAT], 1000, "p1 doesn't recharge on r1's turn");
-  ({ state: s } = applyCommand(s, { actorId: 'r1', actionId: LASER, targetIds: ['p1'] })); // r1 acts → wraps to p1 → p1 ticks
-  assert.equal(s.combatants.find((c) => c.id === 'p1')!.stats?.[ENERGY_STAT], 4000, 'p1 recharged 3000 at its turn start');
+test('a combatant spends its salvo energy firing, then recharges at its side phase start', () => {
+  // p1 (combatId 0) acts first on a charged start (energy = energyMax). Firing the laser spends its full
+  // salvo (cost == energyMax), draining p1 to 0; a full round later the player phase re-opens and
+  // small-engine's declared 3000 recharge folds at that PHASE start (foldPhaseStart). For a lone-ship
+  // side, phase-start and the ship's own activation coincide; the multi-ship test below shows they differ.
+  let s = applyCommand(
+    encounterOf([ship('p1', 'player'), ship('r1', 'rival')]),
+    { actorId: 'p1', actionId: LASER, targetIds: ['r1'] }, // p1 fires → drains to 0 → r1's phase
+  ).state;
+  assert.equal(s.combatants.find((c) => c.id === 'p1')!.stats?.[ENERGY_STAT], 0, 'firing spent p1\'s full salvo (no recharge during r1\'s phase)');
+  s = applyCommand(s, { actorId: 'r1', actionId: LASER, targetIds: ['p1'] }).state; // r1 acts → wraps → player phase opens
+  assert.equal(s.combatants.find((c) => c.id === 'p1')!.stats?.[ENERGY_STAT], 3000, 'p1 recharged 3000 at the player phase start');
+});
+
+test('recharge folds at the SIDE phase start for ALL its ships, not per-activation', () => {
+  // The user-facing rule (§3.8.5): when the baton returns to a side, EVERY one of its ships recharges at
+  // once — not just the ship that acts, and not mid-phase. Two player ships share ONE initiative icon
+  // (floor(2 × ½)), so the side acts ONCE per phase; p2 is drained but never activated, yet still
+  // recharges at the player phase start (a per-activation turnStart tick would leave it untouched).
+  const base = encounterOf([ship('p1', 'player'), ship('p2', 'player'), ship('r1', 'rival')]);
+  let s: EncounterState = { ...base, combatants: base.combatants.map((c) => (c.id === 'p2' ? withStat(c, ENERGY_STAT, 1000) : c)) };
+  const energyOf = (id: string) => s.combatants.find((c) => c.id === id)!.stats?.[ENERGY_STAT];
+  s = applyCommand(s, { actorId: 'p1', actionId: LASER, targetIds: ['r1'] }).state; // p1 spends the side's lone icon → rival phase
+  assert.equal(energyOf('p2'), 1000, 'p2 does NOT recharge mid-phase (it was never activated)');
+  s = applyCommand(s, { actorId: 'r1', actionId: LASER, targetIds: ['p1'] }).state; // r1 acts → wraps → player phase opens
+  assert.equal(energyOf('p2'), 4000, 'p2 recharged 3000 at the player phase start despite never acting');
+  assert.equal(energyOf('p1'), 3000, 'p1 (which fired) also recharged at that same phase start');
 });
 
 test('a self shield absorbs before hull, then expires after 3 of its owner\'s cycles', () => {
