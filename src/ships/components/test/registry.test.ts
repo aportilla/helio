@@ -89,6 +89,15 @@ test('the small shield is a defense part granting a self support verb that insta
   );
 });
 
+test('the tactical-command-module is a utility that grants nothing and installs a permanent tactical-command effect', () => {
+  const mod = COMPONENT_BY_TYPE.get('tactical-command-module')!;
+  assert.equal(mod.kind, 'utility');
+  assert.equal(mod.grants, undefined, 'it grants no action — its job is side tempo, not a command');
+  // The Press-Turn contribution is a DECLARED effect (the generic substrate), NOT a static `initiative`
+  // registry key: it installs a permanent tactical-command whose phaseStart folds a +1 SideDelta.
+  assert.deepEqual(mod.installs, [{ effectKey: 'tactical-command', remaining: -1, params: { initiative: 1 } }]);
+});
+
 test('componentLabel resolves a def to its display label', () => {
   assert.equal(componentLabel('small-laser'), 'Small Laser');
   assert.equal(componentLabel('small-engine'), 'Small Engine');

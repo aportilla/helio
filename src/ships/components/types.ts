@@ -15,7 +15,7 @@ import type { EffectInstall } from '../../encounter/effects/types.ts';
 // shipped one breaks old saves AND the action ids derived from it — three guards defend it
 // (registry FROZEN_COMPONENT_IDS + its CI test, the DEV module-load assert, and this literal union
 // forcing every Record over it to update). Mirrors FacilityType / ShipClassType discipline.
-export type ShipComponentType = 'small-engine' | 'small-laser' | 'small-shield';
+export type ShipComponentType = 'small-engine' | 'small-laser' | 'small-shield' | 'tactical-command-module';
 
 // A component's structural family (the D13 taxonomy). It drives nothing in the menu today — the
 // grants do that — but names the part's ROLE so the deferred consumers can read it: a loadout

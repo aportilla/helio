@@ -31,7 +31,7 @@ interface CombatantBase extends Actor {
   // Combat HP is an ordered POOL STACK (./pools): a hit cascades top→bottom, so a shield is just a
   // band spliced above `hull` (absorb-before-hull is a stack-order fact, not shield-specific code).
   // `pools` is ABSENT on the effect-free adapter output; createEncounterState seeds the `hull` band,
-  // and a declared effect's onInstall splices more. The energy gate lives separately in the opaque
+  // and a declared effect's `install` handler splices more. The energy gate lives separately in the opaque
   // `stats` bag (where `energy`/`energyMax` sit, gating the menu) — the accepted axis split: a hit
   // hits pools, a recharge tops a stat, and a StatDelta never crosses into a pool.
   readonly pools?: readonly Pool[];
@@ -84,7 +84,7 @@ export function withStat(combatant: Combatant, key: string, value: number): Comb
 }
 
 // A combatant with its pool stack replaced — the immutable update the damage cascade and the
-// onInstall/onExpire pool edits make (a NEW combatant). The stat-bag twin is withStat.
+// `install`/`expire` pool edits make (a NEW combatant). The stat-bag twin is withStat.
 export function withPools(combatant: Combatant, pools: readonly Pool[]): Combatant {
   return { ...combatant, pools };
 }
@@ -131,12 +131,33 @@ export interface EncounterState {
   // combatId === index, preserved from the spec. A combatant's stats mutate across steps (its hull
   // falls), so the reducer replaces this array each step rather than mutating in place — it stays pure.
   readonly combatants: readonly Combatant[];
-  // The combatId whose turn it is — the turn cursor (./turn-order) advances it; the renderer's
-  // timeline ribbon projects upcoming actors from it.
+  // The combatId whose turn it is — the turn cursor (./turn-order) advances it WITHIN the active
+  // side's phase; the renderer anchors the active-turn marker on it.
   readonly activeId: number;
-  // 1-based; bumps when the cursor wraps a full pass through the living combatants. The event-driven
-  // round (§3.2) — an idle player burns none.
+  // 1-based; bumps when a full ROUND completes — all sides have taken a phase, i.e. the phase wraps
+  // back to the initiator's side (§3.8.1). The event-driven round — an idle player burns none.
   readonly round: number;
+  // ── Press-Turn initiative (§3.8) — the per-SIDE tempo economy ──────────────────────────────────
+  // The spent-down pool of whole-integer icons per side. Only `initiative[phaseSide]` is being spent
+  // right now; an off-phase side holds the pool it last refilled to (a tempo readout). Re-derived
+  // (refilled) when a side's phase begins (I5). Transient, immutable-replaced each step, NEVER
+  // serialized (§6.1) — like `round`.
+  readonly initiative: Readonly<Record<FactionType, number>>;
+  // Whose phase is live — the side currently spending icons (§3.8.1). The attacker (`initiator`)
+  // opens; phases alternate side-by-side until each has acted (one round), then repeat.
+  readonly phaseSide: FactionType;
+  // The side that opened the encounter (the attacker, `EncounterSpec.initiator`'s side) — the immutable
+  // round anchor: `round` bumps whenever a phase transition lands back on THIS side (a full pass
+  // completed, §3.8.1). Set once at create; never changes.
+  readonly initiatorSide: FactionType;
+  // Did ANY damage-dealing action land since the current round began? Accumulates across both sides'
+  // phases and resets at the round boundary. Drives the mutual-disengage terminal (./terminal, §8.4):
+  // a full round with no damage from either side ends the encounter.
+  readonly damageThisRound: boolean;
+  // Latched once a full round completed with `damageThisRound === false` — the mutual-disengage
+  // terminal (§8.4 / §3.8.3), the "all pass a round" exit now that a phase is voluntarily endable
+  // (End Round, ./step `endPhase`). isTerminal reads it alongside side-elimination.
+  readonly disengaged: boolean;
   // The live effects riding on the combatants — the only serialized half of the effect substrate
   // (./effects), minted at build from provider declarations and folded at each combatant's turn
   // start. Each is its own instance (distinct-instances stacking).

@@ -17,9 +17,10 @@ export interface EncounterSpec {
   // through it. Derived from `sides` so the two can't drift.
   readonly combatants: readonly Combatant[];
   // The offensive intent that launched the encounter — who acted, which action, the first target.
-  // Carried, not yet consumed: E2's reducer reads it to seed initiative; the deterministic PRNG
-  // seed (§6.2, derived from turn + cluster + attacker) is a deferred-mechanics concern that hangs
-  // off this same launch context.
+  // The reducer reads it to set the opening `phaseSide`/`initiatorSide` (the attacker acts first,
+  // I7/I12); the deterministic PRNG seed (§6.2) is a deferred-mechanics concern hanging off the same
+  // launch context. The per-side initiative pool is NOT carried here — it's computed by the reducer at
+  // each phase start (fleet base + effect SideDeltas), re-derived from the living roster (I5).
   readonly initiator: ActionIntent;
 }
 

@@ -1,5 +1,6 @@
-// isTerminal invariants — the encounter is over once fewer than two factions field a living
-// combatant (side elimination). Pure; synthetic combatants.
+// isTerminal invariants — the encounter ends on side elimination (fewer than two factions field a
+// living combatant) OR mutual disengage (a damage-free round latched `disengaged`). Pure; synthetic
+// combatants.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,7 +10,8 @@ import type { Combatant, EncounterState } from '../state.ts';
 const c = (combatId: number, factionId: Combatant['factionId'], hull = 100): Combatant => ({
   kind: 'ship', id: `c${combatId}`, combatId, factionId, classId: 'corvette', commands: [], pools: [{ key: 'hull', current: hull, max: hull }],
 });
-const roster = (combatants: readonly Combatant[]): EncounterState => ({ combatants, activeId: 0, round: 1, effects: [], nextEffectId: 0 });
+const roster = (combatants: readonly Combatant[], disengaged = false): EncounterState =>
+  ({ combatants, activeId: 0, round: 1, effects: [], nextEffectId: 0, initiative: { player: 0, rival: 0 }, phaseSide: 'player', initiatorSide: 'player', damageThisRound: false, disengaged });
 
 test('not terminal while two factions each field a living combatant', () => {
   assert.equal(isTerminal(roster([c(0, 'player'), c(1, 'rival')])), false);
@@ -28,4 +30,11 @@ test('a faction counts as living only if a member is still up', () => {
 
 test('terminal for an empty roster', () => {
   assert.equal(isTerminal(roster([])), true);
+});
+
+test('terminal when mutually disengaged, even with both sides alive', () => {
+  // A damage-free round latches `disengaged` (step.beginNextPhase); isTerminal honors it though both
+  // sides still field a living combatant.
+  assert.equal(isTerminal(roster([c(0, 'player'), c(1, 'rival')], true)), true);
+  assert.equal(isTerminal(roster([c(0, 'player'), c(1, 'rival')], false)), false);
 });

@@ -12,7 +12,7 @@ export const HULL_POOL = 'hull';
 
 // One band of the stack. `current`/`max` are integer-milli; `current` falls as the band absorbs and is
 // never negative. `sourceEffectId` ties a TEMPORARY band to the ActiveEffect that spliced it, so that
-// effect's onExpire pops exactly its own band(s); a permanent body pool carries none.
+// effect's `expire` handler pops exactly its own band(s); a permanent body pool carries none.
 export interface Pool {
   readonly key: string;
   readonly current: number;

@@ -664,10 +664,13 @@ export class SystemScene implements Screen {
     // the selection (which closes the menu) — one Escape per level, then one to deselect.
     if (this.actionMenu.handleKey(e)) return;
     // Combat owns input while the mode is live: an Esc not claimed by a drilled combat menu flees
-    // (tears the mode down); every other key is inert (no live-view selection/menu mid-fight). E4's
-    // combat menu claims its drill/target/confirm keys via handleKey above, before this catch-all.
+    // (tears the mode down); 'R' ends the controlled side's Press-Turn phase (the fleet-scoped End
+    // Round, §3.8.3 — inert on the opponent's auto-driven phase); every other key is inert (no
+    // live-view selection/menu mid-fight). E4's combat menu claims its drill/target/confirm keys via
+    // handleKey above, before this catch-all.
     if (this.inEncounter) {
       if (e.key === 'Escape') this.exitEncounter();
+      else if (e.key.toLowerCase() === 'r') this.encounter.endRound();
       return;
     }
     // Keyboard-first actor focus: a directional tap while no menu is open — nothing selected,

@@ -16,3 +16,21 @@ export const PLACEHOLDER_DAMAGE_MILLI = 40_000;
 // the canonical triple-missile fixture's energyMax of 9 (§4). The engine's `recharge` effect tops
 // energy back toward this each cycle.
 export const PLACEHOLDER_ENERGY_MILLI = 9_000;
+
+// ── Initiative knobs (COMMITTED, §3.8) — load-bearing, NOT placeholders ───────
+// The Press-Turn round structure (state.ts/turn-order.ts/step.ts). These are real game tuning,
+// hoisted per Appendix B. The fleet→icons ratio is the ONLY fractional step (floored before play,
+// §3.8.2); everything in the loop is whole icons.
+
+// The fleet→icons ratio (milli, so 500 ≈ ½): a side's base pool is floor(livingShips × ratio).
+// At ½ a 12-ship fleet derives 6 icons — a deliberate tempo throttle (you don't act with EVERY ship
+// each phase). RESERVED seam: this may become a concave diminishing-returns curve so huge fleets
+// don't get enormous phases — the symbol is the lever, the curve is tuning, not structure (I4).
+export const INITIATIVE_PER_SHIP_MILLI = 500;
+
+// The per-side floor so any side with a living ship always gets at least one action — fixes the
+// floor(½ × 1) = 0 lone-ship dead state (a lone scout still fights, I4/I5). The side pool is clamped to
+// this minimum AFTER the fleet base AND after any effect SideDelta folds (foldPhaseStart), so a
+// focus-fired debuff can never zero a side. Presence-not-count for a component's tempo contribution is
+// NOT a knob here — it's an effect property (`stacking: 'presence'` on the tactical-command def).
+export const MIN_INITIATIVE = 1;

@@ -47,12 +47,24 @@ const DEFS = {
     // A defense part grants a SUPPORT verb that raises a temporary shield on the ship ITSELF. `kind`
     // is the live-view dispatch fork only (immediate outside combat); inside an encounter the reducer
     // folds it regardless of `kind`. On resolve it installs a 3-cycle `shield-segment` (worked example
-    // B, 4x-encounter-combat-system §7.5): onInstall splices a `shields` band above hull, the damage
-    // cascade absorbs into it first, onExpire pops it. `capacity` is shield-HP-milli; a re-cast stacks
+    // B, 4x-encounter-combat-system §7.5): its `install` handler splices a `shields` band above hull, the
+    // damage cascade absorbs into it first, `expire` pops it. `capacity` is shield-HP-milli; a re-cast stacks
     // a second independent band (distinct-instances). The on-resolve install is keyed by grant key so a
     // multi-grant component installs per verb.
     grants: [{ key: 'raise-shields', label: 'Raise Shields', color: SHIELD_ACTION_COLOR, category: 'support', targeting: 'self', kind: 'immediate' }],
     installsOnResolve: { 'raise-shields': [{ effectKey: 'shield-segment', remaining: 3, params: { capacity: 50_000 } }] },
+  },
+  'tactical-command-module': {
+    type: 'tactical-command-module',
+    label: 'Tactical Command Module',
+    kind: 'utility',
+    // A utility part that grants NO action — its whole job is to raise its SIDE's Press-Turn tempo. It
+    // does so the generic way: it INSTALLS a permanent `tactical-command` effect (encounter
+    // §3.8.2/§3.8.6) whose phaseStart handler folds a +1 SideDelta into the side's pool each phase. The
+    // effect's `stacking: 'presence'` makes it count ONCE per side however many ships carry it — so the
+    // presence-not-count rule lives in the effect, not a static `initiative` registry key. Standalone
+    // like small-shield (not on the corvette default loadout) — opted into by a tested fixture.
+    installs: [{ effectKey: 'tactical-command', remaining: -1, params: { initiative: 1 } }],
   },
 } satisfies Record<ShipComponentType, ShipComponentDef>;
 
@@ -78,7 +90,7 @@ export function componentLabel(type: ShipComponentType): string {
 // a live type (SHIP_COMPONENT_TYPES.has), so removing OR renaming a shipped id fails — protecting
 // the action ids derived from it (and, from Phase 3, old ship saves) from a compiler-invisible
 // "cleanup". Mirrors FROZEN_FACILITY_IDS / FROZEN_SHIP_CLASS_IDS.
-export const FROZEN_COMPONENT_IDS: readonly string[] = ['small-engine', 'small-laser', 'small-shield'];
+export const FROZEN_COMPONENT_IDS: readonly string[] = ['small-engine', 'small-laser', 'small-shield', 'tactical-command-module'];
 
 // DEV-only module-load invariant: each def's `type` equals its registry key, and every frozen id is
 // still a live type. Mirrors the facilities + ships drift checks — loud in dev, stripped in prod,

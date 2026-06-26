@@ -1,40 +1,72 @@
 // Effect vocabulary — the combat analog of the action vocabulary (../../actions/types.ts) and the
 // fourth member of the registry family (FacilityDef / ShipClassDef / ActionGrant / EffectDef). A
 // provider DECLARES the effects it installs exactly as it declares grants, and the reducer FOLDS
-// them with NO per-effect-type branch — dispatch by hook PRESENCE, mirroring how deriveCommands
-// folds grants. A pure leaf: its only import is the Pool type from the sibling pool-stack leaf
-// (./pools, which itself imports nothing app-side). Only the ActiveEffect INSTANCE is ever
-// serialized — replay (seed + intent log) re-mints instances and re-runs the def CODE.
+// them with NO per-effect-type branch. A pure leaf: its only import is the Pool type from the sibling
+// pool-stack leaf (./pools, which itself imports nothing app-side). Only the ActiveEffect INSTANCE is
+// ever serialized — replay (seed + intent log) re-mints instances and re-runs the def CODE.
+//
+// The model is a UNIFIED LIFECYCLE: an effect subscribes to named lifecycle PHASES (when), and each
+// handler returns typed OUTCOMES (what) that the reducer routes through ONE dispatch. This decouples
+// "when an effect fires" from "what it changes": a turn-start handler may edit a stat OR a pool OR the
+// side's tempo, and so may a phase-start one. Adding a NOVEL effect — even one that touches a new
+// aspect under a unique condition — is a new def with handlers, never a new registry key or a new
+// reducer branch. (A genuinely new lifecycle MOMENT is the only thing that touches the substrate: one
+// LifecyclePhase member + one reducer raise-site.)
 
 import type { Pool } from '../pools.ts';
 
 // The frozen save-key naming an effect's DEF. An ActiveEffect re-binds to its def by this key the
 // way a saved Facility re-binds by {type}, so it is guarded the standard 3 ways (./registry).
-export type EffectKey = 'recharge' | 'shield-segment';
+export type EffectKey = 'recharge' | 'shield-segment' | 'tactical-command';
 
-// What a per-cycle hook asks the reducer to change — an integer-milli adjustment to ONE key in the
-// opaque STAT bag (e.g. energy), optionally clamped. Pool-stack HP is NOT touched this way: a band is
-// added/removed via PoolEdit (below) and depleted by the damage cascade, never by a StatDelta. (A
-// unified stat-or-pool key lookup is deferred until a DoT/HoT first needs to tick a pool.) Effect
+// ── Lifecycle phases (WHEN an effect fires) ──────────────────────────────────────────────────────
+// The named moments the reducer raises. An effect implements a handler per phase it cares about
+// (EffectDef.on), dispatched by PRESENCE — no per-effect branch. LIVE phases are below; a reserved
+// moment (roundStart / damageDealt / damageTaken / resolve …) becomes live by adding one member here
+// plus one reducer raise-site — a localized substrate change, NOT a per-effect one.
+//   - 'install'    — once, when the instance is minted (a shield splices its band).
+//   - 'expire'     — once, on the cycle a timed instance counts out, before it drops (a shield pops).
+//   - 'turnStart'  — at the OWNER combatant's own activation/turn start (recharge; later DoT / HoT).
+//   - 'phaseStart' — when the owner's SIDE begins a Press-Turn phase (§3.8): tactical-command tempo,
+//                    later Rally / Disruption. The side-aggregated phase from which SideDeltas fold.
+export type LifecyclePhase = 'install' | 'expire' | 'turnStart' | 'phaseStart';
+
+// ── Outcomes (WHAT a handler changes) — one discriminated channel the fold routes uniformly ───────
+
+// Adjust ONE key in the opaque STAT bag (e.g. energy), optionally clamped. Integer-milli. Effect
 // content, never a formula.
 export interface StatDelta {
+  readonly kind: 'stat';
   readonly statKey: string;
   readonly delta: number;
   readonly clampToMaxKey?: string; // ceil the result at this stat's value (energy ≤ energyMax)
   readonly clampToZero?: boolean; // floor the result at 0
 }
 
-// A structural edit to the owner's pool stack — what onInstall / onExpire RETURN (the pool-stack twin
-// of StatDelta: a hook describes the change, the fold applies it, so the def stays pure and the
-// reducer carries no per-effect branch). `splice` adds a band (the fold stamps its sourceEffectId, so
-// the def need not know its own id) directly above the first `aboveKey` band; `drop` removes every
-// band this effect spliced. A shield-segment is one `splice` on install + one `drop` on expire — no
-// damage hook, because absorb-before-hull is purely the stack order (./pools).
+// A structural edit to the owner's pool STACK. `splice` adds a band (the fold stamps its sourceEffectId,
+// so the def need not know its own id) directly above the first `aboveKey` band; `drop` removes every
+// band this effect spliced. A shield is one `splice` on install + one `drop` on expire — no damage
+// hook, because absorb-before-hull is purely the stack order (./pools).
 export type PoolEdit =
-  | { readonly op: 'splice'; readonly pool: Pool; readonly aboveKey?: string }
-  | { readonly op: 'drop' };
+  | { readonly kind: 'pool'; readonly op: 'splice'; readonly pool: Pool; readonly aboveKey?: string }
+  | { readonly kind: 'pool'; readonly op: 'drop' };
 
-// The read-only view a hook gets of the combatant it rides on — the minimum it needs, declared apart
+// Add/remove whole Press-Turn initiative icons from the owner's SIDE pool (§3.8.4) — the per-SIDE tier
+// neither StatDelta (per-combatant stat) nor PoolEdit (per-combatant HP) can reach. The fold resolves
+// the owner to its side and folds these at the relevant phase; `initiative` is whole icons (gain +,
+// debuff −). Whom it lands on is the lifecycle: a phaseStart SideDelta sets the side's pool for the
+// phase (tactical-command); a future on-resolve debuff would target the victim side.
+export interface SideDelta {
+  readonly kind: 'side';
+  readonly initiative: number;
+}
+
+// The single typed channel every handler returns — the fold routes each by `kind` to its applier
+// (stat→bag, pool→stack, side→pool), so a handler can return ANY mix from ANY phase. This is the seam
+// that makes "novel effects that touch different aspects" need zero substrate change.
+export type EffectOutcome = StatDelta | PoolEdit | SideDelta;
+
+// The read-only view a handler gets of the combatant it rides on — the minimum it needs, declared apart
 // from ../state so the effect leaf carries no state↔effects dependency (it shares only the neutral
 // Pool leaf). A Combatant satisfies it structurally.
 export interface EffectTarget {
@@ -42,27 +74,35 @@ export interface EffectTarget {
   readonly pools?: readonly Pool[];
 }
 
-// The context a per-cycle hook reads — its instance params + its owner. Pure: a hook reads these and
-// returns deltas; it never reaches app state.
+// The context a handler reads — its instance params + its owner. Pure: a handler reads these and
+// returns outcomes; it never reaches app state. Richer per-event context (a hit amount, an attacker
+// id) lands as optional fields here with the event that first needs them.
 export interface EffectContext {
   readonly params: Readonly<Record<string, number>>;
   readonly owner: EffectTarget;
 }
 
-// An effect's DEF — pure code keyed by a frozen EffectKey, NEVER serialized. A def implements only
-// the hooks its mechanic needs (no upfront taxonomy), each PURE and RETURNING its change for the fold
-// to apply (never mutating). `onCycleStart` fires at the owner's OWN turn start (recharge / DoT / HoT)
-// and returns stat deltas. `onInstall` fires once at mint (a shield splices its band); `onExpire`
-// fires on the cycle a timed effect counts out, after that cycle's onCycleStart, before the instance
-// drops (a shield pops its band) — both return pool edits.
+// One lifecycle handler — the UNIFORM shape for every phase: read context, return typed outcomes.
+export type EffectHandler = (ctx: EffectContext) => readonly EffectOutcome[];
+
+// How multiple live INSTANCES of this effect on ONE SIDE aggregate when their SideDeltas fold at a
+// side phase (§3.8.2). 'sum' (default) = every living carrier contributes (instances add). 'presence'
+// = the effect counts ONCE per side however many carriers hold it ("+1 no matter how many tactical-
+// command ships") — the generic expression of presence-not-count, a DATA property, not a hardcoded
+// cap. Per-combatant outcomes (stat/pool, e.g. recharge) are unaffected: they always apply per owner.
+export type EffectStacking = 'sum' | 'presence';
+
+// An effect's DEF — pure code keyed by a frozen EffectKey, NEVER serialized. It declares only the
+// lifecycle handlers its mechanic needs (no upfront taxonomy), each PURE and RETURNING its outcomes for
+// the fold to apply (never mutating). Dispatch is by handler PRESENCE in `on`, mirroring how
+// deriveCommands folds grants — no per-key branch in the reducer.
 export interface EffectDef {
   readonly key: EffectKey;
   readonly label: string;
   readonly color: string; // effect-chip hue, literal sRGB (ColorManagement OFF), like ActionGrant.color
   readonly tags?: readonly string[]; // 'buff'|'debuff'|… — what cleanse/dispel will match on (data, not a branch)
-  onCycleStart?(ctx: EffectContext): readonly StatDelta[];
-  onInstall?(ctx: EffectContext): readonly PoolEdit[];
-  onExpire?(ctx: EffectContext): readonly PoolEdit[];
+  readonly stacking?: EffectStacking; // side-fold aggregation (above); ABSENT ⇒ 'sum'
+  readonly on?: Partial<Record<LifecyclePhase, EffectHandler>>; // lifecycle subscriptions; ABSENT phase ⇒ no-op
 }
 
 // A live effect riding on a combatant — the ONLY serialized half (EncounterState.effects), so replay
@@ -74,8 +114,8 @@ export interface ActiveEffect {
   readonly key: EffectKey; // re-binds to the def (code, never saved)
   readonly ownerId: number; // the combatId it rides on
   readonly sourceId: number; // who installed it — carried from day one so reflect/charge-up need no later save change
-  readonly remainingCycles: number; // -1 = PERMANENT; >0 counts down at the owner's own cycle start
-  readonly params: Readonly<Record<string, number>>; // integer-milli config: {amount} / {capacity}
+  readonly remainingCycles: number; // -1 = PERMANENT; >0 counts down at the owner's own turn start
+  readonly params: Readonly<Record<string, number>>; // integer-milli config: {amount} / {capacity} / {initiative}
 }
 
 // A provider's DECLARATION that it installs an effect — the combat twin of an ActionGrant, a

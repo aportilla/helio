@@ -15,7 +15,7 @@
 // both the player and the headless verification.
 
 import { OrthographicCamera, Scene, type WebGLRenderer } from 'three';
-import { applyCommand, createEncounterState } from '../encounter/step';
+import { applyCommand, createEncounterState, endPhase } from '../encounter/step';
 import { isTerminal } from '../encounter/terminal';
 import { isDown, type Combatant, type EncounterState } from '../encounter/state';
 import type { EncounterSpec } from '../encounter/encounter-spec';
@@ -64,6 +64,15 @@ export class EncounterController {
     this.state = createEncounterState(spec);
     this.menu.onEncounterCommit = (intent) => this.commit(intent);
     this.menu.setEncounterMode(true);
+    // Fail closed: a spec already terminal at birth (a degenerate <2-living-sides roster) must not open
+    // the menu over a dead encounter — tear down at once, mirroring commit()/endActivePhase(). The live
+    // launch path can't produce this (combat is born from an attack on a living enemy), but enter()
+    // shouldn't depend on the caller's invariant — otherwise a controlled active just sits, since tick()
+    // returns on `playerWaits` before it reaches its own terminal check.
+    if (isTerminal(this.state)) {
+      this.onExit();
+      return;
+    }
     this.repaint();
     this.openOnActive(this.state);
   }
@@ -105,7 +114,18 @@ export class EncounterController {
       return;
     }
     const intent = this.autoIntent(this.state);
-    if (intent) this.commit(intent);
+    if (intent) {
+      this.commit(intent);
+      return;
+    }
+    // The active opponent ship has no move (no attack command, or no living enemy): end the phase so a
+    // stranded pool never soft-locks the round (§3.8.3 auto-pass). The driver LOOPS across ticks — one
+    // activation per interval — spending the pool down, then hands the phase back (the player's phase
+    // opens its menu via openOnActive). LIMITATION: autoIntent only inspects the ACTIVE ship, so a mixed
+    // loadout where the active ship can't attack but a same-side ship could forfeits the whole phase —
+    // it works today only because every ship flies the homogeneous corvette loadout (all can fire). A
+    // real AI that picks WHICH same-side ship acts lands with the deferred in-phase ◄ ► ship-selection.
+    this.endActivePhase();
   }
 
   // The overlay anchors to the live fleet slots, so it must render in the SAME content viewport the
@@ -155,6 +175,28 @@ export class EncounterController {
     this.openOnActive(this.state);
   }
 
+  // The player-facing fleet-scoped End Round (§3.8.3): forfeit the CONTROLLED side's remaining initiative
+  // and hand the phase over. Only valid on your own phase — an opponent's phase is auto-driven, so a
+  // stray key during it is inert. SystemScene routes the End-Round key here.
+  endRound(): void {
+    if (this.state?.phaseSide !== CONTROLLED_FACTION_ID) return;
+    this.endActivePhase();
+  }
+
+  // End the active side's phase through the reducer (End Round or the auto-pass-on-stranded), then
+  // re-paint and either exit (terminal — side-elimination or mutual-disengage) or open on the new active
+  // combatant. Shared by the player's End Round and the opponent auto-driver's stranded pass.
+  private endActivePhase(): void {
+    if (!this.state) return;
+    this.state = endPhase(this.state).state;
+    this.repaint();
+    if (isTerminal(this.state)) {
+      this.onExit();
+      return;
+    }
+    this.openOnActive(this.state);
+  }
+
   // Every LIVING combatant as a target candidate, tagged by allegiance to the acting combatant (self =
   // itself, ally = same faction, enemy = other). The menu filters this by the cursored command's
   // TargetCriteria (a laser admits only enemies; a self verb only the actor). A downed combatant is no
@@ -184,7 +226,15 @@ export class EncounterController {
 
   private repaint(): void {
     if (!this.state) return;
-    this.overlay.paint(this.state.combatants, this.state.activeId, this.slotCenterFor, this.contentW, this.bufH);
+    this.overlay.paint(
+      this.state.combatants,
+      this.state.activeId,
+      this.state.initiative,
+      this.state.phaseSide,
+      this.slotCenterFor,
+      this.contentW,
+      this.bufH,
+    );
   }
 
   dispose(): void {

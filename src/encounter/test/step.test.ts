@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyCommand, createEncounterState } from '../step.ts';
+import { applyCommand, createEncounterState, endPhase } from '../step.ts';
 import { shipsToCombatants, shipToCombatant } from '../ships-to-combatants.ts';
 import { buildEncounterSpec } from '../encounter-spec.ts';
 import { isTerminal } from '../terminal.ts';
@@ -164,7 +164,7 @@ test('a self shield absorbs before hull, then expires after 3 of its owner\'s cy
   assert.equal(hit.pools?.find((p) => p.key === 'hull')?.current, PLACEHOLDER_HULL_MILLI, 'hull is untouched behind the shield');
 
   // Run turns (p1 flees, r1 attacks) until the band is gone — it ticks at p1's turn starts and pops on
-  // the 3rd (3→2→1→0 → onExpire). p1 never re-shields, so exactly one band lives the whole time.
+  // the 3rd (3→2→1→0 → expire). p1 never re-shields, so exactly one band lives the whole time.
   const expires: EncounterEvent[] = [];
   let guard = 0;
   while (s.combatants.find((c) => c.id === 'p1')!.pools!.some((p) => p.key === 'shields') && guard++ < 12) {
@@ -193,4 +193,93 @@ test('runs a full encounter to the side-elimination terminal', () => {
   assert.ok(guard < 100, 'terminated well before the guard');
   const livingFactions = new Set(s.combatants.filter((c) => !isDown(c)).map((c) => c.factionId));
   assert.equal(livingFactions.size, 1, 'exactly one side left standing');
+});
+
+// ── Press-Turn initiative (§3.8) ─────────────────────────────────────────────
+
+test('createEncounterState seeds per-side initiative and opens on the initiator side', () => {
+  const s = encounterOf([ship('p1', 'player'), ship('r1', 'rival')], 'p1');
+  assert.equal(s.phaseSide, 'player');
+  assert.equal(s.initiatorSide, 'player');
+  assert.equal(s.initiative.player, 1, '1 ship → max(1, floor(½)) = 1');
+  assert.equal(s.initiative.rival, 1);
+});
+
+test('the fleet→icons ratio throttles a side (3 ships → 1 icon, not one per ship)', () => {
+  const s = encounterOf([ship('p1', 'player'), ship('p2', 'player'), ship('p3', 'player'), ship('r1', 'rival')], 'p1');
+  assert.equal(s.initiative.player, 1, 'floor(½ × 3) = 1');
+});
+
+test('a side with 2 icons activates twice in one phase, then the phase passes', () => {
+  // 4 player ships → floor(½ × 4) = 2 icons; r1 absorbs two 40k hits (80k < 100k hull) and survives.
+  let s = encounterOf(
+    [ship('p1', 'player'), ship('p2', 'player'), ship('p3', 'player'), ship('p4', 'player'), ship('r1', 'rival')],
+    'p1',
+  );
+  assert.equal(s.initiative.player, 2);
+  ({ state: s } = applyCommand(s, { actorId: 'p1', actionId: LASER, targetIds: ['r1'] }));
+  assert.equal(s.phaseSide, 'player', 'one icon left → still the player phase');
+  assert.equal(s.initiative.player, 1);
+  assert.equal(s.combatants[s.activeId]!.factionId, 'player', 'a second player ship is now active (round-robin within the side)');
+  const second = s.combatants[s.activeId]!.id;
+  ({ state: s } = applyCommand(s, { actorId: second, actionId: LASER, targetIds: ['r1'] }));
+  assert.equal(s.phaseSide, 'rival', 'both icons spent → the phase passed to the rival');
+});
+
+test('endPhase forfeits the side\'s remaining icons and hands the phase over (End Round)', () => {
+  // 4 player ships → 2 icons; End Round before spending forfeits both (no banking, I6).
+  let s = encounterOf(
+    [ship('p1', 'player'), ship('p2', 'player'), ship('p3', 'player'), ship('p4', 'player'), ship('r1', 'rival')],
+    'p1',
+  );
+  assert.equal(s.initiative.player, 2);
+  ({ state: s } = endPhase(s));
+  assert.equal(s.phaseSide, 'rival', 'the phase passed despite unspent icons');
+});
+
+test('a full round with no damage from either side mutually disengages', () => {
+  let s = encounterOf([ship('p1', 'player'), ship('r1', 'rival')], 'p1');
+  assert.equal(isTerminal(s), false);
+  ({ state: s } = endPhase(s)); // player ends → rival phase, still round 1
+  assert.equal(s.phaseSide, 'rival');
+  assert.equal(isTerminal(s), false, 'one side passing is not yet terminal');
+  ({ state: s } = endPhase(s)); // rival ends → wraps to the initiator: a damage-free round
+  assert.equal(s.disengaged, true);
+  assert.equal(isTerminal(s), true, 'a damage-free round mutually disengages');
+});
+
+test('a damage-dealing round does NOT disengage (the accumulator resets each round)', () => {
+  let s = encounterOf([ship('p1', 'player'), ship('r1', 'rival')], 'p1');
+  ({ state: s } = applyCommand(s, { actorId: 'p1', actionId: LASER, targetIds: ['r1'] })); // player deals damage
+  ({ state: s } = endPhase(s)); // rival ends its phase → wrap to player
+  assert.equal(s.disengaged, false, 'damage this round keeps it off the mutual-disengage terminal');
+  assert.equal(s.round, 2);
+});
+
+test('a tactical-command effect refills a side to base + 1 at its phase start (presence tempo)', () => {
+  // Ride a permanent tactical-command on p1 (as the module's build-time install would). After a full
+  // round wraps back to the player, its phase re-folds: fleet base(1) + presence(1) = 2.
+  let s = encounterOf([ship('p1', 'player'), ship('r1', 'rival')], 'p1');
+  s = {
+    ...s,
+    effects: [...s.effects, { id: s.nextEffectId, key: 'tactical-command', ownerId: 0, sourceId: 0, remainingCycles: -1, params: { initiative: 1 } }],
+    nextEffectId: s.nextEffectId + 1,
+  };
+  ({ state: s } = applyCommand(s, { actorId: 'p1', actionId: LASER, targetIds: ['r1'] })); // player → rival
+  ({ state: s } = applyCommand(s, { actorId: 'r1', actionId: LASER, targetIds: ['p1'] })); // rival → wrap to player
+  assert.equal(s.phaseSide, 'player');
+  assert.equal(s.initiative.player, 2, 'fleet base 1 + tactical-command 1');
+});
+
+test('a malformed intent is a strict no-op — no icon spent, no turn advance (the AI/replay guard)', () => {
+  // DEV throws (import.meta.env undefined under node --test, so the prod no-op path runs). An unknown
+  // action on the active actor, and an unknown actor, both leave the state IDENTICAL — a stale intent
+  // can't silently drain tempo or skip a phase.
+  const s0 = encounterOf([ship('p1', 'player'), ship('r1', 'rival')], 'p1');
+  const badAction = applyCommand(s0, { actorId: 'p1', actionId: 'small-laser:no-such-grant', targetIds: ['r1'] });
+  assert.equal(badAction.state, s0, 'unknown action: state returned unchanged');
+  assert.deepEqual(badAction.events, []);
+  const badActor = applyCommand(s0, { actorId: 'ghost', actionId: LASER, targetIds: ['r1'] });
+  assert.equal(badActor.state, s0, 'unknown actor: state returned unchanged');
+  assert.deepEqual(badActor.events, []);
 });

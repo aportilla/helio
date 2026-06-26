@@ -9,6 +9,7 @@
 import { Widget } from '../ui/widget';
 import { factionColor } from '../factions/registry';
 import { isDown, type Combatant } from '../encounter/state';
+import type { FactionType } from '../factions/types';
 import type { SlotCenter } from './actions/system-action-menu';
 
 // All env px. The bar rides just above each sprite; the active marker is a bright 1-px frame.
@@ -21,6 +22,16 @@ const DOWN_BORDER = '#3a3a3a'; // a downed slot's frame goes grey ("out")
 const ACTIVE = '#ffe98a'; // the active-turn marker (the locked-target yellow)
 const SHIELD_FILL = '#5b8dd6'; // shield-band portion (matches the shield effect-chip hue)
 
+// Per-side Press-Turn INITIATIVE readout (§3.8.6) — a corner strip of icon pips per side: a faction
+// swatch then one pip per remaining icon, the active side underlined. The fleet's tempo, read at a
+// glance. Spent pips ghost so the phase's drain is legible.
+const PIP = 4; // one initiative icon
+const PIP_GAP = 2;
+const SWATCH = 5; // the leading faction-color square that identifies the side's row
+const READOUT_PAD = 6; // inset from the top-left corner
+const ROW_H = 9; // per-side row pitch
+const PIP_SPENT = '#243447'; // a spent/forecast icon (dim) so the cap still reads as the row drains
+
 export class CombatOverlay extends Widget {
   // Paint every combatant's chrome onto one content-buffer canvas. `slotCenterFor` maps a combatant's
   // durable id to its live on-screen slot (the same accessor the action menu anchors through), so the
@@ -28,6 +39,8 @@ export class CombatOverlay extends Widget {
   paint(
     combatants: readonly Combatant[],
     activeId: number,
+    initiative: Readonly<Record<FactionType, number>>,
+    phaseSide: FactionType,
     slotCenterFor: (id: string) => SlotCenter | null,
     contentW: number,
     bufH: number,
@@ -46,12 +59,57 @@ export class CombatOverlay extends Widget {
       const y = Math.round(bufH - topUp);
       this.paintBar(g, x, y, combatant, combatant.combatId === activeId);
     }
+    this.paintInitiative(g, combatants, initiative, phaseSide);
     this.setTexture(canvas, canvas.width, canvas.height);
     this.placeAt(0, 0);
   }
 
   hide(): void {
     this.setVisible(false);
+  }
+
+  // The per-side initiative readout, top-left (canvas-top maps to screen-top via flipY). One row per
+  // side present, in first-seen combatId order: a faction swatch + one pip per CURRENT icon, the active
+  // side underlined in the turn-marker yellow. The active side's count is exact (its live spend-down
+  // pool); an off-phase side's row is its fleet base — a forecast that omits effect bonuses (e.g.
+  // tactical-command) and attrition until that side's phase opens and re-folds the pool.
+  private paintInitiative(
+    g: CanvasRenderingContext2D,
+    combatants: readonly Combatant[],
+    initiative: Readonly<Record<FactionType, number>>,
+    phaseSide: FactionType,
+  ): void {
+    const sides: FactionType[] = [];
+    const seen = new Set<FactionType>();
+    for (const c of combatants) {
+      if (!seen.has(c.factionId)) {
+        seen.add(c.factionId);
+        sides.push(c.factionId);
+      }
+    }
+    let rowTop = READOUT_PAD;
+    for (const side of sides) {
+      const count = Math.max(0, initiative[side] ?? 0);
+      const color = factionColor(side);
+      g.fillStyle = color;
+      g.fillRect(READOUT_PAD, rowTop, SWATCH, SWATCH);
+      for (let i = 0; i < count; i++) {
+        const px = READOUT_PAD + SWATCH + PIP_GAP + i * (PIP + PIP_GAP);
+        g.fillStyle = color;
+        g.fillRect(px, rowTop + (SWATCH - PIP), PIP, PIP);
+      }
+      if (count === 0) {
+        // a spent/empty side still shows one ghost pip so the row never collapses to a lone swatch
+        g.fillStyle = PIP_SPENT;
+        g.fillRect(READOUT_PAD + SWATCH + PIP_GAP, rowTop + (SWATCH - PIP), PIP, PIP);
+      }
+      if (side === phaseSide) {
+        g.fillStyle = ACTIVE;
+        const w = SWATCH + PIP_GAP + Math.max(1, count) * (PIP + PIP_GAP);
+        g.fillRect(READOUT_PAD, rowTop + SWATCH + 1, w, 1);
+      }
+      rowTop += ROW_H;
+    }
   }
 
   private paintBar(g: CanvasRenderingContext2D, x: number, y: number, combatant: Combatant, active: boolean): void {

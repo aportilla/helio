@@ -6,13 +6,16 @@ A pure declaration + registry leaf: its app-side imports are **type-only** — t
 
 ## The v1 components
 
-| id | kind | grants |
+| id | kind | grants / effects |
 |---|---|---|
-| `small-engine` | `drive` | NAVIGATION **Flee** (self, immediate) — D9: every ship has a drive, so every ship can flee |
+| `small-engine` | `drive` | NAVIGATION **Flee** (self, immediate) — D9: every ship has a drive, so every ship can flee. Installs a permanent `recharge` effect |
 | `small-laser` | `weapon` | ATTACK **Laser** (single enemy, enters an encounter) — the enemy-only predicate mirrors the body railgun/missile batteries |
 | `small-shield` | `defense` | SUPPORT **Raise Shields** (self, immediate) — its `installsOnResolve` mints a 3-cycle `shield-segment` effect (worked example B of the effect substrate); registered but **not** on the corvette's default loadout |
+| `tactical-command-module` | `utility` | **No grant.** Installs a permanent `tactical-command` effect whose `phaseStart` folds **+1 Press-Turn initiative** into its side's pool (encounter §3.8) — `stacking: 'presence'`, so it counts once per side however many ships carry it. Standalone (not on the corvette default) |
 
 Every ship currently flies the corvette's fixed loadout (`['small-engine', 'small-laser']`, declared on its `ShipClassDef`). There is no build UI yet, so this is the basic loadout for the whole fleet.
+
+A component's combat contribution is **always a declared effect**, never a bespoke registry key: `tactical-command-module` raises fleet tempo by *installing the `tactical-command` effect*, exactly as `small-engine` recharges by installing `recharge` — there is no `initiative` field on `ShipComponentDef`. New combat behaviours add an `EffectDef` and a lifecycle handler ([the encounter doc](../../encounter/README.md) → "The effect substrate"), not a component key.
 
 ## Frozen-key discipline
 

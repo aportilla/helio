@@ -1,14 +1,18 @@
-// fold — the pure effect machinery: collect declared installs (the deriveCommands twin), MINT them
-// into ActiveEffects (running each one's onInstall pool edits), and tick a combatant's per-cycle
-// effects at its turn start (running onCycleStart, then onExpire as a timed instance counts out). The
-// fold dispatches by hook PRESENCE — no effectKey branch — exactly as deriveCommands folds grants.
-// Pure: it reads the effect registry + the state/pool leaves, nothing app-side.
+// fold — the pure effect machinery on the unified lifecycle model (./types). collectInstalls is the
+// deriveCommands twin (gather declared installs); installEffects MINTS instances + runs their `install`
+// handler; tickTurnStart runs an owner's `turnStart` handlers at its turn start (and counts a timed
+// instance down, running `expire` as it drops); foldPhaseStart runs a side's `phaseStart` handlers when
+// its Press-Turn phase begins. ALL of them route a handler's returned outcomes through ONE applier
+// (applyOutcome) that dispatches by outcome.kind — stat → bag, pool → stack, side → tempo. No per-
+// effect-type branch anywhere; a def's `on` map is read by phase PRESENCE, exactly as deriveCommands
+// reads grants. Pure: reads the effect registry + the state/pool leaves + the initiative floor.
 
 import { EFFECT_BY_KEY } from './registry.ts';
-import type { ActiveEffect, EffectInstall, PoolEdit, StatDelta } from './types.ts';
+import type { ActiveEffect, EffectInstall, EffectOutcome, PoolEdit, StatDelta } from './types.ts';
 import type { Combatant, EncounterEvent, EncounterState } from '../state.ts';
-import { withPools, withStat } from '../state.ts';
+import { isDown, withPools, withStat } from '../state.ts';
 import { dropPoolsBySource, splicePool, type Pool } from '../pools.ts';
+import { MIN_INITIATIVE } from '../tuning.ts';
 
 // The pure twin of deriveCommands: flatMap every provider's declared installs. A provider with no
 // installs (most components) is a no-op, exactly as a grantless provider is in deriveCommands.
@@ -36,50 +40,29 @@ export interface EffectsSlice {
   readonly nextEffectId: number;
 }
 
+// What applying ONE outcome produced: the (possibly) updated roster, any side-pool delta it asked for
+// (stat/pool outcomes contribute 0; the caller folds these into the right side), and the renderer beat
+// a real stat change emits (pool/side changes are beat-less here — install/expire beats are the
+// caller's, and the side-pool readout is the observable for tempo).
+interface OutcomeResult {
+  readonly combatants: readonly Combatant[];
+  readonly sideDelta: number;
+  readonly event?: EncounterEvent;
+}
+
 // Apply one PoolEdit to a band stack: 'splice' stamps the owning effect's id onto the new band (so its
-// later onExpire can find exactly its own band) and inserts it; 'drop' removes the expiring effect's
-// band(s). Shared by the onInstall (mint) and onExpire (tick) paths — the only place a hook's declared
-// edit meets the pool operators.
+// later `expire` can find exactly its own band) and inserts it; 'drop' removes the expiring effect's
+// band(s). The only place a hook's pool edit meets the pool operators.
 function applyPoolEdit(pools: readonly Pool[], edit: PoolEdit, effectId: number): readonly Pool[] {
   return edit.op === 'splice'
     ? splicePool(pools, { ...edit.pool, sourceEffectId: effectId }, edit.aboveKey)
     : dropPoolsBySource(pools, effectId);
 }
 
-// Mint each request into an ActiveEffect with a MONOTONIC id, run its onInstall pool edits against the
-// owner, and emit an `install` beat. Both mint sites call this — createEncounterState's build pass
-// (which discards the events: the opening loadout needs no renderer beat) and applyCommand's on-resolve
-// pass (which keeps them: a shield going up is a beat). Pure; returns the updated slice + the events.
-export function installEffects(
-  slice: EffectsSlice,
-  requests: readonly MintRequest[],
-): { readonly slice: EffectsSlice; readonly events: readonly EncounterEvent[] } {
-  let combatants = slice.combatants;
-  const effects = [...slice.effects];
-  const events: EncounterEvent[] = [];
-  let nextEffectId = slice.nextEffectId;
-  for (const { install, ownerId, sourceId } of requests) {
-    const id = nextEffectId++;
-    effects.push({ id, key: install.effectKey, ownerId, sourceId, remainingCycles: install.remaining, params: install.params });
-    const def = EFFECT_BY_KEY.get(install.effectKey);
-    const owner = combatants[ownerId];
-    if (def?.onInstall && owner) {
-      let pools = owner.pools ?? [];
-      for (const edit of def.onInstall({ params: install.params, owner })) {
-        pools = applyPoolEdit(pools, edit, id);
-      }
-      combatants = combatants.map((c, i) => (i === ownerId ? withPools(owner, pools) : c));
-    }
-    events.push({ kind: 'install', combatId: ownerId, effectKey: install.effectKey, effectId: id });
-  }
-  return { slice: { combatants, effects, nextEffectId }, events };
-}
-
 // Apply one StatDelta to a combatant, clamped; returns the updated combatant + the amount ACTUALLY
 // applied (0 when a clamp swallowed it — e.g. recharge at full energy), so the caller emits an event
-// only on a real change. Integer-milli throughout. statKey resolves ONLY against the opaque stat bag
-// (energy lives there); pool-stack HP is changed via PoolEdit + the damage cascade, never here, so a
-// StatDelta and a pool never cross. (A unified stat-or-pool lookup is deferred to the DoT/HoT slice.)
+// only on a real change. Integer-milli. statKey resolves ONLY against the opaque stat bag (energy lives
+// there); pool-stack HP is changed via PoolEdit + the damage cascade, never here.
 function applyDelta(combatant: Combatant, d: StatDelta): { readonly combatant: Combatant; readonly applied: number } {
   const current = combatant.stats?.[d.statKey] ?? 0;
   let next = current + d.delta;
@@ -92,18 +75,84 @@ function applyDelta(combatant: Combatant, d: StatDelta): { readonly combatant: C
   return applied === 0 ? { combatant, applied: 0 } : { combatant: withStat(combatant, d.statKey, next), applied };
 }
 
-// Tick the active combatant's per-cycle effects (its OWN turn start, §3.2): run each of its
-// onCycleStart hooks in install order and apply the deltas, then count down timed instances. On the
-// cycle a timed instance reaches 0 it ticks ITS onCycleStart first (the final tick), then runs onExpire
-// against the evolving owner and is dropped; permanent effects (remainingCycles −1) ride on. Pure —
-// returns the next state + the events the renderer animates. combatId === index, so the owner is
-// combatants[actorId].
-export function tickCycleStart(
+// THE dispatch — route one outcome to its applier by `kind`. The single place the substrate fans a
+// declared change out to the right tier: a stat-bag write (emitting an `effect` beat on a real change),
+// a pool-stack edit, or a side-pool delta (returned for the caller to fold into the owner's side). Every
+// lifecycle runner calls this, so adding an outcome kind is one case here, not a change at each site.
+function applyOutcome(
+  combatants: readonly Combatant[],
+  ownerId: number,
+  outcome: EffectOutcome,
+  effectKey: string,
+  effectId: number,
+): OutcomeResult {
+  const owner = combatants[ownerId];
+  if (!owner) return { combatants, sideDelta: 0 };
+  switch (outcome.kind) {
+    case 'stat': {
+      const { combatant, applied } = applyDelta(owner, outcome);
+      if (applied === 0) return { combatants, sideDelta: 0 };
+      return {
+        combatants: combatants.map((c, i) => (i === ownerId ? combatant : c)),
+        sideDelta: 0,
+        event: { kind: 'effect', combatId: ownerId, effectKey, statKey: outcome.statKey, delta: applied },
+      };
+    }
+    case 'pool': {
+      const pools = applyPoolEdit(owner.pools ?? [], outcome, effectId);
+      return { combatants: combatants.map((c, i) => (i === ownerId ? withPools(owner, pools) : c)), sideDelta: 0 };
+    }
+    case 'side':
+      return { combatants, sideDelta: outcome.initiative };
+  }
+}
+
+// Mint each request into an ActiveEffect with a MONOTONIC id, run its `install` handler outcomes against
+// the owner, and emit an `install` beat. Both mint sites call this — createEncounterState's build pass
+// (which discards the events) and applyCommand's on-resolve pass (which keeps them). A SideDelta at
+// install is ignored: a side buff folds at the SIDE's phase start (phaseStart), not at the instant a
+// permanent carrier is registered. Pure; returns the updated slice + the events.
+export function installEffects(
+  slice: EffectsSlice,
+  requests: readonly MintRequest[],
+): { readonly slice: EffectsSlice; readonly events: readonly EncounterEvent[] } {
+  let combatants = slice.combatants;
+  const effects = [...slice.effects];
+  const events: EncounterEvent[] = [];
+  let nextEffectId = slice.nextEffectId;
+  for (const { install, ownerId, sourceId } of requests) {
+    const id = nextEffectId++;
+    effects.push({ id, key: install.effectKey, ownerId, sourceId, remainingCycles: install.remaining, params: install.params });
+    const handler = EFFECT_BY_KEY.get(install.effectKey)?.on?.install;
+    const owner = combatants[ownerId];
+    if (handler && owner) {
+      for (const outcome of handler({ params: install.params, owner })) {
+        const r = applyOutcome(combatants, ownerId, outcome, install.effectKey, id);
+        combatants = r.combatants;
+        // Keep the stat-change beat (an install-time StatDelta animates like any other), uniform with
+        // tickTurnStart/foldPhaseStart. A SideDelta at install is ignored: a side buff folds at the
+        // SIDE's phaseStart, not when a permanent carrier is first registered.
+        if (r.event) events.push(r.event);
+      }
+    }
+    events.push({ kind: 'install', combatId: ownerId, effectKey: install.effectKey, effectId: id });
+  }
+  return { slice: { combatants, effects, nextEffectId }, events };
+}
+
+// Tick the active combatant's `turnStart` handlers (its OWN turn start, §3.2/§3.8.5): run each in install
+// order through applyOutcome (a recharge tops a stat; a future DoT could also pool/side), then count
+// down timed instances. On the cycle a timed instance reaches 0 it ticks its turnStart FIRST (the final
+// tick), then runs `expire` against the evolving owner and is dropped; permanent effects ride on. Any
+// SideDelta a turnStart returns folds into the OWNER'S side pool (clamped at the floor). Pure — returns
+// the next state + the events the renderer animates.
+export function tickTurnStart(
   state: EncounterState,
   actorId: number,
 ): { readonly state: EncounterState; readonly events: readonly EncounterEvent[] } {
   const events: EncounterEvent[] = [];
   let combatants = state.combatants;
+  let sideDelta = 0;
   const surviving: ActiveEffect[] = [];
   for (const effect of state.effects) {
     if (effect.ownerId !== actorId) {
@@ -111,14 +160,13 @@ export function tickCycleStart(
       continue;
     }
     const def = EFFECT_BY_KEY.get(effect.key);
-    const owner = combatants[actorId];
-    if (def?.onCycleStart && owner) {
-      for (const delta of def.onCycleStart({ params: effect.params, owner })) {
-        const { combatant, applied } = applyDelta(combatants[actorId]!, delta);
-        if (applied !== 0) {
-          combatants = combatants.map((c, i) => (i === actorId ? combatant : c));
-          events.push({ kind: 'effect', combatId: actorId, effectKey: effect.key, statKey: delta.statKey, delta: applied });
-        }
+    const turn = def?.on?.turnStart;
+    if (turn && combatants[actorId]) {
+      for (const outcome of turn({ params: effect.params, owner: combatants[actorId]! })) {
+        const r = applyOutcome(combatants, actorId, outcome, effect.key, effect.id);
+        combatants = r.combatants;
+        sideDelta += r.sideDelta;
+        if (r.event) events.push(r.event);
       }
     }
     // Count down a timed instance; a permanent one (−1) rides on unchanged.
@@ -127,16 +175,13 @@ export function tickCycleStart(
       if (remainingCycles > 0) {
         surviving.push({ ...effect, remainingCycles }); // still ticking
       } else {
-        // Expiring THIS cycle (after its final onCycleStart): run onExpire against the OWNER as the
-        // tick has left it (so a same-tick recharge change isn't clobbered), emit the chip-down beat,
-        // then drop the instance (do not push to surviving).
-        const expiringOwner = combatants[actorId];
-        if (def?.onExpire && expiringOwner) {
-          let pools = expiringOwner.pools ?? [];
-          for (const edit of def.onExpire({ params: effect.params, owner: expiringOwner })) {
-            pools = applyPoolEdit(pools, edit, effect.id);
+        // Expiring THIS cycle (after its final turnStart): run `expire` against the OWNER as the tick has
+        // left it (so a same-tick recharge change isn't clobbered), emit the chip-down beat, then drop.
+        const expire = def?.on?.expire;
+        if (expire && combatants[actorId]) {
+          for (const outcome of expire({ params: effect.params, owner: combatants[actorId]! })) {
+            ({ combatants } = applyOutcome(combatants, actorId, outcome, effect.key, effect.id));
           }
-          combatants = combatants.map((c, i) => (i === actorId ? withPools(expiringOwner, pools) : c));
         }
         events.push({ kind: 'expire', combatId: actorId, effectKey: effect.key, effectId: effect.id });
       }
@@ -144,5 +189,51 @@ export function tickCycleStart(
       surviving.push(effect); // permanent
     }
   }
-  return { state: { ...state, combatants, effects: surviving }, events };
+  let initiative = state.initiative;
+  if (sideDelta !== 0) {
+    const side = combatants[actorId]?.factionId;
+    // Clamp the LIVE spend-down pool at 0, NOT at MIN_INITIATIVE: a mid-phase turnStart SideDelta must
+    // not resurrect a spent pool (a negative debuff should be able to drive a side to 0). The
+    // MIN_INITIATIVE floor is a phase-OPENING guarantee and lives only in foldPhaseStart's base derive.
+    if (side) initiative = { ...initiative, [side]: Math.max(0, state.initiative[side] + sideDelta) };
+  }
+  return { state: { ...state, combatants, effects: surviving, initiative }, events };
+}
+
+// Fold a side's `phaseStart` handlers when its Press-Turn phase begins (§3.8.2): run every LIVING
+// same-side carrier's phaseStart outcomes through applyOutcome — SideDeltas sum into the side's pool
+// (the tempo contribution, e.g. tactical-command), and any stat/pool outcomes apply per owner. PRESENCE
+// stacking counts a presence-effect ONCE per side however many carriers hold it (presence-not-count);
+// 'sum' effects contribute per instance. The pool is set to max(MIN_INITIATIVE, currentBase + Σ
+// SideDeltas) — the caller seeds `initiative[side]` to the fleet base first, this adds the effect tier.
+export function foldPhaseStart(
+  state: EncounterState,
+  side: EncounterState['phaseSide'],
+): { readonly state: EncounterState; readonly events: readonly EncounterEvent[] } {
+  let combatants = state.combatants;
+  const events: EncounterEvent[] = [];
+  let sideDelta = 0;
+  const countedPresence = new Set<string>();
+  for (const effect of state.effects) {
+    const owner = combatants[effect.ownerId];
+    if (!owner || owner.factionId !== side || isDown(owner)) continue; // living same-side carriers only
+    const def = EFFECT_BY_KEY.get(effect.key);
+    const handler = def?.on?.phaseStart;
+    if (!handler) continue;
+    // presence-not-count gates ONLY the side-aggregate channel: a 'presence' effect's SideDelta counts
+    // once per key per side, but its per-OWNER outcomes (stat/pool) still apply for every living carrier
+    // (the EffectStacking contract). So we run the handler for every carrier and only suppress the
+    // SideDelta on the 2nd+ presence carrier.
+    const presence = def?.stacking === 'presence';
+    const countSide = !presence || !countedPresence.has(effect.key);
+    if (presence) countedPresence.add(effect.key);
+    for (const outcome of handler({ params: effect.params, owner })) {
+      const r = applyOutcome(combatants, effect.ownerId, outcome, effect.key, effect.id);
+      combatants = r.combatants;
+      if (countSide) sideDelta += r.sideDelta;
+      if (r.event) events.push(r.event);
+    }
+  }
+  const pool = Math.max(MIN_INITIATIVE, state.initiative[side] + sideDelta);
+  return { state: { ...state, combatants, initiative: { ...state.initiative, [side]: pool } }, events };
 }
