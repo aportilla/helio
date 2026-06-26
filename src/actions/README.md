@@ -153,7 +153,7 @@ the `kind` fork is skipped (flipped on via `setEncounterMode`).
   Phase-2 energy model. Pure refactor — behavior unchanged (every suite green).
 - **Ship component loadouts (shipped — Phase 2 of `4x-modular-ship-components.md`, action side):**
   the ship **stub loadout is gone**. [`src/ships/components/`](../ships/README.md) is now a real
-  `ShipComponentDef` registry (`small-engine` → Flee, `small-laser` → Laser); a ship's commands
+  `ShipComponentDef` registry (`small-engine` → no action / recharge only, `small-laser` → Laser); a ship's commands
   derive from its class's `components` loadout through the same `deriveCommands` as a body's
   facilities. The byte-identical faction-split both adapters carried was extracted to `sides.ts`
   (`actorSides`). **Deferred:** the energy model (`battery`/`recharge`/`costPerUnit`), size-class

@@ -10,7 +10,7 @@
 // real world-mutation (and the reconcile that must follow it) will land. No mechanic is decided
 // here.
 //
-// An 'immediate' action with no handler registered here (grant keys flee / repair / recon — verbs
+// An 'immediate' action with no handler registered here (grant keys like repair / recon — verbs
 // that resolve elsewhere) falls through to SystemScene's DEV placeholder log. A grant key shared by
 // two distinct 'immediate' providers MUST mean the same world effect (the map is provider-agnostic);
 // when real effects land, a provider-specific verb routes by the full composed id instead.

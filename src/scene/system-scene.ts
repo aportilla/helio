@@ -198,7 +198,7 @@ export class SystemScene implements Screen {
     // The action menu's execute DISPATCH (Menu M2). 'immediate' actions route to an app-side
     // effect handler keyed by GRANT KEY (grantKeyOf(actionId), EFFECT_HANDLERS) that mutates the
     // save now — today a no-op stub, so this is the live ROUTING with deferred mechanics; an
-    // immediate verb with no handler (flee/repair/recon) falls through to a DEV log. 'encounter'
+    // immediate verb with no handler (repair/recon) falls through to a DEV log. 'encounter'
     // actions enter the combat MODE on this view (onEnterEncounter → enterEncounter, live now). The
     // menu itself (select → drill → target → confirm) is fully live; this is the seam its intent flows into.
     this.actionMenu.onImmediate = (intent) => {
@@ -216,7 +216,7 @@ export class SystemScene implements Screen {
     // same diagram. The DEV opponent-spawn supplies the enemy side until ship movement lands.
     this.actionMenu.onEnterEncounter = (intent) =>
       this.enterEncounter(buildEncounterSpec(shipsToCombatants(this.readyShips()), intent));
-    // The reducer reaching a terminal (or a flee) tells the mode to tear down + unfreeze the turn.
+    // The reducer reaching a terminal tells the mode to tear down + unfreeze the turn (there is no flee).
     this.encounter.onExit = () => this.exitEncounter();
     // The outer focus axis: ←/→ at the category level cycles the active actor (the menu re-opens
     // on the next ship). The controller routes the key; the actor ring lives here (game-state).
@@ -669,14 +669,14 @@ export class SystemScene implements Screen {
     // level). Escape at the menu's top level is NOT claimed, so it falls through to clear
     // the selection (which closes the menu) — one Escape per level, then one to deselect.
     if (this.actionMenu.handleKey(e)) return;
-    // Combat owns input while the mode is live: an Esc not claimed by a drilled combat menu flees
-    // (tears the mode down); 'R' ends the controlled side's Press-Turn phase (the fleet-scoped End
-    // Round, §3.8.3 — inert on the opponent's auto-driven phase); every other key is inert (no
-    // live-view selection/menu mid-fight). E4's combat menu claims its drill/target/confirm keys via
-    // handleKey above, before this catch-all.
+    // Combat owns input while the mode is live (the combat menu claimed its drill / target / confirm keys
+    // via handleKey above, before this catch-all):
     if (this.inEncounter) {
-      if (e.key === 'Escape') this.exitEncounter();
-      else if (e.key.toLowerCase() === 'r') this.encounter.endRound();
+      // 'R' ends the controlled side's Press-Turn phase (the fleet-scoped End Round, §3.8.3). There is no
+      // flee: an encounter runs to its terminal (side-elimination or mutual disengage), so Escape does NOT
+      // bail out — at the menu's top level it is simply inert (a drilled-in Escape was already consumed by
+      // the menu's back-out above). Every other key is inert mid-fight.
+      if (e.key.toLowerCase() === 'r') this.encounter.endRound();
       return;
     }
     // Keyboard-first actor focus: a directional tap while no menu is open — nothing selected,

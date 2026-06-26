@@ -7,12 +7,13 @@
 
 import type { ActionCategory, ActionCommand } from './types.ts';
 
-// The category PALETTES — the stable top-level row set per actor TYPE. A ship shows Attack +
-// Navigation, a body Attack + Support; the menu renders exactly the actor's palette (in
-// CATEGORY_ORDER), greying any category its loadout leaves empty, so the menu's SHAPE is stable
-// per type rather than per loadout. Central here (not in the adapters) so the two palettes read
-// side by side. The order they list in is irrelevant — the menu re-sorts by CATEGORY_ORDER.
-export const SHIP_CATEGORIES: readonly ActionCategory[] = ['attack', 'navigation'];
+// The category PALETTES — the stable top-level row set per actor TYPE. A ship shows Attack (no flee ⇒
+// no Navigation in combat; an encounter is fought to its terminal, never withdrawn), a body Attack +
+// Support; the menu renders exactly the actor's palette (in CATEGORY_ORDER), greying any category its
+// loadout leaves empty, so the menu's SHAPE is stable per type rather than per loadout. Central here (not
+// in the adapters) so the two palettes read side by side. 'navigation' stays a valid ActionCategory,
+// reserved for future in-combat repositioning / galaxy movement — re-add it to a palette when that lands.
+export const SHIP_CATEGORIES: readonly ActionCategory[] = ['attack'];
 export const BODY_CATEGORIES: readonly ActionCategory[] = ['attack', 'support'];
 
 // A resolved command's menu label — the grant's label, suffixed with its stack count when more

@@ -41,15 +41,14 @@ test('every grant carries a well-formed sRGB hex accent', () => {
   }
 });
 
-test('the small engine is a drive granting an immediate self-targeted flee (D9)', () => {
+test('the small engine is a drive granting NO action — it only installs the recharge effect', () => {
   const engine = COMPONENT_BY_TYPE.get('small-engine')!;
   assert.equal(engine.kind, 'drive');
-  const grants = engine.grants ?? [];
-  assert.equal(grants.length, 1);
-  const flee = grants[0]!;
+  // No flee (an encounter is fought to its terminal, never withdrawn) — the drive grants nothing.
+  assert.deepEqual(engine.grants ?? [], []);
   assert.deepEqual(
-    [flee.key, flee.category, flee.targeting, flee.kind],
-    ['flee', 'navigation', 'self', 'immediate'],
+    engine.installs,
+    [{ effectKey: 'recharge', remaining: -1, params: { amount: 3_000 } }],
   );
 });
 

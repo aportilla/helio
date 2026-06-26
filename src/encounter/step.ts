@@ -89,8 +89,8 @@ export function createEncounterState(spec: EncounterSpec): EncounterState {
 // Fold one committed intent into the next state. The bones read the actor's own resolved command (no
 // central lookup): an ATTACK cascades the flat placeholder hit through each named target's pool stack
 // (shields absorb before hull, purely by stack order); a command may ALSO install timed effects on
-// resolve (a self shield); anything else (navigation/support) simply passes the activation (flee-to-exit
-// is the §5.5 escape, wired at E4). The action spends ONE initiative icon (§3.8.3), then the turn
+// resolve (a self shield); anything else (a support verb like raise-shields) simply passes the activation
+// (there are no navigation actions — no flee). The action spends ONE initiative icon (§3.8.3), then the turn
 // advances (advanceTurn): within the side's phase while icons + a living ship remain, else to the next
 // side's phase.
 export function applyCommand(state: EncounterState, intent: ActionIntent): StepResult {

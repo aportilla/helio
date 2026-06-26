@@ -27,8 +27,9 @@ test('the category palettes are well-formed subsets of the category vocabulary',
     assert.equal(new Set(palette).size, palette.length, `${name} palette has a duplicate category`);
     for (const c of palette) assert.ok(valid.has(c), `${name} palette has an unknown category '${c}'`);
   }
-  // The shipped split: a ship navigates + attacks, a body supports + attacks (never navigates).
-  assert.deepEqual([...SHIP_CATEGORIES].sort(), ['attack', 'navigation']);
+  // The shipped split: a ship only attacks (no flee ⇒ no Navigation), a body supports + attacks.
+  // 'navigation' stays a valid category (reserved for future movement), just not on a palette today.
+  assert.deepEqual([...SHIP_CATEGORIES].sort(), ['attack']);
   assert.deepEqual([...BODY_CATEGORIES].sort(), ['attack', 'support']);
 });
 

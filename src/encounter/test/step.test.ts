@@ -17,7 +17,6 @@ import { PLACEHOLDER_DAMAGE_MILLI, PLACEHOLDER_HULL_MILLI } from '../tuning.ts';
 import type { Ship } from '../../game-state-codec.ts';
 
 const LASER = 'small-laser:laser'; // an ATTACK command on the corvette loadout
-const FLEE = 'small-engine:flee'; // a NAVIGATION command — the bones treat it as a turn pass
 const RAISE = 'small-shield:raise-shields'; // a SUPPORT command that installs a timed shield on resolve
 
 const ship = (id: string, factionId: Ship['factionId']): Ship => ({
@@ -56,14 +55,6 @@ test('the round bumps when the cursor wraps back to the top', () => {
   ({ state: s } = applyCommand(s, { actorId: 'r1', actionId: LASER, targetIds: ['p1'] })); // active 1 → 0, wrap
   assert.equal(s.activeId, 0);
   assert.equal(s.round, 2);
-});
-
-test('a non-attack command passes the turn without damage', () => {
-  const s0 = encounterOf([ship('p1', 'player'), ship('r1', 'rival')]);
-  const { state: s1, events } = applyCommand(s0, { actorId: 'p1', actionId: FLEE, targetIds: [] });
-  assert.deepEqual(events, []);
-  assert.equal(hullOf(s1, 'r1'), PLACEHOLDER_HULL_MILLI, 'no damage from a navigation command');
-  assert.equal(s1.activeId, 1, 'the turn still passed');
 });
 
 test('a target reaching 0 hull is downed (event + isDown + terminal)', () => {
@@ -134,9 +125,9 @@ test('a combatant recharges energy at its own turn start (the declared engine ef
 });
 
 test('a self shield absorbs before hull, then expires after 3 of its owner\'s cycles', () => {
-  // p1 flies a small-engine (flee = a turn pass) + a small-shield (raise-shields); r1 is a plain
-  // corvette (laser). Built inline so the corvette preset stays a flee+laser ship — the small-shield
-  // component is live in the registry, just not on the default loadout.
+  // p1 flies a small-engine (no action — recharge only) + a small-shield (raise-shields); r1 is a plain
+  // corvette (laser). Built inline because the small-shield component is live in the registry, just not on
+  // the corvette default loadout (engine + laser).
   const p1Commands = deriveCommands([
     { id: 'small-engine', grants: COMPONENT_BY_TYPE.get('small-engine')!.grants },
     { id: 'small-shield', grants: COMPONENT_BY_TYPE.get('small-shield')!.grants },
@@ -155,6 +146,10 @@ test('a self shield absorbs before hull, then expires after 3 of its owner\'s cy
   const shielded = s.combatants.find((c) => c.id === 'p1')!;
   assert.deepEqual(shielded.pools?.map((p) => p.key), ['shields', 'hull'], 'the shield sits above hull (absorbs first)');
   assert.ok(raised.events.some((e) => e.kind === 'install' && e.effectKey === 'shield-segment'), 'an install event fired');
+  // Raising shields is a NON-ATTACK command: it deals no damage and passes the turn (its only beat is the
+  // install). This is the standalone "non-attack passes" coverage now that there is no pure-pass flee.
+  assert.ok(!raised.events.some((e) => e.kind === 'damage'), 'a support command deals no damage');
+  assert.equal(s.activeId, 1, 'the non-attack command passed the turn to r1');
   const cap = shielded.pools!.find((p) => p.key === 'shields')!.max;
 
   // r1 attacks p1 → the shield eats the hit; hull is untouched behind it.
@@ -163,14 +158,14 @@ test('a self shield absorbs before hull, then expires after 3 of its owner\'s cy
   assert.equal(hit.pools?.find((p) => p.key === 'shields')?.current, cap - PLACEHOLDER_DAMAGE_MILLI, 'the shield absorbed the hit');
   assert.equal(hit.pools?.find((p) => p.key === 'hull')?.current, PLACEHOLDER_HULL_MILLI, 'hull is untouched behind the shield');
 
-  // Run turns (p1 flees, r1 attacks) until the band is gone — it ticks at p1's turn starts and pops on
-  // the 3rd (3→2→1→0 → expire). p1 never re-shields, so exactly one band lives the whole time.
+  // Run turns (p1 ends its phase, r1 attacks) until the band is gone — it ticks at p1's turn starts and
+  // pops on the 3rd (3→2→1→0 → expire). p1 never re-shields, so exactly one band lives the whole time.
   const expires: EncounterEvent[] = [];
   let guard = 0;
   while (s.combatants.find((c) => c.id === 'p1')!.pools!.some((p) => p.key === 'shields') && guard++ < 12) {
     const active = s.combatants[s.activeId]!;
     const res = active.id === 'p1'
-      ? applyCommand(s, { actorId: 'p1', actionId: FLEE, targetIds: [] })
+      ? endPhase(s) // p1 has no attack and there is no flee — it forfeits its phase to advance the round
       : applyCommand(s, { actorId: 'r1', actionId: LASER, targetIds: ['p1'] });
     s = res.state;
     for (const e of res.events) if (e.kind === 'expire') expires.push(e);

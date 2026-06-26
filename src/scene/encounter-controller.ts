@@ -67,7 +67,7 @@ export class EncounterController {
   // OFF by default: the live path drives the round from player input via the menu. The DEV demo flips
   // it on to auto-drive the same commit path (so the loop is visible headlessly).
   autoPlay = false;
-  // Raised by the controller when the encounter ends (side-elimination or flee); SystemScene wires
+  // Raised by the controller when the encounter ends (side-elimination or mutual disengage); SystemScene wires
   // this to exitEncounter (lower the freeze, re-enable Next Turn).
   onExit: () => void = () => {};
 
@@ -85,8 +85,10 @@ export class EncounterController {
     return this.state !== null;
   }
 
-  // Begin the encounter from a launch spec: seed the reducer state, route the menu's confirm sink to
-  // this controller, paint the opening roster, and open the menu on the initiator.
+  // Begin the encounter from a launch spec: seed the reducer state, route the menu's confirm sink to this
+  // controller, paint the opening roster, then FIRE the launching attack (`spec.initiator`) as the
+  // initiator's opening move — so the action that ENTERED combat also lands (with its animation + effects),
+  // not a no-op that merely opens the mode. The menu opens on the NEXT turn, after the opening shot settles.
   enter(spec: EncounterSpec): void {
     this.state = createEncounterState(spec);
     this.menu.onEncounterCommit = (intent) => this.commit(intent);
@@ -101,7 +103,11 @@ export class EncounterController {
       return;
     }
     this.repaint();
-    this.openOnActive(this.state);
+    // Fire the action that TRIGGERED the encounter as the initiator's opening move — entering combat and
+    // the first shot are ONE beat, not two. createEncounterState put `activeId` on the initiator, so the
+    // intent's actor IS the active combatant (commit/applyCommand's invariant); commit animates it, applies
+    // its effects, and settles into the next turn (opening the menu there).
+    this.commit(spec.initiator);
   }
 
   exit(): void {
@@ -216,18 +222,14 @@ export class EncounterController {
 
   // Fold one committed intent into the reducer, then open the action's animation window (§14.2), OR exit.
   // The intent's actor is always the active combatant (the menu only ever opened on it / the auto-driver
-  // targets it), satisfying applyCommand's DEV-assert. A NAVIGATION command is flee-to-exit (§5.5) — a
-  // controller-level withdrawal, not a reducer step (there is no flee command in the reducer). The reducer
-  // advances NOW (it is the source of truth), but the menu reopen + HP repaint are DEFERRED to settle()
-  // when the window elapses, so the beat (a tracer crossing, the HP drop landing) has time to read.
+  // targets it), satisfying applyCommand's DEV-assert. The reducer advances NOW (it is the source of
+  // truth), but the menu reopen + HP repaint are DEFERRED to settle() when the window elapses, so the beat
+  // (a tracer crossing, the HP drop landing) has time to read. There is no flee — an encounter is fought to
+  // its terminal (side-elimination or mutual disengage, §8.4); a ship can't withdraw once it's in.
   private commit(intent: ActionIntent): void {
     if (!this.state) return;
     const actor = this.state.combatants[this.state.activeId];
     const command = actor ? commandFor(actor, intent.actionId) : undefined;
-    if (command?.grant.category === 'navigation') {
-      this.onExit();
-      return;
-    }
     const { state, events } = applyCommand(this.state, intent);
     this.state = state;
     // Close the menu so no input lands mid-beat; settle() reopens it on the new active combatant. Fan the

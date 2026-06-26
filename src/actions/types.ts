@@ -77,7 +77,7 @@ export type ActionKind = 'immediate' | 'encounter';
 // (the immediate effect or the encounter reducer is the consumer's content). Mirrors the
 // thinness of v1 ShipClassDef / FactionDef.
 export interface ActionGrant {
-  // Stable WITHIN the provider, naming the capability not its discharge ('railgun' / 'flee',
+  // Stable WITHIN the provider, naming the capability not its discharge ('railgun' / 'repair',
   // never a loaded verb like 'fire'). The serializable command id is `"<providerId>:<key>"`
   // (./derive) — the provider id is the durable thing, the key disambiguates a multi-grant module.
   readonly key: string;

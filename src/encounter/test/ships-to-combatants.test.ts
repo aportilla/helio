@@ -57,8 +57,9 @@ test('a combatant is an Actor + combat identity: kind, classId, palette, derived
   assert.equal(c.combatId, 7);
   assert.equal(c.factionId, 'player');
   assert.equal(c.classId, 'corvette');
-  // A ship never shows Support — that palette is the body's; same SHIP_CATEGORIES as the live view.
-  assert.deepEqual(c.categories, ['attack', 'navigation']);
+  // A ship shows only Attack (no flee ⇒ no Navigation; Support is the body's); same SHIP_CATEGORIES
+  // as the live view.
+  assert.deepEqual(c.categories, ['attack']);
   // Commands ARE the ship's derived loadout — the SAME projection the system-view actor uses, so a
   // combatant and a live-view ship offer an identical menu.
   assert.deepEqual(c.commands, shipLoadout(ship('p1', 'player')));
@@ -79,7 +80,7 @@ test('combatantInstallsOnResolve resolves a ship grant\'s timed installs by comp
   // A known component with NO installsOnResolve entry for that grant → empty.
   assert.deepEqual(combatantInstallsOnResolve(s, 'small-laser:laser'), []);
   // A no-colon id (whole id is the provider) and an unknown provider → empty, no throw.
-  assert.deepEqual(combatantInstallsOnResolve(s, 'flee'), []);
+  assert.deepEqual(combatantInstallsOnResolve(s, 'bareword'), []);
   assert.deepEqual(combatantInstallsOnResolve(s, 'nonexistent:foo'), []);
   // A namespaced provider id splits on the LAST colon (providerId 'a:b', key 'c') → unknown → empty.
   assert.deepEqual(combatantInstallsOnResolve(s, 'a:b:c'), []);

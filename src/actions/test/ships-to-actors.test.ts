@@ -44,21 +44,19 @@ test("'building' ships are excluded (not in the field yet)", () => {
   assert.deepEqual(sides[0]!.actors.map((a) => a.id), ['p1']);
 });
 
-test('a ship Actor always carries the Attack + Navigation category palette', () => {
-  // The menu shows these two top-level rows on every ship (greying one if its loadout is
-  // empty there); a ship never shows Support — that palette is the body's.
-  assert.deepEqual(shipToActor(ship('p1', 'player')).categories, ['attack', 'navigation']);
+test('a ship Actor carries the Attack category palette', () => {
+  // The menu shows Attack on every ship (greyed if its loadout is empty there). A ship shows no
+  // Navigation (there is no flee — an encounter is fought to its terminal) and no Support (the body's).
+  assert.deepEqual(shipToActor(ship('p1', 'player')).categories, ['attack']);
 });
 
-test("the corvette loadout derives flee (immediate) + laser (encounter), via the SAME projection", () => {
-  // A corvette flies a small-engine + small-laser: the engine grants NAVIGATION flee (D9), the
-  // laser an ATTACK that enters an encounter. The wire ids are the composed `<componentId>:<key>`,
-  // in loadout order (engine before laser).
-  assert.deepEqual(shipLoadout(ship('p1', 'player')).map((c) => c.id), ['small-engine:flee', 'small-laser:laser']);
+test('the corvette loadout derives just the laser (encounter), via the SAME projection', () => {
+  // A corvette flies a small-engine + small-laser: the engine grants NO action (it only installs the
+  // recharge effect), the laser an ATTACK that enters an encounter. So the only command is the laser;
+  // its wire id is the composed `<componentId>:<key>`.
+  assert.deepEqual(shipLoadout(ship('p1', 'player')).map((c) => c.id), ['small-laser:laser']);
   const laser = shipLoadout(ship('p1', 'player')).find((c) => c.grant.category === 'attack')!;
-  const flee = shipLoadout(ship('p1', 'player')).find((c) => c.grant.category === 'navigation')!;
   assert.equal(laser.grant.kind, 'encounter', 'the laser enters the encounter modality');
-  assert.equal(flee.grant.kind, 'immediate');
   assert.deepEqual([laser.count, laser.totalCost], [1, 0], 'one laser, no energy model yet ⇒ zero cost');
 });
 
@@ -69,7 +67,7 @@ test('an actor gets its class loadout by default', () => {
 });
 
 test('commandsFor overrides the per-ship loadout', () => {
-  const only = shipLoadout(ship('p1', 'player')).slice(0, 1); // just the flee command
+  const only = shipLoadout(ship('p1', 'player')).slice(0, 1); // just the laser command
   const sides = shipsToActors([ship('p1', 'player')], () => only);
   assert.deepEqual(sides[0]!.actors[0]!.commands, only);
 });

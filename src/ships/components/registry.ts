@@ -7,11 +7,11 @@
 // A component's `grants` are declared INLINE here, the same way a facility declares its on
 // FacilityDef — ships-to-actors collects + merges them across a ship's loadout (deriveCommands).
 // No central component→command map. A grant `key` names the CAPABILITY, not how it discharges
-// ('laser' / 'flee', never a loaded shared verb like 'fire'). Importing the action accent colors
-// from ../../actions/tuning.ts mirrors the facility registry's import of the same hoisted palette.
+// ('laser', never a loaded shared verb like 'fire'). Importing the action accent colors from
+// ../../actions/tuning.ts mirrors the facility registry's import of the same hoisted palette.
 
 import type { ShipComponentDef, ShipComponentType } from './types.ts';
-import { LASER_ACTION_COLOR, FLEE_ACTION_COLOR, SHIELD_ACTION_COLOR } from '../../actions/tuning.ts';
+import { LASER_ACTION_COLOR, SHIELD_ACTION_COLOR } from '../../actions/tuning.ts';
 
 // The registry, keyed by ShipComponentType. `satisfies Record<ShipComponentType, ...>` is the
 // compile layer of the frozen-key guard: adding a literal to the union without a def here fails to
@@ -22,13 +22,11 @@ const DEFS = {
     type: 'small-engine',
     label: 'Small Engine',
     kind: 'drive',
-    // The drive grants NAVIGATION flee (D9: every ship has a drive ⇒ every ship can flee). It
-    // targets self (the ship withdraws) and resolves immediately — no encounter, no target pick.
-    grants: [{ key: 'flee', label: 'Flee', color: FLEE_ACTION_COLOR, category: 'navigation', targeting: 'self', kind: 'immediate' }],
-    // The drive DECLARES its per-cycle energy recharge as an effect (worked example A,
-    // 4x-encounter-combat-system §7.5) — not a hardcoded reducer step. `amount` is energy-milli
-    // restored at the ship's own turn start, clamped to energyMax. A second power component would
-    // install its own `recharge`; the instances simply sum in the one fold, no merge logic.
+    // The drive grants NO action — there is no flee (an encounter is fought to its terminal, never
+    // withdrawn). Its whole job is the per-cycle energy recharge it DECLARES as an effect (worked example
+    // A, 4x-encounter-combat-system §7.5) — not a hardcoded reducer step. `amount` is energy-milli restored
+    // at the ship's own turn start, clamped to energyMax. A second power component would install its own
+    // `recharge`; the instances simply sum in the one fold, no merge logic.
     installs: [{ effectKey: 'recharge', remaining: -1, params: { amount: 3_000 } }],
   },
   'small-laser': {

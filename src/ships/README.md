@@ -14,7 +14,7 @@ A `ShipClassDef` stays thin — identity + display fields, a build time, a sprit
 
 ## Components & loadout (`components/`)
 
-A ship is a **platform carrying modules**, the ship-side twin of a body carrying facilities ([modular-components plan](../../plans/4x-modular-ship-components.md) §5). [`components/`](components/README.md) is the **`ShipComponentDef` registry** — one def per component (today: `small-engine` → NAVIGATION flee, `small-laser` → ATTACK), each declaring the `ActionGrant`s it provides, exactly as a `FacilityDef` does. A class's `components` array is its default loadout; [`ships-to-actors`](../actions/README.md) derives a ship's menu commands from those components' grants through the **same** `deriveCommands` projection a body runs over its facilities. There is no ship builder yet, so every ship of a class shares its class preset (per-ship `components[]` serialization is a later phase).
+A ship is a **platform carrying modules**, the ship-side twin of a body carrying facilities ([modular-components plan](../../plans/4x-modular-ship-components.md) §5). [`components/`](components/README.md) is the **`ShipComponentDef` registry** — one def per component (today: `small-engine` → no action, just a recharge effect; `small-laser` → ATTACK), each declaring the `ActionGrant`s it provides — a drive grants none — exactly as a `FacilityDef` does. A class's `components` array is its default loadout; [`ships-to-actors`](../actions/README.md) derives a ship's menu commands from those components' grants through the **same** `deriveCommands` projection a body runs over its facilities. There is no ship builder yet, so every ship of a class shares its class preset (per-ship `components[]` serialization is a later phase).
 
 ## Map
 

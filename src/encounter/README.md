@@ -106,9 +106,13 @@ the rest of the project follows.
   galaxy turn freezes on BOTH paths — a `freezesTurn` getter backed by an `inEncounter` flag (since
   `Screen.freezesTurn` is `readonly`) for the programmatic `nextTurn()`, and `setNextTurnEnabled(false)`
   for the user click. `onEnterEncounter` is un-stubbed: a confirmed `'encounter'`-kind action builds
-  the spec via `buildEncounterSpec(shipsToCombatants(readyShips()), intent)` and enters. A DEV
-  spectator auto-play drives the reducer to side-elimination; Esc flees, terminal exits — both
-  unfreeze. A DEV `?demo-encounter` boot path makes the chrome reproducibly screenshot-able.
+  the spec via `buildEncounterSpec(shipsToCombatants(readyShips()), intent)` and enters — `enter` then
+  **fires that launching `intent`** (`spec.initiator`) as the initiator's opening move, so entering combat
+  and the first shot are ONE beat: the attack that triggered the encounter also lands (with its animation +
+  effects), not a no-op that merely opens the mode. A DEV
+  spectator auto-play drives the reducer to side-elimination; the terminal exits and unfreezes (there is
+  no flee — combat runs to its resolution). A DEV `?demo-encounter` boot path makes the chrome
+  reproducibly screenshot-able.
 - **E4 — the interactive loop (shipped), Press-Turn.** The same `SystemActionMenu` drives the round: an
   `onEncounterCommit` sink + `setEncounterMode` flip its `dispatch()` from the live-view kind fork into
   the reducer. `EncounterController` opens the menu on the active **CONTROLLED** combatant (its derived
@@ -119,8 +123,8 @@ the rest of the project follows.
   `CombatOverlay` paints a per-side **initiative pip readout** (icons remaining, active side underlined)
   beside the HP bars. You command only your side — an opponent's phase opens no menu and is auto-driven
   (a placeholder for the deferred AI, §3.7): the driver **loops one activation per interval until its
-  pool is spent**, ending its phase if stranded. A NAVIGATION command is flee-to-exit; side-elimination
-  / mutual-disengage auto-exit.
+  pool is spent**, ending its phase if stranded. There is **no flee** — once in, ships fight to the
+  terminal: side-elimination / mutual-disengage auto-exit (no menu action or key withdraws).
 - **Free in-phase actor choice (shipped), §3.8.** You spend your initiative across **any** of your living
   same-side actors, in any order — not a forced round-robin. `selectActor(state, combatId)` (`step.ts`) is
   a pure cursor move (no icon spent, no turn-start tick — recharge stays tied to `advanceTurn`'s landing
