@@ -176,6 +176,22 @@ export function endPhase(state: EncounterState): StepResult {
   return advanceTurn(advanced, []);
 }
 
+// Re-point the active cursor to a chosen living combatant on the CURRENT phase side — the player's free
+// in-phase actor choice (§3.8): you spend your initiative across whichever of YOUR actors you pick, in any
+// order, not a forced round-robin. A pure CURSOR move — it spends NO icon and ticks NO turn-start effect
+// (selection is not an activation; a ship's recharge stays tied to advanceTurn's landing cadence — how
+// recharge meshes with free choice is a P-Experiment energy-model decision, not a bones concern). An
+// illegal pick (out of range, an enemy, or a downed ship) returns the state UNCHANGED by reference, so a
+// stale/garbage selection can't desync the reducer (the AI/replay source of truth). Energy + action
+// availability still gate each ACTION (applyCommand / the menu's greyed rows) — selecting a tapped-out
+// ship is allowed; acting with it is not.
+export function selectActor(state: EncounterState, combatId: number): EncounterState {
+  if (combatId === state.activeId) return state;
+  const c = state.combatants[combatId];
+  if (!c || c.factionId !== state.phaseSide || isDown(c)) return state;
+  return { ...state, activeId: combatId };
+}
+
 // Advance off the (possibly mutated) roster. Stay in the active side's phase while it holds an icon AND
 // a living ship to offer (nextActor); otherwise hand the phase to the next living side (beginNextPhase).
 // The combatant we land on ticks its own per-cycle effects (its turn start), so a just-downed combatant

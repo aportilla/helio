@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyCommand, createEncounterState, endPhase } from '../step.ts';
+import { applyCommand, createEncounterState, endPhase, selectActor } from '../step.ts';
 import { shipsToCombatants, shipToCombatant } from '../ships-to-combatants.ts';
 import { buildEncounterSpec } from '../encounter-spec.ts';
 import { isTerminal } from '../terminal.ts';
@@ -269,6 +269,27 @@ test('a tactical-command effect refills a side to base + 1 at its phase start (p
   ({ state: s } = applyCommand(s, { actorId: 'r1', actionId: LASER, targetIds: ['p1'] })); // rival → wrap to player
   assert.equal(s.phaseSide, 'player');
   assert.equal(s.initiative.player, 2, 'fleet base 1 + tactical-command 1');
+});
+
+test('selectActor re-points to a chosen living same-side combatant; no icon spent (free actor choice)', () => {
+  // 4 player ships → 2 icons; the player jumps the cursor to p3 instead of the round-robin next.
+  let s = encounterOf([ship('p1', 'player'), ship('p2', 'player'), ship('p3', 'player'), ship('p4', 'player'), ship('r1', 'rival')], 'p1');
+  const p3 = s.combatants.find((c) => c.id === 'p3')!.combatId;
+  const before = s.initiative.player;
+  s = selectActor(s, p3);
+  assert.equal(s.activeId, p3, 'the cursor moved to the chosen ship');
+  assert.equal(s.initiative.player, before, 'selecting spends no icon');
+});
+
+test('selectActor rejects an enemy, downed, or out-of-range pick (state unchanged by reference)', () => {
+  const s = encounterOf([ship('p1', 'player'), ship('p2', 'player'), ship('r1', 'rival')], 'p1');
+  const r1 = s.combatants.find((c) => c.id === 'r1')!.combatId;
+  const p2 = s.combatants.find((c) => c.id === 'p2')!.combatId;
+  assert.equal(selectActor(s, r1), s, 'cannot select an enemy during the player phase');
+  assert.equal(selectActor(s, 99), s, 'an out-of-range combatId is a no-op');
+  assert.equal(selectActor(s, s.activeId), s, 'the already-active actor is a no-op (same ref)');
+  const downed: EncounterState = { ...s, combatants: s.combatants.map((c) => (c.id === 'p2' ? { ...c, pools: [{ key: 'hull', current: 0, max: PLACEHOLDER_HULL_MILLI }] } : c)) };
+  assert.equal(selectActor(downed, p2), downed, 'cannot select a downed same-side ship');
 });
 
 test('a malformed intent is a strict no-op — no icon spent, no turn advance (the AI/replay guard)', () => {

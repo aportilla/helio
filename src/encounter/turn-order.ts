@@ -27,6 +27,24 @@ export function nextActor(state: EncounterState): number | undefined {
   return undefined; // no living same-side combatant → phase over (eliminated / stranded)
 }
 
+// The living SAME-SIDE combatant `delta` steps from the active one in combatId order (wrapping) — the
+// player's free in-phase actor cycle (◄ ►, §3.8). `delta` is the DIRECTION (+1 next, −1 prev); the walk
+// runs the full ring so a lone living same-side ship returns ITSELF (a no-op re-anchor). Reads phaseSide,
+// so it only ever offers YOUR side during your phase. Unlike `nextActor` it is NOT gated on icons and does
+// not advance the turn — a cursor query for the UI's actor switch (selectActor), never a turn-order step.
+export function neighborActor(state: EncounterState, delta: number): number | undefined {
+  const n = state.combatants.length;
+  if (n === 0) return undefined;
+  const side = state.phaseSide;
+  const dir = delta < 0 ? -1 : 1;
+  for (let step = 1; step <= n; step++) {
+    const id = (((state.activeId + dir * step) % n) + n) % n;
+    const c = state.combatants[id];
+    if (c && c.factionId === side && !isDown(c)) return id;
+  }
+  return undefined;
+}
+
 // The sides in first-seen combatId order — the deterministic phase rotation. Ships are numbered
 // side-by-side at spec build (ships-to-combatants), so this is the side order the round walks.
 export function sideOrderOf(combatants: EncounterState['combatants']): readonly FactionType[] {

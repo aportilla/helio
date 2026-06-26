@@ -24,7 +24,8 @@
 // §14.5); render-only pacing — no float reaches the integer-milli reducer (§6.4).
 
 import { OrthographicCamera, Scene, type WebGLRenderer } from 'three';
-import { applyCommand, createEncounterState, endPhase } from '../encounter/step';
+import { applyCommand, createEncounterState, endPhase, selectActor } from '../encounter/step';
+import { neighborActor } from '../encounter/turn-order';
 import { isTerminal } from '../encounter/terminal';
 import { isDown, type Combatant, type EncounterEvent, type EncounterState } from '../encounter/state';
 import type { EncounterSpec } from '../encounter/encounter-spec';
@@ -166,8 +167,9 @@ export class EncounterController {
     // activation per interval — spending the pool down, then hands the phase back (the player's phase
     // opens its menu via openOnActive). LIMITATION: autoIntent only inspects the ACTIVE ship, so a mixed
     // loadout where the active ship can't attack but a same-side ship could forfeits the whole phase —
-    // it works today only because every ship flies the homogeneous corvette loadout (all can fire). A
-    // real AI that picks WHICH same-side ship acts lands with the deferred in-phase ◄ ► ship-selection.
+    // it works today only because every ship flies the homogeneous corvette loadout (all can fire). The
+    // PLAYER now picks WHICH same-side ship acts freely (cycleActor / selectActorByEntityId, §3.8); a real
+    // AI that does the same for the opponent is the remaining deferral.
     this.endActivePhase();
   }
 
@@ -293,6 +295,43 @@ export class EncounterController {
     if (this.playback) return; // inert mid-beat — the round is paused on the animation window
     if (this.state?.phaseSide !== CONTROLLED_FACTION_ID) return;
     this.endActivePhase();
+  }
+
+  // The player's free in-phase actor choice (§3.8): re-anchor the menu (and the active-turn marker) onto
+  // another of YOUR ships mid-phase, so you spend your initiative across whichever actors you pick, in any
+  // order — not a forced round-robin. ◄ ► steps the ring (neighborActor); SystemScene routes the menu's
+  // category-level cycle here in combat. A pure cursor move (no icon); energy + availability still gate
+  // each ACTION (the menu greys what a chosen ship can't afford).
+  cycleActor(delta: number): void {
+    if (!this.canChooseActor()) return;
+    const next = neighborActor(this.state!, delta);
+    if (next !== undefined) this.reanchor(next);
+  }
+
+  // Re-anchor onto a clicked friendly combatant by its durable entity id (a ship id today; a body id once
+  // E5 lands). An enemy / downed / off-side pick is rejected by selectActor.
+  selectActorByEntityId(entityId: string): void {
+    if (!this.canChooseActor()) return;
+    const c = this.state!.combatants.find((cc) => cc.id === entityId);
+    if (c) this.reanchor(c.combatId);
+  }
+
+  // You may choose an actor only on your OWN side's live phase, and not while an action's animation window
+  // is playing (the round is paused on the beat).
+  private canChooseActor(): boolean {
+    return this.state !== null && this.playback === null && this.state.phaseSide === CONTROLLED_FACTION_ID;
+  }
+
+  // Move the active cursor to a chosen combatant and re-open on it: repaint so the active-turn marker
+  // follows, then re-anchor the menu. selectActor returns the SAME state ref for an illegal/no-op pick, so
+  // a stray cycle/click onto the current actor / an enemy / a downed ship changes nothing.
+  private reanchor(combatId: number): void {
+    if (!this.state) return;
+    const next = selectActor(this.state, combatId);
+    if (next === this.state) return;
+    this.state = next;
+    this.repaint();
+    this.openOnActive(this.state);
   }
 
   // End the active side's phase through the reducer (End Round or the auto-pass-on-stranded), then settle.

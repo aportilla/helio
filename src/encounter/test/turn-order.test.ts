@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { firstLivingOfSide, nextActor, nextLivingSide, sideOrderOf } from '../turn-order.ts';
+import { firstLivingOfSide, neighborActor, nextActor, nextLivingSide, sideOrderOf } from '../turn-order.ts';
 import type { Combatant, EncounterState } from '../state.ts';
 import type { FactionType } from '../../factions/types.ts';
 
@@ -64,4 +64,26 @@ test('firstLivingOfSide is the lowest-combatId living combatant of a side', () =
 
 test('sideOrderOf is the first-seen faction order', () => {
   assert.deepEqual(sideOrderOf([c(0, 'rival'), c(1, 'player'), c(2, 'rival')]), ['rival', 'player']);
+});
+
+// ── neighborActor — the player's free in-phase actor cycle (◄ ►, §3.8) ────────
+
+test('neighborActor cycles to the next / prev living same-side ship (wrapping), skipping the other side', () => {
+  const cs = [c(0, 'player'), c(1, 'rival'), c(2, 'player')];
+  const st = at(cs, 0, 'player', { player: 2, rival: 0 });
+  assert.equal(neighborActor(st, 1), 2, '+1 from 0 → the next player (rival 1 skipped)');
+  assert.equal(neighborActor(st, -1), 2, '−1 from 0 wraps back to 2');
+  assert.equal(neighborActor(at(cs, 2, 'player', { player: 2, rival: 0 }), 1), 0, '+1 from 2 wraps to 0');
+});
+
+test('neighborActor returns the lone living same-side ship itself (a no-op switch)', () => {
+  const cs = [c(0, 'player'), c(1, 'rival')];
+  assert.equal(neighborActor(at(cs, 0, 'player', { player: 1, rival: 0 }), 1), 0);
+  assert.equal(neighborActor(at(cs, 0, 'player', { player: 1, rival: 0 }), -1), 0);
+});
+
+test('neighborActor skips a downed same-side ship', () => {
+  const cs = [c(0, 'player'), c(1, 'player', 0), c(2, 'player')]; // combatId 1 is down
+  assert.equal(neighborActor(at(cs, 0, 'player', { player: 3, rival: 0 }), 1), 2, '+1 from 0 skips downed 1 → 2');
+  assert.equal(neighborActor(at(cs, 2, 'player', { player: 3, rival: 0 }), -1), 0, '−1 from 2 skips downed 1 → 0');
 });

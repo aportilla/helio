@@ -352,9 +352,14 @@ export class SystemScene implements Screen {
     if (this.hud.handleClick(this._hudPt.x, this._hudPt.y)) return;
     // The open action menu claims clicks ahead of the diagram (drill / fire / absorb).
     if (this.actionMenu.handleClick(this._hudPt.x, this._hudPt.y)) return;
-    // In combat, a click that missed chrome does NOT pick/select the diagram (combat owns the field).
-    // E4 routes a click on an enemy combatant to the menu's target lock via handleClick above.
-    if (this.inEncounter) return;
+    // In combat, a click that missed chrome re-anchors onto a clicked FRIENDLY combatant — the free actor
+    // choice (§3.8). An enemy click was already claimed by the menu's target lock (handleClick above); a
+    // click on anything else is absorbed (combat owns the field — no diagram selection).
+    if (this.inEncounter) {
+      const pick = this.pickAt(this._hudPt.x, this._hudPt.y);
+      if (pick?.kind === 'ship') this.encounter.selectActorByEntityId(pick.shipId);
+      return;
+    }
 
     // A click on the diagram (or empty space): pick under it (null over chrome).
     const hit = this.pickAt(this._hudPt.x, this._hudPt.y);
@@ -504,9 +509,10 @@ export class SystemScene implements Screen {
   // current pick is normally already in the ring; the jump-to-an-end is a defensive fallback.
   // Re-selecting re-opens the menu.
   private cycleActor(delta: number): void {
-    // In combat the active combatant is fixed by turn order — ←/→ at the category level must NOT jump
-    // to a live-view actor (it cycles the target at the command level, which the menu handles itself).
-    if (this.inEncounter) return;
+    // In combat the ←/→ category-level cycle re-anchors onto another of YOUR combatants — the free
+    // in-phase actor choice (§3.8), handled by the encounter controller. (At the command level the menu
+    // cycles the locked TARGET itself, never reaching here.)
+    if (this.inEncounter) { this.encounter.cycleActor(delta); return; }
     const ring = this.commandableActorIds();
     if (ring.length === 0) return;
     const current = this.selectedActorId();

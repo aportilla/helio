@@ -120,7 +120,16 @@ the rest of the project follows.
   beside the HP bars. You command only your side — an opponent's phase opens no menu and is auto-driven
   (a placeholder for the deferred AI, §3.7): the driver **loops one activation per interval until its
   pool is spent**, ending its phase if stranded. A NAVIGATION command is flee-to-exit; side-elimination
-  / mutual-disengage auto-exit; per-actor `◄ ►` cycling within a phase is deferred.
+  / mutual-disengage auto-exit.
+- **Free in-phase actor choice (shipped), §3.8.** You spend your initiative across **any** of your living
+  same-side actors, in any order — not a forced round-robin. `selectActor(state, combatId)` (`step.ts`) is
+  a pure cursor move (no icon spent, no turn-start tick — recharge stays tied to `advanceTurn`'s landing
+  cadence; energy + availability still gate each ACTION via the menu's greyed rows); `neighborActor`
+  (`turn-order.ts`) is the ◄ ► ring. `EncounterController.cycleActor` / `selectActorByEntityId` re-anchor
+  the menu + the active-turn marker onto the chosen actor — **both ◄ ► (category-level) and a click on a
+  friendly combatant** work, routed from `SystemScene` (`onCycleActor` → `cycleActor`; the in-encounter
+  pointer path). The round-robin (`nextActor`) is now just the post-action DEFAULT and the opponent
+  auto-driver's path; the player overrides it freely.
 - **EV — event-animation lifecycle (shipped: steps 1–6), plan §14.** A confirmed action no longer reopens
   the menu in the same call stack: `commit` applies the reducer, then opens an **animation window** held by
   the controller's per-frame `tick`, and only `settle`s (repaint to the post-action truth — the HP drop —
