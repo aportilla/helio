@@ -2,9 +2,10 @@
 // encounter (E3). A scene-side, combat-specific Widget (it reads encounter DTOs + faction colors —
 // scene may; the generic ui/ toolkit may not): one content-buffer-sized CanvasTexture quad that draws
 // each combatant's HP bar anchored to its live slot center, with an active-turn marker and a downed
-// dim. Repainted only when the EncounterState changes (once per applyCommand), so the full-buffer
-// canvas cost is negligible at combat cadence. Richer chrome (tracers, number-pops, shield chips) lands
-// with the deferred event animation; this is the readable static-state baseline.
+// dim. Repainted once per settled action (at the end of an EV animation window, §14), not per frame, so
+// the full-buffer canvas cost is negligible at combat cadence. The ANIMATED chrome (bolts, number-pops,
+// kill bursts) lives in its per-frame sibling CombatTracers (`encounter-tracers.ts`); this overlay is the
+// static HP / initiative baseline beneath it.
 
 import { Widget } from '../ui/widget';
 import { factionColor } from '../factions/registry';

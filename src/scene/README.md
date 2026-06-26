@@ -10,8 +10,9 @@ screen.ts               Screen lifecycle contract (start/stop/dispose/afterTurnA
 overlay-stack.ts        OverlayStack: pure depth-N stack of overlay Screens over the root (headless-tested)
 scene.ts                StarmapScene: galaxy view, tick loop, selection routing
 system-scene.ts         SystemScene: cluster close-up, lazily built/disposed
-encounter-controller.ts EncounterController: the combat MODE driver — owns the transient EncounterState + its own overlay scene; drives the round (folds confirms through applyCommand, reopens the menu on the new activeId); SystemScene freezes the galaxy turn on enter
-encounter-overlay.ts    CombatOverlay: the combat render PASS — bordered HP bars (hull + shield bands), active-turn marker, downed dim, anchored to live fleet slots via slotCenterForEntity (static-per-commit)
+encounter-controller.ts EncounterController: the combat MODE driver — owns the transient EncounterState + its own overlay scene; drives the round (folds confirms through applyCommand, opens a per-action animation WINDOW, settles + reopens the menu on the new activeId when it elapses); SystemScene freezes the galaxy turn on enter
+encounter-overlay.ts    CombatOverlay: the combat render PASS — bordered HP bars (hull + shield bands), active-turn marker, downed dim, anchored to live fleet slots via slotCenterForEntity (repainted at settle, once per action)
+encounter-tracers.ts    CombatTracers: the transient action-event animation layer (EV) — a CanvasTexture sibling of CombatOverlay, redrawn each frame; per damage event the firing weapon's count fans into that many BOLTS (staggered + position-offset) travelling source→target in the weapon's colour (vfxForCommand), then an impact flash (a burst on a kill) + rising drawPixelText damage number; cleared between beats
 system-diagram/         SystemDiagram coordinator + per-render-kind layers
   index.ts              Coordinator: owns scene/camera + layers, runs layout, picks, hovers
   types.ts              DiagramHit + PlanetCenterIndex + StarLightSource shared across layers (re-exports the DiagramPick pick contract from src/diagram-pick.ts)

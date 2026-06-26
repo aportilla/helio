@@ -13,31 +13,55 @@
 // strict lockstep with the reducer's "intent actor === active combatant" assertion. A DEV `autoPlay`
 // flag auto-drives that same `commit` path on a timer (the demo / spectator), so one code path serves
 // both the player and the headless verification.
+//
+// EV (§14) — the action-event animation seam: the reducer is synchronous, but an action's beat (a bolt
+// crossing to its target, the HP drop landing) needs frames of wall-clock time. So `commit` no longer
+// reopens the menu in its own call stack — it applies the reducer, fans the returned events into the
+// CombatTracers layer's BOLTS, and opens an animation `playback` WINDOW; the existing per-frame `tick`
+// advances the tracers and only `settle`s (repaint to the post-action truth, terminal check, reopen the
+// menu) once the window elapses. The HP drop thus lands at the END of the beat, not at the click. A
+// barrage's `count` and the per-weapon look are recovered render-side from the firing command (§14.4/
+// §14.5); render-only pacing — no float reaches the integer-milli reducer (§6.4).
 
 import { OrthographicCamera, Scene, type WebGLRenderer } from 'three';
 import { applyCommand, createEncounterState, endPhase } from '../encounter/step';
 import { isTerminal } from '../encounter/terminal';
-import { isDown, type Combatant, type EncounterState } from '../encounter/state';
+import { isDown, type Combatant, type EncounterEvent, type EncounterState } from '../encounter/state';
 import type { EncounterSpec } from '../encounter/encounter-spec';
-import type { ActionIntent, TargetAllegiance, TargetCandidate } from '../actions/types';
+import type { ActionCommand, ActionIntent, TargetAllegiance, TargetCandidate } from '../actions/types';
 import { commandFor } from '../actions/derive';
 import { CONTROLLED_FACTION_ID } from '../factions/registry';
 import { CombatOverlay } from './encounter-overlay';
+import { CombatTracers, vfxForCommand, type Bolt } from './encounter-tracers';
 import type { SlotCenter, SystemActionMenu } from './actions/system-action-menu';
 
 // Wall-clock pacing for the DEV auto-play (ms between reducer steps) — slow enough to read each hit +
 // the HP drain. Render-only timing; it never feeds back into the integer-milli reducer.
 const STEP_MS = 800;
 
+// EV barrage tuning (render-only, §14.4/§14.6). MAX_BARRAGE caps how many bolts one hit fans (so a hugely
+// stacked weapon can't stretch the window absurdly); SRC_FAN spreads a barrage's launch points vertically
+// at the source. Per-weapon colour + per-bolt timing live in the tracer layer's vfxForCommand.
+const MAX_BARRAGE = 6;
+const SRC_FAN = 4;
+
 export class EncounterController {
   readonly scene = new Scene();
   readonly camera = new OrthographicCamera(0, 1, 1, 0, -1, 1);
   private readonly overlay = new CombatOverlay();
+  private readonly tracers: CombatTracers;
 
   private state: EncounterState | null = null;
   private contentW = 1;
   private bufH = 1;
   private lastStepAt = 0; // 0 = re-arm: the first tick shows the opening state before stepping
+  // EV (§14): a post-action animation window in flight. While set, `tick` advances nothing else (the round
+  // is paused on the beat), drives the CombatTracers layer each frame, and `settle`s when it elapses.
+  // `startedAt` is stamped lazily on the first tick that sees it — the commit that opens the window has no
+  // frame clock. Null between beats; a window opens only when an action produces an animatable beat.
+  // durationMs is DERIVED per action by buildBolts (a staggered barrage runs longer than a single shot),
+  // so the window always fits its bolts — no flat constant.
+  private playback: { startedAt: number; readonly durationMs: number } | null = null;
 
   // OFF by default: the live path drives the round from player input via the menu. The DEV demo flips
   // it on to auto-drive the same commit path (so the loop is visible headlessly).
@@ -51,7 +75,9 @@ export class EncounterController {
     private readonly menu: SystemActionMenu,
     private readonly nameFor: (id: string) => string,
   ) {
+    this.tracers = new CombatTracers(this.slotCenterFor);
     this.overlay.addTo(this.scene);
+    this.tracers.addTo(this.scene);
   }
 
   get active(): boolean {
@@ -81,6 +107,8 @@ export class EncounterController {
     this.menu.setEncounterMode(false);
     this.menu.close();
     this.state = null;
+    this.playback = null; // drop any in-flight beat so it can't gate a re-entered encounter's tick
+    this.tracers.clearBolts();
     this.overlay.hide();
   }
 
@@ -90,15 +118,30 @@ export class EncounterController {
     this.camera.right = contentBufferW;
     this.camera.top = bufferH;
     this.camera.updateProjectionMatrix();
+    this.tracers.resize(contentBufferW, bufferH);
     if (this.state) this.repaint();
   }
 
-  // Per-frame: drive the auto-turns on a timer. A CONTROLLED combatant's turn waits for the player's
-  // menu input — UNLESS auto-play (the demo) drives it too; an OPPONENT's turn is always auto-driven
-  // (no AI yet). Lingers one interval before each auto-step (so the menu/turn reads), and on the
-  // terminal state before exiting. The live player loop advances on confirm, not here.
+  // Per-frame: advance any in-flight animation WINDOW first (the beat the last commit opened) — while one
+  // plays, nothing else moves — then drive the auto-turns on a timer. A CONTROLLED combatant's turn waits
+  // for the player's menu input — UNLESS auto-play (the demo) drives it too; an OPPONENT's turn is always
+  // auto-driven (no AI yet). Lingers one interval before each auto-step (so the menu/turn reads), and on
+  // the terminal state before exiting. The live player loop advances on confirm, not here.
   tick(now: number): void {
     if (!this.state) return;
+    // A beat is playing: hold ALL turn advancement (the auto-driver below AND the player's reopened menu)
+    // until its window elapses, then settle. startedAt is stamped on the first tick that sees the window
+    // — the commit that opened it had no frame clock (§14.2).
+    if (this.playback) {
+      if (this.playback.startedAt < 0) this.playback.startedAt = now;
+      const elapsed = now - this.playback.startedAt;
+      this.tracers.render(elapsed);
+      if (elapsed < this.playback.durationMs) return;
+      this.playback = null;
+      this.tracers.clearBolts();
+      this.settle();
+      return;
+    }
     const active = this.state.combatants[this.state.activeId];
     if (!active) return;
     const playerWaits = active.factionId === CONTROLLED_FACTION_ID && !this.autoPlay;
@@ -155,46 +198,111 @@ export class EncounterController {
     }
   }
 
-  // Fold one committed intent into the reducer and re-open on the new active combatant, OR exit. The
-  // intent's actor is always the active combatant (the menu only ever opened on it / the auto-driver
-  // targets it), satisfying applyCommand's DEV-assert. A NAVIGATION command is flee-to-exit (§5.5) — a
-  // controller-level withdrawal, not a reducer step (there is no flee command in the reducer).
-  private commit(intent: ActionIntent): void {
+  // Resolve the post-action state once any animation window has elapsed: repaint to the new truth (the HP
+  // drop lands HERE, at the END of the beat — not at commit), then either exit on a terminal (so the
+  // killing blow gets to play first) or open the menu on the new active combatant. Shared by the playback
+  // gate in tick, a no-event commit, and an ended phase.
+  private settle(): void {
     if (!this.state) return;
-    const actor = this.state.combatants[this.state.activeId];
-    if (actor && commandFor(actor, intent.actionId)?.grant.category === 'navigation') {
-      this.onExit();
-      return;
-    }
-    this.state = applyCommand(this.state, intent).state;
     this.repaint();
     if (isTerminal(this.state)) {
       this.onExit();
       return;
     }
     this.openOnActive(this.state);
+  }
+
+  // Fold one committed intent into the reducer, then open the action's animation window (§14.2), OR exit.
+  // The intent's actor is always the active combatant (the menu only ever opened on it / the auto-driver
+  // targets it), satisfying applyCommand's DEV-assert. A NAVIGATION command is flee-to-exit (§5.5) — a
+  // controller-level withdrawal, not a reducer step (there is no flee command in the reducer). The reducer
+  // advances NOW (it is the source of truth), but the menu reopen + HP repaint are DEFERRED to settle()
+  // when the window elapses, so the beat (a tracer crossing, the HP drop landing) has time to read.
+  private commit(intent: ActionIntent): void {
+    if (!this.state) return;
+    const actor = this.state.combatants[this.state.activeId];
+    const command = actor ? commandFor(actor, intent.actionId) : undefined;
+    if (command?.grant.category === 'navigation') {
+      this.onExit();
+      return;
+    }
+    const { state, events } = applyCommand(this.state, intent);
+    this.state = state;
+    // Close the menu so no input lands mid-beat; settle() reopens it on the new active combatant. Fan the
+    // action's events into tracer BOLTS (a barrage of `command.count` per `damage` event, §14.4/§14.6). An
+    // action with no bolt (a pass, or a self-effect like a shield — §14.6 step 4 gives those their own
+    // beats) opens no window and settles at once — only a beat worth watching earns the wait.
+    this.menu.close();
+    const { bolts, durationMs } = this.buildBolts(events, command);
+    if (bolts.length === 0) {
+      this.settle();
+      return;
+    }
+    this.tracers.setBolts(bolts);
+    this.playback = { startedAt: -1, durationMs };
+  }
+
+  // Fan the reducer's events into the renderer's BOLTS. The reducer stays weapon-agnostic: it emits one
+  // `damage` event per target (carrying the TOTAL amount) and a `down` when a target falls — so the BARRAGE
+  // count + per-weapon look are recovered render-side from the firing command (§14.4/§14.5), never the
+  // event stream. Each damage event becomes `count` bolts, staggered in launch time (salvoGapMs) and fanned
+  // in launch/impact position; only the last carries the (total) number-pop, and it becomes a destruction
+  // burst if a `down` accompanied that target. Returns the bolts + the window duration that fits them all.
+  private buildBolts(
+    events: readonly EncounterEvent[],
+    command: ActionCommand | undefined,
+  ): { bolts: readonly Bolt[]; durationMs: number } {
+    if (!this.state) return { bolts: [], durationMs: 0 };
+    const vfx = vfxForCommand(command);
+    const count = Math.min(MAX_BARRAGE, Math.max(1, command?.count ?? 1));
+    const downed = new Set<number>();
+    for (const e of events) if (e.kind === 'down') downed.add(e.combatId);
+    const bolts: Bolt[] = [];
+    for (const e of events) {
+      if (e.kind !== 'damage') continue;
+      const source = this.state.combatants[e.source];
+      const target = this.state.combatants[e.target];
+      if (!source || !target) continue;
+      const mid = (count - 1) / 2;
+      for (let i = 0; i < count; i++) {
+        const last = i === count - 1;
+        bolts.push({
+          sourceId: source.id,
+          targetId: target.id,
+          color: vfx.color,
+          startMs: i * vfx.salvoGapMs,
+          travelMs: vfx.travelMs,
+          impactMs: vfx.impactMs,
+          srcDx: 0,
+          srcDy: Math.round((i - mid) * SRC_FAN),
+          dstDx: ((i * 5) % 7) - 3, // a small deterministic impact scatter (no Math.random in the tick path)
+          dstDy: ((i * 3) % 5) - 2,
+          popMilli: last ? e.amount : null,
+          kill: last && downed.has(e.target),
+        });
+      }
+    }
+    const durationMs = bolts.reduce((m, b) => Math.max(m, b.startMs + b.travelMs + b.impactMs), 0);
+    return { bolts, durationMs };
   }
 
   // The player-facing fleet-scoped End Round (§3.8.3): forfeit the CONTROLLED side's remaining initiative
   // and hand the phase over. Only valid on your own phase — an opponent's phase is auto-driven, so a
   // stray key during it is inert. SystemScene routes the End-Round key here.
   endRound(): void {
+    if (this.playback) return; // inert mid-beat — the round is paused on the animation window
     if (this.state?.phaseSide !== CONTROLLED_FACTION_ID) return;
     this.endActivePhase();
   }
 
-  // End the active side's phase through the reducer (End Round or the auto-pass-on-stranded), then
-  // re-paint and either exit (terminal — side-elimination or mutual-disengage) or open on the new active
-  // combatant. Shared by the player's End Round and the opponent auto-driver's stranded pass.
+  // End the active side's phase through the reducer (End Round or the auto-pass-on-stranded), then settle.
+  // A phase pass deals no damage (its events are at most phaseStart effects not yet animated), so it
+  // settles synchronously with no window — the damage beat comes only through commit (§14). Shared by the
+  // player's End Round and the opponent auto-driver's stranded pass.
   private endActivePhase(): void {
     if (!this.state) return;
     this.state = endPhase(this.state).state;
-    this.repaint();
-    if (isTerminal(this.state)) {
-      this.onExit();
-      return;
-    }
-    this.openOnActive(this.state);
+    this.settle();
   }
 
   // Every LIVING combatant as a target candidate, tagged by allegiance to the acting combatant (self =
@@ -239,5 +347,6 @@ export class EncounterController {
 
   dispose(): void {
     this.overlay.dispose();
+    this.tracers.dispose();
   }
 }

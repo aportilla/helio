@@ -51,10 +51,14 @@ mode on `SystemScene`) is the consumer, in `src/scene/`.
 Built phase-by-phase; combat shares the "build the UX bones first, defer the mechanics" discipline
 the rest of the project follows.
 
-> **Next:** combat is **first-playable** (E1–E4) on the **Press-Turn** turn model (§3.8). The remaining
-> frontier: animate the `EncounterEvent`s (the hit / heal / shield juice — the overlay updates statically
-> per commit today), a real opponent **AI** (§3.7 — a placeholder auto-attacks then ends its phase now),
-> and **E5** (body combatants — the `body-role` producer appends planet/moon/belt combatants to the spec).
+> **Next:** combat is **first-playable** (E1–E4) on the **Press-Turn** turn model (§3.8), and the
+> **event-animation lifecycle is shipped** (EV steps 1–6, plan §14): an action animates as a **beat** —
+> the firing weapon's `count` fans into that many bolts (in the weapon's colour) travelling source→target,
+> then an impact flash (a burst on a kill) + a damage-number pop — held by an async **playback window** in
+> the controller (the reducer stays synchronous; the HP drop lands at the beat's end). The remaining
+> frontier: beats for the non-`damage` events (heal / shield juice — step 4's tail), a real opponent **AI**
+> (§3.7 — a placeholder auto-attacks then ends its phase now), and **E5** (body combatants — the
+> `body-role` producer appends planet/moon/belt combatants).
 
 - **E1 — the contract (shipped).** `state.ts` (the `Combatant` union + `CombatantSide`),
   `encounter-spec.ts` (`EncounterSpec` + `buildEncounterSpec`), and `ships-to-combatants.ts` (the
@@ -116,9 +120,19 @@ the rest of the project follows.
   beside the HP bars. You command only your side — an opponent's phase opens no menu and is auto-driven
   (a placeholder for the deferred AI, §3.7): the driver **loops one activation per interval until its
   pool is spent**, ending its phase if stranded. A NAVIGATION command is flee-to-exit; side-elimination
-  / mutual-disengage auto-exit; per-actor `◄ ►` cycling within a phase is deferred. *Deferred:* animating
-  the returned `EncounterEvent`s (damage tracer + number-pop, shield chips) — the overlay updates
-  statically per commit today.
+  / mutual-disengage auto-exit; per-actor `◄ ►` cycling within a phase is deferred.
+- **EV — event-animation lifecycle (shipped: steps 1–6), plan §14.** A confirmed action no longer reopens
+  the menu in the same call stack: `commit` applies the reducer, then opens an **animation window** held by
+  the controller's per-frame `tick`, and only `settle`s (repaint to the post-action truth — the HP drop —
+  then reopen the menu on the new active) when it elapses. The reducer stays **synchronous** (no float
+  reaches it, §6.4); the window's duration is **derived** to fit the beat, and the menu / opponent
+  auto-driver wait behind it. `CombatTracers` (`src/scene/encounter-tracers.ts`) draws it: per `damage`
+  event the firing weapon's **`count`** (recovered render-side via `commandFor`, §14.4) fans into that many
+  **bolts** — staggered in launch time + offset in position — travelling source→target (via `slotCenterFor`,
+  bodies for free) in the **weapon's colour** (`vfxForCommand`, §14.5); the last bolt pops the total
+  `drawPixelText` damage number, and a `down` turns its impact into a destruction burst. A no-beat action (a
+  pass, a self-effect) opens no window and settles at once. *Forward (step 4's tail):* beats for the
+  `effect` / `install` / `expire` events (heal / shield juice).
 - **E5 — body combatants.** The `body-role` producer + appending body-combatants to the spec.
 
 Until ship *movement* exists, opponents are placed by a DEV-only spawn action; the single
