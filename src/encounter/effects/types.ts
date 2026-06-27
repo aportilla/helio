@@ -17,7 +17,7 @@ import type { Pool } from '../pools.ts';
 
 // The frozen save-key naming an effect's DEF. An ActiveEffect re-binds to its def by this key the
 // way a saved Facility re-binds by {type}, so it is guarded the standard 3 ways (./registry).
-export type EffectKey = 'recharge' | 'shield-segment' | 'tactical-command';
+export type EffectKey = 'recharge' | 'shield-segment' | 'tactical-command' | 'damage';
 
 // ── Lifecycle phases (WHEN an effect fires) ──────────────────────────────────────────────────────
 // The named moments the reducer raises. An effect implements a handler per phase it cares about
@@ -43,13 +43,18 @@ export interface StatDelta {
   readonly clampToZero?: boolean; // floor the result at 0
 }
 
-// A structural edit to the owner's pool STACK. `splice` adds a band (the fold stamps its sourceEffectId,
-// so the def need not know its own id) directly above the first `aboveKey` band; `drop` removes every
-// band this effect spliced. A shield is one `splice` on install + one `drop` on expire — no damage
-// hook, because absorb-before-hull is purely the stack order (./pools).
+// An edit to the owner's pool STACK — the same channel for the three things a stack edit can be.
+// `splice` adds a band (the fold stamps its sourceEffectId, so the def need not know its own id) directly
+// above the first `aboveKey` band; `drop` removes every band this effect spliced; `damage` cascades a hit
+// top→bottom through the bands (./pools cascadeDamage), depleting shields before hull purely by stack
+// order. A shield is one `splice` on install + one `drop` on expire; a hit is one `damage` — and because
+// damage is just another stack edit, there is no attack-specific reducer branch. Only `damage` carries a
+// magnitude and surfaces a beat (the `damage` event, with the source — emitted by the fold's applyOutcome);
+// splice/drop are silent structural edits whose chip-up/chip-down beats the runner emits.
 export type PoolEdit =
   | { readonly kind: 'pool'; readonly op: 'splice'; readonly pool: Pool; readonly aboveKey?: string }
-  | { readonly kind: 'pool'; readonly op: 'drop' };
+  | { readonly kind: 'pool'; readonly op: 'drop' }
+  | { readonly kind: 'pool'; readonly op: 'damage'; readonly amount: number };
 
 // Add/remove whole Press-Turn initiative icons from the owner's SIDE pool (§3.8.4) — the per-SIDE tier
 // neither StatDelta (per-combatant stat) nor PoolEdit (per-combatant HP) can reach. The fold resolves
@@ -125,6 +130,9 @@ export interface ActiveEffect {
 // leaf pure) mints TIMED effects when that grant's action resolves in the reducer.
 export interface EffectInstall {
   readonly effectKey: EffectKey;
-  readonly remaining: number; // -1 permanent, else the cycle count
+  // -1 = PERMANENT; >0 = a TIMED rider (the cycle count, counted down at the owner's turn start); 0 = a
+  // ONE-SHOT (a hit) — its `install` outcomes apply once, but it is never persisted as an ActiveEffect
+  // and emits no chip-up beat (its outcome's own beat is the beat). A `damage` install uses 0.
+  readonly remaining: number;
   readonly params: Readonly<Record<string, number>>;
 }

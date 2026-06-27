@@ -5,11 +5,9 @@
 // The placeholder current/max of the `hull` POOL every combatant is seeded with (createEncounterState
 // stamps the band; the cascade depletes it). A value, NOT a formula — the real hull is Σ the loadout's
 // component hull, deferred with the stat model — so the loop reads as combat with zero committed math.
+// (The placeholder HIT magnitude that depletes it lives on the weapon now — small-laser's on-resolve
+// `damage` install — not here, since damage is a declared effect rather than a reducer constant.)
 export const PLACEHOLDER_HULL_MILLI = 100_000;
-
-// The flat hull a placeholder ATTACK removes per target per hit — sized so a few hits down a
-// combatant, keeping the bones loop short and legible. No PRNG, no damage formula (§0, §6.4).
-export const PLACEHOLDER_DAMAGE_MILLI = 40_000;
 
 // ── Initiative knobs (COMMITTED, §3.8) — load-bearing, NOT placeholders ───────
 // The Press-Turn round structure (state.ts/turn-order.ts/step.ts). These are real game tuning,

@@ -11,7 +11,7 @@ import { EFFECT_BY_KEY } from './registry.ts';
 import type { ActiveEffect, EffectInstall, EffectOutcome, PoolEdit, StatDelta } from './types.ts';
 import type { Combatant, EncounterEvent, EncounterState } from '../state.ts';
 import { isDown, withPools, withStat } from '../state.ts';
-import { dropPoolsBySource, splicePool, type Pool } from '../pools.ts';
+import { cascadeDamage, dropPoolsBySource, splicePool, type Pool } from '../pools.ts';
 import { MIN_INITIATIVE } from '../tuning.ts';
 
 // The pure twin of deriveCommands: flatMap every provider's declared installs. A provider with no
@@ -50,10 +50,11 @@ interface OutcomeResult {
   readonly event?: EncounterEvent;
 }
 
-// Apply one PoolEdit to a band stack: 'splice' stamps the owning effect's id onto the new band (so its
-// later `expire` can find exactly its own band) and inserts it; 'drop' removes the expiring effect's
-// band(s). The only place a hook's pool edit meets the pool operators.
-function applyPoolEdit(pools: readonly Pool[], edit: PoolEdit, effectId: number): readonly Pool[] {
+// Apply one STRUCTURAL PoolEdit to a band stack: 'splice' stamps the owning effect's id onto the new
+// band (so its later `expire` can find exactly its own band) and inserts it; 'drop' removes the expiring
+// effect's band(s). The 'damage' op is handled in applyOutcome (it needs the cascade's `dealt` to emit
+// the hit event), so it never reaches here — the type excludes it.
+function applyPoolEdit(pools: readonly Pool[], edit: Exclude<PoolEdit, { op: 'damage' }>, effectId: number): readonly Pool[] {
   return edit.op === 'splice'
     ? splicePool(pools, { ...edit.pool, sourceEffectId: effectId }, edit.aboveKey)
     : dropPoolsBySource(pools, effectId);
@@ -82,6 +83,7 @@ function applyDelta(combatant: Combatant, d: StatDelta): { readonly combatant: C
 function applyOutcome(
   combatants: readonly Combatant[],
   ownerId: number,
+  sourceId: number,
   outcome: EffectOutcome,
   effectKey: string,
   effectId: number,
@@ -99,6 +101,19 @@ function applyOutcome(
       };
     }
     case 'pool': {
+      if (outcome.op === 'damage') {
+        // Cascade the hit top→bottom (./pools): shields absorb before hull purely by stack order. `dealt`
+        // is HP ACTUALLY removed (≤ Σ current), so the event never reports more than existed and an
+        // unpooled/already-0 target takes a visible 0-damage hit (the reducer stays total). The attacker
+        // is the effect's `sourceId` (the damage event's `source`, anchoring the tracer source→target);
+        // carried for the same reason ActiveEffect.sourceId is — reflect/lifesteal need no later change.
+        const { pools, dealt } = cascadeDamage(owner.pools ?? [], outcome.amount);
+        return {
+          combatants: combatants.map((c, i) => (i === ownerId ? withPools(owner, pools) : c)),
+          sideDelta: 0,
+          event: { kind: 'damage', source: sourceId, target: ownerId, amount: dealt },
+        };
+      }
       const pools = applyPoolEdit(owner.pools ?? [], outcome, effectId);
       return { combatants: combatants.map((c, i) => (i === ownerId ? withPools(owner, pools) : c)), sideDelta: 0 };
     }
@@ -107,11 +122,15 @@ function applyOutcome(
   }
 }
 
-// Mint each request into an ActiveEffect with a MONOTONIC id, run its `install` handler outcomes against
-// the owner, and emit an `install` beat. Both mint sites call this — createEncounterState's build pass
-// (which discards the events) and applyCommand's on-resolve pass (which keeps them). A SideDelta at
-// install is ignored: a side buff folds at the SIDE's phase start (phaseStart), not at the instant a
-// permanent carrier is registered. Pure; returns the updated slice + the events.
+// Mint each request, run its `install` handler outcomes against the owner, and emit the resulting beats.
+// Both mint sites call this — createEncounterState's build pass (which discards events) and applyCommand's
+// on-resolve pass (which keeps them). A request that PERSISTS (remaining ≠ 0) becomes an ActiveEffect with
+// a MONOTONIC id and emits an `install` chip-up beat; a ONE-SHOT (remaining 0, a hit) applies its outcomes
+// but is never registered and gets no chip-up beat (its own beat — the `damage` event — is the beat), so it
+// draws no id. A SideDelta at install is ignored: a side buff folds at the SIDE's phase start (phaseStart),
+// not at the instant a permanent carrier is registered. The `down` beat is the state-transition consequence
+// of a hit (only a damage outcome can cross a combatant to 0 HP) — emitted here, uniform whether the hit
+// came from an on-resolve weapon or a future DoT install. Pure; returns the updated slice + the events.
 export function installEffects(
   slice: EffectsSlice,
   requests: readonly MintRequest[],
@@ -121,21 +140,24 @@ export function installEffects(
   const events: EncounterEvent[] = [];
   let nextEffectId = slice.nextEffectId;
   for (const { install, ownerId, sourceId } of requests) {
-    const id = nextEffectId++;
-    effects.push({ id, key: install.effectKey, ownerId, sourceId, remainingCycles: install.remaining, params: install.params });
+    const persists = install.remaining !== 0; // a one-shot hit (0) never rides on, so draws no id
+    const id = persists ? nextEffectId++ : -1;
+    const before = combatants[ownerId];
+    const wasUp = before !== undefined && !isDown(before);
+    if (persists) {
+      effects.push({ id, key: install.effectKey, ownerId, sourceId, remainingCycles: install.remaining, params: install.params });
+    }
     const handler = EFFECT_BY_KEY.get(install.effectKey)?.on?.install;
-    const owner = combatants[ownerId];
-    if (handler && owner) {
-      for (const outcome of handler({ params: install.params, owner })) {
-        const r = applyOutcome(combatants, ownerId, outcome, install.effectKey, id);
+    if (handler && combatants[ownerId]) {
+      for (const outcome of handler({ params: install.params, owner: combatants[ownerId]! })) {
+        const r = applyOutcome(combatants, ownerId, sourceId, outcome, install.effectKey, id);
         combatants = r.combatants;
-        // Keep the stat-change beat (an install-time StatDelta animates like any other), uniform with
-        // tickTurnStart/foldPhaseStart. A SideDelta at install is ignored: a side buff folds at the
-        // SIDE's phaseStart, not when a permanent carrier is first registered.
-        if (r.event) events.push(r.event);
+        if (r.event) events.push(r.event); // the damage / stat-change beat, uniform across runners
       }
     }
-    events.push({ kind: 'install', combatId: ownerId, effectKey: install.effectKey, effectId: id });
+    if (persists) events.push({ kind: 'install', combatId: ownerId, effectKey: install.effectKey, effectId: id });
+    const after = combatants[ownerId];
+    if (wasUp && after !== undefined && isDown(after)) events.push({ kind: 'down', combatId: ownerId });
   }
   return { slice: { combatants, effects, nextEffectId }, events };
 }
@@ -163,7 +185,7 @@ export function tickTurnStart(
     const turn = def?.on?.turnStart;
     if (turn && combatants[actorId]) {
       for (const outcome of turn({ params: effect.params, owner: combatants[actorId]! })) {
-        const r = applyOutcome(combatants, actorId, outcome, effect.key, effect.id);
+        const r = applyOutcome(combatants, actorId, effect.sourceId, outcome, effect.key, effect.id);
         combatants = r.combatants;
         sideDelta += r.sideDelta;
         if (r.event) events.push(r.event);
@@ -180,7 +202,7 @@ export function tickTurnStart(
         const expire = def?.on?.expire;
         if (expire && combatants[actorId]) {
           for (const outcome of expire({ params: effect.params, owner: combatants[actorId]! })) {
-            ({ combatants } = applyOutcome(combatants, actorId, outcome, effect.key, effect.id));
+            ({ combatants } = applyOutcome(combatants, actorId, effect.sourceId, outcome, effect.key, effect.id));
           }
         }
         events.push({ kind: 'expire', combatId: actorId, effectKey: effect.key, effectId: effect.id });
@@ -228,7 +250,7 @@ export function foldPhaseStart(
     const countSide = !presence || !countedPresence.has(effect.key);
     if (presence) countedPresence.add(effect.key);
     for (const outcome of handler({ params: effect.params, owner })) {
-      const r = applyOutcome(combatants, effect.ownerId, outcome, effect.key, effect.id);
+      const r = applyOutcome(combatants, effect.ownerId, effect.sourceId, outcome, effect.key, effect.id);
       combatants = r.combatants;
       if (countSide) sideDelta += r.sideDelta;
       if (r.event) events.push(r.event);

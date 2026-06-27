@@ -17,13 +17,13 @@ import { commandFor } from '../actions/derive.ts';
 import { CONTROLLED_FACTION_ID } from '../factions/registry.ts';
 import type { EncounterSpec } from './encounter-spec.ts';
 import type { EncounterEvent, EncounterState, Combatant } from './state.ts';
-import { ENERGY_MAX_STAT, ENERGY_STAT, isDown, withPools, withStat } from './state.ts';
-import { HULL_POOL, cascadeDamage } from './pools.ts';
+import { ENERGY_MAX_STAT, ENERGY_STAT, isDown, withStat } from './state.ts';
+import { HULL_POOL } from './pools.ts';
 import { combatantEnergyMax, combatantInstalls, combatantInstallsOnResolve } from './ships-to-combatants.ts';
 import { foldPhaseStart, installEffects, tickTurnStart, type MintRequest } from './effects/fold.ts';
 import { firstActableOfSide, firstLivingOfSide, nextActor, nextLivingSide } from './turn-order.ts';
 import { baseSideInitiative, zeroInitiative } from './initiative.ts';
-import { PLACEHOLDER_DAMAGE_MILLI, PLACEHOLDER_HULL_MILLI } from './tuning.ts';
+import { PLACEHOLDER_HULL_MILLI } from './tuning.ts';
 
 type StepResult = { readonly state: EncounterState; readonly events: readonly EncounterEvent[] };
 
@@ -87,10 +87,24 @@ export function createEncounterState(spec: EncounterSpec): EncounterState {
   return foldPhaseStart(opening, initiatorSide).state;
 }
 
+// Resolve an intent's target domain-ids (ship / body ids) to the combatIds the on-resolve mint owns,
+// dropping a target that is missing or already downed (you can't land a hit on a corpse). combatId === the
+// dense array index, so a resolved id is BOTH the owner key applyOutcome indexes by AND the damage event's
+// `target`. A target named twice resolves twice — duplicate hits stack, because installEffects threads the
+// evolving roster across requests (the second hit reads the first's depleted hull).
+function resolveTargetOwnerIds(targetIds: readonly string[], combatants: readonly Combatant[]): number[] {
+  const ids: number[] = [];
+  for (const targetId of targetIds) {
+    const target = combatants.find((c) => c.id === targetId);
+    if (target && !isDown(target)) ids.push(target.combatId);
+  }
+  return ids;
+}
+
 // Fold one committed intent into the next state. The bones read the actor's own resolved command (no
-// central lookup): an ATTACK cascades the flat placeholder hit through each named target's pool stack
-// (shields absorb before hull, purely by stack order); a command may ALSO install timed effects on
-// resolve (a self shield); anything else (a support verb like raise-shields) simply passes the activation
+// central lookup) and run it through the SINGLE on-resolve effect path: a weapon's grant mints a `damage`
+// effect on each target (the cascade lives in the effect, ./effects — there is no attack branch here), a
+// defense grant mints a self shield, and a grant with no on-resolve installs simply passes the activation
 // (there are no navigation actions — no flee). The action spends ONE initiative icon (§3.8.3), then the turn
 // advances (advanceTurn): within the side's phase while icons + a living ship remain, else to the next
 // side's phase.
@@ -116,39 +130,26 @@ export function applyCommand(state: EncounterState, intent: ActionIntent): StepR
   let nextEffectId = state.nextEffectId;
   let dealtDamage = false;
 
-  if (command.grant.category === 'attack') {
-    for (const targetId of intent.targetIds) {
-      const idx = combatants.findIndex((c) => c.id === targetId);
-      const target = combatants[idx];
-      if (!target || isDown(target)) continue; // can't hit a missing or already-downed combatant
-      // Cascade the hit top→bottom; `dealt` is HP actually removed (min of the hit and the stack's
-      // total), so the event never reports more than existed and a no-pool target takes a visible
-      // 0-damage hit and is never downed — the reducer stays total.
-      const { pools, dealt } = cascadeDamage(target.pools ?? [], PLACEHOLDER_DAMAGE_MILLI);
-      const after = withPools(target, pools);
-      combatants = combatants.map((c, i) => (i === idx ? after : c));
-      events.push({ kind: 'damage', source: actor.combatId, target: target.combatId, amount: dealt });
-      if (dealt > 0) dealtDamage = true; // a real hit keeps the round off the mutual-disengage terminal
-      if (isDown(after)) events.push({ kind: 'down', combatId: target.combatId });
-    }
-  }
-
-  // On-resolve mint — runs UNCONDITIONALLY for the resolved command (a future weapon could both hit AND
-  // self-buff). Slice 2 is self-target only: owner === source === the acting combatant, asserted so a
-  // non-self install can't silently land on the caster before its ownership threading is built.
+  // On-resolve mint — the SINGLE path every committed action runs through, no behaviour fork: the actor's
+  // grant declares the effects its resolution installs (a weapon → `damage` on each target; a defense part
+  // → a self shield), minted uniformly by installEffects. The grant's `targeting` picks each install's
+  // owner — a 'self' grant lands on the caster, any other on each resolved target. (A future grant that
+  // BOTH damages a target AND self-buffs would need per-install targeting — a noted seam; today every
+  // grant's installs share one owner set.) installEffects emits the damage / down / install beats; a hit
+  // that actually removed HP keeps the round off the mutual-disengage terminal (§8.4).
   const onResolve = combatantInstallsOnResolve(actor, intent.actionId);
   if (onResolve.length > 0) {
-    if (import.meta.env?.DEV && command.grant.targeting !== 'self') {
-      throw new Error(`[encounter] installsOnResolve on non-self grant ${intent.actionId} not yet supported`);
-    }
+    const ownerIds =
+      command.grant.targeting === 'self' ? [actor.combatId] : resolveTargetOwnerIds(intent.targetIds, combatants);
     const minted = installEffects(
       { combatants, effects, nextEffectId },
-      onResolve.map((install) => ({ install, ownerId: actor.combatId, sourceId: actor.combatId })),
+      ownerIds.flatMap((ownerId) => onResolve.map((install) => ({ install, ownerId, sourceId: actor.combatId }))),
     );
     combatants = minted.slice.combatants;
     effects = minted.slice.effects;
     nextEffectId = minted.slice.nextEffectId;
     events.push(...minted.events);
+    dealtDamage = minted.events.some((e) => e.kind === 'damage' && e.amount > 0);
   }
 
   // Spend the salvo's energy (§3.8.5): the command's totalCost leaves the ACTING ship's energy bag,

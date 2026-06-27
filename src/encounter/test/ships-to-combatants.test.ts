@@ -77,8 +77,16 @@ test('combatantInstallsOnResolve resolves a ship grant\'s timed installs by comp
     combatantInstallsOnResolve(s, 'small-shield:raise-shields'),
     [{ effectKey: 'shield-segment', remaining: 3, params: { capacity: 50_000 } }],
   );
-  // A known component with NO installsOnResolve entry for that grant → empty.
-  assert.deepEqual(combatantInstallsOnResolve(s, 'small-laser:laser'), []);
+  // The laser grant now carries a one-shot `damage` install on resolve — the on-resolve path is how the
+  // hit lands (no reducer attack branch). Asserted structurally so the placeholder magnitude can become a
+  // real formula without churning this adapter test.
+  const laser = combatantInstallsOnResolve(s, 'small-laser:laser');
+  assert.equal(laser.length, 1);
+  assert.equal(laser[0]!.effectKey, 'damage');
+  assert.equal(laser[0]!.remaining, 0, 'a one-shot hit, never a rider');
+  assert.ok((laser[0]!.params.amount ?? 0) > 0, 'a positive hit magnitude');
+  // A known component + an unknown grant key → empty (no install for that grant).
+  assert.deepEqual(combatantInstallsOnResolve(s, 'small-laser:no-such-grant'), []);
   // A no-colon id (whole id is the provider) and an unknown provider → empty, no throw.
   assert.deepEqual(combatantInstallsOnResolve(s, 'bareword'), []);
   assert.deepEqual(combatantInstallsOnResolve(s, 'nonexistent:foo'), []);

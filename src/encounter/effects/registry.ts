@@ -62,6 +62,25 @@ const DEFS = {
       phaseStart: (ctx) => [{ kind: 'side', initiative: ctx.params.initiative ?? 0 }],
     },
   },
+  // A one-shot HIT as a DECLARED effect — the cut that retired the reducer's last hardcoded behaviour
+  // fork (the old `category === 'attack'` branch). A weapon mints it on each resolved TARGET via
+  // installsOnResolve (the same path the shield's raise-shields uses, now non-self), with `remaining: 0`
+  // so it applies once and never rides on. Its `install` handler cascades a `damage` pool outcome through
+  // the target's stack — shields absorb before hull purely by stack order, so there is zero attack-
+  // specific code in the fold. The hit MAGNITUDE is install param (the weapon's stat, declared on the
+  // component), so a stronger gun is a bigger param, not new code. This is the seam EVERY enemy-applied
+  // effect grows behind — a debuff / slow / taunt / the Disruption Virus initiative swing is a new
+  // EffectDef + an installsOnResolve entry, never a reducer branch. `color`/`tags` are nominal: a hit
+  // renders through the damage event's tracer (§14), not an effect chip.
+  damage: {
+    key: 'damage',
+    label: 'Damage',
+    color: '#ff5a5a',
+    tags: ['attack'],
+    on: {
+      install: (ctx) => [{ kind: 'pool', op: 'damage', amount: ctx.params.amount ?? 0 }],
+    },
+  },
 } satisfies Record<EffectKey, EffectDef>;
 
 export const EFFECT_DEFS: readonly EffectDef[] = Object.values(DEFS);
@@ -78,7 +97,7 @@ export const EFFECT_KEYS: ReadonlySet<string> = new Set(Object.keys(DEFS));
 // deliberately NOT typed as the live union — so renaming a shipped effect can't quietly re-green the
 // guard. The CI test asserts each entry is still a live key (EFFECT_KEYS.has), so removing OR
 // renaming a shipped id fails, protecting old replays.
-export const FROZEN_EFFECT_IDS: readonly string[] = ['recharge', 'shield-segment', 'tactical-command'];
+export const FROZEN_EFFECT_IDS: readonly string[] = ['recharge', 'shield-segment', 'tactical-command', 'damage'];
 
 // DEV-only module-load invariant: each def's `key` equals its registry key, and every frozen id is
 // still live. Mirrors the factions / ships / facilities drift checks — loud in dev, stripped in

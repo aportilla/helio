@@ -45,6 +45,12 @@ const DEFS = {
     // encounter.
     battery: 9_000,
     grants: [{ key: 'laser', label: 'Laser', color: LASER_ACTION_COLOR, category: 'attack', targeting: 'single', kind: 'encounter', costPerUnit: 9_000, targets: (c) => c.allegiance === 'enemy' }],
+    // On resolve the laser mints a one-shot `damage` effect on each target — the same installsOnResolve
+    // path the shield uses for a self buff, now landing on an enemy (the reducer's old attack branch is
+    // gone; damage is a declared effect, src/encounter/effects). 40_000 is the placeholder hit magnitude
+    // (was the reducer's PLACEHOLDER_DAMAGE_MILLI), declared HERE as the weapon's own stat to keep ships ↛
+    // encounter, superseded by the real damage formula. `remaining: 0` = a hit: applied once, never a rider.
+    installsOnResolve: { 'laser': [{ effectKey: 'damage', remaining: 0, params: { amount: 40_000 } }] },
   },
   'small-shield': {
     type: 'small-shield',

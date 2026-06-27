@@ -13,11 +13,14 @@ import { ENERGY_STAT, isDown, withStat, type EncounterEvent, type EncounterState
 import { deriveCommands } from '../../actions/derive.ts';
 import { SHIP_CATEGORIES } from '../../actions/registry.ts';
 import { COMPONENT_BY_TYPE } from '../../ships/components/registry.ts';
-import { PLACEHOLDER_DAMAGE_MILLI, PLACEHOLDER_HULL_MILLI } from '../tuning.ts';
+import { PLACEHOLDER_HULL_MILLI } from '../tuning.ts';
 import type { Ship } from '../../game-state-codec.ts';
 
 const LASER = 'small-laser:laser'; // an ATTACK command on the corvette loadout
 const RAISE = 'small-shield:raise-shields'; // a SUPPORT command that installs a timed shield on resolve
+// The laser's placeholder hit magnitude now lives on the weapon component (its on-resolve `damage`
+// install), not a tuning constant — read it from there so the test tracks the real wired value.
+const DMG = COMPONENT_BY_TYPE.get('small-laser')!.installsOnResolve!['laser']![0]!.params.amount!;
 
 const ship = (id: string, factionId: Ship['factionId']): Ship => ({
   id, systemId: 'sol', factionId, classId: 'corvette', name: id, status: 'ready',
@@ -41,9 +44,9 @@ test('createEncounterState stamps placeholder hull and starts at the initiator',
 test('an attack removes the flat placeholder hull and emits a damage event; the turn passes', () => {
   const s0 = encounterOf([ship('p1', 'player'), ship('r1', 'rival')]); // p1 = combatId 0, acts first
   const { state: s1, events } = applyCommand(s0, { actorId: 'p1', actionId: LASER, targetIds: ['r1'] });
-  assert.equal(hullOf(s1, 'r1'), PLACEHOLDER_HULL_MILLI - PLACEHOLDER_DAMAGE_MILLI);
+  assert.equal(hullOf(s1, 'r1'), PLACEHOLDER_HULL_MILLI - DMG);
   assert.equal(hullOf(s1, 'p1'), PLACEHOLDER_HULL_MILLI, 'the attacker is untouched');
-  assert.deepEqual(events, [{ kind: 'damage', source: 0, target: 1, amount: PLACEHOLDER_DAMAGE_MILLI }]);
+  assert.deepEqual(events, [{ kind: 'damage', source: 0, target: 1, amount: DMG }]);
   assert.equal(s1.activeId, 1, "now r1's turn");
   assert.equal(s1.round, 1);
 });
@@ -63,7 +66,7 @@ test('a target reaching 0 hull is downed (event + isDown + terminal)', () => {
   const low: EncounterState = {
     ...base,
     combatants: base.combatants.map((c) =>
-      c.id === 'r1' ? { ...c, pools: [{ key: 'hull', current: PLACEHOLDER_DAMAGE_MILLI, max: PLACEHOLDER_HULL_MILLI }] } : c),
+      c.id === 'r1' ? { ...c, pools: [{ key: 'hull', current: DMG, max: PLACEHOLDER_HULL_MILLI }] } : c),
   };
   const { state, events } = applyCommand(low, { actorId: 'p1', actionId: LASER, targetIds: ['r1'] });
   assert.equal(hullOf(state, 'r1'), 0);
@@ -84,11 +87,11 @@ test('an attack on an unpooled target is a visible 0-damage hit that never downs
 test('an attack with multiple targets hits each in target order', () => {
   const s = encounterOf([ship('p1', 'player'), ship('r1', 'rival'), ship('r2', 'rival')]); // p1=0, r1=1, r2=2
   const { state, events } = applyCommand(s, { actorId: 'p1', actionId: LASER, targetIds: ['r1', 'r2'] });
-  assert.equal(hullOf(state, 'r1'), PLACEHOLDER_HULL_MILLI - PLACEHOLDER_DAMAGE_MILLI);
-  assert.equal(hullOf(state, 'r2'), PLACEHOLDER_HULL_MILLI - PLACEHOLDER_DAMAGE_MILLI);
+  assert.equal(hullOf(state, 'r1'), PLACEHOLDER_HULL_MILLI - DMG);
+  assert.equal(hullOf(state, 'r2'), PLACEHOLDER_HULL_MILLI - DMG);
   assert.deepEqual(events, [
-    { kind: 'damage', source: 0, target: 1, amount: PLACEHOLDER_DAMAGE_MILLI },
-    { kind: 'damage', source: 0, target: 2, amount: PLACEHOLDER_DAMAGE_MILLI },
+    { kind: 'damage', source: 0, target: 1, amount: DMG },
+    { kind: 'damage', source: 0, target: 2, amount: DMG },
   ]);
 });
 
@@ -99,13 +102,13 @@ test('an attack stacks duplicate target ids cumulatively (the per-target rebind,
   const low: EncounterState = {
     ...base,
     combatants: base.combatants.map((c) =>
-      c.id === 'r1' ? { ...c, pools: [{ key: 'hull', current: 2 * PLACEHOLDER_DAMAGE_MILLI, max: PLACEHOLDER_HULL_MILLI }] } : c),
+      c.id === 'r1' ? { ...c, pools: [{ key: 'hull', current: 2 * DMG, max: PLACEHOLDER_HULL_MILLI }] } : c),
   };
   const { state, events } = applyCommand(low, { actorId: 'p1', actionId: LASER, targetIds: ['r1', 'r1'] });
   assert.equal(hullOf(state, 'r1'), 0, 'both hits landed cumulatively');
   assert.deepEqual(events, [
-    { kind: 'damage', source: 0, target: 1, amount: PLACEHOLDER_DAMAGE_MILLI },
-    { kind: 'damage', source: 0, target: 1, amount: PLACEHOLDER_DAMAGE_MILLI },
+    { kind: 'damage', source: 0, target: 1, amount: DMG },
+    { kind: 'damage', source: 0, target: 1, amount: DMG },
     { kind: 'down', combatId: 1 },
   ]);
 });
@@ -183,7 +186,7 @@ test('a self shield absorbs before hull, then expires after 3 of its owner\'s cy
   // r1 attacks p1 → the shield eats the hit; hull is untouched behind it.
   ({ state: s } = applyCommand(s, { actorId: 'r1', actionId: LASER, targetIds: ['p1'] }));
   const hit = s.combatants.find((c) => c.id === 'p1')!;
-  assert.equal(hit.pools?.find((p) => p.key === 'shields')?.current, cap - PLACEHOLDER_DAMAGE_MILLI, 'the shield absorbed the hit');
+  assert.equal(hit.pools?.find((p) => p.key === 'shields')?.current, cap - DMG, 'the shield absorbed the hit');
   assert.equal(hit.pools?.find((p) => p.key === 'hull')?.current, PLACEHOLDER_HULL_MILLI, 'hull is untouched behind the shield');
 
   // Run turns (p1 ends its phase, r1 attacks) until the band is gone — it ticks at p1's turn starts and

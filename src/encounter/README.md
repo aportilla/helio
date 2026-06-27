@@ -74,11 +74,12 @@ the rest of the project follows.
   act again while icons remain), and when the pool is spent / End-Round'd the phase passes to the next
   living side, whose pool is **re-derived from its living roster each phase** (`baseSideInitiative` =
   `floor(ships × ratio)` clamped to a floor, plus effect `SideDelta`s, I5). A full pass over the sides
-  is one `round`; the attacker (`initiator`) opens. Zero gameplay math: a **flat placeholder effect**
-  subtracts a fixed `hull` amount and emits a `damage`/`down` event. The terminal (`terminal.ts`) is
-  **side elimination** OR **mutual disengage** (a full round with no damage from either side). The
-  attack path cascades the **pool stack** the effect substrate (below) layered on this reducer; `dealt`
-  (HP actually removed) drives the `damage` event.
+  is one `round`; the attacker (`initiator`) opens. Zero gameplay math and **no behaviour fork** —
+  `applyCommand` runs every action through ONE path, the on-resolve effect mint (substrate below): a
+  weapon's grant installs a one-shot `damage` effect on each target that cascades a flat placeholder hit
+  through its **pool stack** (`dealt` = HP actually removed drives the `damage`/`down` events), a defense
+  grant installs a self shield, anything else just passes the activation. The terminal (`terminal.ts`) is
+  **side elimination** OR **mutual disengage** (a full round with no damage from either side).
 - **The effect substrate (shipped) — a unified lifecycle/delta model.** `effects/` is the fourth
   registry-family member: a provider DECLARES the effects it installs exactly as it declares grants, and
   an effect subscribes to named **lifecycle phases** (`EffectDef.on`: `install` / `expire` / `turnStart`
@@ -97,8 +98,12 @@ the rest of the project follows.
   the band, `expire` drops it — both `PoolEdit`s); **C** — `tactical-command-module` installs a permanent
   `tactical-command` (`phaseStart` → a `+1` `SideDelta`) with **`stacking: 'presence'`**, so a side's
   Press-Turn tempo bonus counts once however many ships carry it (presence-not-count is the effect's
-  DATA, not a static `initiative` registry key). Effect ids are a **monotonic counter** (an on-resolve
-  mint never reuses a freed id); stacking is **distinct instances** (a re-cast is a second band).
+  DATA, not a static `initiative` registry key); **D** — a weapon's `installsOnResolve` mints a one-shot
+  `damage` (`remaining: 0` — applied on `install`, never a rider, no chip beat) whose handler cascades a
+  `damage` `PoolEdit` through the target's stack: the cut that retired the reducer's LAST attack branch,
+  so an enemy debuff / DoT / the Disruption-Virus initiative swing is now just another `EffectDef`, not a
+  reducer fork. Effect ids are a **monotonic counter** (an on-resolve mint never reuses a freed id; a
+  one-shot draws none); stacking is **distinct instances** (a re-cast is a second band).
 - **E3 — the mode (shipped).** Combat runs as a MODE on `SystemScene`, in place over the same diagram
   (no second scene — combat is an extra render PASS). `EncounterController` (`src/scene/encounter-
   controller.ts`) owns the transient `EncounterState` + its own overlay scene; `CombatOverlay`
