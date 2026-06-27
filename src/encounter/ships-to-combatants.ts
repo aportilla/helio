@@ -47,6 +47,18 @@ export function combatantInstalls(combatant: Combatant): readonly EffectInstall[
   return collectInstalls(components.map((type) => ({ installs: COMPONENT_BY_TYPE.get(type)?.installs })));
 }
 
+// A combatant's combat energy CAPACITY (energyMax) — Σ the `battery` its components contribute, the
+// energy-model twin of combatantInstalls (same class→components path, so both switch to the per-ship
+// loadout together once Phase 3 serializes it). createEncounterState seeds energyMax AND a charged
+// start (energy = energyMax) from this, so a loadout's salvo budget IS its parts' batteries: a
+// single-laser corvette derives 9_000 and fires exactly one salvo before its drive recharges. A body
+// carries no components until E5, so it contributes none (energyMax 0 — it has no costed grants yet).
+export function combatantEnergyMax(combatant: Combatant): number {
+  if (combatant.kind !== 'ship') return 0;
+  const components = SHIP_CLASS_BY_TYPE.get(combatant.classId)?.components ?? [];
+  return components.reduce((sum, type) => sum + (COMPONENT_BY_TYPE.get(type)?.battery ?? 0), 0);
+}
+
 // A ship's TIMED on-resolve installs for ONE resolved action — the on-resolve twin of combatantInstalls.
 // The action's wire id `"<componentId>:<grantKey>"` names the providing component directly, and the
 // reducer only reaches here once commandFor has confirmed the actor actually carries the command, so

@@ -19,27 +19,28 @@ import type { EncounterSpec } from './encounter-spec.ts';
 import type { EncounterEvent, EncounterState, Combatant } from './state.ts';
 import { ENERGY_MAX_STAT, ENERGY_STAT, isDown, withPools, withStat } from './state.ts';
 import { HULL_POOL, cascadeDamage } from './pools.ts';
-import { combatantInstalls, combatantInstallsOnResolve } from './ships-to-combatants.ts';
+import { combatantEnergyMax, combatantInstalls, combatantInstallsOnResolve } from './ships-to-combatants.ts';
 import { foldPhaseStart, installEffects, tickTurnStart, type MintRequest } from './effects/fold.ts';
 import { firstActableOfSide, firstLivingOfSide, nextActor, nextLivingSide } from './turn-order.ts';
 import { baseSideInitiative, zeroInitiative } from './initiative.ts';
-import { PLACEHOLDER_DAMAGE_MILLI, PLACEHOLDER_ENERGY_MILLI, PLACEHOLDER_HULL_MILLI } from './tuning.ts';
+import { PLACEHOLDER_DAMAGE_MILLI, PLACEHOLDER_HULL_MILLI } from './tuning.ts';
 
 type StepResult = { readonly state: EncounterState; readonly events: readonly EncounterEvent[] };
 
-// Stamp the bones placeholder profile onto a combatant: a single `hull` POOL to deplete (the bottom
-// band of the cascade stack), and a charged energy bar (energy = energyMax) in the opaque stat bag.
-// The effect-free adapter ships neither — this is what makes the bones loop killable and gives the
-// engine's recharge effect something to top up. Real multi-pool HP + Σ-battery energyMax supersede
-// these placeholders when those models land.
+// Stamp the combat profile onto a combatant: a single `hull` POOL to deplete (the bottom band of the
+// cascade stack — still a placeholder magnitude until the multi-pool HP model lands), and a charged
+// energy bar (energy = energyMax) in the opaque stat bag, energyMax now DERIVED as the Σ of the
+// loadout's component batteries (combatantEnergyMax). The effect-free adapter ships neither — this is
+// what makes the bones loop killable and gives the engine's recharge effect something to top up.
 function seedCombatant(combatant: Combatant): Combatant {
+  const energyMax = combatantEnergyMax(combatant);
   return {
     ...combatant,
     pools: [{ key: HULL_POOL, current: PLACEHOLDER_HULL_MILLI, max: PLACEHOLDER_HULL_MILLI }],
     stats: {
       ...combatant.stats,
-      [ENERGY_STAT]: PLACEHOLDER_ENERGY_MILLI,
-      [ENERGY_MAX_STAT]: PLACEHOLDER_ENERGY_MILLI,
+      [ENERGY_STAT]: energyMax, // charged start
+      [ENERGY_MAX_STAT]: energyMax,
     },
   };
 }

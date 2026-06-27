@@ -11,12 +11,6 @@ export const PLACEHOLDER_HULL_MILLI = 100_000;
 // combatant, keeping the bones loop short and legible. No PRNG, no damage formula (§0, §6.4).
 export const PLACEHOLDER_DAMAGE_MILLI = 40_000;
 
-// The placeholder energy capacity (energyMax) every combatant starts charged to. A bones value
-// standing in for the real energyMax = Σ battery (deferred with the per-weapon cost model); matches
-// the canonical triple-missile fixture's energyMax of 9 (§4). The engine's `recharge` effect tops
-// energy back toward this each cycle.
-export const PLACEHOLDER_ENERGY_MILLI = 9_000;
-
 // ── Initiative knobs (COMMITTED, §3.8) — load-bearing, NOT placeholders ───────
 // The Press-Turn round structure (state.ts/turn-order.ts/step.ts). These are real game tuning,
 // hoisted per Appendix B. The fleet→icons ratio is the ONLY fractional step (floored before play,

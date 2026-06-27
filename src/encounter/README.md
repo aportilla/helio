@@ -161,8 +161,10 @@ the rest of the project follows.
   acting side lit + ship counts). It **supersedes** `CombatOverlay`'s old top-left corner pip strip
   (removed); the overlay keeps the per-sprite gauges, now HP **plus a NEW energy bar** (amber,
   `stats.energy/energyMax`). The **energy slice** makes that gauge live: `small-laser` carries a real
-  `costPerUnit` (== the placeholder `energyMax`, so a full charge fires ONE salvo), `applyCommand`
-  deducts it, and the opponent auto-driver only fires what it can afford — so a shot drains the bar and
+  `costPerUnit` matched to its own `battery`, and a combatant's `energyMax` is DERIVED as the Σ of its
+  loadout's component batteries (`combatantEnergyMax`, seeded by `createEncounterState` as both the cap
+  and a charged start) — so a single-laser ship's full charge fires exactly ONE salvo. `applyCommand`
+  deducts the cost, and the opponent auto-driver only fires what it can afford — so a shot drains the bar and
   the engine's `recharge` refills it ~⅓ at each of its side's phase starts. The fleet baseline lifts in-encounter (`setBottomReserve`)
   to clear the band. The bar carries ONE interactive element — a centered **End Turn** button
   (`end-turn-button.ts`, the click-twin of `R`'s End Round, shown only on the controlled side's phase) that

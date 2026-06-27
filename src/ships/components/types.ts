@@ -25,11 +25,11 @@ export type ShipComponentType = 'small-engine' | 'small-laser' | 'small-shield' 
 export type ShipComponentKind = 'chassis' | 'drive' | 'weapon' | 'defense' | 'utility';
 
 // One ship component's static design — the ship-side peer of FacilityDef. Deliberately THIN: just
-// identity, role, the actions it grants, and the per-cycle/passive effects it installs in combat.
-// The energy COST model (`battery` capacity, and `costPerUnit` on the grant), D13's size-class mass
-// budget, and the render piece are deferred behind the SAME seam FacilityDef defers `battery?`
-// behind — each lands with the consumer that reads it (the loadout build flow / the fleet render),
-// exactly as ShipClassDef stayed thin until its consumers arrived.
+// identity, role, the actions it grants, the per-cycle/passive effects it installs in combat, and
+// the energy capacity it contributes. The salvo `costPerUnit` rides on the grant; D13's size-class
+// mass budget and the render piece are still deferred behind the SAME seam — each lands with the
+// consumer that reads it (the loadout build flow / the fleet render), exactly as ShipClassDef stayed
+// thin until its consumers arrived.
 export interface ShipComponentDef {
   readonly type: ShipComponentType;   // === its registry key; a DEV assert pins def.type === key
   readonly label: string;             // 'Small Laser' — single source for build rows + part labels
@@ -52,4 +52,10 @@ export interface ShipComponentDef {
   // `installsOnResolve[grantKeyOf(actionId)]` when that action fires. A defense part's `raise-shields`
   // grant maps to a timed `shield-segment` here. ABSENT ⇒ installs none on resolve.
   readonly installsOnResolve?: Readonly<Record<string, readonly EffectInstall[]>>;
+  // The combat energy CAPACITY (energy-milli) this component contributes to its ship's salvo budget.
+  // A combatant's `energyMax` is the Σ of this across its loadout (combatantEnergyMax, the energy-model
+  // twin of `installs`), seeded by createEncounterState. D3 — a weapon carries its OWN battery, so its
+  // grant's `costPerUnit` and this value match: a single-laser ship fires exactly one salvo, then the
+  // drive's recharge refills it. ABSENT ⇒ contributes none (a chassis/drive holds no charge of its own).
+  readonly battery?: number;
 }

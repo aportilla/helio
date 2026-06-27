@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shipsToCombatants, shipToCombatant, combatantInstallsOnResolve } from '../ships-to-combatants.ts';
+import { shipsToCombatants, shipToCombatant, combatantInstallsOnResolve, combatantEnergyMax } from '../ships-to-combatants.ts';
 import type { Combatant, CombatantSide } from '../state.ts';
 import { shipLoadout } from '../../actions/ships-to-actors.ts';
 import type { Ship } from '../../game-state-codec.ts';
@@ -87,4 +87,14 @@ test('combatantInstallsOnResolve resolves a ship grant\'s timed installs by comp
   // A body combatant has no ship components (its E5 producer adds bodies) → empty.
   const body: Combatant = { kind: 'body', id: 'b1', combatId: 1, factionId: 'player', bodyId: 'sol-3', commands: [] };
   assert.deepEqual(combatantInstallsOnResolve(body, 'small-shield:raise-shields'), []);
+});
+
+test('combatantEnergyMax sums the loadout component batteries (D3: a weapon carries its own battery)', () => {
+  // The corvette loadout is small-engine (no battery) + small-laser (9_000) → Σ = 9_000, so a full
+  // charge fires exactly one laser salvo (cost == battery). This is what seedCombatant seeds as
+  // energyMax + the charged start, derived not placeholder.
+  assert.equal(combatantEnergyMax(shipToCombatant(ship('p1', 'player'), 0)), 9_000);
+  // A body carries no ship components until E5 → 0 (no costed grants yet, so no salvo budget needed).
+  const body: Combatant = { kind: 'body', id: 'b1', combatId: 1, factionId: 'player', bodyId: 'sol-3', commands: [] };
+  assert.equal(combatantEnergyMax(body), 0);
 });
