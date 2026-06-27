@@ -8,7 +8,7 @@ A pure declaration + registry leaf: its app-side imports are **type-only** — t
 
 | id | kind | grants / effects |
 |---|---|---|
-| `small-engine` | `drive` | NAVIGATION **Flee** (self, immediate) — D9: every ship has a drive, so every ship can flee. Installs a permanent `recharge` effect |
+| `small-engine` | `drive` | **No grant** — there is no flee (an encounter is fought to its terminal, never withdrawn). Installs a permanent `recharge` effect (worked example A) |
 | `small-laser` | `weapon` | ATTACK **Laser** (single enemy, enters an encounter) — the enemy-only predicate mirrors the body railgun/missile batteries |
 | `small-shield` | `defense` | SUPPORT **Raise Shields** (self, immediate) — its `installsOnResolve` mints a 3-cycle `shield-segment` effect (worked example B of the effect substrate); registered but **not** on the corvette's default loadout |
 | `tactical-command-module` | `utility` | **No grant.** Installs a permanent `tactical-command` effect whose `phaseStart` folds **+1 Press-Turn initiative** into its side's pool (encounter §3.8) — `stacking: 'presence'`, so it counts once per side however many ships carry it. Standalone (not on the corvette default) |

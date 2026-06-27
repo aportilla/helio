@@ -56,9 +56,10 @@ the rest of the project follows.
 > the firing weapon's `count` fans into that many bolts (in the weapon's colour) travelling source→target,
 > then an impact flash (a burst on a kill) + a damage-number pop — held by an async **playback window** in
 > the controller (the reducer stays synchronous; the HP drop lands at the beat's end). The remaining
-> frontier: beats for the non-`damage` events (heal / shield juice — step 4's tail), a real opponent **AI**
-> (§3.7 — a placeholder auto-attacks then ends its phase now), and **E5** (body combatants — the
-> `body-role` producer appends planet/moon/belt combatants).
+> frontier: beats for the non-`damage` events (heal / shield juice — step 4's tail) and **E5** (body
+> combatants — the `body-role` producer appends planet/moon/belt combatants). A first-slice opponent **AI**
+> shipped (`ai.ts`, §3.7): a deterministic, fleet-aware focus-fire policy — it fires any same-side ship that
+> can afford a salvo at the weakest living enemy; richer valuation (timing, combos) layers on with P-Experiment.
 
 - **E1 — the contract (shipped).** `state.ts` (the `Combatant` union + `CombatantSide`),
   `encounter-spec.ts` (`EncounterSpec` + `buildEncounterSpec`), and `ships-to-combatants.ts` (the
@@ -128,9 +129,10 @@ the rest of the project follows.
   charged same-side ship still waits.
   `CombatOverlay` paints each combatant's **HP + energy gauges** (hull/shield bands + the amber salvo
   bar) and the active-turn marker; the per-side **initiative readout** lives in the bottom **encounter
-  bar** (EB, below). You command only your side — an opponent's phase opens no menu and is auto-driven
-  (a placeholder for the deferred AI, §3.7): the driver **loops one activation per interval until its
-  pool is spent**, ending its phase if stranded. There is **no flee** — once in, ships fight to the
+  bar** (EB, below). You command only your side — an opponent's phase opens no menu and is auto-driven by
+  the **AI policy** (`ai.ts`, §3.7 — a fleet-aware focus-fire driver): it **loops one activation per interval
+  until its pool is spent**, each interval firing whichever same-side ship can afford a salvo at the weakest
+  living enemy, and ending its phase if stranded. There is **no flee** — once in, ships fight to the
   terminal: side-elimination / mutual-disengage auto-exit (no menu action or key withdraws).
 - **Free in-phase actor choice (shipped), §3.8.** You spend your initiative across **any** of your living
   same-side actors, in any order — not a forced round-robin. `selectActor(state, combatId)` (`step.ts`) is
@@ -139,8 +141,8 @@ the rest of the project follows.
   (`turn-order.ts`) is the ◄ ► ring. `EncounterController.cycleActor` / `selectActorByEntityId` re-anchor
   the menu + the active-turn marker onto the chosen actor — **both ◄ ► (category-level) and a click on a
   friendly combatant** work, routed from `SystemScene` (`onCycleActor` → `cycleActor`; the in-encounter
-  pointer path). The round-robin (`nextActor`) is now just the post-action DEFAULT and the opponent
-  auto-driver's path; the player overrides it freely.
+  pointer path). The round-robin (`nextActor`) is now just the reducer's post-action DEFAULT cursor; both the
+  player and the opponent AI override it (via the same `selectActor`) to choose which same-side ship acts.
 - **EV — event-animation lifecycle (shipped: steps 1–6), plan §14.** A confirmed action no longer reopens
   the menu in the same call stack: `commit` applies the reducer, then opens an **animation window** held by
   the controller's per-frame `tick`, and only `settle`s (repaint to the post-action truth — the HP drop —

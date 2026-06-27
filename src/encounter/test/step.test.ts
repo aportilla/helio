@@ -1,7 +1,7 @@
 // step reducer invariants — state seeding, the flat placeholder attack, turn advance + round wrap, a
 // non-attack pass, downing, and a full encounter run to the side-elimination terminal. Drives REAL
 // ship combatants (the E1 adapter) so the command lookup (small-laser:laser is an attack;
-// small-engine:flee is navigation) is exercised end to end. Runs under `node --test` type-stripping.
+// small-shield:raise-shields a non-attack support pass) is exercised end to end. Runs under `node --test` type-stripping.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

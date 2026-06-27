@@ -25,6 +25,7 @@
 
 import { OrthographicCamera, Scene, type WebGLRenderer } from 'three';
 import { applyCommand, createEncounterState, endPhase, selectActor } from '../encounter/step';
+import { chooseAutoIntent } from '../encounter/ai';
 import { neighborActor } from '../encounter/turn-order';
 import { isTerminal } from '../encounter/terminal';
 import { ENERGY_STAT, isDown, type Combatant, type EncounterEvent, type EncounterState } from '../encounter/state';
@@ -144,7 +145,7 @@ export class EncounterController {
   // Per-frame: advance any in-flight animation WINDOW first (the beat the last commit opened) — while one
   // plays, nothing else moves — then drive the auto-turns on a timer. A CONTROLLED combatant's turn waits
   // for the player's menu input — UNLESS auto-play (the demo) drives it too; an OPPONENT's turn is always
-  // auto-driven (no AI yet). Lingers one interval before each auto-step (so the menu/turn reads), and on
+  // auto-driven by the AI policy. Lingers one interval before each auto-step (so the menu/turn reads), and on
   // the terminal state before exiting. The live player loop advances on confirm, not here.
   tick(now: number): void {
     if (!this.state) return;
@@ -181,20 +182,30 @@ export class EncounterController {
       this.onExit();
       return;
     }
-    const intent = this.autoIntent(this.state);
-    if (intent) {
-      this.commit(intent);
+    // Auto-drive the opponent's phase via the AI policy (§3.7): chooseAutoIntent reasons over the WHOLE
+    // phase side — picking which same-side ship fires and focus-firing the weakest enemy — so a mixed
+    // loadout no longer forfeits the phase the instant the active ship can't fire. A null intent means the
+    // side is stranded (no affordable, target-having action): end the phase so a held pool never soft-
+    // locks the round (§3.8.3 auto-pass). The driver LOOPS across ticks — one activation per interval —
+    // spending the pool down, then hands the phase back (the player's phase opens its menu via openOnActive).
+    const intent = chooseAutoIntent(this.state);
+    if (!intent) {
+      this.endActivePhase();
       return;
     }
-    // The active opponent ship has no move (no attack command, or no living enemy): end the phase so a
-    // stranded pool never soft-locks the round (§3.8.3 auto-pass). The driver LOOPS across ticks — one
-    // activation per interval — spending the pool down, then hands the phase back (the player's phase
-    // opens its menu via openOnActive). LIMITATION: autoIntent only inspects the ACTIVE ship, so a mixed
-    // loadout where the active ship can't attack but a same-side ship could forfeits the whole phase —
-    // it works today only because every ship flies the homogeneous corvette loadout (all can fire). The
-    // PLAYER now picks WHICH same-side ship acts freely (cycleActor / selectActorByEntityId, §3.8); a real
-    // AI that does the same for the opponent is the remaining deferral.
-    this.endActivePhase();
+    // The policy may pick a same-side ship that isn't the active one, so re-anchor the cursor onto it (a
+    // pure cursor move — no icon, no turn-start tick — the SAME selectActor the player's free actor choice
+    // uses) before committing, keeping applyCommand's "intent actor === active combatant" invariant.
+    // Repaint only when the cursor actually moved, so the active-turn marker tracks the firing ship.
+    const chosen = this.state.combatants.find((c) => c.id === intent.actorId);
+    if (chosen) {
+      const moved = selectActor(this.state, chosen.combatId);
+      if (moved !== this.state) {
+        this.state = moved;
+        this.repaint();
+      }
+    }
+    this.commit(intent);
   }
 
   // The overlay anchors to the live fleet slots, so it must render in the SAME content viewport the
@@ -206,7 +217,7 @@ export class EncounterController {
   // Set up the combatant whose turn it is. You command only YOUR side: the anchored menu opens on a
   // CONTROLLED combatant (carrying its own derived loadout + seeded energy gate, its durable id
   // anchoring the panel/bracket, candidates built from the live roster relative to it); an opponent's
-  // turn opens NO menu and is auto-driven by tick (a placeholder for the deferred AI, §3.7). Called on
+  // turn opens NO menu and is auto-driven by tick via the AI policy (§3.7, chooseAutoIntent). Called on
   // enter and after every commit; re-arms the auto-turn timer.
   private openOnActive(state: EncounterState): void {
     this.lastStepAt = 0;
@@ -376,24 +387,6 @@ export class EncounterController {
       out.push({ id: c.id, kind: c.kind, allegiance, tags: [] });
     }
     return out;
-  }
-
-  // A spectator move for the active combatant: its first attack-category command aimed at the first
-  // living enemy. Defensive (skips downed, respects category); returns null when no move exists. DEV
-  // auto-play only — the live loop produces real intents from the menu.
-  private autoIntent(state: EncounterState): ActionIntent | null {
-    const actor = state.combatants[state.activeId];
-    if (!actor) return null;
-    // Respect the same energy gate the player's menu enforces: pick an attack the ship can AFFORD
-    // (energy >= its salvo cost). A depleted ship yields no intent → the driver ends the phase
-    // (auto-pass), so the opponent's energy bar drains and recharges just like the player's, instead of
-    // firing for free. An actor with no energy stat (no cost model) stays permissively affordable.
-    const energy = actor.stats?.[ENERGY_STAT] ?? Infinity;
-    const attack = actor.commands.find((c) => c.grant.category === 'attack' && c.totalCost <= energy);
-    if (!attack) return null;
-    const enemy = state.combatants.find((c) => c.factionId !== actor.factionId && !isDown(c));
-    if (!enemy) return null;
-    return { actorId: actor.id, actionId: attack.id, targetIds: [enemy.id] };
   }
 
   private repaint(): void {
