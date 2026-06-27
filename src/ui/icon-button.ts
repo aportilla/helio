@@ -23,6 +23,7 @@ export interface IconButtonStates {
   hover: CanvasTexture;
   on?: CanvasTexture;        // present iff the button has a selected state
   onHover?: CanvasTexture;
+  disabled?: CanvasTexture;  // present iff the button can be greyed inert (e.g. back button during combat)
 }
 
 export interface IconButtonOpts {
@@ -33,6 +34,7 @@ export interface IconButtonOpts {
 export class IconButton extends Widget {
   private hover = false;
   private selected = false;
+  private disabled = false;
 
   constructor(
     size: number,
@@ -58,6 +60,16 @@ export class IconButton extends Widget {
     this.applyTexture();
   }
 
+  // Grey the button inert: shows the `disabled` texture (when provided) and ignores hover/selected swaps.
+  // The host is responsible for ignoring clicks while disabled — this only renders the visual. Drops hover
+  // so re-enabling doesn't restore a stale highlight.
+  setDisabled(d: boolean): void {
+    if (this.disabled === d) return;
+    this.disabled = d;
+    if (d) this.hover = false;
+    this.applyTexture();
+  }
+
   // Forces hover → false. Called when the host widget hides (e.g. info
   // card cleared) so the next time it appears, the X starts in its off
   // color regardless of where the cursor was last.
@@ -65,7 +77,9 @@ export class IconButton extends Widget {
 
   private applyTexture(): void {
     let tex: CanvasTexture;
-    if (this.selected) {
+    if (this.disabled && this.states.disabled) {
+      tex = this.states.disabled;
+    } else if (this.selected) {
       // 4-state path. Fall back to off/hover textures if on/onHover
       // weren't provided (caller used a 2-state config but called
       // setSelected anyway — degrade gracefully rather than throw).

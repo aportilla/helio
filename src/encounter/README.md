@@ -105,7 +105,9 @@ the rest of the project follows.
   a downed dim over each combatant, anchored to the live fleet slots via `slotCenterForEntity`. The
   galaxy turn freezes on BOTH paths — a `freezesTurn` getter backed by an `inEncounter` flag (since
   `Screen.freezesTurn` is `readonly`) for the programmatic `nextTurn()`, and `setNextTurnEnabled(false)`
-  for the user click. `onEnterEncounter` is un-stubbed: a confirmed `'encounter'`-kind action builds
+  for the user click. The system-view **back button** greys out too (`SystemHud.setBackEnabled(false)`) —
+  combat runs to its terminal, so neither Next Turn nor Back leaves the view mid-fight. `onEnterEncounter`
+  is un-stubbed: a confirmed `'encounter'`-kind action builds
   the spec via `buildEncounterSpec(shipsToCombatants(readyShips()), intent)` and enters — `enter` then
   **fires that launching `intent`** (`spec.initiator`) as the initiator's opening move, so entering combat
   and the first shot are ONE beat: the attack that triggered the encounter also lands (with its animation +
@@ -119,7 +121,11 @@ the rest of the project follows.
   loadout + seeded `energy`/`energyMax` gate, anchored by durable id), folds a confirm through
   `applyCommand`, and REOPENS on the new `activeId`. Because the reducer keeps `activeId` on the
   controlled side until its icons are spent, the menu **stays on your side across multiple activations**
-  within the phase; pressing **`R`** is the fleet-scoped **End Round** (`endPhase`, forfeit + pass).
+  within the phase; the fleet-scoped **End Round** (`endPhase`, forfeit + pass) fires from **`R`** OR the
+  bar's **End Turn** button (EB). A phase **opens on a ship that can act** — `beginNextPhase` picks the
+  lowest same-side ship that can afford an action (`firstActableOfSide`, run AFTER the phase-start
+  recharge), falling back to the first living ship, so the cursor never lands on a drained ship while a
+  charged same-side ship still waits.
   `CombatOverlay` paints each combatant's **HP + energy gauges** (hull/shield bands + the amber salvo
   bar) and the active-turn marker; the per-side **initiative readout** lives in the bottom **encounter
   bar** (EB, below). You command only your side — an opponent's phase opens no menu and is auto-driven
@@ -156,7 +162,12 @@ the rest of the project follows.
   `costPerUnit` (== the placeholder `energyMax`, so a full charge fires ONE salvo), `applyCommand`
   deducts it, and the opponent auto-driver only fires what it can afford — so a shot drains the bar and
   the engine's `recharge` refills it ~⅓ at each of its side's phase starts. The fleet baseline lifts in-encounter (`setBottomReserve`)
-  to clear the band; the bar is display-only (`hitTest` opaque), owned + repainted by the controller.
+  to clear the band. The bar carries ONE interactive element — a centered **End Turn** button
+  (`end-turn-button.ts`, the click-twin of `R`'s End Round, shown only on the controlled side's phase) that
+  **blinks gold** when no living controlled ship has an affordable, target-having action
+  (`controlledHasAnyAction`) — the suggested move; the rest of the band stays display-only (`hitTest`
+  opaque). Owned + repainted by the controller; the blink is a cheap per-frame texture swap (not a bar
+  repaint), and the bar reserves a center plaza so pips never run under the button.
 - **E5 — body combatants.** The `body-role` producer + appending body-combatants to the spec.
 
 Until ship *movement* exists, opponents are placed by a DEV-only spawn action; the single

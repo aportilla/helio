@@ -21,7 +21,7 @@ import { ENERGY_MAX_STAT, ENERGY_STAT, isDown, withPools, withStat } from './sta
 import { HULL_POOL, cascadeDamage } from './pools.ts';
 import { combatantInstalls, combatantInstallsOnResolve } from './ships-to-combatants.ts';
 import { foldPhaseStart, installEffects, tickTurnStart, type MintRequest } from './effects/fold.ts';
-import { firstLivingOfSide, nextActor, nextLivingSide } from './turn-order.ts';
+import { firstActableOfSide, firstLivingOfSide, nextActor, nextLivingSide } from './turn-order.ts';
 import { baseSideInitiative, zeroInitiative } from './initiative.ts';
 import { PLACEHOLDER_DAMAGE_MILLI, PLACEHOLDER_ENERGY_MILLI, PLACEHOLDER_HULL_MILLI } from './tuning.ts';
 
@@ -245,20 +245,28 @@ function advanceTurn(state: EncounterState, events: readonly EncounterEvent[]): 
 function beginNextPhase(state: EncounterState): StepResult | null {
   const nextSide = nextLivingSide(state);
   if (nextSide === undefined) return null;
-  const activeId = firstLivingOfSide(state.combatants, nextSide);
-  if (activeId === undefined) return null;
+  // Provisional opener — only confirms the side fields a living ship before we recharge; the FINAL opener
+  // is re-picked below, after foldPhaseStart tops energy up.
+  const opener = firstLivingOfSide(state.combatants, nextSide);
+  if (opener === undefined) return null;
   const base = baseSideInitiative(state.combatants.filter((c) => c.factionId === nextSide));
   const wrapped = nextSide === state.initiatorSide;
   const opened: EncounterState = {
     ...state,
     phaseSide: nextSide,
-    activeId,
+    activeId: opener,
     initiative: { ...state.initiative, [nextSide]: base },
     round: state.round + (wrapped ? 1 : 0),
     disengaged: state.disengaged || (wrapped && !state.damageThisRound),
     damageThisRound: wrapped ? false : state.damageThisRound,
   };
   // Fold the entering side's phaseStart effect SideDeltas onto its fleet base (tactical-command, future
-  // buffs/debuffs), re-derived from the LIVING roster (I5) — the dynamic, lifecycle-driven pool.
-  return foldPhaseStart(opened, nextSide);
+  // buffs/debuffs), re-derived from the LIVING roster (I5) — the dynamic, lifecycle-driven pool. Recharge
+  // also lands here (small-engine's phaseStart energy), so it must run BEFORE we choose the opener.
+  const folded = foldPhaseStart(opened, nextSide);
+  // OPEN the phase on the lowest same-side ship that can actually act (afford a command) given the just-
+  // recharged energy — so the cursor never lands on a drained ship while a charged one waits (§3.8). A
+  // fully-spent side has no actable ship: fall back to the provisional opener (the phase is a forfeit).
+  const activeId = firstActableOfSide(folded.state.combatants, nextSide) ?? opener;
+  return { state: { ...folded.state, activeId }, events: folded.events };
 }

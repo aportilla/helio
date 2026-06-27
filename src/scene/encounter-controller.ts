@@ -31,9 +31,10 @@ import { ENERGY_STAT, isDown, type Combatant, type EncounterEvent, type Encounte
 import type { EncounterSpec } from '../encounter/encounter-spec';
 import type { ActionCommand, ActionIntent, TargetAllegiance, TargetCandidate } from '../actions/types';
 import { commandFor } from '../actions/derive';
+import { filterCandidates } from '../actions/menu';
 import { CONTROLLED_FACTION_ID } from '../factions/registry';
 import { CombatOverlay } from './encounter-overlay';
-import { EncounterHud } from '../ui/encounter-hud';
+import { EncounterHud, EndTurnButton, ENCOUNTER_BAR_HEIGHT } from '../ui/encounter-hud';
 import { CombatTracers, vfxForCommand, type Bolt } from './encounter-tracers';
 import type { SlotCenter, SystemActionMenu } from './actions/system-action-menu';
 
@@ -52,11 +53,16 @@ export class EncounterController {
   readonly camera = new OrthographicCamera(0, 1, 1, 0, -1, 1);
   private readonly overlay = new CombatOverlay();
   private readonly bar = new EncounterHud();
+  private readonly endTurn = new EndTurnButton();
   private readonly tracers: CombatTracers;
 
   private state: EncounterState | null = null;
   private contentW = 1;
   private bufH = 1;
+  // Cached at each repaint (it only changes when the state does): true when NONE of the controlled side's
+  // living ships has an affordable, target-having action left — the trigger for the End Turn button's gold
+  // CTA blink. tick() reads it per frame to drive the blink without re-scanning the roster each frame.
+  private noPlayerActions = false;
   private lastStepAt = 0; // 0 = re-arm: the first tick shows the opening state before stepping
   // EV (§14): a post-action animation window in flight. While set, `tick` advances nothing else (the round
   // is paused on the beat), drives the CombatTracers layer each frame, and `settle`s when it elapses.
@@ -81,6 +87,7 @@ export class EncounterController {
     this.tracers = new CombatTracers(this.slotCenterFor);
     this.overlay.addTo(this.scene);
     this.bar.addTo(this.scene);
+    this.endTurn.addTo(this.scene);
     this.tracers.addTo(this.scene);
   }
 
@@ -121,6 +128,7 @@ export class EncounterController {
     this.tracers.clearBolts();
     this.overlay.hide();
     this.bar.hide();
+    this.endTurn.setVisible(false);
   }
 
   resize(contentBufferW: number, bufferH: number): void {
@@ -140,6 +148,12 @@ export class EncounterController {
   // the terminal state before exiting. The live player loop advances on confirm, not here.
   tick(now: number): void {
     if (!this.state) return;
+    // Drive the End Turn button every frame: it shows only on the CONTROLLED side's LIVE phase (hidden
+    // mid-beat — the round is paused on the animation window — and during the opponent's auto-driven
+    // phase), and runs its gold CTA blink off `now` when the player has no useful action left
+    // (noPlayerActions, cached at repaint). A cheap texture swap; nothing here re-scans the roster.
+    const showEndTurn = this.playback === null && this.state.phaseSide === CONTROLLED_FACTION_ID;
+    this.endTurn.update(now, showEndTurn, showEndTurn && this.noPlayerActions);
     // A beat is playing: hold ALL turn advancement (the auto-driver below AND the player's reopened menu)
     // until its window elapses, then settle. startedAt is stamped on the first tick that sees the window
     // — the commit that opened it had no frame clock (§14.2).
@@ -392,17 +406,71 @@ export class EncounterController {
       this.bufH,
     );
     this.bar.paint(this.state.combatants, this.state.initiative, this.state.phaseSide, this.contentW);
+    // Recompute the CTA trigger + re-place the button while we hold the fresh state (the only times it
+    // moves: state change + resize, both routed through here). tick() then animates from these cached values.
+    this.noPlayerActions = !this.controlledHasAnyAction(this.state);
+    this.layoutEndTurn();
   }
 
-  // True when a HUD-space point lands on the encounter bar band (display-only chrome): SystemScene
-  // consults this so a click on the bar is absorbed, never falling through to combatant targeting.
-  pointerOverBar(x: number, y: number): boolean {
+  // Center the End Turn button horizontally on the field and vertically within the encounter bar band, so
+  // it straddles the divider the two fleets face across (the band the bar reserved a center plaza for).
+  private layoutEndTurn(): void {
+    const left = Math.round(this.contentW / 2 - this.endTurn.width / 2);
+    const bottom = Math.round((ENCOUNTER_BAR_HEIGHT - this.endTurn.height) / 2);
+    this.endTurn.placeAt(left, bottom);
+  }
+
+  // A pointer-DOWN over the encounter bar / its End Turn button. Returns true when consumed, so SystemScene
+  // stops — the click never falls through to combatant targeting / the free actor choice. A hit on the End
+  // Turn button fires the fleet-scoped End Round (endRound self-guards to the player's own live phase, off-
+  // beat); the rest of the band is display-only chrome that simply absorbs the click.
+  handleBarPointerDown(x: number, y: number): boolean {
+    if (this.endTurn.visible && this.endTurn.bounds.contains(x, y)) {
+      this.endRound();
+      return true;
+    }
     return this.bar.bounds.contains(x, y);
+  }
+
+  // A pointer-MOVE over the bar: highlight the End Turn button on hover (SystemScene turns the cursor into
+  // a hand when this returns true). A no-op while the button is hidden (opponent phase / mid-beat).
+  handleBarPointerMove(x: number, y: number): boolean {
+    const over = this.endTurn.visible && this.endTurn.bounds.contains(x, y);
+    this.endTurn.setHover(over);
+    return over;
+  }
+
+  // True when ANY living combatant on the CONTROLLED side has at least one action it can both AFFORD
+  // (the energy gate, mirroring the menu's D6 availability) and AIM (a valid target under the command's
+  // criteria). When false the player may still hold initiative but can accomplish nothing, so the End Turn
+  // button raises its gold CTA blink (the suggested move). A self-target support verb (raise-shields)
+  // counts as an available action, so the CTA fires only when there is truly nothing useful left — typically
+  // every ship out of salvo energy, awaiting next phase's recharge.
+  private controlledHasAnyAction(state: EncounterState): boolean {
+    for (const c of state.combatants) {
+      if (c.factionId !== CONTROLLED_FACTION_ID || isDown(c)) continue;
+      const energy = c.stats?.[ENERGY_STAT] ?? Infinity;
+      for (const command of c.commands) {
+        if (command.totalCost > energy) continue;
+        if (this.hasValidTarget(state, c, command)) return true;
+      }
+    }
+    return false;
+  }
+
+  // Whether a command has at least one admissible target from the acting combatant. A 'self' verb always
+  // does (the living actor itself); otherwise the grant's TargetCriteria must admit at least one living
+  // candidate — the SAME filter the menu applies (filterCandidates), so this availability never drifts from
+  // what the player can actually drill.
+  private hasValidTarget(state: EncounterState, actor: Combatant, command: ActionCommand): boolean {
+    if (command.grant.targeting === 'self') return true;
+    return filterCandidates(this.combatCandidates(state, actor), command.grant.targets, actor).length > 0;
   }
 
   dispose(): void {
     this.overlay.dispose();
     this.bar.dispose();
+    this.endTurn.dispose();
     this.tracers.dispose();
   }
 }

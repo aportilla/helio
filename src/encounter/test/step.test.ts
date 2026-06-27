@@ -139,6 +139,19 @@ test('recharge folds at the SIDE phase start for ALL its ships, not per-activati
   assert.equal(energyOf('p1'), 3000, 'p1 (which fired) also recharged at that same phase start');
 });
 
+test('a re-opened phase opens on a ship that can act, skipping a drained lower-combatId ship', () => {
+  // Two player ships share ONE icon (floor(½×2)): p1 (combatId 0) fires in round 1 and drains to 0, while
+  // p2 (combatId 1) never acts and stays charged. When the player phase re-opens in round 2, p1 has only
+  // recharged to 3000 (< the 9000 salvo) but p2 is full — so the cursor must OPEN on p2, not the drained
+  // p1 (firstActableOfSide, §3.8), landing the player on a ship that can actually act.
+  let s = encounterOf([ship('p1', 'player'), ship('p2', 'player'), ship('r1', 'rival')], 'p1');
+  ({ state: s } = applyCommand(s, { actorId: 'p1', actionId: LASER, targetIds: ['r1'] })); // player's lone icon spent → rival phase
+  assert.equal(s.phaseSide, 'rival');
+  ({ state: s } = applyCommand(s, { actorId: 'r1', actionId: LASER, targetIds: ['p1'] })); // rival acts → wraps to the player phase
+  assert.equal(s.phaseSide, 'player', 'round 2, the player phase re-opens');
+  assert.equal(s.combatants[s.activeId]!.id, 'p2', 'opens on the charged p2, not the drained lower-combatId p1');
+});
+
 test('a self shield absorbs before hull, then expires after 3 of its owner\'s cycles', () => {
   // p1 flies a small-engine (no action — recharge only) + a small-shield (raise-shields); r1 is a plain
   // corvette (laser). Built inline because the small-shield component is live in the registry, just not on

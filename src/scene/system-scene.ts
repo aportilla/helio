@@ -294,6 +294,9 @@ export class SystemScene implements Screen {
     this.inEncounter = true;
     this.actionMenu.close();
     this.sidebar.setNextTurnEnabled(false);
+    // No leaving the system view mid-fight: an encounter runs to its terminal (no flee), so the back
+    // button greys out alongside Next Turn until the mode tears down.
+    this.hud.setBackEnabled(false);
     // Lift the fleet formation clear of the bottom encounter bar (EB, §15) before the chrome anchors to
     // the slots; exitEncounter drops it back.
     this.diagram.setFleetBottomReserve(ENCOUNTER_BAR_HEIGHT);
@@ -308,6 +311,7 @@ export class SystemScene implements Screen {
     this.encounter.exit();
     this.diagram.setFleetBottomReserve(0);
     this.sidebar.setNextTurnEnabled(true);
+    this.hud.setBackEnabled(true);
   }
 
   // DEV-only: boot straight into a demo encounter (the ?demo-encounter URL path) — seed a friendly +
@@ -361,9 +365,10 @@ export class SystemScene implements Screen {
     // choice (§3.8). An enemy click was already claimed by the menu's target lock (handleClick above); a
     // click on anything else is absorbed (combat owns the field — no diagram selection).
     if (this.inEncounter) {
-      // The encounter bar is display-only chrome: a click on its band is absorbed, never falling
-      // through to combatant targeting / the free actor choice.
-      if (this.encounter.pointerOverBar(this._hudPt.x, this._hudPt.y)) return;
+      // The encounter bar absorbs clicks on its band, and its End Turn button fires the fleet-scoped End
+      // Round — both handled before targeting so neither falls through to combatant targeting / the free
+      // actor choice.
+      if (this.encounter.handleBarPointerDown(this._hudPt.x, this._hudPt.y)) return;
       const pick = this.pickAt(this._hudPt.x, this._hudPt.y);
       if (pick?.kind === 'ship') this.encounter.selectActorByEntityId(pick.shipId);
       return;
@@ -644,12 +649,14 @@ export class SystemScene implements Screen {
     const onSidebar = this.sidebar.handlePointerMove(this._hudPt.x, this._hudPt.y);
     const onButton = this.hud.handlePointerMove(this._hudPt.x, this._hudPt.y);
     const onMenu = this.actionMenu.handlePointerMove(this._hudPt.x, this._hudPt.y);
+    // In combat, the encounter bar's End Turn button highlights on hover (and takes the pointer cursor).
+    const onEndTurn = this.inEncounter && this.encounter.handleBarPointerMove(this._hudPt.x, this._hudPt.y);
     const pick = this.pickAt(this._hudPt.x, this._hudPt.y);
     this.diagram.setHovered(pick);
     this.hud.setHoveredBody(pick, this._hudPt.x, this._hudPt.y);
     // A ship has no hover rim or info card yet, so the pointer cursor is its hover
     // affordance — the cue that it's clickable. Bodies rely on their rim + card instead.
-    this.canvas.style.cursor = (onSidebar || onButton || onMenu || pick?.kind === 'ship') ? 'pointer' : '';
+    this.canvas.style.cursor = (onSidebar || onButton || onMenu || onEndTurn || pick?.kind === 'ship') ? 'pointer' : '';
   }
 
   // Pick the disc under a HUD-space point, skipping the picker when the

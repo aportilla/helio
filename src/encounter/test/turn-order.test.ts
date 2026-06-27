@@ -6,8 +6,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { firstLivingOfSide, neighborActor, nextActor, nextLivingSide, sideOrderOf } from '../turn-order.ts';
+import { firstActableOfSide, firstLivingOfSide, neighborActor, nextActor, nextLivingSide, sideOrderOf } from '../turn-order.ts';
 import type { Combatant, EncounterState } from '../state.ts';
+import type { ActionCommand } from '../../actions/types.ts';
 import type { FactionType } from '../../factions/types.ts';
 
 // hull defaults to a living value; pass 0 for a downed combatant (an empty pool band reads as 0 HP).
@@ -64,6 +65,32 @@ test('firstLivingOfSide is the lowest-combatId living combatant of a side', () =
 
 test('sideOrderOf is the first-seen faction order', () => {
   assert.deepEqual(sideOrderOf([c(0, 'rival'), c(1, 'player'), c(2, 'rival')]), ['rival', 'player']);
+});
+
+// A fixed-cost attack command + a combatant carrying it with an explicit energy stat — the affordability
+// inputs firstActableOfSide reads (cost ≤ energy). Energy `undefined` ⇒ no energy model ⇒ permissive.
+const fire = (totalCost: number): ActionCommand => ({
+  id: 'mod:fire', count: 1, totalCost,
+  grant: { key: 'fire', label: 'Fire', color: '#ffffff', category: 'attack', targeting: 'single', kind: 'encounter' },
+});
+const armed = (combatId: number, factionId: FactionType, energy: number | undefined, cost = 9000, hull = 100): Combatant => ({
+  kind: 'ship', id: `c${combatId}`, combatId, factionId, classId: 'corvette',
+  commands: [fire(cost)], pools: [{ key: 'hull', current: hull, max: hull }],
+  ...(energy === undefined ? {} : { stats: { energy } }),
+});
+
+test('firstActableOfSide opens on the lowest-combatId same-side ship that can afford an action', () => {
+  // c0 drained (0 < 9000), c1 charged → the opener skips c0 and lands on c1; the rival is never offered.
+  const cs = [armed(0, 'player', 0), armed(1, 'player', 9000), armed(2, 'rival', 9000)];
+  assert.equal(firstActableOfSide(cs, 'player'), 1);
+});
+
+test('firstActableOfSide skips downed/unaffordable ships and yields undefined when the side is spent', () => {
+  const spent = [armed(0, 'player', 9000, 9000, 0), armed(1, 'player', 1000)]; // c0 down, c1 can't afford
+  assert.equal(firstActableOfSide(spent, 'player'), undefined);
+  // A ship with no commands cannot act; a ship with no energy stat is permissively affordable (no model).
+  assert.equal(firstActableOfSide([c(0, 'player')], 'player'), undefined, 'no commands ⇒ not actable');
+  assert.equal(firstActableOfSide([armed(0, 'player', undefined)], 'player'), 0, 'no energy model ⇒ affordable');
 });
 
 // ── neighborActor — the player's free in-phase actor cycle (◄ ►, §3.8) ────────

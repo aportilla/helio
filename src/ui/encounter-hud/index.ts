@@ -3,9 +3,11 @@
 // bitmap font, the pixel idiom) — a peer of SystemHud — that reads only encounter DTOs + the faction
 // registry (ui/ may import encounter/ + factions/, never scene/). Mirrored: the controlled side musters
 // LEFT, the opponent RIGHT, their initiative pips meeting at a center divider and draining toward it as
-// each side spends; the acting side is lit. Display-only — it issues no commands (the anchored menu does
-// that). The controller paints it once per settled action (not per frame) and treats its band as opaque
-// so a click there falls through to nothing.
+// each side spends; the acting side is lit. The bar issues no round commands (the anchored menu does that),
+// but the controller floats a sibling End Turn button (`end-turn-button.ts`) in the band's center — the one
+// interactive element. The controller paints the bar once per settled action (not per frame); its band is
+// opaque (a click is absorbed, never falling through to the field), while the End Turn button is a SEPARATE
+// widget the controller hit-tests + animates (its gold CTA blink would otherwise force a per-frame repaint).
 
 import { Widget } from '../widget';
 import { drawPixelText, measurePixelText } from '../../data/pixel-font';
@@ -14,6 +16,9 @@ import { CONTROLLED_FACTION_ID, factionColor } from '../../factions/registry';
 import { baseSideInitiative } from '../../encounter/initiative';
 import { isDown, type Combatant } from '../../encounter/state';
 import type { FactionType } from '../../factions/types';
+import { END_TURN_RESERVE } from './end-turn-button';
+
+export { EndTurnButton, END_TURN_RESERVE } from './end-turn-button';
 
 // Band geometry (env px). Tall enough for a label line + a pip row; kept compact so the in-encounter
 // fleet baseline only has to lift by this much (the controller reserves ENCOUNTER_BAR_HEIGHT at the
@@ -24,7 +29,10 @@ const LABEL_Y = 7; // canvas-y (band top is y=0) of the label line
 const PIP_Y = 20; // canvas-y of the pip row
 const PIP_SIZE = 7;
 const PIP_GAP = 3;
-const DIV_GAP = 9; // gap between the center divider and the nearest pip
+// Gap between the center divider and the nearest pip. Widened to clear the End Turn button that sits in
+// the band's center during the player's phase (END_TURN_RESERVE), so pips never march under it — and the
+// center plaza stays the same width both phases (the button is hidden on the opponent's, the gap holds).
+const DIV_GAP = Math.max(9, END_TURN_RESERVE);
 // A dark slate band — distinct from the near-black field so the bar reads as a deliberate HUD plate
 // (the scene's own `surface` token is ~black, which vanishes over the empty lower field), under a
 // bright 1-px top edge that draws the band's line across the full width.

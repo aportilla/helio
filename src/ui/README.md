@@ -8,7 +8,7 @@ Generic pixel-art UI primitives (`Widget`, `BasePanel`, `IconButton`, the painte
 widget.ts               Widget base: Mesh + plane + optional CanvasTexture lifecycle
 base-panel.ts           Repaint-on-state-change canvas-texture panel base
 panel.ts                Tabbed popover; toggle / action / keybinding / radio rows
-icon-button.ts          Texture-pool button (off / hover / on / onHover)
+icon-button.ts          Texture-pool button (off / hover / on / onHover / disabled)
 painter.ts              Shared 2D primitives: surfaces, glyphs, pill + segmented-pill buttons
 theme.ts                Colors, sizes, fonts shared across widgets
 hit-test.ts             'interactive' | 'opaque' | 'transparent' pointer-routing contract
@@ -19,6 +19,9 @@ system-hud/
   body-info-card.ts     BodyInfoCard: thin BasePanel that measures + lays out the on-hover tooltip
   body-rows.ts          Body or star → title / subtitle / key-value row projection for the card (label tables + per-kind builders; takes BodyOrStarPick — ships never reach it)
   body-label.ts         Generative biome name for the BodyInfoCard subtitle — `[lead] [terrain]` composed from per-family word pools (surface worlds wear a landscape, gaseous worlds a skyscape), family chosen by a precedence cascade over body-traits predicates + raw fields; a notable condition replaces the family's signature lead (never stacks), always 2–3 words, no single body type
+encounter-hud/
+  index.ts              EncounterHud: the bottom combat bar — mirrored per-side fleet + initiative pips (display-only); reserves a center plaza for the End Turn button. Combat detail lives in the encounter doc
+  end-turn-button.ts    EndTurnButton: the centered End Turn affordance on the bar (fleet-scoped End Round), gold-blinking when no controlled ship can act
 sidebar/
   sidebar.ts            Sidebar: persistent full-height right-edge panel — AppController-owned, rendered by the active scene. Turn header (count + Next Turn) over a swappable contextual region
   context.ts            SidebarContext: the interface for the contextual region below the header (paint + hit-test against absolute canvas coords)

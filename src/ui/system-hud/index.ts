@@ -21,16 +21,26 @@ import { BodyInfoCard } from './body-info-card';
 // blowing the pixel art up into chunky blocks.
 const BACK_BTN_SIZE = sizes.iconBox * 2;
 
-function buildBackBtnTexture(hover: boolean): CanvasTexture {
+// Greyed colours for the disabled (combat-locked) back button — clearly muted below the resting off-state
+// so "you can't leave the system view right now" reads at a glance.
+const BACK_DISABLED_BORDER = '#163450';
+const BACK_DISABLED_GLYPH = '#1e466b';
+
+function buildBackBtnTexture(state: 'off' | 'hover' | 'disabled'): CanvasTexture {
   const SIZE = BACK_BTN_SIZE;
   const c = document.createElement('canvas');
   c.width = SIZE; c.height = SIZE;
   const g = c.getContext('2d')!;
-  paintSurface(g, 0, 0, SIZE, SIZE, {
-    bg: colors.surface,
-    border: hover ? colors.borderAccent : colors.borderDim,
-  });
-  paintLeftArrow(g, 0, 0, SIZE, hover ? colors.glyphHover : colors.glyphOff);
+  const border =
+    state === 'disabled' ? BACK_DISABLED_BORDER
+    : state === 'hover' ? colors.borderAccent
+    : colors.borderDim;
+  const glyph =
+    state === 'disabled' ? BACK_DISABLED_GLYPH
+    : state === 'hover' ? colors.glyphHover
+    : colors.glyphOff;
+  paintSurface(g, 0, 0, SIZE, SIZE, { bg: colors.surface, border });
+  paintLeftArrow(g, 0, 0, SIZE, glyph);
   return paintToTexture(c);
 }
 
@@ -45,6 +55,10 @@ export class SystemHud {
   private readonly backBtnTextures: IconButtonStates;
   private readonly bodyCard: BodyInfoCard;
 
+  // Cleared while combat owns the view: the back button greys out and its clicks no-op (an encounter runs
+  // to its terminal — no leaving mid-fight), matching the disabled Next Turn pill in the sidebar.
+  private backEnabled = true;
+
   // Cursor offset for the body info tooltip. Big enough that the card never sits
   // under the cursor (which would create hover cycles with the disc the cursor is
   // meant to be on).
@@ -56,8 +70,9 @@ export class SystemHud {
 
   constructor() {
     this.backBtnTextures = {
-      off:   buildBackBtnTexture(false),
-      hover: buildBackBtnTexture(true),
+      off:      buildBackBtnTexture('off'),
+      hover:    buildBackBtnTexture('hover'),
+      disabled: buildBackBtnTexture('disabled'),
     };
     this.backBtn = new IconButton(BACK_BTN_SIZE, this.backBtnTextures, {
       renderOrder: 100,
@@ -80,18 +95,28 @@ export class SystemHud {
     this.layoutAll();
   }
 
+  // Grey the back button inert (combat owns the view — no leaving until the encounter resolves) or restore
+  // it. The button still occupies its corner and absorbs clicks/picks (hitTest stays interactive), it just
+  // stops firing onBack and stops highlighting on hover.
+  setBackEnabled(enabled: boolean): void {
+    if (this.backEnabled === enabled) return;
+    this.backEnabled = enabled;
+    this.backBtn.setDisabled(!enabled);
+  }
+
   // Returns true if the click was consumed by the HUD. Only the back button takes
-  // pointer events.
+  // pointer events. A click on a DISABLED back button is still consumed (so it never
+  // reaches the diagram beneath) — it simply doesn't fire onBack.
   handleClick(bufX: number, bufY: number): boolean {
     if (this.backBtn.bounds.contains(bufX, bufY)) {
-      this.onBack();
+      if (this.backEnabled) this.onBack();
       return true;
     }
     return false;
   }
 
   handlePointerMove(bufX: number, bufY: number): boolean {
-    const onBack = this.backBtn.bounds.contains(bufX, bufY);
+    const onBack = this.backEnabled && this.backBtn.bounds.contains(bufX, bufY);
     this.backBtn.setHover(onBack);
     return onBack;
   }
