@@ -8,12 +8,14 @@ A pure declaration + registry leaf: its app-side imports are **type-only** — t
 
 | id | kind | grants / effects |
 |---|---|---|
-| `small-engine` | `drive` | **No grant** — there is no flee (an encounter is fought to its terminal, never withdrawn). Installs a permanent `recharge` effect (worked example A) |
-| `small-laser` | `weapon` | ATTACK **Laser** (single enemy, enters an encounter) — the enemy-only predicate mirrors the body railgun/missile batteries |
-| `small-shield` | `defense` | SUPPORT **Raise Shields** (self, immediate) — its `installsOnResolve` mints a 3-cycle `shield-segment` effect (worked example B of the effect substrate); registered but **not** on the corvette's default loadout |
-| `tactical-command-module` | `utility` | **No grant.** Installs a permanent `tactical-command` effect whose `phaseStart` folds **+1 Press-Turn initiative** into its side's pool (encounter §3.8) — `stacking: 'presence'`, so it counts once per side however many ships carry it. Standalone (not on the corvette default) |
+| `small-engine` | `drive` | **No grant** — there is no flee (an encounter is fought to its terminal, never withdrawn). Installs a permanent `recharge` effect (worked example A); contributes no `battery` |
+| `small-laser` | `weapon` | ATTACK **Laser** (single enemy) — its on-resolve `damage` carries `effByKey` effectiveness **strong vs shields, weak vs hull**; carries its own `battery` (= its salvo `costPerUnit`) |
+| `small-cannon` | `weapon` | ATTACK **Cannon** (single enemy) — the kinetic counterpart, the INVERSE effectiveness (**weak vs shields, strong vs hull**). Firing the right weapon at the right defensive state is the dynamic |
+| `small-shield` | `defense` | SUPPORT **Raise Shields** (self, immediate) — its `installsOnResolve` mints a 3-cycle `shield-segment` effect (worked example B); registered but **not** on a default loadout |
+| `small-shield-generator` | `defense` | **No grant** — an always-on shield. Installs a permanent `shield-generator` effect (worked example E): regenerates each phase at an energy `upkeep`, and **fritzes out** for N phases when stripped, then reboots |
+| `tactical-command-module` | `utility` | **No grant.** Installs a permanent `tactical-command` effect whose `phaseStart` folds **+1 Press-Turn initiative** into its side's pool (encounter §3.8) — `stacking: 'presence'`, so it counts once per side however many ships carry it. Standalone (not on a default) |
 
-Every ship currently flies the corvette's fixed loadout (`['small-engine', 'small-laser']`, declared on its `ShipClassDef`). There is no build UI yet, so this is the basic loadout for the whole fleet.
+Loadouts are fixed per class (no build UI yet): the `corvette` flies `['small-engine', 'small-laser']`; the `gunship` — the dynamic-combat demo hull — flies engine + **both** weapons + the shield generator.
 
 A component's combat contribution is **always a declared effect**, never a bespoke registry key: `tactical-command-module` raises fleet tempo by *installing the `tactical-command` effect*, exactly as `small-engine` recharges by installing `recharge` — there is no `initiative` field on `ShipComponentDef`. New combat behaviours add an `EffectDef` and a lifecycle handler ([the encounter doc](../../encounter/README.md) → "The effect substrate"), not a component key.
 
@@ -23,7 +25,7 @@ Mirrors the facility / ship-class / faction registries exactly: a frozen `ShipCo
 
 ## Deferred seams
 
-`ShipComponentDef` carries identity, role (`kind`), `grants`, and the **declared-effect** maps `installs` / `installsOnResolve` (the permanent + on-resolve combat effects it installs — the effect-substrate twin of `grants`, consumed by the encounter reducer; see [the encounter doc](../../encounter/README.md)). Still deferred behind the same thinness seam: the **energy model** (`battery` / `recharge`, and `costPerUnit` on each grant), D13's **size-class** mass budget, and the **render** piece (the organic-fleet sprite assembled from the component list) — each lands with the consumer that reads it (the loadout build flow / the fleet render), exactly as `FacilityDef` defers its own `battery?`/`recharge?`. See the [modular-components plan](../../../plans/4x-modular-ship-components.md) §3–§4.
+`ShipComponentDef` carries identity, role (`kind`), `grants`, the **declared-effect** maps `installs` / `installsOnResolve` (the permanent + on-resolve combat effects it installs — the effect-substrate twin of `grants`, consumed by the encounter reducer; see [the encounter doc](../../encounter/README.md)), and the **energy** `battery` capacity. The energy model is now **live**: a combatant's `energyMax` is the Σ of its loadout's `battery`, and each weapon grant's `costPerUnit` is its salvo cost (the menu/AI gate on it). Still deferred behind the same thinness seam: D13's **size-class** mass budget and the **render** piece (the organic-fleet sprite assembled from the component list) — each lands with the consumer that reads it (the loadout build flow / the fleet render). See the [modular-components plan](../../../plans/4x-modular-ship-components.md) §3–§4.
 
 ## Map
 

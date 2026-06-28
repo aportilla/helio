@@ -17,7 +17,7 @@ import type { Pool } from '../pools.ts';
 
 // The frozen save-key naming an effect's DEF. An ActiveEffect re-binds to its def by this key the
 // way a saved Facility re-binds by {type}, so it is guarded the standard 3 ways (./registry).
-export type EffectKey = 'recharge' | 'shield-segment' | 'tactical-command' | 'damage';
+export type EffectKey = 'recharge' | 'shield-segment' | 'tactical-command' | 'damage' | 'shield-generator';
 
 // ── Lifecycle phases (WHEN an effect fires) ──────────────────────────────────────────────────────
 // The named moments the reducer raises. An effect implements a handler per phase it cares about
@@ -43,18 +43,22 @@ export interface StatDelta {
   readonly clampToZero?: boolean; // floor the result at 0
 }
 
-// An edit to the owner's pool STACK — the same channel for the three things a stack edit can be.
+// An edit to the owner's pool STACK — the same channel for the four things a stack edit can be.
 // `splice` adds a band (the fold stamps its sourceEffectId, so the def need not know its own id) directly
-// above the first `aboveKey` band; `drop` removes every band this effect spliced; `damage` cascades a hit
-// top→bottom through the bands (./pools cascadeDamage), depleting shields before hull purely by stack
-// order. A shield is one `splice` on install + one `drop` on expire; a hit is one `damage` — and because
-// damage is just another stack edit, there is no attack-specific reducer branch. Only `damage` carries a
-// magnitude and surfaces a beat (the `damage` event, with the source — emitted by the fold's applyOutcome);
-// splice/drop are silent structural edits whose chip-up/chip-down beats the runner emits.
+// above the first `aboveKey` band; `drop` removes every band this effect spliced; `restore` tops this
+// effect's band(s) toward max by `amount` (a regenerating shield each phase — the heal-twin of `damage`);
+// `damage` cascades a hit top→bottom through the bands (./pools cascadeDamage), depleting shields before
+// hull purely by stack order, scaled per band by the weapon's `effByKey` effectiveness (permille by band
+// key — how a laser shreds shields and a cannon caves hull, as DATA not a per-type branch). A shield is one
+// `splice` on install + one `drop` on expire; a hit is one `damage` — and because damage is just another
+// stack edit, there is no attack-specific reducer branch. Only `damage` surfaces a beat (the `damage`
+// event, with the source — emitted by the fold's applyOutcome); splice/drop/restore are silent structural
+// edits whose chip beats (if any) the runner emits.
 export type PoolEdit =
   | { readonly kind: 'pool'; readonly op: 'splice'; readonly pool: Pool; readonly aboveKey?: string }
   | { readonly kind: 'pool'; readonly op: 'drop' }
-  | { readonly kind: 'pool'; readonly op: 'damage'; readonly amount: number };
+  | { readonly kind: 'pool'; readonly op: 'restore'; readonly amount: number }
+  | { readonly kind: 'pool'; readonly op: 'damage'; readonly amount: number; readonly effByKey?: Readonly<Record<string, number>> };
 
 // Add/remove whole Press-Turn initiative icons from the owner's SIDE pool (§3.8.4) — the per-SIDE tier
 // neither StatDelta (per-combatant stat) nor PoolEdit (per-combatant HP) can reach. The fold resolves

@@ -24,19 +24,34 @@ export interface Pool {
 // into the next, and overflow past the last band is discarded (the combatant is dead — there is no HP
 // there to remove). Returns a NEW pool array (every mutated band is a fresh object; the input is left
 // untouched, so the prior state snapshot stays valid for replay) plus `dealt` — the HP actually removed
-// = min(rawMilli, Σ current). The damage event reports `dealt`, never the raw, so a renderer never
+// = min(effective hit, Σ current). The damage event reports `dealt`, never the raw, so a renderer never
 // animates more HP than existed.
+//
+// `effByKey` is a per-band EFFECTIVENESS multiplier (permille, 1000 = 100%) the weapon declares against
+// each band KEY — this is how a laser shreds shields (>1000 vs 'shields') while glancing off hull (<1000
+// vs 'hull') and a cannon does the inverse, with NO per-weapon-type branch: the cascade just reads a
+// number per band. ABSENT or a missing key ⇒ 1000 ⇒ the function is byte-identical to a flat cascade
+// (so the no-effectiveness call site and every existing test are unchanged). Each band converts the
+// running RAW budget into its own currency (effective = raw × m / 1000), absorbs what it can, then debits
+// the raw budget by what that absorption COST in raw (consumed = absorbed × 1000 / m) — so an effective
+// (>100%) weapon both drains the band faster AND keeps more budget to spill, and a resisted (<100%) one
+// the opposite. Integer-milli / permille throughout, multiply-then-divide (divide-last) so no float and
+// no PRNG reaches the reducer; `ceil` on the raw debit guards against a >100% weapon over-spilling.
 export function cascadeDamage(
   pools: readonly Pool[],
   rawMilli: number,
+  effByKey?: Readonly<Record<string, number>>,
 ): { readonly pools: readonly Pool[]; readonly dealt: number } {
   let remaining = rawMilli;
   let dealt = 0;
   const next = pools.map((pool) => {
     if (remaining <= 0) return pool;
-    const absorbed = Math.min(pool.current, remaining);
+    const m = effByKey?.[pool.key] ?? 1000;
+    if (m <= 0) return pool; // a band fully immune to this damage type absorbs nothing, costs no budget
+    const effective = Math.floor((remaining * m) / 1000);
+    const absorbed = Math.min(pool.current, effective);
     if (absorbed === 0) return pool;
-    remaining -= absorbed;
+    remaining -= Math.ceil((absorbed * 1000) / m);
     dealt += absorbed;
     return { ...pool, current: pool.current - absorbed };
   });
@@ -57,4 +72,14 @@ export function splicePool(pools: readonly Pool[], pool: Pool, aboveKey?: string
 // Returns a NEW array; never mutates the input.
 export function dropPoolsBySource(pools: readonly Pool[], effectId: number): readonly Pool[] {
   return pools.filter((p) => p.sourceEffectId !== effectId);
+}
+
+// Top up every band a given effect sourced, toward its `max`, by `amount` — the heal-twin of
+// cascadeDamage and the band-edit a regenerating shield uses each phase. Matched by sourceEffectId (the
+// fold supplies the effect's own id), so it only restores THIS effect's band(s), never the permanent hull
+// (which carries no sourceEffectId). Clamped at `max`; integer-milli; returns a NEW array, never mutates.
+export function restorePoolsBySource(pools: readonly Pool[], effectId: number, amount: number): readonly Pool[] {
+  if (amount <= 0) return pools;
+  return pools.map((p) =>
+    p.sourceEffectId === effectId ? { ...p, current: Math.min(p.max, p.current + amount) } : p);
 }

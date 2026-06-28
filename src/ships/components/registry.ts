@@ -11,7 +11,7 @@
 // ../../actions/tuning.ts mirrors the facility registry's import of the same hoisted palette.
 
 import type { ShipComponentDef, ShipComponentType } from './types.ts';
-import { LASER_ACTION_COLOR, SHIELD_ACTION_COLOR } from '../../actions/tuning.ts';
+import { CANNON_ACTION_COLOR, LASER_ACTION_COLOR, SHIELD_ACTION_COLOR } from '../../actions/tuning.ts';
 
 // The registry, keyed by ShipComponentType. `satisfies Record<ShipComponentType, ...>` is the
 // compile layer of the frozen-key guard: adding a literal to the union without a def here fails to
@@ -47,10 +47,37 @@ const DEFS = {
     grants: [{ key: 'laser', label: 'Laser', color: LASER_ACTION_COLOR, category: 'attack', targeting: 'single', kind: 'encounter', costPerUnit: 9_000, targets: (c) => c.allegiance === 'enemy' }],
     // On resolve the laser mints a one-shot `damage` effect on each target — the same installsOnResolve
     // path the shield uses for a self buff, now landing on an enemy (the reducer's old attack branch is
-    // gone; damage is a declared effect, src/encounter/effects). 40_000 is the placeholder hit magnitude
-    // (was the reducer's PLACEHOLDER_DAMAGE_MILLI), declared HERE as the weapon's own stat to keep ships ↛
-    // encounter, superseded by the real damage formula. `remaining: 0` = a hit: applied once, never a rider.
-    installsOnResolve: { 'laser': [{ effectKey: 'damage', remaining: 0, params: { amount: 40_000 } }] },
+    // gone; damage is a declared effect, src/encounter/effects). 40_000 is the placeholder hit magnitude;
+    // `eff:shields`/`eff:hull` are its per-band EFFECTIVENESS (permille): a beam SHREDS shields (1500 =
+    // 150%) but glances off hull (600 = 60%) — the cannon below is the mirror. All literals HERE (ships ↛
+    // encounter), superseded by the real damage formula. `remaining: 0` = a hit: applied once, never a rider.
+    installsOnResolve: { 'laser': [{ effectKey: 'damage', remaining: 0, params: { amount: 40_000, 'eff:shields': 1_500, 'eff:hull': 600 } }] },
+  },
+  'small-cannon': {
+    type: 'small-cannon',
+    label: 'Small Cannon',
+    kind: 'weapon',
+    // The KINETIC counterpart to the laser: the same ATTACK shape (single enemy, an energy-gated salvo),
+    // but its on-resolve `damage` carries the INVERSE effectiveness — it bounces off shields (eff:shields
+    // 500 = 50%) and craters hull (eff:hull 1400 = 140%). So a laser strips the shield and a cannon finishes
+    // the hull: firing the right weapon at the right defensive state is the dynamic. Magnitudes are literals
+    // here (ships ↛ encounter), superseded by the real damage formula.
+    battery: 9_000,
+    grants: [{ key: 'cannon', label: 'Cannon', color: CANNON_ACTION_COLOR, category: 'attack', targeting: 'single', kind: 'encounter', costPerUnit: 9_000, targets: (c) => c.allegiance === 'enemy' }],
+    installsOnResolve: { 'cannon': [{ effectKey: 'damage', remaining: 0, params: { amount: 40_000, 'eff:shields': 500, 'eff:hull': 1_400 } }] },
+  },
+  'small-shield-generator': {
+    type: 'small-shield-generator',
+    label: 'Small Shield Generator',
+    kind: 'defense',
+    // An ALWAYS-ON shield (grants NO action — unlike small-shield's manually-raised segment): it INSTALLS a
+    // permanent `shield-generator` effect (worked example E, src/encounter/effects) whose phaseStart state
+    // machine splices a `shields` band above hull, regens it toward `capacity` by `regen` each phase at the
+    // cost of `upkeep` energy, and — when a hit fully strips it — drops the band and FRITZES OUT for
+    // `fritzPhases` of the owner's phases before rebooting cold. Its own `battery` adds the energy capacity
+    // the upkeep draws from (so it isn't purely parasitic on the weapons' bar). All magnitudes literals here.
+    battery: 9_000,
+    installs: [{ effectKey: 'shield-generator', remaining: -1, params: { capacity: 50_000, regen: 15_000, upkeep: 2_000, fritzPhases: 2 } }],
   },
   'small-shield': {
     type: 'small-shield',
@@ -102,7 +129,7 @@ export function componentLabel(type: ShipComponentType): string {
 // a live type (SHIP_COMPONENT_TYPES.has), so removing OR renaming a shipped id fails — protecting
 // the action ids derived from it (and, from Phase 3, old ship saves) from a compiler-invisible
 // "cleanup". Mirrors FROZEN_FACILITY_IDS / FROZEN_SHIP_CLASS_IDS.
-export const FROZEN_COMPONENT_IDS: readonly string[] = ['small-engine', 'small-laser', 'small-shield', 'tactical-command-module'];
+export const FROZEN_COMPONENT_IDS: readonly string[] = ['small-engine', 'small-laser', 'small-cannon', 'small-shield', 'small-shield-generator', 'tactical-command-module'];
 
 // DEV-only module-load invariant: each def's `type` equals its registry key, and every frozen id is
 // still a live type. Mirrors the facilities + ships drift checks — loud in dev, stripped in prod,

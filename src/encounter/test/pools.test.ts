@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cascadeDamage, dropPoolsBySource, splicePool, type Pool } from '../pools.ts';
+import { cascadeDamage, dropPoolsBySource, restorePoolsBySource, splicePool, type Pool } from '../pools.ts';
 import { isDown, remainingHp, type Combatant } from '../state.ts';
 
 const band = (key: string, current: number, sourceEffectId?: number): Pool =>
@@ -53,6 +53,46 @@ test('cascadeDamage is immutable — the input bands are untouched', () => {
   const input = [band('hull', 100)];
   cascadeDamage(input, 40);
   assert.equal(input[0]!.current, 100, 'the source band is not mutated');
+});
+
+test('cascadeDamage scales the per-band bite by effByKey: super-effective strips more, resisted less', () => {
+  // A laser-vs-shield (1500 = 150%): a 40 hit lands 60 of pressure, stripping the whole 30-current shield.
+  const sup = cascadeDamage([band('shields', 30)], 40, { shields: 1500 });
+  assert.equal(sup.dealt, 30, 'the band is fully stripped (60 pressure ≥ 30 current)');
+  assert.equal(sup.pools[0]!.current, 0);
+  // A laser-vs-hull (600 = 60%): the same 40 hit lands only 24 — the weak axis.
+  const res = cascadeDamage([band('hull', 100)], 40, { hull: 600 });
+  assert.equal(res.dealt, 24, '40 × 600 / 1000 = 24');
+  assert.equal(res.pools[0]!.current, 76);
+  // A missing key defaults to 1000 (full effect) — identical to a flat hit, so untyped bands are unchanged.
+  const miss = cascadeDamage([band('hull', 100)], 40, { shields: 500 });
+  assert.equal(miss.dealt, 40, 'hull absent from the map ⇒ 1000 ⇒ flat');
+  assert.equal(miss.pools[0]!.current, 60);
+});
+
+test('cascadeDamage spills with per-band effectiveness, debiting the raw budget by what each band cost', () => {
+  // The worked example, scaled: a 40 laser into a 30 shield (1500) over a 100 hull (600). The shield is
+  // stripped (consuming 20 of raw: 30 ÷ 1.5), then the 20 remaining raw hits hull at 60% = 12.
+  const { pools, dealt } = cascadeDamage([band('shields', 30), band('hull', 100)], 40, { shields: 1500, hull: 600 });
+  assert.equal(pools[0]!.current, 0, 'shield stripped');
+  assert.equal(pools[1]!.current, 88, 'hull took 12 of spill (20 raw × 60%)');
+  assert.equal(dealt, 42, 'dealt = 30 shield + 12 hull, the HP actually removed');
+});
+
+test('cascadeDamage treats a 0-effectiveness band as immune: it absorbs nothing and costs no budget', () => {
+  // A weapon a shield is fully immune to (eff 0) passes THROUGH the shield untouched to hull at full effect.
+  const { pools, dealt } = cascadeDamage([band('shields', 30), band('hull', 100)], 40, { shields: 0 });
+  assert.equal(pools[0]!.current, 30, 'the immune shield is untouched');
+  assert.equal(pools[1]!.current, 60, 'the full 40 reached hull (hull key absent ⇒ 1000)');
+  assert.equal(dealt, 40);
+});
+
+test('restorePoolsBySource tops a sourced band toward max, clamps at max, spares unsourced bands', () => {
+  const stack: readonly Pool[] = [{ key: 'shields', current: 30, max: 50, sourceEffectId: 7 }, { key: 'hull', current: 100, max: 100 }];
+  assert.deepEqual(restorePoolsBySource(stack, 7, 15).map((p) => p.current), [45, 100], 'the sourced band climbed by 15');
+  assert.equal(restorePoolsBySource(stack, 7, 100)[0]!.current, 50, 'clamped at max');
+  assert.deepEqual(restorePoolsBySource(stack, 99, 15), stack, 'no matching source ⇒ unchanged set');
+  assert.equal(restorePoolsBySource(stack, 7, 0), stack, 'a non-positive amount is a no-op');
 });
 
 test('splicePool inserts above the named band, else at the top', () => {

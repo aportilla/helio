@@ -13,7 +13,7 @@ import type { ShipComponentType } from './components/types.ts';
 // shipped member breaks old saves — three guards defend it (registry
 // FROZEN_SHIP_CLASS_IDS + its CI test, the DEV module-load assert, and this literal
 // union forcing every Record over it to update). Mirrors FacilityType's discipline.
-export type ShipClassType = 'corvette';
+export type ShipClassType = 'corvette' | 'gunship';
 
 // One ship class's static design — what the build flow offers and the fleet layer
 // renders. Deliberately THIN: it carries a default component loadout (the source of

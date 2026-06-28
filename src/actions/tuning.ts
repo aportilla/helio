@@ -13,6 +13,11 @@
 // offensive family with (but distinct from) the body railgun orange / missile amber. (small-laser)
 export const LASER_ACTION_COLOR = '#e0644e';
 
+// — Cannon: a ship's kinetic weapon — the laser's counterpart that craters hull but bounces off shields.
+// A heavier brass-amber, offensive family, distinct from the laser red and the body railgun/missile hues.
+// (small-cannon)
+export const CANNON_ACTION_COLOR = '#e8923c';
+
 // — Raise Shields: a ship's defensive SUPPORT verb. A protective blue, cooler than the cyan UI and
 // distinct from the offensive reds/ambers — reads as a deflector going up. (small-shield)
 export const SHIELD_ACTION_COLOR = '#5aa9d6';

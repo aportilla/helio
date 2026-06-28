@@ -11,7 +11,7 @@ import { EFFECT_BY_KEY } from './registry.ts';
 import type { ActiveEffect, EffectInstall, EffectOutcome, PoolEdit, StatDelta } from './types.ts';
 import type { Combatant, EncounterEvent, EncounterState } from '../state.ts';
 import { isDown, withPools, withStat } from '../state.ts';
-import { cascadeDamage, dropPoolsBySource, splicePool, type Pool } from '../pools.ts';
+import { cascadeDamage, dropPoolsBySource, restorePoolsBySource, splicePool, type Pool } from '../pools.ts';
 import { MIN_INITIATIVE } from '../tuning.ts';
 
 // The pure twin of deriveCommands: flatMap every provider's declared installs. A provider with no
@@ -55,9 +55,14 @@ interface OutcomeResult {
 // effect's band(s). The 'damage' op is handled in applyOutcome (it needs the cascade's `dealt` to emit
 // the hit event), so it never reaches here — the type excludes it.
 function applyPoolEdit(pools: readonly Pool[], edit: Exclude<PoolEdit, { op: 'damage' }>, effectId: number): readonly Pool[] {
-  return edit.op === 'splice'
-    ? splicePool(pools, { ...edit.pool, sourceEffectId: effectId }, edit.aboveKey)
-    : dropPoolsBySource(pools, effectId);
+  switch (edit.op) {
+    case 'splice':
+      return splicePool(pools, { ...edit.pool, sourceEffectId: effectId }, edit.aboveKey);
+    case 'drop':
+      return dropPoolsBySource(pools, effectId);
+    case 'restore':
+      return restorePoolsBySource(pools, effectId, edit.amount);
+  }
 }
 
 // Apply one StatDelta to a combatant, clamped; returns the updated combatant + the amount ACTUALLY
@@ -107,7 +112,7 @@ function applyOutcome(
         // unpooled/already-0 target takes a visible 0-damage hit (the reducer stays total). The attacker
         // is the effect's `sourceId` (the damage event's `source`, anchoring the tracer source→target);
         // carried for the same reason ActiveEffect.sourceId is — reflect/lifesteal need no later change.
-        const { pools, dealt } = cascadeDamage(owner.pools ?? [], outcome.amount);
+        const { pools, dealt } = cascadeDamage(owner.pools ?? [], outcome.amount, outcome.effByKey);
         return {
           combatants: combatants.map((c, i) => (i === ownerId ? withPools(owner, pools) : c)),
           sideDelta: 0,

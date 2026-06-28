@@ -91,7 +91,11 @@ the rest of the project follows.
   twin) runs `install`; `tickTurnStart` runs an owner's `turnStart` at its turn start (and counts a
   timed instance down, running `expire` as it drops); `foldPhaseStart` runs a side's `phaseStart` when
   its Press-Turn phase begins. HP is an ordered **pool stack** (`pools.ts`): a hit cascades top→bottom,
-  so a shield is just a band spliced above `hull` (absorb-before-hull is pure stack order). Worked
+  so a shield is just a band spliced above `hull` (absorb-before-hull is pure stack order), and the cascade
+  scales each band's bite by the weapon's **effectiveness** (`effByKey`, permille by band key — how a laser
+  shreds shields while a cannon craters hull, read as a per-band number, NOT a per-type branch; absent ⇒
+  100% ⇒ a flat hit). `PoolEdit` has four ops on that stack — `splice` (add a band) / `drop` (remove a
+  sourced band) / `restore` (regen a sourced band toward max) / `damage` (cascade a typed hit). Worked
   examples live: **A** — `small-engine` installs a permanent `recharge` (`phaseStart` → a clamped energy
   `StatDelta`); **B** — `small-shield`'s `raise-shields` mints (via `installsOnResolve`, keyed by grant
   key on the component def, NOT the neutral `ActionGrant`) a 3-cycle `shield-segment` (`install` splices
@@ -102,8 +106,24 @@ the rest of the project follows.
   `damage` (`remaining: 0` — applied on `install`, never a rider, no chip beat) whose handler cascades a
   `damage` `PoolEdit` through the target's stack: the cut that retired the reducer's LAST attack branch,
   so an enemy debuff / DoT / the Disruption-Virus initiative swing is now just another `EffectDef`, not a
-  reducer fork. Effect ids are a **monotonic counter** (an on-resolve mint never reuses a freed id; a
+  reducer fork; **E** — `small-shield-generator` installs a permanent `shield-generator` whose `phaseStart`
+  is a **4-state machine** reading only its owner's pools + stats: it splices a full `shields` band, regens
+  it toward cap each phase at the cost of `upkeep` energy, and when a hit strips it to 0 **drops it and
+  fritzes out** for `fritzPhases` of the owner's phases (a plain `shieldCooldown` stat counts down; the
+  band's absence is the rest of the memory) before rebooting to full — a crisp reactive-feeling lockout
+  with NO new lifecycle moment and NO mutable-state bag, the substrate flexing without growing. Effect ids
+  are a **monotonic counter** (an on-resolve mint never reuses a freed id; a
   one-shot draws none); stacking is **distinct instances** (a re-cast is a second band).
+- **Dynamic-combat demo (shipped) — the first real mechanics on the substrate.** A `gunship` class
+  (`src/ships/`) fits BOTH weapons + the shield generator, so the loop is playable on one platform: a
+  **laser** (`eff:shields` 150% / `eff:hull` 60%) strips a shield fast but glances off hull; a **cannon**
+  (`eff:shields` 50% / `eff:hull` 140%) is the inverse. So firing the right weapon at the right defensive
+  state is the decision — strip a shield with the laser (which **fritzes** it down for two phases), then
+  crater the exposed hull with the cannon; cannon-first wastes shots on the shield. Every magnitude is a
+  literal on the component (ships ↛ encounter); the asymmetry is the per-band `effByKey` effectiveness and
+  the shield is worked example **E** above. End-to-end in `test/dynamic-combat.test.ts`. The damage
+  numbers are still PLACEHOLDER (no formula, no PRNG) — this proves the *mechanic shape*, the real damage
+  formula (timing / typing / boost) is the P-Experiment phase. Design: `plans/4x-encounter-combat-system.md`.
 - **E3 — the mode (shipped).** Combat runs as a MODE on `SystemScene`, in place over the same diagram
   (no second scene — combat is an extra render PASS). `EncounterController` (`src/scene/encounter-
   controller.ts`) owns the transient `EncounterState` + its own overlay scene; `CombatOverlay`

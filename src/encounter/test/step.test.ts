@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyCommand, createEncounterState, endPhase, selectActor } from '../step.ts';
-import { shipsToCombatants, shipToCombatant } from '../ships-to-combatants.ts';
+import { shipsToCombatants } from '../ships-to-combatants.ts';
 import { buildEncounterSpec } from '../encounter-spec.ts';
 import { isTerminal } from '../terminal.ts';
 import { ENERGY_STAT, isDown, withStat, type EncounterEvent, type EncounterState, type ShipCombatant } from '../state.ts';
@@ -18,9 +18,16 @@ import type { Ship } from '../../game-state-codec.ts';
 
 const LASER = 'small-laser:laser'; // an ATTACK command on the corvette loadout
 const RAISE = 'small-shield:raise-shields'; // a SUPPORT command that installs a timed shield on resolve
-// The laser's placeholder hit magnitude now lives on the weapon component (its on-resolve `damage`
-// install), not a tuning constant — read it from there so the test tracks the real wired value.
-const DMG = COMPONENT_BY_TYPE.get('small-laser')!.installsOnResolve!['laser']![0]!.params.amount!;
+const CANNON = 'small-cannon:cannon'; // the kinetic ATTACK (weak vs shields, strong vs hull)
+// Read each weapon's wired magnitude + per-band effectiveness from the component, so these tests track the
+// real values (not copies). `eff(params, key)` = the EFFECTIVE hit a weapon lands on a bare band of that
+// key (base × eff:<key>, divide-last). The corvette targets below are HULL-only, so the laser's effective
+// HULL hit is what lands — and the laser is now weak vs hull (the cannon is the hull-killer).
+const eff = (p: Readonly<Record<string, number>>, key: string) => Math.floor((p.amount! * (p[`eff:${key}`] ?? 1000)) / 1000);
+const laserDmg = COMPONENT_BY_TYPE.get('small-laser')!.installsOnResolve!['laser']![0]!.params;
+const cannonDmg = COMPONENT_BY_TYPE.get('small-cannon')!.installsOnResolve!['cannon']![0]!.params;
+const DMG = eff(laserDmg, 'hull'); // the laser's effective damage to a bare hull band (its weak axis)
+const CANNON_VS_SHIELD = eff(cannonDmg, 'shields'); // the cannon's modest effective damage to a shield band
 
 const ship = (id: string, factionId: Ship['factionId']): Ship => ({
   id, systemId: 'sol', factionId, classId: 'corvette', name: id, status: 'ready',
@@ -156,15 +163,21 @@ test('a re-opened phase opens on a ship that can act, skipping a drained lower-c
 });
 
 test('a self shield absorbs before hull, then expires after 3 of its owner\'s cycles', () => {
-  // p1 flies a small-engine (no action — recharge only) + a small-shield (raise-shields); r1 is a plain
-  // corvette (laser). Built inline because the small-shield component is live in the registry, just not on
-  // the corvette default loadout (engine + laser).
+  // p1 flies a small-engine (no action — recharge only) + a small-shield (raise-shields); r1 flies an
+  // engine + a small-CANNON (kinetic, WEAK vs shields), so its hit is absorbed and the shield survives —
+  // the EXPIRY (timer), not depletion, is what ends the band. Built inline because these components aren't
+  // on the corvette default loadout. (A laser would shred the shield in one shot — eff:shields 150% — which
+  // the dynamic-combat suite covers; here we want a modest hit so the expiry timer is the thing under test.)
   const p1Commands = deriveCommands([
     { id: 'small-engine', grants: COMPONENT_BY_TYPE.get('small-engine')!.grants },
     { id: 'small-shield', grants: COMPONENT_BY_TYPE.get('small-shield')!.grants },
   ]);
   const p1: ShipCombatant = { kind: 'ship', id: 'p1', combatId: 0, factionId: 'player', classId: 'corvette', commands: p1Commands, categories: SHIP_CATEGORIES };
-  const r1 = shipToCombatant(ship('r1', 'rival'), 1);
+  const r1Commands = deriveCommands([
+    { id: 'small-engine', grants: COMPONENT_BY_TYPE.get('small-engine')!.grants },
+    { id: 'small-cannon', grants: COMPONENT_BY_TYPE.get('small-cannon')!.grants },
+  ]);
+  const r1: ShipCombatant = { kind: 'ship', id: 'r1', combatId: 1, factionId: 'rival', classId: 'corvette', commands: r1Commands, categories: SHIP_CATEGORIES };
   const spec = buildEncounterSpec(
     [{ factionId: 'player', controlled: true, combatants: [p1] }, { factionId: 'rival', controlled: false, combatants: [r1] }],
     { actorId: 'p1', actionId: RAISE, targetIds: [] },
@@ -183,27 +196,24 @@ test('a self shield absorbs before hull, then expires after 3 of its owner\'s cy
   assert.equal(s.activeId, 1, 'the non-attack command passed the turn to r1');
   const cap = shielded.pools!.find((p) => p.key === 'shields')!.max;
 
-  // r1 attacks p1 → the shield eats the hit; hull is untouched behind it.
-  ({ state: s } = applyCommand(s, { actorId: 'r1', actionId: LASER, targetIds: ['p1'] }));
+  // r1 fires ONE cannon at p1 → the shield eats it (cannon is weak vs shields); hull is untouched behind it.
+  ({ state: s } = applyCommand(s, { actorId: 'r1', actionId: CANNON, targetIds: ['p1'] }));
   const hit = s.combatants.find((c) => c.id === 'p1')!;
-  assert.equal(hit.pools?.find((p) => p.key === 'shields')?.current, cap - DMG, 'the shield absorbed the hit');
+  assert.equal(hit.pools?.find((p) => p.key === 'shields')?.current, cap - CANNON_VS_SHIELD, 'the shield absorbed the hit');
   assert.equal(hit.pools?.find((p) => p.key === 'hull')?.current, PLACEHOLDER_HULL_MILLI, 'hull is untouched behind the shield');
 
-  // Run turns (p1 ends its phase, r1 attacks) until the band is gone — it ticks at p1's turn starts and
-  // pops on the 3rd (3→2→1→0 → expire). p1 never re-shields, so exactly one band lives the whole time.
+  // Now let the 3-cycle timer run out with NO further attacks (each side forfeits its phase), so the band
+  // expires by its TIMER (independent of any weapon) — it ticks at p1's turn starts and pops on the 3rd.
   const expires: EncounterEvent[] = [];
   let guard = 0;
   while (s.combatants.find((c) => c.id === 'p1')!.pools!.some((p) => p.key === 'shields') && guard++ < 12) {
-    const active = s.combatants[s.activeId]!;
-    const res = active.id === 'p1'
-      ? endPhase(s) // p1 has no attack and there is no flee — it forfeits its phase to advance the round
-      : applyCommand(s, { actorId: 'r1', actionId: LASER, targetIds: ['p1'] });
+    const res = endPhase(s); // the active side forfeits — no damage dealt
     s = res.state;
     for (const e of res.events) if (e.kind === 'expire') expires.push(e);
   }
-  assert.ok(expires.some((e) => e.kind === 'expire' && e.effectKey === 'shield-segment'), 'the shield expired');
+  assert.ok(expires.some((e) => e.kind === 'expire' && e.effectKey === 'shield-segment'), 'the shield expired by its timer');
   assert.equal(s.combatants.find((c) => c.id === 'p1')!.pools!.some((p) => p.key === 'shields'), false, 'the band popped on expiry');
-  assert.ok(!isDown(s.combatants.find((c) => c.id === 'p1')!), 'p1 survived — the shield bought time');
+  assert.ok(!isDown(s.combatants.find((c) => c.id === 'p1')!), 'p1 survived — only one absorbed hit landed');
 });
 
 test('runs a full encounter to the side-elimination terminal', () => {
@@ -237,7 +247,7 @@ test('the fleet→icons ratio throttles a side (3 ships → 1 icon, not one per 
 });
 
 test('a side with 2 icons activates twice in one phase, then the phase passes', () => {
-  // 4 player ships → floor(½ × 4) = 2 icons; r1 absorbs two 40k hits (80k < 100k hull) and survives.
+  // 4 player ships → floor(½ × 4) = 2 icons; r1 absorbs two laser hits (each weak vs hull) and survives.
   let s = encounterOf(
     [ship('p1', 'player'), ship('p2', 'player'), ship('p3', 'player'), ship('p4', 'player'), ship('r1', 'rival')],
     'p1',

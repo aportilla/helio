@@ -5,7 +5,7 @@
 // the frozen-key discipline reads identically across both registries.
 
 import type { ShipClassDef, ShipClassType } from './types.ts';
-import { CORVETTE_BUILD_TURNS, CORVETTE_SPRITE_SIZE_PX } from './tuning.ts';
+import { CORVETTE_BUILD_TURNS, CORVETTE_SPRITE_SIZE_PX, GUNSHIP_BUILD_TURNS, GUNSHIP_SPRITE_SIZE_PX } from './tuning.ts';
 
 // The registry, keyed by ShipClassType. `satisfies Record<ShipClassType, ...>` is
 // the compile layer of the frozen-key guard: adding a literal to the union without
@@ -21,6 +21,17 @@ const DEFS = {
     // The v1 basic loadout every corvette flies with (no build UI yet): a small engine (a recharge
     // effect, no action) + a small laser (ATTACK). These component ids back the ship's derived action ids.
     components: ['small-engine', 'small-laser'],
+  },
+  gunship: {
+    type: 'gunship',
+    label: 'Gunship',
+    color: '#c8a06a', // brass — a warmer hull tone than the corvette steel, reading as a heavier gun platform
+    buildTurns: GUNSHIP_BUILD_TURNS,
+    spriteSizePx: GUNSHIP_SPRITE_SIZE_PX,
+    // The dynamic-combat demo loadout: engine (recharge) + BOTH weapons (laser shreds shields, cannon
+    // craters hull) + an always-on shield generator (regen + fritz). energyMax = Σ battery across the kit
+    // (laser + cannon + generator) gives it the budget to fire either weapon and pay shield upkeep.
+    components: ['small-engine', 'small-laser', 'small-cannon', 'small-shield-generator'],
   },
 } satisfies Record<ShipClassType, ShipClassDef>;
 
@@ -67,7 +78,7 @@ export function buildTurns(type: ShipClassType): number {
 // test (test/registry.test.ts) asserts each entry is still a live type
 // (SHIP_CLASS_TYPES.has), so removing OR renaming a shipped id fails, protecting old
 // saves from a compiler-invisible "cleanup".
-export const FROZEN_SHIP_CLASS_IDS: readonly string[] = ['corvette'];
+export const FROZEN_SHIP_CLASS_IDS: readonly string[] = ['corvette', 'gunship'];
 
 // DEV-only module-load invariant: each def's `type` equals its registry key, and
 // every frozen id is still a live type. Mirrors the facilities + catalog drift

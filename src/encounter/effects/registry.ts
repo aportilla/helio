@@ -4,7 +4,14 @@
 // frozen-key discipline exactly. EffectDefs are CODE (never serialized); only ActiveEffect instances
 // persist, re-binding to a def by `key`.
 
-import type { EffectDef, EffectKey } from './types.ts';
+import type { EffectDef, EffectKey, EffectOutcome } from './types.ts';
+
+// The pool-band key BOTH shield sources (the timed raise-shields segment and the always-on generator)
+// splice — shared so a weapon's `eff:shields` effectiveness applies to either, and the generator finds
+// "its" band by the same name. The per-combatant fritz timer is a plain stat the generator reads + counts
+// down (no new substrate state) — distinct from energy, living in the same opaque stat bag.
+const SHIELD_KEY = 'shields';
+const SHIELD_COOLDOWN = 'shieldCooldown';
 
 // The registry, keyed by EffectKey. `satisfies Record<EffectKey, EffectDef>` is the compile layer of
 // the frozen-key guard: a union literal with no def here fails to compile, and a stray key is
@@ -39,7 +46,7 @@ const DEFS = {
     tags: ['buff', 'shield'],
     on: {
       install: (ctx) => [
-        { kind: 'pool', op: 'splice', pool: { key: 'shields', current: ctx.params.capacity ?? 0, max: ctx.params.capacity ?? 0 }, aboveKey: 'hull' },
+        { kind: 'pool', op: 'splice', pool: { key: SHIELD_KEY, current: ctx.params.capacity ?? 0, max: ctx.params.capacity ?? 0 }, aboveKey: 'hull' },
       ],
       expire: () => [{ kind: 'pool', op: 'drop' }],
     },
@@ -78,7 +85,83 @@ const DEFS = {
     color: '#ff5a5a',
     tags: ['attack'],
     on: {
-      install: (ctx) => [{ kind: 'pool', op: 'damage', amount: ctx.params.amount ?? 0 }],
+      // The hit's MAGNITUDE is `amount`; its per-band EFFECTIVENESS (how it fares vs each defensive band)
+      // rides as flattened `eff:<bandKey>` params (permille) so the weapon's table stays inside the flat
+      // `Record<string, number>` params channel — collected here into the `effByKey` the cascade reads. A
+      // laser declares eff:shields > 1000 / eff:hull < 1000; a cannon the inverse. No `eff:` keys ⇒ a flat
+      // type-agnostic hit (today's behaviour). The damage stays a uniform pool outcome — no per-weapon code.
+      install: (ctx) => {
+        const effByKey: Record<string, number> = {};
+        for (const [k, v] of Object.entries(ctx.params)) if (k.startsWith('eff:')) effByKey[k.slice(4)] = v;
+        const amount = ctx.params.amount ?? 0;
+        return [Object.keys(effByKey).length > 0
+          ? { kind: 'pool', op: 'damage', amount, effByKey }
+          : { kind: 'pool', op: 'damage', amount }];
+      },
+    },
+  },
+  // Worked example E — an ALWAYS-ON shield that consumes energy to maintain and FRITZES OUT when fully
+  // stripped, expressed as ONE permanent effect's `phaseStart` state machine: NO reactive trigger, NO new
+  // lifecycle moment, NO mutable-state bag. It reads only its owner's pools + stats (the handler's whole
+  // context) and emits ordinary outcomes. `install` splices a full `shields` band above hull. At each of
+  // the owner's SIDE phase starts the band is in one of four states the handler branches on, mutually
+  // exclusively, from the single owner snapshot:
+  //   • UP (band present, current > 0): pay `upkeep` energy (StatDelta, clamp ≥0) + `restore` toward cap by
+  //     `regen` — but only if energy covers the upkeep ("consumes energy to maintain": a drained ship's
+  //     shield stops regenerating).
+  //   • COLLAPSED (band present, current 0 — a hit emptied it last phase): `drop` the dead band + set the
+  //     `shieldCooldown` stat to `fritzPhases`. The shield is now DOWN.
+  //   • FRITZING (no band, cooldown > 1): count the cooldown down by 1.
+  //   • REBOOT (no band, cooldown ≤ 1 but > 0): clear the cooldown + re-`splice` a FULL band. (Reboot to
+  //     full, NOT cold: a `current 0` band would be indistinguishable from a just-collapsed one and re-fritz
+  //     every phase. The N-phase gap was the cost; `regen` recovers PARTIAL hits, reboot recovers a total
+  //     collapse.)
+  // The fritz timer is just a stat the handler reads + decrements, and "is the band there?" is its own
+  // memory — so a crisp N-phase lockout needs zero substrate growth beyond the `restore` op. `current === 0`
+  // therefore means UNAMBIGUOUSLY "just collapsed" (the band is never parked at 0). The 1-phase detection
+  // lag (collapse is noticed at the NEXT phase start) is accepted; a reactive `damageTaken` moment would
+  // make it instant but is deferred. (Assumes ONE shields band per ship — the generator finds its band by
+  // key; a ship also flying a raise-shields segment would need the effect's own id, deferred.)
+  'shield-generator': {
+    key: 'shield-generator',
+    label: 'Shield Generator',
+    color: '#5b8dd6',
+    tags: ['buff', 'shield'],
+    on: {
+      install: (ctx) => [
+        { kind: 'pool', op: 'splice', pool: { key: SHIELD_KEY, current: ctx.params.capacity ?? 0, max: ctx.params.capacity ?? 0 }, aboveKey: 'hull' },
+      ],
+      phaseStart: (ctx) => {
+        const band = ctx.owner.pools?.find((p) => p.key === SHIELD_KEY);
+        const cooldown = ctx.owner.stats?.[SHIELD_COOLDOWN] ?? 0;
+        if (band && band.current > 0) {
+          const upkeep = ctx.params.upkeep ?? 0;
+          if ((ctx.owner.stats?.energy ?? 0) < upkeep) return []; // can't afford upkeep ⇒ no regen this phase
+          const out: EffectOutcome[] = [];
+          if (upkeep > 0) out.push({ kind: 'stat', statKey: 'energy', delta: -upkeep, clampToZero: true });
+          out.push({ kind: 'pool', op: 'restore', amount: ctx.params.regen ?? 0 });
+          return out;
+        }
+        if (band && band.current === 0) { // present but emptied — JUST collapsed
+          // `delta` SETS the timer to fritzPhases (not adds): cooldown is 0 here in normal flow (band
+          // present ⟹ cooldown 0, the invariant the drop+set / clear+splice pairs maintain), but the
+          // set-form is robust even if it weren't. The explicit `current === 0` (not a bare `if (band)`
+          // riding on the UP branch's return) keeps this self-contained.
+          return [
+            { kind: 'pool', op: 'drop' },
+            { kind: 'stat', statKey: SHIELD_COOLDOWN, delta: (ctx.params.fritzPhases ?? 0) - cooldown },
+          ];
+        }
+        if (cooldown > 1) return [{ kind: 'stat', statKey: SHIELD_COOLDOWN, delta: -1 }]; // still fritzing
+        if (cooldown > 0) { // reboot: clear the timer, re-splice a FULL band (never 0 — see the note above)
+          const capacity = ctx.params.capacity ?? 0;
+          return [
+            { kind: 'stat', statKey: SHIELD_COOLDOWN, delta: -cooldown },
+            { kind: 'pool', op: 'splice', pool: { key: SHIELD_KEY, current: capacity, max: capacity }, aboveKey: 'hull' },
+          ];
+        }
+        return [];
+      },
     },
   },
 } satisfies Record<EffectKey, EffectDef>;
@@ -97,7 +180,7 @@ export const EFFECT_KEYS: ReadonlySet<string> = new Set(Object.keys(DEFS));
 // deliberately NOT typed as the live union — so renaming a shipped effect can't quietly re-green the
 // guard. The CI test asserts each entry is still a live key (EFFECT_KEYS.has), so removing OR
 // renaming a shipped id fails, protecting old replays.
-export const FROZEN_EFFECT_IDS: readonly string[] = ['recharge', 'shield-segment', 'tactical-command', 'damage'];
+export const FROZEN_EFFECT_IDS: readonly string[] = ['recharge', 'shield-segment', 'tactical-command', 'damage', 'shield-generator'];
 
 // DEV-only module-load invariant: each def's `key` equals its registry key, and every frozen id is
 // still live. Mirrors the factions / ships / facilities drift checks — loud in dev, stripped in
