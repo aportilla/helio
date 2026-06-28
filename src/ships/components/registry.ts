@@ -47,24 +47,25 @@ const DEFS = {
     grants: [{ key: 'laser', label: 'Laser', color: LASER_ACTION_COLOR, category: 'attack', targeting: 'single', kind: 'encounter', costPerUnit: 9_000, targets: (c) => c.allegiance === 'enemy' }],
     // On resolve the laser mints a one-shot `damage` effect on each target — the same installsOnResolve
     // path the shield uses for a self buff, now landing on an enemy (the reducer's old attack branch is
-    // gone; damage is a declared effect, src/encounter/effects). 40_000 is the placeholder hit magnitude;
-    // `eff:shields`/`eff:hull` are its per-band EFFECTIVENESS (permille): a beam SHREDS shields (1500 =
-    // 150%) but glances off hull (600 = 60%) — the cannon below is the mirror. All literals HERE (ships ↛
+    // gone; damage is a declared effect, src/encounter/effects). `amount` 40_000 is the placeholder hit; its
+    // `damageType` 'energy' is the BEAM type — the cascade scales it by each target band's resistance to
+    // energy (shields weak to it, hull resists it; src/encounter/tuning SHIELD_RESIST/HULL_RESIST), so a
+    // laser SHREDS shields and glances off hull, the cannon below the mirror. Literals HERE (ships ↛
     // encounter), superseded by the real damage formula. `remaining: 0` = a hit: applied once, never a rider.
-    installsOnResolve: { 'laser': [{ effectKey: 'damage', remaining: 0, params: { amount: 40_000, 'eff:shields': 1_500, 'eff:hull': 600 } }] },
+    installsOnResolve: { 'laser': [{ effectKey: 'damage', remaining: 0, damageType: 'energy', params: { amount: 40_000 } }] },
   },
   'small-cannon': {
     type: 'small-cannon',
     label: 'Small Cannon',
     kind: 'weapon',
     // The KINETIC counterpart to the laser: the same ATTACK shape (single enemy, an energy-gated salvo),
-    // but its on-resolve `damage` carries the INVERSE effectiveness — it bounces off shields (eff:shields
-    // 500 = 50%) and craters hull (eff:hull 1400 = 140%). So a laser strips the shield and a cannon finishes
-    // the hull: firing the right weapon at the right defensive state is the dynamic. Magnitudes are literals
-    // here (ships ↛ encounter), superseded by the real damage formula.
+    // but `damageType` 'kinetic' — the INVERSE matchup. Shields RESIST kinetic (it bounces off) and hull is
+    // WEAK to it (it craters), per the same band resistances, so a laser strips the shield and a cannon
+    // finishes the hull: firing the right weapon at the right defensive state is the dynamic. Literals here
+    // (ships ↛ encounter), superseded by the real damage formula.
     battery: 9_000,
     grants: [{ key: 'cannon', label: 'Cannon', color: CANNON_ACTION_COLOR, category: 'attack', targeting: 'single', kind: 'encounter', costPerUnit: 9_000, targets: (c) => c.allegiance === 'enemy' }],
-    installsOnResolve: { 'cannon': [{ effectKey: 'damage', remaining: 0, params: { amount: 40_000, 'eff:shields': 500, 'eff:hull': 1_400 } }] },
+    installsOnResolve: { 'cannon': [{ effectKey: 'damage', remaining: 0, damageType: 'kinetic', params: { amount: 40_000 } }] },
   },
   'small-shield-generator': {
     type: 'small-shield-generator',

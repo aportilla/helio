@@ -9,8 +9,8 @@ A pure declaration + registry leaf: its app-side imports are **type-only** — t
 | id | kind | grants / effects |
 |---|---|---|
 | `small-engine` | `drive` | **No grant** — there is no flee (an encounter is fought to its terminal, never withdrawn). Installs a permanent `recharge` effect (worked example A); contributes no `battery` |
-| `small-laser` | `weapon` | ATTACK **Laser** (single enemy) — its on-resolve `damage` carries `effByKey` effectiveness **strong vs shields, weak vs hull**; carries its own `battery` (= its salvo `costPerUnit`) |
-| `small-cannon` | `weapon` | ATTACK **Cannon** (single enemy) — the kinetic counterpart, the INVERSE effectiveness (**weak vs shields, strong vs hull**). Firing the right weapon at the right defensive state is the dynamic |
+| `small-laser` | `weapon` | ATTACK **Laser** (single enemy) — its on-resolve `damage` carries `damageType: 'energy'`; defensive bands' `resistByType` make energy **strong vs shields, weak vs hull**. Carries its own `battery` (= its salvo `costPerUnit`) |
+| `small-cannon` | `weapon` | ATTACK **Cannon** (single enemy) — the kinetic counterpart (`damageType: 'kinetic'`), the INVERSE matchup (**weak vs shields, strong vs hull**). Firing the right weapon at the right defensive state is the dynamic |
 | `small-shield` | `defense` | SUPPORT **Raise Shields** (self, immediate) — its `installsOnResolve` mints a 3-cycle `shield-segment` effect (worked example B); registered but **not** on a default loadout |
 | `small-shield-generator` | `defense` | **No grant** — an always-on shield. Installs a permanent `shield-generator` effect (worked example E): regenerates each phase at an energy `upkeep`, and **fritzes out** for N phases when stripped, then reboots |
 | `tactical-command-module` | `utility` | **No grant.** Installs a permanent `tactical-command` effect whose `phaseStart` folds **+1 Press-Turn initiative** into its side's pool (encounter §3.8) — `stacking: 'presence'`, so it counts once per side however many ships carry it. Standalone (not on a default) |

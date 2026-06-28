@@ -112,7 +112,7 @@ function applyOutcome(
         // unpooled/already-0 target takes a visible 0-damage hit (the reducer stays total). The attacker
         // is the effect's `sourceId` (the damage event's `source`, anchoring the tracer source→target);
         // carried for the same reason ActiveEffect.sourceId is — reflect/lifesteal need no later change.
-        const { pools, dealt } = cascadeDamage(owner.pools ?? [], outcome.amount, outcome.effByKey);
+        const { pools, dealt } = cascadeDamage(owner.pools ?? [], outcome.amount, outcome.damageType);
         return {
           combatants: combatants.map((c, i) => (i === ownerId ? withPools(owner, pools) : c)),
           sideDelta: 0,
@@ -154,7 +154,7 @@ export function installEffects(
     }
     const handler = EFFECT_BY_KEY.get(install.effectKey)?.on?.install;
     if (handler && combatants[ownerId]) {
-      for (const outcome of handler({ params: install.params, owner: combatants[ownerId]! })) {
+      for (const outcome of handler({ params: install.params, owner: combatants[ownerId]!, damageType: install.damageType })) {
         const r = applyOutcome(combatants, ownerId, sourceId, outcome, install.effectKey, id);
         combatants = r.combatants;
         if (r.event) events.push(r.event); // the damage / stat-change beat, uniform across runners

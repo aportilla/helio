@@ -9,6 +9,18 @@
 // `damage` install — not here, since damage is a declared effect rather than a reducer constant.)
 export const PLACEHOLDER_HULL_MILLI = 100_000;
 
+// ── Damage typing — the deterministic formula's `typeMatchMult` (resistances) ──────────────────────
+// A defensive band's RESISTANCE to each damage TYPE, permille (1000 = 100% = no resist; >1000 = weak to
+// that type, the band takes MORE; <1000 = resistant, takes LESS). The cascade reads
+// `band.resistByType[weapon.damageType]` per band, so effectiveness is a property of the DEFENCE (a new
+// armour layer authors its own row) crossed with the weapon's type — pure data, no per-weapon/per-type
+// reducer branch. An absent type or band defaults to 1000 (full effect). Types today: 'energy' (beams) /
+// 'kinetic' (slugs); a third is one key here + one `damageType` on a weapon, no code. Placeholder values
+// until the real stat model — they reproduce the demo: a laser (energy) shreds shields, a cannon (kinetic)
+// craters hull. Keys must match the weapons' `damageType` strings (src/ships/components/registry.ts).
+export const SHIELD_RESIST: Readonly<Record<string, number>> = { energy: 1_500, kinetic: 500 };
+export const HULL_RESIST: Readonly<Record<string, number>> = { energy: 600, kinetic: 1_400 };
+
 // ── Initiative knobs (COMMITTED, §3.8) — load-bearing, NOT placeholders ───────
 // The Press-Turn round structure (state.ts/turn-order.ts/step.ts). These are real game tuning,
 // hoisted per Appendix B. The fleet→icons ratio is the ONLY fractional step (floored before play,

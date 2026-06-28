@@ -48,17 +48,17 @@ export interface StatDelta {
 // above the first `aboveKey` band; `drop` removes every band this effect spliced; `restore` tops this
 // effect's band(s) toward max by `amount` (a regenerating shield each phase — the heal-twin of `damage`);
 // `damage` cascades a hit top→bottom through the bands (./pools cascadeDamage), depleting shields before
-// hull purely by stack order, scaled per band by the weapon's `effByKey` effectiveness (permille by band
-// key — how a laser shreds shields and a cannon caves hull, as DATA not a per-type branch). A shield is one
-// `splice` on install + one `drop` on expire; a hit is one `damage` — and because damage is just another
-// stack edit, there is no attack-specific reducer branch. Only `damage` surfaces a beat (the `damage`
-// event, with the source — emitted by the fold's applyOutcome); splice/drop/restore are silent structural
-// edits whose chip beats (if any) the runner emits.
+// hull purely by stack order, scaled per band by that band's RESISTANCE to the hit's `damageType` (permille
+// on the band — how a laser ('energy') shreds shields and a cannon ('kinetic') caves hull, as DATA on the
+// DEFENCE, not a per-type branch). A shield is one `splice` on install + one `drop` on expire; a hit is one
+// `damage` — and because damage is just another stack edit, there is no attack-specific reducer branch.
+// Only `damage` surfaces a beat (the `damage` event, with the source — emitted by the fold's applyOutcome);
+// splice/drop/restore are silent structural edits whose chip beats (if any) the runner emits.
 export type PoolEdit =
   | { readonly kind: 'pool'; readonly op: 'splice'; readonly pool: Pool; readonly aboveKey?: string }
   | { readonly kind: 'pool'; readonly op: 'drop' }
   | { readonly kind: 'pool'; readonly op: 'restore'; readonly amount: number }
-  | { readonly kind: 'pool'; readonly op: 'damage'; readonly amount: number; readonly effByKey?: Readonly<Record<string, number>> };
+  | { readonly kind: 'pool'; readonly op: 'damage'; readonly amount: number; readonly damageType?: string };
 
 // Add/remove whole Press-Turn initiative icons from the owner's SIDE pool (§3.8.4) — the per-SIDE tier
 // neither StatDelta (per-combatant stat) nor PoolEdit (per-combatant HP) can reach. The fold resolves
@@ -89,6 +89,11 @@ export interface EffectTarget {
 export interface EffectContext {
   readonly params: Readonly<Record<string, number>>;
   readonly owner: EffectTarget;
+  // The damage TYPE the installing weapon declared (e.g. 'energy' / 'kinetic'), threaded from the
+  // EffectInstall at mint — a `damage` install's handler stamps it onto its `damage` PoolEdit so the
+  // cascade can read the target band's resistance to it. Only present on the install path; absent ⇒ a flat,
+  // type-agnostic hit. A string (not a typed enum), matching the untyped band-key convention.
+  readonly damageType?: string;
 }
 
 // One lifecycle handler — the UNIFORM shape for every phase: read context, return typed outcomes.
@@ -139,4 +144,7 @@ export interface EffectInstall {
   // and emits no chip-up beat (its outcome's own beat is the beat). A `damage` install uses 0.
   readonly remaining: number;
   readonly params: Readonly<Record<string, number>>;
+  // The damage TYPE a weapon's `damage` install declares (string, e.g. 'kinetic'), surfaced to the handler
+  // via EffectContext. Lives here, not in numeric `params`, because it is a string. ABSENT ⇒ a flat hit.
+  readonly damageType?: string;
 }

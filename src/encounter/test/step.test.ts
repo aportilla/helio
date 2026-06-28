@@ -13,21 +13,22 @@ import { ENERGY_STAT, isDown, withStat, type EncounterEvent, type EncounterState
 import { deriveCommands } from '../../actions/derive.ts';
 import { SHIP_CATEGORIES } from '../../actions/registry.ts';
 import { COMPONENT_BY_TYPE } from '../../ships/components/registry.ts';
-import { PLACEHOLDER_HULL_MILLI } from '../tuning.ts';
+import { HULL_RESIST, PLACEHOLDER_HULL_MILLI, SHIELD_RESIST } from '../tuning.ts';
 import type { Ship } from '../../game-state-codec.ts';
 
 const LASER = 'small-laser:laser'; // an ATTACK command on the corvette loadout
 const RAISE = 'small-shield:raise-shields'; // a SUPPORT command that installs a timed shield on resolve
 const CANNON = 'small-cannon:cannon'; // the kinetic ATTACK (weak vs shields, strong vs hull)
-// Read each weapon's wired magnitude + per-band effectiveness from the component, so these tests track the
-// real values (not copies). `eff(params, key)` = the EFFECTIVE hit a weapon lands on a bare band of that
-// key (base × eff:<key>, divide-last). The corvette targets below are HULL-only, so the laser's effective
-// HULL hit is what lands — and the laser is now weak vs hull (the cannon is the hull-killer).
-const eff = (p: Readonly<Record<string, number>>, key: string) => Math.floor((p.amount! * (p[`eff:${key}`] ?? 1000)) / 1000);
-const laserDmg = COMPONENT_BY_TYPE.get('small-laser')!.installsOnResolve!['laser']![0]!.params;
-const cannonDmg = COMPONENT_BY_TYPE.get('small-cannon')!.installsOnResolve!['cannon']![0]!.params;
-const DMG = eff(laserDmg, 'hull'); // the laser's effective damage to a bare hull band (its weak axis)
-const CANNON_VS_SHIELD = eff(cannonDmg, 'shields'); // the cannon's modest effective damage to a shield band
+// The EFFECTIVE hit a weapon lands on a bare band = its base `amount` × that band's resistance to the
+// weapon's `damageType` (divide-last), read from the wired component + the band resist tables so these
+// tests track the real values. The corvette targets below are HULL-only, so the laser's effective HULL hit
+// is what lands — the laser ('energy') is weak vs hull, the cannon ('kinetic') is the hull-killer.
+const effOn = (install: { readonly damageType?: string; readonly params: Readonly<Record<string, number>> }, resist: Readonly<Record<string, number>>) =>
+  Math.floor(((install.params.amount ?? 0) * (resist[install.damageType ?? ''] ?? 1000)) / 1000);
+const laserInstall = COMPONENT_BY_TYPE.get('small-laser')!.installsOnResolve!['laser']![0]!;
+const cannonInstall = COMPONENT_BY_TYPE.get('small-cannon')!.installsOnResolve!['cannon']![0]!;
+const DMG = effOn(laserInstall, HULL_RESIST); // the laser's effective damage to a bare hull band (its weak axis)
+const CANNON_VS_SHIELD = effOn(cannonInstall, SHIELD_RESIST); // the cannon's modest effective damage to a shield band
 
 const ship = (id: string, factionId: Ship['factionId']): Ship => ({
   id, systemId: 'sol', factionId, classId: 'corvette', name: id, status: 'ready',
@@ -73,7 +74,7 @@ test('a target reaching 0 hull is downed (event + isDown + terminal)', () => {
   const low: EncounterState = {
     ...base,
     combatants: base.combatants.map((c) =>
-      c.id === 'r1' ? { ...c, pools: [{ key: 'hull', current: DMG, max: PLACEHOLDER_HULL_MILLI }] } : c),
+      c.id === 'r1' ? { ...c, pools: [{ key: 'hull', current: DMG, max: PLACEHOLDER_HULL_MILLI, resistByType: HULL_RESIST }] } : c),
   };
   const { state, events } = applyCommand(low, { actorId: 'p1', actionId: LASER, targetIds: ['r1'] });
   assert.equal(hullOf(state, 'r1'), 0);
@@ -109,7 +110,7 @@ test('an attack stacks duplicate target ids cumulatively (the per-target rebind,
   const low: EncounterState = {
     ...base,
     combatants: base.combatants.map((c) =>
-      c.id === 'r1' ? { ...c, pools: [{ key: 'hull', current: 2 * DMG, max: PLACEHOLDER_HULL_MILLI }] } : c),
+      c.id === 'r1' ? { ...c, pools: [{ key: 'hull', current: 2 * DMG, max: PLACEHOLDER_HULL_MILLI, resistByType: HULL_RESIST }] } : c),
   };
   const { state, events } = applyCommand(low, { actorId: 'p1', actionId: LASER, targetIds: ['r1', 'r1'] });
   assert.equal(hullOf(state, 'r1'), 0, 'both hits landed cumulatively');

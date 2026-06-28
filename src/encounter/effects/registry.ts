@@ -5,6 +5,7 @@
 // persist, re-binding to a def by `key`.
 
 import type { EffectDef, EffectKey, EffectOutcome } from './types.ts';
+import { SHIELD_RESIST } from '../tuning.ts';
 
 // The pool-band key BOTH shield sources (the timed raise-shields segment and the always-on generator)
 // splice — shared so a weapon's `eff:shields` effectiveness applies to either, and the generator finds
@@ -46,7 +47,7 @@ const DEFS = {
     tags: ['buff', 'shield'],
     on: {
       install: (ctx) => [
-        { kind: 'pool', op: 'splice', pool: { key: SHIELD_KEY, current: ctx.params.capacity ?? 0, max: ctx.params.capacity ?? 0 }, aboveKey: 'hull' },
+        { kind: 'pool', op: 'splice', pool: { key: SHIELD_KEY, current: ctx.params.capacity ?? 0, max: ctx.params.capacity ?? 0, resistByType: SHIELD_RESIST }, aboveKey: 'hull' },
       ],
       expire: () => [{ kind: 'pool', op: 'drop' }],
     },
@@ -85,17 +86,15 @@ const DEFS = {
     color: '#ff5a5a',
     tags: ['attack'],
     on: {
-      // The hit's MAGNITUDE is `amount`; its per-band EFFECTIVENESS (how it fares vs each defensive band)
-      // rides as flattened `eff:<bandKey>` params (permille) so the weapon's table stays inside the flat
-      // `Record<string, number>` params channel — collected here into the `effByKey` the cascade reads. A
-      // laser declares eff:shields > 1000 / eff:hull < 1000; a cannon the inverse. No `eff:` keys ⇒ a flat
-      // type-agnostic hit (today's behaviour). The damage stays a uniform pool outcome — no per-weapon code.
+      // The hit's MAGNITUDE is `amount`; its TYPE rides on the install (`ctx.damageType`, e.g. 'energy') and
+      // is stamped onto the `damage` PoolEdit so the cascade scales it by each target band's RESISTANCE to
+      // that type (./pools + src/encounter/tuning SHIELD_RESIST / HULL_RESIST — the numbers live on the
+      // defence). No `damageType` ⇒ a flat, type-agnostic hit. The damage stays a uniform pool outcome — no
+      // per-weapon code.
       install: (ctx) => {
-        const effByKey: Record<string, number> = {};
-        for (const [k, v] of Object.entries(ctx.params)) if (k.startsWith('eff:')) effByKey[k.slice(4)] = v;
         const amount = ctx.params.amount ?? 0;
-        return [Object.keys(effByKey).length > 0
-          ? { kind: 'pool', op: 'damage', amount, effByKey }
+        return [ctx.damageType !== undefined
+          ? { kind: 'pool', op: 'damage', amount, damageType: ctx.damageType }
           : { kind: 'pool', op: 'damage', amount }];
       },
     },
@@ -129,7 +128,7 @@ const DEFS = {
     tags: ['buff', 'shield'],
     on: {
       install: (ctx) => [
-        { kind: 'pool', op: 'splice', pool: { key: SHIELD_KEY, current: ctx.params.capacity ?? 0, max: ctx.params.capacity ?? 0 }, aboveKey: 'hull' },
+        { kind: 'pool', op: 'splice', pool: { key: SHIELD_KEY, current: ctx.params.capacity ?? 0, max: ctx.params.capacity ?? 0, resistByType: SHIELD_RESIST }, aboveKey: 'hull' },
       ],
       phaseStart: (ctx) => {
         const band = ctx.owner.pools?.find((p) => p.key === SHIELD_KEY);
@@ -157,7 +156,7 @@ const DEFS = {
           const capacity = ctx.params.capacity ?? 0;
           return [
             { kind: 'stat', statKey: SHIELD_COOLDOWN, delta: -cooldown },
-            { kind: 'pool', op: 'splice', pool: { key: SHIELD_KEY, current: capacity, max: capacity }, aboveKey: 'hull' },
+            { kind: 'pool', op: 'splice', pool: { key: SHIELD_KEY, current: capacity, max: capacity, resistByType: SHIELD_RESIST }, aboveKey: 'hull' },
           ];
         }
         return [];

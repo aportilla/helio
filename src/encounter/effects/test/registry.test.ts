@@ -5,6 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EFFECT_DEFS, EFFECT_BY_KEY, EFFECT_KEYS, FROZEN_EFFECT_IDS } from '../registry.ts';
+import { SHIELD_RESIST } from '../../tuning.ts';
 
 test('every def is keyed by its own key', () => {
   for (const def of EFFECT_DEFS) {
@@ -39,7 +40,7 @@ test('shield-segment: install splices a shields band above hull, expire drops it
   assert.equal(shield.on!.turnStart, undefined);
   assert.deepEqual(
     shield.on!.install!({ params: { capacity: 50000 }, owner: { pools: [{ key: 'hull', current: 100, max: 100 }] } }),
-    [{ kind: 'pool', op: 'splice', pool: { key: 'shields', current: 50000, max: 50000 }, aboveKey: 'hull' }],
+    [{ kind: 'pool', op: 'splice', pool: { key: 'shields', current: 50000, max: 50000, resistByType: SHIELD_RESIST }, aboveKey: 'hull' }],
   );
   assert.deepEqual(shield.on!.expire!({ params: { capacity: 50000 }, owner: {} }), [{ kind: 'pool', op: 'drop' }]);
 });
@@ -48,7 +49,7 @@ test('shield-segment: a missing capacity param is a silent zero band, not a thro
   const shield = EFFECT_BY_KEY.get('shield-segment')!;
   assert.deepEqual(
     shield.on!.install!({ params: {}, owner: {} }),
-    [{ kind: 'pool', op: 'splice', pool: { key: 'shields', current: 0, max: 0 }, aboveKey: 'hull' }],
+    [{ kind: 'pool', op: 'splice', pool: { key: 'shields', current: 0, max: 0, resistByType: SHIELD_RESIST }, aboveKey: 'hull' }],
   );
 });
 

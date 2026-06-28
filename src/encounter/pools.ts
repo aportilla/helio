@@ -18,6 +18,11 @@ export interface Pool {
   readonly current: number;
   readonly max: number;
   readonly sourceEffectId?: number;
+  // This band's RESISTANCE to each damage TYPE (permille, 1000 = full effect; >1000 = weak to it, <1000 =
+  // resistant). The cascade reads `resistByType[weapon.damageType]` for the band it's chewing — so a
+  // laser shreds a shield band that is weak to 'energy', a cannon craters hull weak to 'kinetic', with the
+  // numbers living on the DEFENCE. ABSENT (or an unprofiled type) ⇒ 1000 ⇒ a flat, type-agnostic hit.
+  readonly resistByType?: Readonly<Record<string, number>>;
 }
 
 // Cascade a hit top→bottom over the stack: each band absorbs up to its `current`, the remainder spills
@@ -27,26 +32,27 @@ export interface Pool {
 // = min(effective hit, Σ current). The damage event reports `dealt`, never the raw, so a renderer never
 // animates more HP than existed.
 //
-// `effByKey` is a per-band EFFECTIVENESS multiplier (permille, 1000 = 100%) the weapon declares against
-// each band KEY — this is how a laser shreds shields (>1000 vs 'shields') while glancing off hull (<1000
-// vs 'hull') and a cannon does the inverse, with NO per-weapon-type branch: the cascade just reads a
-// number per band. ABSENT or a missing key ⇒ 1000 ⇒ the function is byte-identical to a flat cascade
-// (so the no-effectiveness call site and every existing test are unchanged). Each band converts the
-// running RAW budget into its own currency (effective = raw × m / 1000), absorbs what it can, then debits
-// the raw budget by what that absorption COST in raw (consumed = absorbed × 1000 / m) — so an effective
-// (>100%) weapon both drains the band faster AND keeps more budget to spill, and a resisted (<100%) one
-// the opposite. Integer-milli / permille throughout, multiply-then-divide (divide-last) so no float and
-// no PRNG reaches the reducer; `ceil` on the raw debit guards against a >100% weapon over-spilling.
+// `damageType` is the hit's type (e.g. 'energy' / 'kinetic'); the per-band multiplier `m` is that band's
+// `resistByType[damageType]` (permille, 1000 = 100%) — so a laser ('energy') shreds a shield weak to energy
+// (>1000) while glancing off hull resistant to it (<1000), and a cannon ('kinetic') does the inverse, with
+// NO per-weapon-type branch: the cascade just reads a number off the band. ABSENT `damageType`, or a band
+// with no `resistByType`, or an unprofiled type ⇒ 1000 ⇒ byte-identical to a flat cascade (so the untyped
+// call site and every flat test are unchanged). Each band converts the running RAW budget into its own
+// currency (effective = raw × m / 1000), absorbs what it can, then debits the raw budget by what that
+// absorption COST in raw (consumed = absorbed × 1000 / m) — so a weak-to-this-type (>100%) band drains
+// faster AND spills more budget, and a resistant (<100%) one the opposite. Integer-milli / permille
+// throughout, multiply-then-divide (divide-last) so no float and no PRNG reaches the reducer; `ceil` on the
+// raw debit guards against a >100% multiplier over-spilling.
 export function cascadeDamage(
   pools: readonly Pool[],
   rawMilli: number,
-  effByKey?: Readonly<Record<string, number>>,
+  damageType?: string,
 ): { readonly pools: readonly Pool[]; readonly dealt: number } {
   let remaining = rawMilli;
   let dealt = 0;
   const next = pools.map((pool) => {
     if (remaining <= 0) return pool;
-    const m = effByKey?.[pool.key] ?? 1000;
+    const m = (damageType !== undefined ? pool.resistByType?.[damageType] : undefined) ?? 1000;
     if (m <= 0) return pool; // a band fully immune to this damage type absorbs nothing, costs no budget
     const effective = Math.floor((remaining * m) / 1000);
     const absorbed = Math.min(pool.current, effective);

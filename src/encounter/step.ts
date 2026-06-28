@@ -23,7 +23,7 @@ import { combatantEnergyMax, combatantInstalls, combatantInstallsOnResolve } fro
 import { foldPhaseStart, installEffects, tickTurnStart, type MintRequest } from './effects/fold.ts';
 import { firstActableOfSide, firstLivingOfSide, nextActor, nextLivingSide } from './turn-order.ts';
 import { baseSideInitiative, zeroInitiative } from './initiative.ts';
-import { PLACEHOLDER_HULL_MILLI } from './tuning.ts';
+import { HULL_RESIST, PLACEHOLDER_HULL_MILLI } from './tuning.ts';
 
 type StepResult = { readonly state: EncounterState; readonly events: readonly EncounterEvent[] };
 
@@ -36,7 +36,7 @@ function seedCombatant(combatant: Combatant): Combatant {
   const energyMax = combatantEnergyMax(combatant);
   return {
     ...combatant,
-    pools: [{ key: HULL_POOL, current: PLACEHOLDER_HULL_MILLI, max: PLACEHOLDER_HULL_MILLI }],
+    pools: [{ key: HULL_POOL, current: PLACEHOLDER_HULL_MILLI, max: PLACEHOLDER_HULL_MILLI, resistByType: HULL_RESIST }],
     stats: {
       ...combatant.stats,
       [ENERGY_STAT]: energyMax, // charged start

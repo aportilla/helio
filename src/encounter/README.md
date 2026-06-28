@@ -92,9 +92,10 @@ the rest of the project follows.
   timed instance down, running `expire` as it drops); `foldPhaseStart` runs a side's `phaseStart` when
   its Press-Turn phase begins. HP is an ordered **pool stack** (`pools.ts`): a hit cascades top→bottom,
   so a shield is just a band spliced above `hull` (absorb-before-hull is pure stack order), and the cascade
-  scales each band's bite by the weapon's **effectiveness** (`effByKey`, permille by band key — how a laser
-  shreds shields while a cannon craters hull, read as a per-band number, NOT a per-type branch; absent ⇒
-  100% ⇒ a flat hit). `PoolEdit` has four ops on that stack — `splice` (add a band) / `drop` (remove a
+  scales each band's bite by that band's **resistance** to the hit's **damage type** (`Pool.resistByType`,
+  permille — how a laser ('energy') shreds a shield weak to energy while a cannon ('kinetic') craters hull
+  weak to kinetic; the numbers live on the DEFENCE, read as a per-band number, NOT a per-type branch; absent
+  ⇒ 100% ⇒ a flat hit). `PoolEdit` has four ops on that stack — `splice` (add a band) / `drop` (remove a
   sourced band) / `restore` (regen a sourced band toward max) / `damage` (cascade a typed hit). Worked
   examples live: **A** — `small-engine` installs a permanent `recharge` (`phaseStart` → a clamped energy
   `StatDelta`); **B** — `small-shield`'s `raise-shields` mints (via `installsOnResolve`, keyed by grant
@@ -116,12 +117,14 @@ the rest of the project follows.
   one-shot draws none); stacking is **distinct instances** (a re-cast is a second band).
 - **Dynamic-combat demo (shipped) — the first real mechanics on the substrate.** A `gunship` class
   (`src/ships/`) fits BOTH weapons + the shield generator, so the loop is playable on one platform: a
-  **laser** (`eff:shields` 150% / `eff:hull` 60%) strips a shield fast but glances off hull; a **cannon**
-  (`eff:shields` 50% / `eff:hull` 140%) is the inverse. So firing the right weapon at the right defensive
+  **laser** (`damageType: 'energy'`) strips a shield fast but glances off hull; a **cannon**
+  (`damageType: 'kinetic'`) is the inverse. So firing the right weapon at the right defensive
   state is the decision — strip a shield with the laser (which **fritzes** it down for two phases), then
-  crater the exposed hull with the cannon; cannon-first wastes shots on the shield. Every magnitude is a
-  literal on the component (ships ↛ encounter); the asymmetry is the per-band `effByKey` effectiveness and
-  the shield is worked example **E** above. End-to-end in `test/dynamic-combat.test.ts`. The damage
+  crater the exposed hull with the cannon; cannon-first wastes shots on the shield. The asymmetry is a
+  **deterministic damage-typing model**: a weapon declares its `damageType`, and each defensive band carries
+  a `resistByType` profile (`SHIELD_RESIST` / `HULL_RESIST` in `tuning.ts` — shields weak to energy, hull
+  weak to kinetic); the cascade computes `base × band-resistance-to-type`. The shield is worked example
+  **E** above. End-to-end in `test/dynamic-combat.test.ts`. The damage
   numbers are still PLACEHOLDER (no formula, no PRNG) — this proves the *mechanic shape*, the real damage
   formula (timing / typing / boost) is the P-Experiment phase. Design: `plans/4x-encounter-combat-system.md`.
 - **E3 — the mode (shipped).** Combat runs as a MODE on `SystemScene`, in place over the same diagram
