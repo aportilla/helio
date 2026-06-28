@@ -24,7 +24,7 @@ import {
   startShipBuild,
 } from '../game-state';
 import { CONTROLLED_FACTION_ID, factionColor, factionLabel } from '../factions/registry';
-import { buildTurns, DEFAULT_SHIP_CLASS, shipClassLabel } from '../ships/registry';
+import { DEMO_SHIP_LOADOUT, shipBuildTurns } from '../ships/components/registry';
 import { shipToActor } from '../actions/ships-to-actors';
 import { bodyToActor } from '../actions/bodies-to-actors';
 import { grantKeyOf } from '../actions/derive';
@@ -158,7 +158,9 @@ export class SystemScene implements Screen {
     // only ever drops a 'building' ship, so the fleet overlay is untouched until a
     // turn completes a build (afterTurnAdvance handles that).
     this.context.onBuildShip = (bodyId) => {
-      startShipBuild(bodyId, DEFAULT_SHIP_CLASS, getGameState().turn + buildTurns(DEFAULT_SHIP_CLASS));
+      // No loadout builder yet → a built ship gets the shared default kit; build time is the Σ of its
+      // modules' buildTurns (shipBuildTurns), the per-ship successor to the old per-class cost.
+      startShipBuild(bodyId, DEMO_SHIP_LOADOUT, getGameState().turn + shipBuildTurns(DEMO_SHIP_LOADOUT));
       this.pushSelectionToSidebar();
     };
     this.context.onCancelBuild = (shipId) => {
@@ -569,7 +571,6 @@ export class SystemScene implements Screen {
         ship
           ? {
               name: ship.name,
-              classLabel: shipClassLabel(ship.classId),
               factionLabel: factionLabel(ship.factionId),
               factionColor: factionColor(ship.factionId),
               status: ship.status,
@@ -599,7 +600,7 @@ export class SystemScene implements Screen {
       build: inProgress
         ? {
             shipId: inProgress.id,
-            classLabel: shipClassLabel(inProgress.classId),
+            name: inProgress.name,
             // A 'building' ship always carries completesOnTurn; the ?? only satisfies
             // the optional type (it falls back to a 1-turn readout, never throws).
             turnsLeft: Math.max(1, (inProgress.completesOnTurn ?? getGameState().turn) - getGameState().turn),

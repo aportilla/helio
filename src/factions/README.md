@@ -35,8 +35,8 @@ fleet and the encounter-combat layer.
 A ship persists its `factionId` in `helio.game` (see [the game save](../../docs/game-systems.md)).
 So `FactionType` is a **serialized wire contract**: renaming or removing a shipped
 faction breaks old saves. `FROZEN_FACTION_IDS` records every id that has ever shipped,
-and the CI guard asserts each is still live — the same discipline `FROZEN_SHIP_CLASS_IDS`
-and `FROZEN_FACILITY_IDS` enforce. A removed faction becomes a retired tombstone, never
+and the CI guard asserts each is still live — the same discipline `FROZEN_FACILITY_IDS`
+and `FROZEN_COMPONENT_IDS` enforce. A removed faction becomes a retired tombstone, never
 a deletion.
 
 ## Deliberately thin

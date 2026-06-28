@@ -13,7 +13,7 @@
 // faction/ship key types — no DOM, no catalog, no sim.
 
 import type { FactionType } from '../factions/types.ts';
-import type { ShipClassType } from '../ships/types.ts';
+import type { ShipComponentType } from '../ships/components/types.ts';
 import type { Actor } from '../actions/types.ts';
 import type { ActiveEffect } from './effects/types.ts';
 import type { Pool } from './pools.ts';
@@ -37,11 +37,12 @@ interface CombatantBase extends Actor {
   readonly pools?: readonly Pool[];
 }
 
-// A fleet ship in combat. `classId` anchors both the combat profile (later) and the fleet sprite
-// the encounter renderer reuses (E3/E4); the durable selection handle is `id` (the ship's save id).
+// A fleet ship in combat. Carries the ship's OWN ordered module list (there are no classes) — the source
+// of its installs + Σ-battery energyMax (combatantInstalls / combatantEnergyMax read it directly); the
+// durable selection handle is `id` (the ship's save id).
 export interface ShipCombatant extends CombatantBase {
   readonly kind: 'ship';
-  readonly classId: ShipClassType;
+  readonly components: readonly ShipComponentType[];
 }
 
 // A planet / moon / belt in combat — stationary, anchored to its on-screen disc. Declared now so

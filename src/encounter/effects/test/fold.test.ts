@@ -12,7 +12,7 @@ import type { ActiveEffect, EffectInstall } from '../types.ts';
 import { ENERGY_MAX_STAT, ENERGY_STAT, type Combatant, type EncounterState } from '../../state.ts';
 
 const c = (combatId: number, factionId: Combatant['factionId'], stats?: Combatant['stats'], pools?: Combatant['pools']): Combatant => ({
-  kind: 'ship', id: `c${combatId}`, combatId, factionId, classId: 'corvette', commands: [], stats, pools,
+  kind: 'ship', id: `c${combatId}`, combatId, factionId, components: ['small-engine', 'small-laser'], commands: [], stats, pools,
 });
 const stateOf = (combatants: readonly Combatant[], effects: readonly ActiveEffect[], nextEffectId = effects.length): EncounterState =>
   ({ combatants, activeId: 0, round: 1, effects, nextEffectId, initiative: { player: 0, rival: 0 }, phaseSide: 'player', initiatorSide: 'player', damageThisRound: false, disengaged: false });

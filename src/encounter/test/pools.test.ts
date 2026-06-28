@@ -11,7 +11,7 @@ import { isDown, remainingHp, type Combatant } from '../state.ts';
 const band = (key: string, current: number, sourceEffectId?: number): Pool =>
   sourceEffectId === undefined ? { key, current, max: current } : { key, current, max: current, sourceEffectId };
 const combatant = (pools?: readonly Pool[]): Combatant =>
-  ({ kind: 'ship', id: 'x', combatId: 0, factionId: 'player', classId: 'corvette', commands: [], pools });
+  ({ kind: 'ship', id: 'x', combatId: 0, factionId: 'player', components: ['small-engine', 'small-laser'], commands: [], pools });
 
 test('cascadeDamage absorbs within one band; dealt = the hit', () => {
   const { pools, dealt } = cascadeDamage([band('hull', 100)], 40);

@@ -15,7 +15,7 @@ const ship = (id: string, factionId: Ship['factionId'], status: Ship['status'] =
   id,
   systemId: 'sol',
   factionId,
-  classId: 'corvette',
+  components: ['small-engine', 'small-laser'],
   name: id,
   status,
 });

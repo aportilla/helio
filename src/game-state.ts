@@ -34,8 +34,8 @@ import {
 } from './game-state-codec';
 import { CONTROLLED_FACTION_ID, FACTION_DEFS } from './factions/registry';
 import type { FactionType } from './factions/types';
-import { DEFAULT_SHIP_CLASS, shipClassLabel } from './ships/registry';
-import type { ShipClassType } from './ships/types';
+import { DEMO_SHIP_LOADOUT } from './ships/components/registry';
+import type { ShipComponentType } from './ships/components/types';
 import { slotKey, readRaw, writeRaw, removeRaw } from './storage';
 import { recordsOnBody } from './world-overlay';
 
@@ -162,11 +162,12 @@ export function facilityCounts(): ReadonlyMap<FacilityType, number> {
 // Start a time-only build at a shipyard. Returns the new 'building' ship, or null if
 // the yard already has a build in flight (the one-build-per-yard cap) or the body is
 // no longer in the catalog. `completesOnTurn` is computed by the caller
-// (getGameState().turn + buildTurns(classId)). The ship is keyed to its SYSTEM, not
-// the shipyard's planet, so it outlives that planet.
+// (getGameState().turn + shipBuildTurns(components)). The ship carries its OWN module
+// loadout (there are no classes) and is keyed to its SYSTEM, not the shipyard's planet,
+// so it outlives that planet.
 export function startShipBuild(
   shipyardBodyId: string,
-  classId: ShipClassType,
+  components: readonly ShipComponentType[],
   completesOnTurn: number,
 ): Ship | null {
   if (buildingShipAt(current.ships, shipyardBodyId)) return null;
@@ -179,8 +180,8 @@ export function startShipBuild(
     systemId,
     factionId: CONTROLLED_FACTION_ID, // the player builds the player's ships
     shipyardBodyId,
-    classId,
-    name: `${shipClassLabel(classId)} ${seq}`,
+    components,
+    name: `Ship ${seq}`,
     status: 'building',
     completesOnTurn,
   };
@@ -197,7 +198,7 @@ export function startShipBuild(
 // lives HERE, in the debug path — the faction registry stays free of any "opponent"
 // concept. Returns the new ship, or null if the system is unknown. Teardown reuses
 // removeShip.
-export function addOpponentShip(systemId: string, classId: ShipClassType = DEFAULT_SHIP_CLASS): Ship | null {
+export function addOpponentShip(systemId: string, components: readonly ShipComponentType[] = DEMO_SHIP_LOADOUT): Ship | null {
   if (!systemExists(systemId)) return null;
   const factionId = FACTION_DEFS.find((f) => f.id !== CONTROLLED_FACTION_ID)?.id ?? CONTROLLED_FACTION_ID;
   const seq = current.seq + 1;
@@ -205,8 +206,8 @@ export function addOpponentShip(systemId: string, classId: ShipClassType = DEFAU
     id: `s${seq}`,
     systemId,
     factionId,
-    classId,
-    name: `${shipClassLabel(classId)} ${seq}`,
+    components,
+    name: `Ship ${seq}`,
     status: 'ready',
   };
   current = { ...current, seq, ships: [...current.ships, ship] };
@@ -218,15 +219,15 @@ export function addOpponentShip(systemId: string, classId: ShipClassType = DEFAU
 // addOpponentShip, so a DEV demo can stage a two-side fight (the player has no starting fleet). Same
 // build-free ready ship (no shipyard / completesOnTurn); DEV-gated caller. Returns the new ship, or
 // null if the system is unknown.
-export function addFriendlyShip(systemId: string, classId: ShipClassType = DEFAULT_SHIP_CLASS): Ship | null {
+export function addFriendlyShip(systemId: string, components: readonly ShipComponentType[] = DEMO_SHIP_LOADOUT): Ship | null {
   if (!systemExists(systemId)) return null;
   const seq = current.seq + 1;
   const ship: Ship = {
     id: `s${seq}`,
     systemId,
     factionId: CONTROLLED_FACTION_ID,
-    classId,
-    name: `${shipClassLabel(classId)} ${seq}`,
+    components,
+    name: `Ship ${seq}`,
     status: 'ready',
   };
   current = { ...current, seq, ships: [...current.ships, ship] };

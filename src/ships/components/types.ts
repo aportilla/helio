@@ -14,7 +14,7 @@ import type { EffectInstall } from '../../encounter/effects/types.ts';
 // (Phase 3) — persists per-ship in 'helio.game'. Adding a member is safe; renaming/removing a
 // shipped one breaks old saves AND the action ids derived from it — three guards defend it
 // (registry FROZEN_COMPONENT_IDS + its CI test, the DEV module-load assert, and this literal union
-// forcing every Record over it to update). Mirrors FacilityType / ShipClassType discipline.
+// forcing every Record over it to update). Mirrors FacilityType discipline.
 export type ShipComponentType =
   | 'small-engine'
   | 'small-laser'
@@ -40,6 +40,10 @@ export interface ShipComponentDef {
   readonly type: ShipComponentType;   // === its registry key; a DEV assert pins def.type === key
   readonly label: string;             // 'Small Laser' — single source for build rows + part labels
   readonly kind: ShipComponentKind;   // the part's structural role (above)
+  // Galaxy turns this module adds to a ship's build. A ship has no class to carry a single build cost
+  // anymore — it IS its modules — so build time is the Σ of its components' `buildTurns` (shipBuildTurns,
+  // ../components/registry), heavier loadouts taking longer. Integer ≥ 0.
+  readonly buildTurns: number;
   // The action-menu commands this component GRANTS its ship — the inverted action model
   // (plans/4x-modular-ship-components.md §2/§5): a component is a capability PROVIDER, and
   // ships-to-actors derives a ship's command list by collecting + merging these across its loadout,

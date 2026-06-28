@@ -15,8 +15,8 @@ import type { Ship } from '../../game-state-codec.ts';
 const LASER = 'small-laser:laser';
 const CANNON = 'small-cannon:cannon';
 
-const gunship = (id: string, factionId: Ship['factionId']): Ship => ({ id, systemId: 'sol', factionId, classId: 'gunship', name: id, status: 'ready' });
-const corvette = (id: string, factionId: Ship['factionId']): Ship => ({ id, systemId: 'sol', factionId, classId: 'corvette', name: id, status: 'ready' });
+const gunship = (id: string, factionId: Ship['factionId']): Ship => ({ id, systemId: 'sol', factionId, components: ['small-engine', 'small-laser', 'small-cannon', 'small-shield-generator'], name: id, status: 'ready' });
+const corvette = (id: string, factionId: Ship['factionId']): Ship => ({ id, systemId: 'sol', factionId, components: ['small-engine', 'small-laser'], name: id, status: 'ready' });
 
 // Open an encounter (no shot fired yet — the launch intent is just the initiator anchor).
 const open = (initiatorId: string, ships: readonly Ship[]): EncounterState =>

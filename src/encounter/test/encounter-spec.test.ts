@@ -11,7 +11,7 @@ import type { ActionIntent } from '../../actions/types.ts';
 import type { Ship } from '../../game-state-codec.ts';
 
 const ship = (id: string, factionId: Ship['factionId']): Ship => ({
-  id, systemId: 'sol', factionId, classId: 'corvette', name: id, status: 'ready',
+  id, systemId: 'sol', factionId, components: ['small-engine', 'small-laser'], name: id, status: 'ready',
 });
 
 const intent: ActionIntent = { actorId: 'p1', actionId: 'small-laser:laser', targetIds: ['r1'] };
@@ -37,7 +37,7 @@ test('places each combatant at its own combatId, not flatten order (append-safe 
   // indexes by combatId (so an E5 body pass can append combatants at higher ids in a later side
   // without disturbing the ships) rather than trusting side/iteration order.
   const sc = (id: string, combatId: number, factionId: ShipCombatant['factionId']): ShipCombatant => ({
-    kind: 'ship', id, combatId, factionId, classId: 'corvette', commands: [], categories: [],
+    kind: 'ship', id, combatId, factionId, components: ['small-engine', 'small-laser'], commands: [], categories: [],
   });
   const sides: readonly CombatantSide[] = [
     { factionId: 'player', controlled: true, combatants: [sc('a', 0, 'player'), sc('c', 2, 'player')] },

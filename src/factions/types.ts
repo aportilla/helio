@@ -16,7 +16,7 @@
 // stores its `factionId`). Adding a member is safe; renaming/removing a shipped member
 // breaks old saves — three guards defend it (registry FROZEN_FACTION_IDS + its CI
 // test, the DEV module-load assert, and this literal union forcing every Record over
-// it to update). Mirrors ShipClassType / FacilityType discipline. The ids are
+// it to update). Mirrors FacilityType discipline. The ids are
 // placeholders for a real faction system: 'player' is the slot the local player
 // currently commands, 'rival' an opposing side — purely a bootstrap pair.
 export type FactionType = 'player' | 'rival';

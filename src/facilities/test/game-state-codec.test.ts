@@ -27,7 +27,7 @@ const ship = (o: Partial<Ship> = {}): Ship => ({
   systemId: 'sol',
   factionId: 'player',
   shipyardBodyId: 'earth',
-  classId: 'corvette',
+  components: ['small-engine', 'small-laser'],
   name: 'Corvette 1',
   status: 'building',
   completesOnTurn: 3,
@@ -116,26 +116,28 @@ test('valid ships survive; malformed ones are dropped', () => {
   const raw = blob({
     version: 1, turn: 5, seq: 9,
     ships: [
-      { id: 's1', systemId: 'sol', shipyardBodyId: 'earth', classId: 'corvette', name: 'Corvette 1', status: 'building', completesOnTurn: 7 },
-      { id: 's2', systemId: 'sol', shipyardBodyId: 'luna', classId: 'corvette', name: 'Corvette 2', status: 'ready', completesOnTurn: 4 },
-      { id: 's3', systemId: 'sol', shipyardBodyId: 'mars', classId: 'dreadnought', name: 'X', status: 'building', completesOnTurn: 9 }, // unknown classId → dropped
-      { id: 's4', systemId: 'sol', shipyardBodyId: 'venus', classId: 'corvette', name: 'X', status: 'queued', completesOnTurn: 9 },     // bad status → dropped
-      { id: 's5', systemId: 'sol', shipyardBodyId: 'io', classId: 'corvette', name: 'X', status: 'building', completesOnTurn: 0 },      // completesOnTurn < 1 → dropped
-      { id: 's6', systemId: 'sol', shipyardBodyId: 'io', classId: 'corvette', name: 'X', status: 'building', completesOnTurn: 3.5 },    // non-integer → dropped
-      { systemId: 'sol', shipyardBodyId: 'earth', classId: 'corvette', name: 'X', status: 'ready', completesOnTurn: 2 },               // missing id → dropped
+      { id: 's1', systemId: 'sol', shipyardBodyId: 'earth', components: ['small-engine', 'small-laser'], name: 'Corvette 1', status: 'building', completesOnTurn: 7 },
+      { id: 's2', systemId: 'sol', shipyardBodyId: 'luna', components: ['small-engine', 'small-laser'], name: 'Corvette 2', status: 'ready', completesOnTurn: 4 },
+      { id: 's3', systemId: 'sol', shipyardBodyId: 'mars', components: ['no-such-module'], name: 'X', status: 'building', completesOnTurn: 9 }, // unknown component → dropped
+      { id: 's4', systemId: 'sol', shipyardBodyId: 'venus', components: ['small-engine', 'small-laser'], name: 'X', status: 'queued', completesOnTurn: 9 },     // bad status → dropped
+      { id: 's5', systemId: 'sol', shipyardBodyId: 'io', components: ['small-engine', 'small-laser'], name: 'X', status: 'building', completesOnTurn: 0 },      // completesOnTurn < 1 → dropped
+      { id: 's6', systemId: 'sol', shipyardBodyId: 'io', components: ['small-engine', 'small-laser'], name: 'X', status: 'building', completesOnTurn: 3.5 },    // non-integer → dropped
+      { systemId: 'sol', shipyardBodyId: 'earth', components: ['small-engine', 'small-laser'], name: 'X', status: 'ready', completesOnTurn: 2 },               // missing id → dropped
+      { id: 's7', systemId: 'sol', components: [], name: 'X', status: 'ready' },                                                                               // EMPTY components → dropped
+      { id: 's8', systemId: 'sol', name: 'X', status: 'ready' },                                                                                              // MISSING components → dropped
     ],
   });
   const { state, droppedShips } = parseGameState(raw, anyBody, anySystem);
   assert.deepEqual(state.ships.map((s) => s.id), ['s1', 's2']);
-  assert.equal(droppedShips, 5);
+  assert.equal(droppedShips, 7);
 });
 
 test('skip-on-missing: a ship whose system the catalog dropped is discarded (any status)', () => {
   const raw = blob({
     version: 1, turn: 1, seq: 2,
     ships: [
-      { id: 's1', systemId: 'gone', shipyardBodyId: 'earth', classId: 'corvette', name: 'A', status: 'building', completesOnTurn: 3 },
-      { id: 's2', systemId: 'gone', shipyardBodyId: 'earth', classId: 'corvette', name: 'B', status: 'ready', completesOnTurn: 2 },
+      { id: 's1', systemId: 'gone', shipyardBodyId: 'earth', components: ['small-engine', 'small-laser'], name: 'A', status: 'building', completesOnTurn: 3 },
+      { id: 's2', systemId: 'gone', shipyardBodyId: 'earth', components: ['small-engine', 'small-laser'], name: 'B', status: 'ready', completesOnTurn: 2 },
     ],
   });
   const { state, droppedShips } = parseGameState(raw, anyBody, noSystem);
@@ -147,8 +149,8 @@ test('a building ship whose shipyard body is gone is reaped; a ready ship outliv
   const raw = blob({
     version: 1, turn: 1, seq: 2,
     ships: [
-      { id: 's1', systemId: 'sol', shipyardBodyId: 'gone', classId: 'corvette', name: 'A', status: 'building', completesOnTurn: 3 },
-      { id: 's2', systemId: 'sol', shipyardBodyId: 'gone', classId: 'corvette', name: 'B', status: 'ready', completesOnTurn: 2 },
+      { id: 's1', systemId: 'sol', shipyardBodyId: 'gone', components: ['small-engine', 'small-laser'], name: 'A', status: 'building', completesOnTurn: 3 },
+      { id: 's2', systemId: 'sol', shipyardBodyId: 'gone', components: ['small-engine', 'small-laser'], name: 'B', status: 'ready', completesOnTurn: 2 },
     ],
   });
   // System exists, but the shipyard body is gone: the in-flight build is a zombie and
@@ -163,11 +165,11 @@ test('factionId validate-and-merge: a pre-faction or unknown side defaults to th
     version: 1, turn: 5, seq: 9,
     ships: [
       // no factionId (a ship saved before ownership existed) → defaults
-      { id: 's1', systemId: 'sol', shipyardBodyId: 'earth', classId: 'corvette', name: 'A', status: 'building', completesOnTurn: 7 },
+      { id: 's1', systemId: 'sol', shipyardBodyId: 'earth', components: ['small-engine', 'small-laser'], name: 'A', status: 'building', completesOnTurn: 7 },
       // an unknown factionId (a retired/typo'd side) → defaults, NOT dropped
-      { id: 's2', systemId: 'sol', classId: 'corvette', name: 'B', status: 'ready', factionId: 'no-such-faction' },
+      { id: 's2', systemId: 'sol', components: ['small-engine', 'small-laser'], name: 'B', status: 'ready', factionId: 'no-such-faction' },
       // an explicit live faction is preserved
-      { id: 's3', systemId: 'sol', classId: 'corvette', name: 'C', status: 'ready', factionId: 'rival' },
+      { id: 's3', systemId: 'sol', components: ['small-engine', 'small-laser'], name: 'C', status: 'ready', factionId: 'rival' },
     ],
   });
   const { state, droppedShips } = parseGameState(raw, anyBody, anySystem);
@@ -184,7 +186,7 @@ test("a 'ready' ship may omit the build-only fields (shipyard / completion turn)
   const raw = blob({
     version: 1, turn: 3, seq: 4,
     ships: [
-      { id: 's1', systemId: 'sol', classId: 'corvette', name: 'Corvette 1', status: 'ready' },
+      { id: 's1', systemId: 'sol', components: ['small-engine', 'small-laser'], name: 'Corvette 1', status: 'ready' },
     ],
   });
   const { state, droppedShips } = parseGameState(raw, noBody, anySystem);
@@ -198,8 +200,8 @@ test('a building ship still REQUIRES a shipyard + completion turn (the build-onl
   const raw = blob({
     version: 1, turn: 1, seq: 2,
     ships: [
-      { id: 's1', systemId: 'sol', classId: 'corvette', name: 'A', status: 'building', completesOnTurn: 3 }, // no shipyardBodyId → dropped
-      { id: 's2', systemId: 'sol', shipyardBodyId: 'earth', classId: 'corvette', name: 'B', status: 'building' }, // no completesOnTurn → dropped
+      { id: 's1', systemId: 'sol', components: ['small-engine', 'small-laser'], name: 'A', status: 'building', completesOnTurn: 3 }, // no shipyardBodyId → dropped
+      { id: 's2', systemId: 'sol', shipyardBodyId: 'earth', components: ['small-engine', 'small-laser'], name: 'B', status: 'building' }, // no completesOnTurn → dropped
     ],
   });
   const { state, droppedShips } = parseGameState(raw, anyBody, anySystem);

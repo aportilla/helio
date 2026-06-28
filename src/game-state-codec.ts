@@ -10,8 +10,8 @@ import { FACILITY_TYPES } from './facilities/registry.ts';
 import type { FacilityType } from './facilities/types.ts';
 import { CONTROLLED_FACTION_ID, FACTION_TYPES } from './factions/registry.ts';
 import type { FactionType } from './factions/types.ts';
-import { SHIP_CLASS_TYPES } from './ships/registry.ts';
-import type { ShipClassType } from './ships/types.ts';
+import { SHIP_COMPONENT_TYPES } from './ships/components/registry.ts';
+import type { ShipComponentType } from './ships/components/types.ts';
 import { pruneMissingBodies, type BodyKeyed } from './world-overlay.ts';
 
 export interface Facility {
@@ -45,7 +45,12 @@ export interface Ship {
   // Whose ship — the side that owns it. A pre-faction save (every ship built before
   // ownership existed) reads as CONTROLLED_FACTION_ID via validate-and-merge.
   readonly factionId: FactionType;
-  readonly classId: ShipClassType;
+  // The ship's ORDERED module list — its authoritative configuration (there are no ship CLASSES; a ship
+  // IS its modules). Persisted here, never derived from a class. Order is authoring/display order (the
+  // eventual silhouette assembly reads it); for combat + the menu it is a multiset (loadout derivation
+  // merges identical modules). Validated on load against SHIP_COMPONENT_TYPES — any unknown id drops the
+  // whole ship (an unknown loadout has undefined capabilities).
+  readonly components: readonly ShipComponentType[];
   // Auto-generated at creation; the ship card reads it.
   readonly name: string;
   readonly status: 'building' | 'ready';
@@ -109,7 +114,12 @@ function isValidShip(s: unknown): s is ParsedShip {
   const o = s as Record<string, unknown>;
   if (typeof o.id !== 'string') return false;
   if (typeof o.systemId !== 'string') return false;
-  if (typeof o.classId !== 'string' || !SHIP_CLASS_TYPES.has(o.classId)) return false;
+  // Components: a NON-EMPTY array of known module ids. All-or-nothing — drop the whole ship on any unknown
+  // id rather than filter, since a ship with a tampered/corrupt loadout has undefined capabilities
+  // (energyMax, actions) and is safer absent than silently de-fanged. Empty is rejected: no authoring path
+  // produces it, so it can only be corruption, and the encounter assumes every ready ship is a real actor.
+  if (!Array.isArray(o.components) || o.components.length === 0) return false;
+  if (!o.components.every((c) => typeof c === 'string' && SHIP_COMPONENT_TYPES.has(c))) return false;
   if (typeof o.name !== 'string') return false;
   if (o.status !== 'building' && o.status !== 'ready') return false;
   // Build-only fields: a 'building' ship MUST carry a well-formed shipyard + completion

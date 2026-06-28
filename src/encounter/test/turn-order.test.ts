@@ -13,7 +13,7 @@ import type { FactionType } from '../../factions/types.ts';
 
 // hull defaults to a living value; pass 0 for a downed combatant (an empty pool band reads as 0 HP).
 const c = (combatId: number, factionId: FactionType, hull = 100): Combatant => ({
-  kind: 'ship', id: `c${combatId}`, combatId, factionId, classId: 'corvette', commands: [], pools: [{ key: 'hull', current: hull, max: hull }],
+  kind: 'ship', id: `c${combatId}`, combatId, factionId, components: ['small-engine', 'small-laser'], commands: [], pools: [{ key: 'hull', current: hull, max: hull }],
 });
 // A synthetic state at (active, phaseSide, pool). initiatorSide is irrelevant to these (no round bump),
 // so it tracks phaseSide; the per-side pool is the spent-down record the cursor reads.
@@ -74,7 +74,7 @@ const fire = (totalCost: number): ActionCommand => ({
   grant: { key: 'fire', label: 'Fire', color: '#ffffff', category: 'attack', targeting: 'single', kind: 'encounter' },
 });
 const armed = (combatId: number, factionId: FactionType, energy: number | undefined, cost = 9000, hull = 100): Combatant => ({
-  kind: 'ship', id: `c${combatId}`, combatId, factionId, classId: 'corvette',
+  kind: 'ship', id: `c${combatId}`, combatId, factionId, components: ['small-engine', 'small-laser'],
   commands: [fire(cost)], pools: [{ key: 'hull', current: hull, max: hull }],
   ...(energy === undefined ? {} : { stats: { energy } }),
 });

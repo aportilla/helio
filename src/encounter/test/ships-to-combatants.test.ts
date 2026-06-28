@@ -16,7 +16,7 @@ const ship = (id: string, factionId: Ship['factionId'], status: Ship['status'] =
   id,
   systemId: 'sol',
   factionId,
-  classId: 'corvette',
+  components: ['small-engine', 'small-laser'],
   name: id,
   status,
 });
@@ -50,13 +50,13 @@ test('combatId is dense and ships-first across the whole roster (faction order Ã
   assert.deepEqual(all.map((c) => [c.id, c.combatId]), [['p1', 0], ['p2', 1], ['r1', 2]]);
 });
 
-test('a combatant is an Actor + combat identity: kind, classId, palette, derived loadout', () => {
+test('a combatant is an Actor + combat identity: kind, components, palette, derived loadout', () => {
   const c = shipToCombatant(ship('p1', 'player'), 7);
   assert.equal(c.kind, 'ship');
   assert.equal(c.id, 'p1');
   assert.equal(c.combatId, 7);
   assert.equal(c.factionId, 'player');
-  assert.equal(c.classId, 'corvette');
+  assert.deepEqual(c.components, ['small-engine', 'small-laser']);
   // A ship shows only Attack (no flee â‡’ no Navigation; Support is the body's); same SHIP_CATEGORIES
   // as the live view.
   assert.deepEqual(c.categories, ['attack']);

@@ -1,27 +1,30 @@
 # src/ships/
 
-The neutral **ship-class registry** — one `ShipClassDef` per class, the static design data the rest of the game reads. A near-pure leaf: its only app-side dependency is a **type-only** import of the action vocabulary (via the component loadout — see below), the same dependency `src/facilities/` takes; it pulls in nothing from the DOM/catalog and nothing from the combat package. Both the ship-build flow and combat consume it; it depends on neither.
+The neutral **ship vocabulary** — what a ship is *made of*. A ship has **no class**: it carries its own ordered list of **modules** (`components: ShipComponentType[]`, persisted in the save), and everything about it — its menu actions, its combat installs, its energy capacity, its build time, its sprite size — **derives from those modules**. So this directory is now just the **component registry** ([`components/`](components/README.md)) plus the loadout-level helpers built on it. A near-pure leaf: its only app-side dependency is a **type-only** import of the action vocabulary (a component's grants), the same dependency `src/facilities/` takes; nothing from the DOM/catalog or the combat package.
 
-It is a deliberate twin of [`src/facilities/`](../facilities/README.md): a frozen string-union (`ShipClassType`) keyed `DEFS` object guarded three ways — the `satisfies Record<ShipClassType, ShipClassDef>` compile guard, the `FROZEN_SHIP_CLASS_IDS` list + its CI test, and a DEV module-load `def.type === key` assert. Adding a class is one literal in the union plus one object in `DEFS`; every derived lookup (`SHIP_CLASS_DEFS`, `SHIP_CLASS_BY_TYPE`, `SHIP_CLASS_TYPES`) flows from that.
+## Ships are module lists, not classes
 
-## Why the class id is frozen
+A built or spawned ship persists its `components` array in `helio.game` (see [the game save](../../docs/game-systems.md)) — the authoritative, per-ship configuration. There is no `ShipClassDef`, no `classId`: a "corvette" is just `['small-engine', 'small-laser']` and a heavier ship is a longer list. Order is authoring/display order (the eventual silhouette assembly reads it); for combat + the menu it's a multiset (loadout derivation merges identical modules). On load, each `components` entry is validated against `SHIP_COMPONENT_TYPES` — an unknown id drops the whole ship (an unknown loadout has undefined capabilities). The save contract is therefore the **component** ids (`FROZEN_COMPONENT_IDS`), not a class union.
 
-A built ship persists its `classId` in `helio.game` (see [the game save](../../docs/game-systems.md)). So `ShipClassType` is a **serialized wire contract**: renaming or removing a shipped class breaks old saves. `FROZEN_SHIP_CLASS_IDS` records every id that has ever shipped, and the CI guard asserts each is still live — the same discipline `FROZEN_FACILITY_IDS` enforces. A removed class becomes a retired tombstone, never a deletion.
+## Everything derives from the modules
 
-## Deliberately thin
+| Concern | How it's derived |
+|---|---|
+| menu **actions** | `ships-to-actors` `shipLoadout` merges each component's `grants` (the same `deriveCommands` a body runs over its facilities) |
+| combat **installs** + **energyMax** | `ships-to-combatants` reads the ship's `components` directly — Σ each module's `installs` / `battery` |
+| **build time** | `shipBuildTurns(components)` = Σ each module's `buildTurns` (floored at 1) — a heavier loadout takes longer |
+| **sprite size** | the fleet layer derives a radius from loadout heft (base + per-module step), so a bigger ship reads bigger |
+| **name** | a generic `Ship N` at creation (no class to name it; player-editable later) |
 
-A `ShipClassDef` stays thin — identity + display fields, a build time, a sprite budget, and a **default component loadout** (the source of its menu actions, see below). Still **not** here: an inline combat stat block (hull / energy / speed) or a minerals cost — the stat block derives from the components (the energy model, a later phase), and each remaining concern lands with the consumer that reads it, so the leaf keeps zero dependency on combat. Tunables live in `tuning.ts` and are referenced by symbol, never baked into prose.
+`DEMO_SHIP_LOADOUT` (in `components/registry.ts`) is the shared default kit the DEV add-ship buttons and the shipyard build flow stamp on a new ship until a loadout-builder UI exists — the full kit (engine + laser + cannon + shield generator) so a spawned/built ship is a real combatant and the dynamic-combat loop is live.
 
-## Components & loadout (`components/`)
+## Components (`components/`)
 
-A ship is a **platform carrying modules**, the ship-side twin of a body carrying facilities ([modular-components plan](../../plans/4x-modular-ship-components.md) §5). [`components/`](components/README.md) is the **`ShipComponentDef` registry** — one def per component, each declaring the `ActionGrant`s it provides (a drive grants none), the combat `installs` it brings, and its `battery` capacity, exactly as a `FacilityDef` does. Today's set: `small-engine` (recharge effect, no action); the two **weapons** `small-laser` (ATTACK, `damageType: 'energy'`, strong vs shields) and `small-cannon` (ATTACK, `damageType: 'kinetic'`, strong vs hull) — their asymmetry is a damage-typing model: the weapon declares a type, defensive bands carry per-type resistances; `small-shield` (a manually-raised timed shield) and `small-shield-generator` (an always-on regenerating shield that fritzes when stripped); and `tactical-command-module`. The weapon-vs-defense dynamic + the shield are documented in [the encounter doc](../encounter/README.md) (effectiveness cascade + worked example E). A class's `components` array is its default loadout; [`ships-to-actors`](../actions/README.md) derives a ship's menu commands from those components' grants through the **same** `deriveCommands` projection a body runs over its facilities. There is no ship builder yet, so every ship of a class shares its class preset (per-ship `components[]` serialization is a later phase). Classes today: the `corvette` (engine + laser) and the `gunship` — the dynamic-combat demo hull fitting both weapons + the shield generator.
+A ship is a **platform carrying modules**, the ship-side twin of a body carrying facilities ([modular-components plan](../../plans/4x-modular-ship-components.md) §5). [`components/`](components/README.md) is the **`ShipComponentDef` registry** — one def per component, each declaring the `ActionGrant`s it provides (a drive grants none), the combat `installs` it brings, its `battery` capacity, and its `buildTurns`, exactly as a `FacilityDef` would. Today's set: `small-engine` (recharge, no action); the two **weapons** `small-laser` (`damageType: 'energy'`, strong vs shields) and `small-cannon` (`damageType: 'kinetic'`, strong vs hull) — their asymmetry is a damage-typing model (the weapon declares a type, defensive bands carry per-type resistances); `small-shield` (a manually-raised timed shield) and `small-shield-generator` (an always-on regenerating shield that fritzes when stripped); and `tactical-command-module`. The weapon-vs-defence dynamic + the shield are documented in [the encounter doc](../encounter/README.md) (effectiveness cascade + worked example E).
 
 ## Map
 
 | File | What's there |
 |---|---|
-| `types.ts` | `ShipClassType` union + the `ShipClassDef` interface (incl. the default `components` loadout) |
-| `registry.ts` | `DEFS` + the derived lookups, the `shipClassLabel`/`shipClassColor`/`buildTurns` accessors, the frozen-id list + DEV assert |
-| `tuning.ts` | hoisted per-class numbers (build time, sprite budget) |
-| `components/` | the `ShipComponentDef` registry — a ship's modules + the actions they grant ([README](components/README.md)) |
-| `test/` + `components/test/` | the frozen-id + color + accessor + grant-shape guards (`npm run test:ships` sweeps both) |
+| `components/` | the `ShipComponentDef` registry (a ship's modules + the grants/installs/battery/buildTurns each carries) + the loadout helpers `DEMO_SHIP_LOADOUT` / `shipBuildTurns` ([README](components/README.md)) |
+| `components/test/` | the frozen-id + def-keying + grant-shape guards (`npm run test:ships`) |

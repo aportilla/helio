@@ -22,6 +22,7 @@ const DEFS = {
     type: 'small-engine',
     label: 'Small Engine',
     kind: 'drive',
+    buildTurns: 1,
     // The drive grants NO action — there is no flee (an encounter is fought to its terminal, never
     // withdrawn). Its whole job is the per-cycle energy recharge it DECLARES as an effect (worked example
     // A, 4x-encounter-combat-system §7.5) — not a hardcoded reducer step. `amount` is energy-milli restored
@@ -33,6 +34,7 @@ const DEFS = {
     type: 'small-laser',
     label: 'Small Laser',
     kind: 'weapon',
+    buildTurns: 2,
     // A weapon grants an ATTACK that enters an encounter against a single enemy. The enemy-only
     // predicate keeps the target bracket on opposing ships/bodies, exactly as the body railgun /
     // missile batteries do — the same grant shape on the ship side of the symmetry. D3 — a weapon
@@ -58,6 +60,7 @@ const DEFS = {
     type: 'small-cannon',
     label: 'Small Cannon',
     kind: 'weapon',
+    buildTurns: 2,
     // The KINETIC counterpart to the laser: the same ATTACK shape (single enemy, an energy-gated salvo),
     // but `damageType` 'kinetic' — the INVERSE matchup. Shields RESIST kinetic (it bounces off) and hull is
     // WEAK to it (it craters), per the same band resistances, so a laser strips the shield and a cannon
@@ -71,6 +74,7 @@ const DEFS = {
     type: 'small-shield-generator',
     label: 'Small Shield Generator',
     kind: 'defense',
+    buildTurns: 2,
     // An ALWAYS-ON shield (grants NO action — unlike small-shield's manually-raised segment): it INSTALLS a
     // permanent `shield-generator` effect (worked example E, src/encounter/effects) whose phaseStart state
     // machine splices a `shields` band above hull, regens it toward `capacity` by `regen` each phase at the
@@ -84,6 +88,7 @@ const DEFS = {
     type: 'small-shield',
     label: 'Small Shield',
     kind: 'defense',
+    buildTurns: 2,
     // A defense part grants a SUPPORT verb that raises a temporary shield on the ship ITSELF. `kind`
     // is the live-view dispatch fork only (immediate outside combat); inside an encounter the reducer
     // folds it regardless of `kind`. On resolve it installs a 3-cycle `shield-segment` (worked example
@@ -98,6 +103,7 @@ const DEFS = {
     type: 'tactical-command-module',
     label: 'Tactical Command Module',
     kind: 'utility',
+    buildTurns: 1,
     // A utility part that grants NO action — its whole job is to raise its SIDE's Press-Turn tempo. It
     // does so the generic way: it INSTALLS a permanent `tactical-command` effect (encounter
     // §3.8.2/§3.8.6) whose phaseStart handler folds a +1 SideDelta into the side's pool each phase. The
@@ -115,9 +121,27 @@ export const COMPONENT_BY_TYPE: ReadonlyMap<ShipComponentType, ShipComponentDef>
 );
 
 // The persistence validation set, derived from the registry so it can never drift from the union
-// (typed as a string-set because it validates arbitrary parsed save JSON once Phase 3 serializes
-// per-ship components).
+// (typed as a string-set because it validates the arbitrary parsed component lists in a saved ship's
+// `components` array — every entry must be a member of this set or the ship is dropped).
 export const SHIP_COMPONENT_TYPES: ReadonlySet<string> = new Set(Object.keys(DEFS));
+
+// ── Loadout-level helpers (a ship IS its ordered module list — there is no class) ───────────────────
+
+// The DEFAULT loadout the DEV add-ship buttons and the shipyard build flow stamp on a new ship, until a
+// loadout-builder UI lets the player compose one. The full demo kit: a drive (recharge) + BOTH weapons +
+// an always-on shield generator, so a spawned/built ship is a real combatant and the dynamic-combat loop
+// (laser strips shields → cannon craters hull, shields regen/fritz) is live by default. One shared
+// constant so the build flow, both DEV spawns, and tests agree on what "a real ship" is.
+export const DEMO_SHIP_LOADOUT: readonly ShipComponentType[] = ['small-engine', 'small-laser', 'small-cannon', 'small-shield-generator'];
+
+// A ship's build time = the Σ of its modules' `buildTurns` (heavier loadout = longer build), the
+// per-ship successor to the old per-class buildTurns. Floored at MIN so a sparse/degenerate loadout still
+// takes a turn. Unknown ids (shouldn't occur — validated on load) contribute 0.
+const MIN_BUILD_TURNS = 1;
+export function shipBuildTurns(components: readonly ShipComponentType[]): number {
+  const sum = components.reduce((n, type) => n + (COMPONENT_BY_TYPE.get(type)?.buildTurns ?? 0), 0);
+  return Math.max(MIN_BUILD_TURNS, sum);
+}
 
 // Single source of a component's display name — build rows + part labels.
 export function componentLabel(type: ShipComponentType): string {
@@ -129,7 +153,7 @@ export function componentLabel(type: ShipComponentType): string {
 // can't quietly re-green the guard under compiler pressure. The CI test asserts each entry is still
 // a live type (SHIP_COMPONENT_TYPES.has), so removing OR renaming a shipped id fails — protecting
 // the action ids derived from it (and, from Phase 3, old ship saves) from a compiler-invisible
-// "cleanup". Mirrors FROZEN_FACILITY_IDS / FROZEN_SHIP_CLASS_IDS.
+// "cleanup". Mirrors FROZEN_FACILITY_IDS.
 export const FROZEN_COMPONENT_IDS: readonly string[] = ['small-engine', 'small-laser', 'small-cannon', 'small-shield', 'small-shield-generator', 'tactical-command-module'];
 
 // DEV-only module-load invariant: each def's `type` equals its registry key, and every frozen id is

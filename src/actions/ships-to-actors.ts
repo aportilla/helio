@@ -20,16 +20,14 @@ import type { ActionCommand, Actor, ActorSide } from './types.ts';
 import { SHIP_CATEGORIES } from './registry.ts';
 import { deriveCommands, type GrantProvider } from './derive.ts';
 import { actorSides } from './sides.ts';
-import { SHIP_CLASS_BY_TYPE } from '../ships/registry.ts';
 import { COMPONENT_BY_TYPE } from '../ships/components/registry.ts';
 
-// A ship's loadout as grant-providers: its class's default component list, each component one
-// provider whose id is its type and whose grants are the ShipComponentDef's declared grants — the
-// exact shape bodies-to-actors builds from a body's facilities. Identical components (e.g. two
-// lasers) then merge into one scaled command, just as identical facilities would.
+// A ship's loadout as grant-providers: the ship's OWN ordered module list (it has no class), each
+// component one provider whose id is its type and whose grants are the ShipComponentDef's declared
+// grants — the exact shape bodies-to-actors builds from a body's facilities. Identical components (e.g.
+// two lasers) then merge into one scaled command, just as identical facilities would.
 function shipProviders(ship: Ship): readonly GrantProvider[] {
-  const loadout = SHIP_CLASS_BY_TYPE.get(ship.classId)?.components ?? [];
-  return loadout.map((type) => ({ id: type, grants: COMPONENT_BY_TYPE.get(type)?.grants }));
+  return ship.components.map((type) => ({ id: type, grants: COMPONENT_BY_TYPE.get(type)?.grants }));
 }
 
 // The commands a ship offers — its loadout's grants, derived + merged (the same projection the body

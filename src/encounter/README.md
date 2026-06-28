@@ -17,7 +17,7 @@ adapters are the **specializations** of the system-view ones:
 
 | System view (`src/actions/`) | Combat (`src/encounter/`) | What combat adds |
 |---|---|---|
-| `ships-to-actors` | `ships-to-combatants` | `kind`, the `combatId` turn index, the `classId` anchor |
+| `ships-to-actors` | `ships-to-combatants` | `kind`, the `combatId` turn index, the ship's `components` list |
 | `bodies-to-actors` | `body-role` *(E5)* | the same, for a planet/moon/belt as a combatant |
 | `actorSides` | reuses `groupByFaction` | — (the controlled-side + ordering rule stays in one place) |
 

@@ -18,7 +18,7 @@ import type { Ship } from '../../game-state-codec.ts';
 const LASER = 'small-laser:laser'; // the corvette's ATTACK command
 
 const ship = (id: string, factionId: Ship['factionId']): Ship => ({
-  id, systemId: 'sol', factionId, classId: 'corvette', name: id, status: 'ready',
+  id, systemId: 'sol', factionId, components: ['small-engine', 'small-laser'], name: id, status: 'ready',
 });
 
 // Build an encounter whose LIVE phase is the initiator's side — the side chooseAutoIntent drives.

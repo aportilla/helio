@@ -8,7 +8,7 @@ import { isTerminal } from '../terminal.ts';
 import type { Combatant, EncounterState } from '../state.ts';
 
 const c = (combatId: number, factionId: Combatant['factionId'], hull = 100): Combatant => ({
-  kind: 'ship', id: `c${combatId}`, combatId, factionId, classId: 'corvette', commands: [], pools: [{ key: 'hull', current: hull, max: hull }],
+  kind: 'ship', id: `c${combatId}`, combatId, factionId, components: ['small-engine', 'small-laser'], commands: [], pools: [{ key: 'hull', current: hull, max: hull }],
 });
 const roster = (combatants: readonly Combatant[], disengaged = false): EncounterState =>
   ({ combatants, activeId: 0, round: 1, effects: [], nextEffectId: 0, initiative: { player: 0, rival: 0 }, phaseSide: 'player', initiatorSide: 'player', damageThisRound: false, disengaged });

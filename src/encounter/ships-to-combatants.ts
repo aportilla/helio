@@ -2,7 +2,8 @@
 // sides. The combat specialization of the system view's `ships-to-actors` (§9, §12 E1): same
 // 'ready' filter, same deterministic faction split (the shared groupByFaction core), same DERIVED
 // loadout (a ship's commands ARE its components' grants, via shipLoadout) — it adds only the combat
-// identity an Actor lacks: a `kind`, the `combatId` turn-order index, and the `classId` anchor.
+// identity an Actor lacks: a `kind`, the `combatId` turn-order index, and the ship's `components` list
+// (the source of its installs + Σ-battery energyMax).
 //
 // System scoping is the CALLER's job — pass ships already narrowed to the focused system
 // (shipsInSystem), exactly as ships-to-actors expects. Pure and node-testable: it reads only the
@@ -13,7 +14,6 @@ import { groupByFaction } from '../actions/sides.ts';
 import { SHIP_CATEGORIES } from '../actions/registry.ts';
 import { grantKeyOf } from '../actions/derive.ts';
 import { shipLoadout } from '../actions/ships-to-actors.ts';
-import { SHIP_CLASS_BY_TYPE } from '../ships/registry.ts';
 import { COMPONENT_BY_TYPE } from '../ships/components/registry.ts';
 import type { ShipComponentType } from '../ships/components/types.ts';
 import { collectInstalls } from './effects/fold.ts';
@@ -30,32 +30,31 @@ export function shipToCombatant(ship: Ship, combatId: number): ShipCombatant {
     id: ship.id,
     combatId,
     factionId: ship.factionId,
-    classId: ship.classId,
+    components: ship.components,
     commands: shipLoadout(ship),
     categories: SHIP_CATEGORIES,
   };
 }
 
 // A combatant's DECLARED effect installs as the substrate sees them — the combat analog of
-// shipLoadout: for a ship, its class's components are the install PROVIDERS (each component may
-// declare `installs`), flattened through the same collectInstalls fold that mirrors deriveCommands.
+// shipLoadout: for a ship, its OWN module list is the install PROVIDERS (each component may declare
+// `installs`), flattened through the same collectInstalls fold that mirrors deriveCommands.
 // createEncounterState feeds this to mintEffects to seed the encounter's ActiveEffects. A body has
 // no installs until its E5 producer lands.
 export function combatantInstalls(combatant: Combatant): readonly EffectInstall[] {
   if (combatant.kind !== 'ship') return [];
-  const components = SHIP_CLASS_BY_TYPE.get(combatant.classId)?.components ?? [];
+  const components = combatant.components;
   return collectInstalls(components.map((type) => ({ installs: COMPONENT_BY_TYPE.get(type)?.installs })));
 }
 
-// A combatant's combat energy CAPACITY (energyMax) — Σ the `battery` its components contribute, the
-// energy-model twin of combatantInstalls (same class→components path, so both switch to the per-ship
-// loadout together once Phase 3 serializes it). createEncounterState seeds energyMax AND a charged
-// start (energy = energyMax) from this, so a loadout's salvo budget IS its parts' batteries: a
-// single-laser corvette derives 9_000 and fires exactly one salvo before its drive recharges. A body
-// carries no components until E5, so it contributes none (energyMax 0 — it has no costed grants yet).
+// A combatant's combat energy CAPACITY (energyMax) — Σ the `battery` its modules contribute, the
+// energy-model twin of combatantInstalls (both read the ship's OWN component list). createEncounterState
+// seeds energyMax AND a charged start (energy = energyMax) from this, so a loadout's salvo budget IS its
+// parts' batteries: a single-laser ship derives 9_000 and fires exactly one salvo before its drive
+// recharges. A body carries no components until E5, so it contributes none (energyMax 0).
 export function combatantEnergyMax(combatant: Combatant): number {
   if (combatant.kind !== 'ship') return 0;
-  const components = SHIP_CLASS_BY_TYPE.get(combatant.classId)?.components ?? [];
+  const components = combatant.components;
   return components.reduce((sum, type) => sum + (COMPONENT_BY_TYPE.get(type)?.battery ?? 0), 0);
 }
 

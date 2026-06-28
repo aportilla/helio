@@ -43,7 +43,7 @@ export interface SelectedBodyInfo {
   // The body's in-flight ship build (a shipyard holds one build slot), or null when
   // none. SystemScene composes it from the game-state store; turnsLeft is DERIVED
   // (completesOnTurn - turn), never stored, and refreshes on selection / each turn.
-  readonly build: { readonly shipId: string; readonly classLabel: string; readonly turnsLeft: number } | null;
+  readonly build: { readonly shipId: string; readonly name: string; readonly turnsLeft: number } | null;
 }
 
 // A selected ship, as the context renders it. Mutually exclusive with SelectedBodyInfo
@@ -51,7 +51,6 @@ export interface SelectedBodyInfo {
 // (movement/combat land later), so this is a plain readout, no controls.
 export interface SelectedShipInfo {
   readonly name: string;
-  readonly classLabel: string;
   // Whose ship — the only ownership signal in the card. factionColor ties the line to
   // the fleet sprite's tint (both come from the faction registry).
   readonly factionLabel: string;
@@ -200,8 +199,6 @@ export class SystemContext implements SidebarContext {
       const lineH = getFont(fonts.body).lineHeight;
       drawPixelText(g, this.ship.name, x0, y, colors.textBody, fonts.body);
       y += lineH + ROW_GAP;
-      drawPixelText(g, this.ship.classLabel, x0, y, colors.titleDim, fonts.body);
-      y += lineH + ROW_GAP;
       // Whose ship, painted in the faction's own color — the card's tie to the fleet
       // sprite's tint (both resolve from the faction registry).
       drawPixelText(g, this.ship.factionLabel, x0, y, this.ship.factionColor, fonts.body);
@@ -311,7 +308,7 @@ export class SystemContext implements SidebarContext {
       } else {
         const b = this.info.build;
         const lineH = getFont(fonts.body).lineHeight;
-        drawPixelText(g, `Building ${b.classLabel}`, x0, y, colors.textBody);
+        drawPixelText(g, `Building ${b.name}`, x0, y, colors.textBody);
         y += lineH + ROW_GAP;
         drawPixelText(g, b.turnsLeft === 1 ? '1 turn left' : `${b.turnsLeft} turns left`, x0, y, colors.titleDim);
         y += lineH + ROW_GAP;

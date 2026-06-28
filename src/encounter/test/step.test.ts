@@ -31,7 +31,7 @@ const DMG = effOn(laserInstall, HULL_RESIST); // the laser's effective damage to
 const CANNON_VS_SHIELD = effOn(cannonInstall, SHIELD_RESIST); // the cannon's modest effective damage to a shield band
 
 const ship = (id: string, factionId: Ship['factionId']): Ship => ({
-  id, systemId: 'sol', factionId, classId: 'corvette', name: id, status: 'ready',
+  id, systemId: 'sol', factionId, components: ['small-engine', 'small-laser'], name: id, status: 'ready',
 });
 
 function encounterOf(ships: readonly Ship[], initiatorId = ships[0]!.id): EncounterState {
@@ -173,12 +173,12 @@ test('a self shield absorbs before hull, then expires after 3 of its owner\'s cy
     { id: 'small-engine', grants: COMPONENT_BY_TYPE.get('small-engine')!.grants },
     { id: 'small-shield', grants: COMPONENT_BY_TYPE.get('small-shield')!.grants },
   ]);
-  const p1: ShipCombatant = { kind: 'ship', id: 'p1', combatId: 0, factionId: 'player', classId: 'corvette', commands: p1Commands, categories: SHIP_CATEGORIES };
+  const p1: ShipCombatant = { kind: 'ship', id: 'p1', combatId: 0, factionId: 'player', components: ['small-engine', 'small-laser'], commands: p1Commands, categories: SHIP_CATEGORIES };
   const r1Commands = deriveCommands([
     { id: 'small-engine', grants: COMPONENT_BY_TYPE.get('small-engine')!.grants },
     { id: 'small-cannon', grants: COMPONENT_BY_TYPE.get('small-cannon')!.grants },
   ]);
-  const r1: ShipCombatant = { kind: 'ship', id: 'r1', combatId: 1, factionId: 'rival', classId: 'corvette', commands: r1Commands, categories: SHIP_CATEGORIES };
+  const r1: ShipCombatant = { kind: 'ship', id: 'r1', combatId: 1, factionId: 'rival', components: ['small-engine', 'small-laser'], commands: r1Commands, categories: SHIP_CATEGORIES };
   const spec = buildEncounterSpec(
     [{ factionId: 'player', controlled: true, combatants: [p1] }, { factionId: 'rival', controlled: false, combatants: [r1] }],
     { actorId: 'p1', actionId: RAISE, targetIds: [] },

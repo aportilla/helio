@@ -11,7 +11,7 @@ import type { Combatant } from '../state.ts';
 import type { FactionType } from '../../factions/types.ts';
 
 const c = (combatId: number, factionId: FactionType, hull = 100): Combatant => ({
-  kind: 'ship', id: `c${combatId}`, combatId, factionId, classId: 'corvette', commands: [], pools: [{ key: 'hull', current: hull, max: hull }],
+  kind: 'ship', id: `c${combatId}`, combatId, factionId, components: ['small-engine', 'small-laser'], commands: [], pools: [{ key: 'hull', current: hull, max: hull }],
 });
 const fleet = (n: number, factionId: FactionType = 'player'): Combatant[] => Array.from({ length: n }, (_, i) => c(i, factionId));
 

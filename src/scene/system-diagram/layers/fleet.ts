@@ -33,7 +33,6 @@
 import { Color, Mesh, PlaneGeometry, Scene, ShaderMaterial, Vector2 } from 'three';
 import type { Ship } from '../../../game-state';
 import { CONTROLLED_FACTION_ID, factionColor } from '../../../factions/registry';
-import { SHIP_CLASS_BY_TYPE } from '../../../ships/registry';
 import { sizes } from '../../../ui/theme';
 import { makeFleetTriangleMaterial } from '../../materials';
 import { disableCulling } from '../geom/cull';
@@ -52,6 +51,11 @@ import {
   Z_FLEET,
 } from '../layout/constants';
 import { domeBaselineY } from '../layout/row';
+
+// Fleet-sprite radius derives from loadout heft (no ship classes): base hull + per-module increment.
+// Tuned so a 2-module ship ≈ 25 and a 4-module full kit ≈ 28 — the old corvette/gunship spread.
+const FLEET_SPRITE_BASE_PX = 22;
+const FLEET_SPRITE_PER_MODULE_PX = 1.5;
 
 interface FleetSprite {
   readonly mesh: Mesh;
@@ -240,8 +244,11 @@ export class FleetLayer {
     return null;
   }
 
+  // Fleet-sprite radius (content-buffer px). With no ship classes, size derives from loadout heft: a
+  // base hull plus a per-module increment, so a heavier ship reads bigger (a 2-module ship ≈ 25, a
+  // 4-module full kit ≈ 28 — reproducing the old corvette/gunship spread without a class table).
   private spriteRadius(ship: Ship): number {
-    return SHIP_CLASS_BY_TYPE.get(ship.classId)?.spriteSizePx ?? 4;
+    return FLEET_SPRITE_BASE_PX + ship.components.length * FLEET_SPRITE_PER_MODULE_PX;
   }
 
   private resizeSprite(sprite: FleetSprite, d: number): void {
