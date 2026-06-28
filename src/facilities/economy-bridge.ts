@@ -47,9 +47,16 @@ import type { SimStarResolver } from './types.ts';
 import { buildGeometry, LY_TO_SIM_UNITS } from './sim-geometry.ts';
 import { sameBodyIds, transplantLiveState } from './world-sync.ts';
 import { base64FromBytes, bytesFromBase64 } from './base64.ts';
-import { slotKey, readRaw, writeRaw } from '../storage.ts';
+import { slotKey, readRaw, writeRaw, removeRaw } from '../storage.ts';
 
 const SIM_SAVE_KEY = slotKey('sim');
+
+// Delete the persisted sim save (the binary economy state) — the sim half of a full game reset. A reload
+// then cold-starts the EconomyBridge from a fresh World (the same path a missing / configHash-mismatched
+// save already takes). The game save (`helio.game`) is cleared by its own owner (game-state `clearGameSave`).
+export function clearSimSave(): void {
+  removeRaw(SIM_SAVE_KEY);
+}
 
 // Pinned, non-zero seed (Prng.fromSeed(0) is degenerate). The economy's RNG
 // identity for a fresh game; a restored save's PRNG state takes over from here.

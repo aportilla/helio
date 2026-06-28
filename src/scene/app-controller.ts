@@ -19,8 +19,8 @@ import { SystemScene } from './system-scene';
 import { TestScene } from './test-view/test-scene';
 import { warmPlanetShaders } from './warm-shaders';
 import { Sidebar } from '../ui/sidebar/sidebar';
-import { EconomyBridge } from '../facilities/economy-bridge';
-import { advanceTurn, getGameState, stepShipBuilds } from '../game-state';
+import { EconomyBridge, clearSimSave } from '../facilities/economy-bridge';
+import { advanceTurn, clearGameSave, getGameState, stepShipBuilds } from '../game-state';
 import { OverlayStack } from './overlay-stack';
 import type { Screen } from './screen';
 
@@ -74,6 +74,17 @@ export class AppController {
     this.starmap = new StarmapScene(canvas, this.renderer, this.sidebar, this.bridge);
     this.starmap.onViewSystem = (idx) => this.enterSystem(idx);
     this.starmap.onViewTest = () => this.enterTest();
+    this.starmap.onResetGame = () => this.resetGame();
+  }
+
+  // Wipe the persisted GAME (game + sim saves; user settings are kept) and reload. A reload is the simplest
+  // robust reset: boot re-reads the now-absent keys and every loader cold-starts (parseGameState → DEFAULTS,
+  // the EconomyBridge → a fresh World) — no in-memory teardown to coordinate across the scene / sidebar /
+  // bridge. Triggered by the settings panel's "Reset game state" action (StarmapScene.onResetGame).
+  private resetGame(): void {
+    clearGameSave();
+    clearSimSave();
+    window.location.reload();
   }
 
   start(): void {

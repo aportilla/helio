@@ -36,7 +36,7 @@ import { CONTROLLED_FACTION_ID, FACTION_DEFS } from './factions/registry';
 import type { FactionType } from './factions/types';
 import { DEFAULT_SHIP_CLASS, shipClassLabel } from './ships/registry';
 import type { ShipClassType } from './ships/types';
-import { slotKey, readRaw, writeRaw } from './storage';
+import { slotKey, readRaw, writeRaw, removeRaw } from './storage';
 import { recordsOnBody } from './world-overlay';
 
 // The save SHAPE (Facility / GameState / Ship) and the pure parse/validate-and-merge
@@ -70,6 +70,15 @@ function readFromStorage(): GameState {
 
 function writeToStorage(s: GameState): void {
   writeRaw(STORAGE_KEY, JSON.stringify(s));
+}
+
+// Delete the persisted game save (turn / facilities / ships / ownership) — the game-state half of a full
+// reset. Does NOT touch the live in-memory `current`; the caller reloads the page so boot re-reads the
+// now-absent key and parseGameState falls back to DEFAULTS (a fresh game). The sim save (`helio.sim`) is a
+// separate key cleared by its own owner (economy-bridge `clearSimSave`); user settings are a third key,
+// deliberately kept (a reset wipes the GAME, not your display preferences).
+export function clearGameSave(): void {
+  removeRaw(STORAGE_KEY);
 }
 
 let current: GameState = readFromStorage();

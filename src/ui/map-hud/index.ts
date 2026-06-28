@@ -36,7 +36,7 @@ import { IconButton, type IconButtonStates } from '../icon-button';
 import { Panel, type PanelHit, type PanelSpec, type TabHit } from '../panel';
 
 export type ToggleId = 'labels' | 'drops' | 'spin';
-export type ActionId = 'reset';
+export type ActionId = 'reset' | 'resetGameState';
 export type TabId = 'general' | 'graphics' | 'controls';
 
 // Inline texture-pool factories for the icons that use IconButton's
@@ -363,6 +363,14 @@ export class MapHud {
               rows: [
                 { kind: 'toggle', id: 'spin',  label: 'Auto-rotate view', on: this.toggleState.spin },
                 { kind: 'action', id: 'reset', label: 'Reset view' },
+              ],
+            },
+            {
+              // The GAME save (turn / facilities / ships / economy), distinct from the view-only rows above
+              // and from display preferences — a wipe-and-restart for the persisted game, not the settings.
+              header: 'Game',
+              rows: [
+                { kind: 'action', id: 'resetGameState', label: 'Reset game state' },
               ],
             },
           ],

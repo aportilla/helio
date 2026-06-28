@@ -148,6 +148,10 @@ export class StarmapScene implements Screen {
   // onViewSystem. Takes no args — the test grid is self-contained.
   onViewTest: () => void = () => {};
 
+  // Routes the settings panel's "Reset game state" action up to AppController (which owns the game + sim
+  // saves) — the scene stays a view: it fires intent, the app layer wipes + reloads. No-op until wired.
+  onResetGame: () => void = () => {};
+
   private readonly _onResize = () => this.resize();
 
   // Reusable per-frame scratch.
@@ -245,6 +249,8 @@ export class StarmapScene implements Screen {
         // autospin fidget and sync the panel checkbox to match.
         this.view.spin = false;
         this.hud.setToggleState('spin', false);
+      } else if (id === 'resetGameState') {
+        this.onResetGame();
       }
     };
     this.hud.onViewTest = () => this.onViewTest();
