@@ -118,6 +118,13 @@ builds an `EncounterSpec` and enters the combat mode on `SystemScene` (E3/E4 shi
 an encounter the menu's confirm folds through a third sink, `onEncounterCommit`, into the reducer —
 the `kind` fork is skipped (flipped on via `setEncounterMode`).
 
+The controller also exposes **`focusState()`** — `{ level, actorId, targetId, weaponColor,
+weaponComponentId }` read off `menu.view()` — which the scene's `TargetingVisuals` layer
+(`src/scene/targeting-visuals.ts`) reads each frame to light the **in-field FX keyed to the menu's
+focus DEPTH**: an engine glow on the focused actor, then a weapon-primed glow (on the firing module's
+rect, via `FleetLayer.moduleCenterFor`) + a yellow aim line + a target reticle once a weapon is armed.
+Escape walking the menu back reverts them by level. It serves combat and the live view alike.
+
 ## Status
 
 - **M1 (shipped):** the registry + `ActionMenu` + the ship adapter, headless-tested.

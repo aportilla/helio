@@ -4,7 +4,7 @@ The neutral **ship vocabulary** — what a ship is *made of*. A ship has **no cl
 
 ## Ships are module lists, not classes
 
-A built or spawned ship persists its `components` array in `helio.game` (see [the game save](../../docs/game-systems.md)) — the authoritative, per-ship configuration. There is no `ShipClassDef`, no `classId`: a "corvette" is just `['small-engine', 'small-laser']` and a heavier ship is a longer list. Order is authoring/display order (the eventual silhouette assembly reads it); for combat + the menu it's a multiset (loadout derivation merges identical modules). On load, each `components` entry is validated against `SHIP_COMPONENT_TYPES` — an unknown id drops the whole ship (an unknown loadout has undefined capabilities). The save contract is therefore the **component** ids (`FROZEN_COMPONENT_IDS`), not a class union.
+A built or spawned ship persists its `components` array in `helio.game` (see [the game save](../../docs/game-systems.md)) — the authoritative, per-ship configuration. There is no `ShipClassDef`, no `classId`: a "corvette" is just `['small-engine', 'small-laser']` and a heavier ship is a longer list. Order is authoring/display order — the fleet render reads it rear→nose, laying the modules out as a segmented hull; for combat + the menu it's a multiset (loadout derivation merges identical modules). On load, each `components` entry is validated against `SHIP_COMPONENT_TYPES` — an unknown id drops the whole ship (an unknown loadout has undefined capabilities). The save contract is therefore the **component** ids (`FROZEN_COMPONENT_IDS`), not a class union.
 
 ## Everything derives from the modules
 

@@ -467,14 +467,14 @@ export function makeStarMeshMaterial(): ShaderMaterial {
   });
 }
 
-// Mesh-based pixel-triangle material — the fleet sprite. A flat-color
-// isoceles triangle pointing LEFT or RIGHT (uDir = -1 / +1), tested per
-// integer pixel against the triangle's tapering half-height so it stays
-// crisp at any render scale (the same gl_FragCoord-vs-parity-snapped-uCenter
-// discipline as makeStarMeshMaterial, and likewise NOT a snapped/registered
-// material). The triangle fills its d×d quad: a full-height base on one
-// side, an apex point on the other. uDir is what gives the two factions
-// their facing — the player's ships aim at the enemy, the enemy's aim back.
+// Mesh-based pixel-triangle material — a standalone directional-sprite
+// primitive. A flat-color isoceles triangle pointing LEFT or RIGHT (uDir =
+// -1 / +1), tested per integer pixel against the triangle's tapering
+// half-height so it stays crisp at any render scale (the same
+// gl_FragCoord-vs-parity-snapped-uCenter discipline as makeStarMeshMaterial,
+// and likewise NOT a snapped/registered material). The triangle fills its
+// d×d quad: a full-height base on one side, an apex point on the other; uDir
+// orients the apex left or right.
 //
 // Per-sprite uniforms: uCenter (buffer-pixel coords, parity-snapped by the
 // caller), uRadius (half the quad edge), uColor, uDir (+1 apex-right /

@@ -131,7 +131,10 @@ the rest of the project follows.
   (no second scene — combat is an extra render PASS). `EncounterController` (`src/scene/encounter-
   controller.ts`) owns the transient `EncounterState` + its own overlay scene; `CombatOverlay`
   (`encounter-overlay.ts`) paints a bordered HP bar (hull + shield bands), an active-turn marker, and
-  a downed dim over each combatant, anchored to the live fleet slots via `slotCenterForEntity`. The
+  a downed dim over each combatant, anchored to the live fleet slots via `slotCenterForEntity`. During
+  the player's turn the shared menu also drives the scene's `TargetingVisuals` layer
+  (`src/scene/targeting-visuals.ts`, menu-focus-keyed: engine glow → weapon-primed glow + aim line +
+  reticle) — scene-owned, so it serves the live view too, not part of this package. The
   galaxy turn freezes on BOTH paths — a `freezesTurn` getter backed by an `inEncounter` flag (since
   `Screen.freezesTurn` is `readonly`) for the programmatic `nextTurn()`, and `setNextTurnEnabled(false)`
   for the user click. The system-view **back button** greys out too (`SystemHud.setBackEnabled(false)`) —

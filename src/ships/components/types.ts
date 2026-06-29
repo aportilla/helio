@@ -24,10 +24,10 @@ export type ShipComponentType =
   | 'tactical-command-module';
 
 // A component's structural family (the D13 taxonomy). It drives nothing in the menu today — the
-// grants do that — but names the part's ROLE so the deferred consumers can read it: a loadout
-// validator (exactly one chassis + one drive, D11), the fleet render layer (which silhouette piece
-// to attach), and the energy model. The full union is declared up front so adding a defense/utility
-// part later is one def, not a type change.
+// grants do that — but names the part's ROLE so its consumers can read it: a loadout validator
+// (exactly one chassis + one drive, D11), the fleet render layer (which tints each module's rect by
+// kind — shipped, FleetLayer), and the energy model. The full union is declared up front so adding a
+// defense/utility part later is one def, not a type change.
 export type ShipComponentKind = 'chassis' | 'drive' | 'weapon' | 'defense' | 'utility';
 
 // One ship component's static design — the ship-side peer of FacilityDef. Deliberately THIN: just
