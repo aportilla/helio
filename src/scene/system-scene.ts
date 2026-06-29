@@ -33,6 +33,7 @@ import type { Actor, TargetAllegiance, TargetCandidate } from '../actions/types'
 import { SystemActionMenu } from './actions/system-action-menu';
 import { EFFECT_HANDLERS } from './actions/effect-handlers';
 import { EncounterController } from './encounter-controller';
+import { TargetingVisuals } from './targeting-visuals';
 import { ENCOUNTER_BAR_HEIGHT } from '../ui/encounter-hud';
 import { buildEncounterSpec, type EncounterSpec } from '../encounter/encounter-spec';
 import { shipsToCombatants } from '../encounter/ships-to-combatants';
@@ -76,6 +77,13 @@ export class SystemScene implements Screen {
     (id) => this.slotCenterForEntity(id),
     this.actionMenu,
     (id) => this.combatantName(id),
+  );
+  // In-field targeting FX keyed to the action menu's focus depth (engine glow / weapon-primed glow /
+  // target line + reticle). Anchors through the same slot seam as the menu + combat chrome, and
+  // composites in the content scissor right after the diagram. Driven by actionMenu.focusState().
+  private readonly targeting = new TargetingVisuals(
+    (id) => this.slotCenterForEntity(id),
+    (id, componentId) => this.moduleAnchorFor(id, componentId),
   );
   // True while combat is live. Backs the readonly Screen.freezesTurn (a getter is the only legal
   // backing) AND gates the overlay render + input branch, so the non-combat path is byte-identical
@@ -282,6 +290,7 @@ export class SystemScene implements Screen {
     this.hud.dispose();
     this.actionMenu.dispose();
     this.encounter.dispose();
+    this.targeting.dispose();
     this.viewport.dispose();
   }
 
@@ -484,6 +493,14 @@ export class SystemScene implements Screen {
   private slotCenterForEntity(id: string): { cx: number; cy: number; r: number } | null {
     const ref = parseEntityId(id);
     return ref.kind === 'body' ? this.diagram.bodyCenter(ref.bodyIdx) : this.diagram.fleetSlotCenter(ref.shipId);
+  }
+
+  // The on-screen center of an actor's MODULE (content-buffer px) — the firing weapon's rect, for the
+  // targeting-visuals weapon glow. Ships only; a body weapon has no module rect (null ⇒ the glow falls
+  // back to the hull front).
+  private moduleAnchorFor(id: string, componentId: string): { cx: number; cy: number; r: number } | null {
+    const ref = parseEntityId(id);
+    return ref.kind === 'ship' ? this.diagram.fleetModuleCenter(ref.shipId, componentId) : null;
   }
 
   // This system's ready ships (the actor + ship-candidate source). Pre-filtered to 'ready'
@@ -739,6 +756,8 @@ export class SystemScene implements Screen {
     // The combat overlay anchors to the diagram's content-buffer slot centers, so it shares the
     // diagram's content dims (NOT the full buffer the menu/hud use).
     this.encounter.resize(this.viewport.contentBufferW, this.viewport.bufferH);
+    // Same content-buffer space as the diagram/combat chrome — the targeting FX anchor to slot centers.
+    this.targeting.resize(this.viewport.contentBufferW, this.viewport.bufferH);
   }
 
   private tick = (): void => {
@@ -752,6 +771,11 @@ export class SystemScene implements Screen {
     this.diagram.update(now);
     // Bounce the action menu's selection pointer (a no-op while the menu is closed).
     this.actionMenu.tick(now);
+    // Targeting FX follow the menu's focus depth: engine glow on the focused actor, then a weapon-
+    // primed glow + aim line + reticle once a weapon is armed at the target level. Null focus (menu
+    // closed) hides them — Esc walking the menu back reverts the states for free.
+    this.targeting.setFocus(this.actionMenu.focusState());
+    this.targeting.tick(now);
     // One full-buffer clear (the reserved sidebar strip stays clear-color), then
     // the diagram clipped to the content rect so its pixel-snapped body materials
     // line up with the content-width uViewport; the HUD spans the full buffer.
@@ -765,6 +789,10 @@ export class SystemScene implements Screen {
     // Combat chrome composites over the diagram in the SAME content viewport/scissor (its slot anchors
     // are content-buffer coords). Gated so the non-combat render path is byte-identical.
     if (this.inEncounter) this.encounter.render(this.renderer);
+    // Targeting FX paint over the diagram + combat chrome, still inside the content scissor so the
+    // aim line can't bleed onto the sidebar strip. Self-gates to a cleared/hidden quad when no actor
+    // is focused, so the idle path stays cheap.
+    this.targeting.render(this.renderer);
     this.renderer.setScissorTest(false);
     this.renderer.setViewport(0, 0, cssW, cssH);
     this.renderer.render(this.hud.scene, this.hud.camera);

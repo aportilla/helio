@@ -23,7 +23,7 @@ import { OrthographicCamera, Scene } from 'three';
 import { ActionMenuPanel, ActorArrow, MenuPointer } from '../../ui/action-menu';
 import type { HitResult } from '../../ui/hit-test';
 import { sizes } from '../../ui/theme';
-import { ActionMenu, type MenuView, type TargetResolver } from '../../actions/menu';
+import { ActionMenu, type MenuLevel, type MenuView, type TargetResolver } from '../../actions/menu';
 import { commandFor } from '../../actions/derive';
 import type { Actor, ActionIntent } from '../../actions/types';
 
@@ -44,6 +44,22 @@ export interface SlotCenter {
   readonly cx: number;
   readonly cy: number;
   readonly r: number;
+}
+
+// A compact read of the menu's current focus DEPTH, consumed by the targeting-visuals layer
+// (TargetingVisuals — engine glow / weapon-primed glow / target line + reticle). Null while the
+// menu is closed. `level` decides WHICH visuals show: the engine glow rides the actor at every
+// level (the menu is open on it); the weapon glow + target line + reticle appear only at the
+// 'target' level (a weapon is armed). `targetId` / `weaponColor` are populated only there.
+export interface TargetingFocus {
+  readonly level: MenuLevel;
+  readonly actorId: string;
+  readonly targetId: string | null;
+  readonly weaponColor: string | null;
+  // The armed weapon's PROVIDER id (a ship component id / body facility id — the half of the command
+  // id before the ':'). The targeting-visuals layer resolves it to that module's on-screen rect so the
+  // weapon-primed glow emanates from the firing module. Null off the target level.
+  readonly weaponComponentId: string | null;
 }
 
 export interface OpenMenuOptions {
@@ -121,6 +137,30 @@ export class SystemActionMenu {
 
   get isOpen(): boolean {
     return this.menu !== null;
+  }
+
+  // A compact read of the current focus depth for the TargetingVisuals layer. Null while the menu
+  // is closed — so the layer hides whenever no actor is focused. The engine glow keys off `actorId`
+  // (shown at every level); the weapon glow + target line + reticle key off the target level, where
+  // a weapon is armed (the row under `cursor`) and a candidate is locked (`targets[targetCursor]`).
+  // The same shape serves the live system view AND combat, which drive this one menu instance.
+  focusState(): TargetingFocus | null {
+    if (!this.menu || !this.opts) return null;
+    const view = this.menu.view();
+    if (view.closed) return null;
+    const actorId = this.opts.actor.id;
+    if (view.level !== 'target') {
+      return { level: view.level, actorId, targetId: null, weaponColor: null, weaponComponentId: null };
+    }
+    // Target level: the armed command is the row under the cursor (frozen here). Resolve its grant
+    // color for the weapon-primed glow + line tint, the locked candidate for the reticle, and the
+    // command id's PROVIDER half (before the ':') so the glow can find the firing module's rect.
+    const targetId = view.targets && view.targets.length > 0 ? view.targets[view.targetCursor ?? 0] ?? null : null;
+    const armedId = view.rows[view.cursor]?.key;
+    const weaponColor = armedId ? commandFor(this.opts.actor, armedId)?.grant.color ?? null : null;
+    const colon = armedId ? armedId.indexOf(':') : -1;
+    const weaponComponentId = armedId && colon > 0 ? armedId.slice(0, colon) : null;
+    return { level: 'target', actorId, targetId, weaponColor, weaponComponentId };
   }
 
   resize(bufferW: number, bufferH: number, contentW: number): void {

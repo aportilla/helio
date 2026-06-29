@@ -182,6 +182,12 @@ export class SystemDiagram {
     return this.fleet.slotCenterFor(shipId);
   }
 
+  // The on-screen center of a ship's MODULE (content-buffer px) — the firing weapon's rect, the
+  // anchor the targeting-visuals weapon glow emanates from. Pass-through to the fleet layer.
+  fleetModuleCenter(shipId: string, componentId: string): { cx: number; cy: number; r: number } | null {
+    return this.fleet.moduleCenterFor(shipId, componentId);
+  }
+
   // The on-screen center of a body (content-buffer px), or null if it isn't laid out — the
   // body twin of fleetSlotCenter. The anchor the action menu pins to (a body actor) and the
   // target bracket rides (a body target); shape-identical to a fleet slot center, so the

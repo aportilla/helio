@@ -15,13 +15,18 @@
 // dome crossed with its half of the width), which derives from the content rect + the
 // dome baseline, re-derived on a resize for free.
 //
-// Primitive: one Mesh + PlaneGeometry per sprite on the makeFleetTriangleMaterial
-// CPU-integer uCenter/uRadius path — a flat triangle tinted by faction color, facing
-// per side via uDir. Same parity-snap discipline as the stars-row disc. Two trip-wires apply:
-// (b) disableCulling (positions are CPU-rewritten, so the cached bounding sphere
-// goes stale) and (c) depthTest:false + a dedicated renderOrder (paint over the
-// bodies + cargo). makeStarMeshMaterial is NOT a snapped/registered material, so the
-// ctor-seed-uViewport and unregisterSnappedMaterial trip-wires do NOT apply.
+// Primitive: one Mesh + PlaneGeometry per sprite, textured with a per-ship CanvasTexture — a ship
+// renders as its ORDERED MODULE LIST (a ship has no class; it IS its modules), drawn rear→nose as a
+// segmented hull of small rects, each filled by its component KIND (drive / weapon / defense /
+// utility / chassis) and framed in the faction color, so the loadout reads at a glance and the two
+// fleets still read by their border color. The row is mirrored by facing side (player musters left
+// facing right, so its rear/drive sits at the hull's left; opponents mirror). The canvas is repainted
+// only on relayout (a fleet change / resize), NearestFilter + parity-snapped so it stays pixel-crisp.
+// Two trip-wires still apply: (b) disableCulling (positions are CPU-rewritten, so the cached bounding
+// sphere goes stale) and (c) depthTest:false + a dedicated renderOrder (paint over the bodies + cargo).
+//
+// Each module's on-screen rect center is published via moduleCenterFor — the anchor the targeting-
+// visuals layer hangs the weapon-primed glow on (it emanates from the firing module's rect).
 //
 // Picks via pickAt: a click on a sprite selects that ship (the sidebar shows its card).
 // The hit-test geometry is rebuilt on each relayout into a pick-target list and walked
@@ -30,11 +35,13 @@
 // no exit path (no movement / combat), so the rendered count is bounded rather than
 // growing without limit.
 
-import { Color, Mesh, PlaneGeometry, Scene, ShaderMaterial, Vector2 } from 'three';
+import { CanvasTexture, Mesh, MeshBasicMaterial, PlaneGeometry, Scene } from 'three';
 import type { Ship } from '../../../game-state';
 import { CONTROLLED_FACTION_ID, factionColor } from '../../../factions/registry';
+import { COMPONENT_BY_TYPE } from '../../../ships/components/registry';
+import type { ShipComponentKind, ShipComponentType } from '../../../ships/components/types';
 import { sizes } from '../../../ui/theme';
-import { makeFleetTriangleMaterial } from '../../materials';
+import { paintToTexture } from '../../../ui/widget';
 import { disableCulling } from '../geom/cull';
 import { snapPxParity } from '../geom/snap';
 import { pickFleetShip, type FleetPickCandidate } from './fleet-pick';
@@ -57,13 +64,44 @@ import { domeBaselineY } from '../layout/row';
 const FLEET_SPRITE_BASE_PX = 22;
 const FLEET_SPRITE_PER_MODULE_PX = 1.5;
 
+// The segmented hull occupies a central horizontal BAND of the square sprite (a slim ship, not a full
+// square), inset from the sides so the engine glow has room behind the rear. Env px / fractions of diam.
+const HULL_BAND_FRAC = 0.5;   // hull band height as a fraction of the sprite diameter
+const HULL_PAD_X = 2;         // horizontal inset (px) at each end of the row
+const HULL_MIN_BAND = 6;      // floor on the band height so a tiny sprite still reads
+
+// Module fill by structural KIND (the part's role) — muted pixel tones, distinct enough to read the
+// loadout at a glance; the faction color frames + divides them. A kind with no entry falls back to the
+// chassis grey. Deliberately not faction hues, so fill = role and border = side stay separable.
+const KIND_COLOR: Record<ShipComponentKind, string> = {
+  chassis: '#4a5360', // grey hull
+  drive:   '#2f6f7a', // teal ion-drive
+  weapon:  '#9a4b3b', // rust red
+  defense: '#3b5a9a', // steel blue
+  utility: '#7a6a3b', // olive
+};
+
 interface FleetSprite {
   readonly mesh: Mesh;
   geometry: PlaneGeometry;
-  readonly material: ShaderMaterial;
-  // Current built diameter in px — geometry is rebuilt only when it changes (a
-  // resize that doesn't change sprite size leaves it intact, like the stars row).
+  readonly material: MeshBasicMaterial;
+  // Per-ship canvas + its texture — repainted (module row) only on relayout, NOT per frame.
+  readonly canvas: HTMLCanvasElement;
+  readonly tex: CanvasTexture;
+  // Current built diameter in px — geometry + canvas are rebuilt only when it changes (a
+  // resize that doesn't change sprite size leaves them intact, like the stars row).
   diam: number;
+}
+
+// One module's published on-screen rect, rebuilt each relayout — the anchor the targeting-visuals
+// weapon glow hangs on (it emanates from the FIRING module). `cx,cy` is the rect center in
+// content-buffer px (Y-up), `r` a glow-sizing half-extent.
+interface ModuleAnchor {
+  readonly shipId: string;
+  readonly componentId: ShipComponentType;
+  readonly cx: number;
+  readonly cy: number;
+  readonly r: number;
 }
 
 export class FleetLayer {
@@ -81,10 +119,17 @@ export class FleetLayer {
   // (the only place the formation changes). Reused in place so a pick (or a hover,
   // which pickAt also serves) allocates nothing.
   private readonly pickTargets: FleetPickCandidate[] = [];
+  // Per-module on-screen rects, rebuilt in relayout alongside pickTargets — the weapon-glow anchor
+  // source (moduleCenterFor). Reused in place so a relayout allocates nothing new.
+  private readonly moduleAnchors: ModuleAnchor[] = [];
 
   constructor(scene: Scene) {
     for (let i = 0; i < MAX_FLEET_SPRITES; i++) {
-      const material = makeFleetTriangleMaterial();
+      // A 1×1 canvas texture, sized + painted on the first relayout. transparent so the box corners
+      // outside the hull band read as empty (only the segmented hull strip paints).
+      const canvas = document.createElement('canvas');
+      const tex = paintToTexture(canvas);
+      const material = new MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
       material.depthTest = false; // trip-wire (c): paint over the bodies + cargo dots
       const geometry = new PlaneGeometry(1, 1); // sized per-ship on the first relayout
       const mesh = new Mesh(geometry, material);
@@ -92,7 +137,7 @@ export class FleetLayer {
       mesh.visible = false; // hidden until a relayout places it (no origin flash)
       disableCulling(mesh); // trip-wire (b): positions are CPU-rewritten
       scene.add(mesh);
-      this.sprites.push({ mesh, geometry, material, diam: 1 });
+      this.sprites.push({ mesh, geometry, material, canvas, tex, diam: 1 });
     }
   }
 
@@ -130,6 +175,7 @@ export class FleetLayer {
     const mine = shown.filter((s) => s.factionId === CONTROLLED_FACTION_ID);
     const theirs = shown.filter((s) => s.factionId !== CONTROLLED_FACTION_ID);
     this.pickTargets.length = 0; // rebuilt by layoutGroup from the visible sprites
+    this.moduleAnchors.length = 0; // ditto — the per-module weapon-glow anchors
 
     // The reserved band's vertical extent. Top tracks the lowest planet so the fleet
     // sits just under the dome on any viewport; bottom is a pad above the content edge.
@@ -204,9 +250,6 @@ export class FleetLayer {
         const sprite = this.sprites[start + placed]!;
         const ship = ships[placed]!;
         this.resizeSprite(sprite, d);
-        (sprite.material.uniforms.uColor!.value as Color).set(factionColor(ship.factionId));
-        sprite.material.uniforms.uRadius!.value = r;
-        sprite.material.uniforms.uDir!.value = dir;
 
         const y = firstY + k * pitchY;
         const u = span > 0 ? (y - yMid) / (span / 2) : 0; // −1 (top) … +1 (bottom)
@@ -216,8 +259,10 @@ export class FleetLayer {
         const cx = snapPxParity(colX + dir * bow, d);
         const cy = snapPxParity(y, d);
         sprite.mesh.position.set(cx, cy, Z_FLEET);
-        (sprite.material.uniforms.uCenter!.value as Vector2).set(cx, cy);
         sprite.mesh.visible = true;
+        // Paint the ship's ordered modules as a segmented hull, recording each module's on-screen
+        // rect center into moduleAnchors (the weapon-glow anchor source).
+        this.paintSprite(sprite, ship, cx, cy, r, dir);
         this.pickTargets.push({ cx, cy, r, shipId: ship.id });
       }
     }
@@ -244,6 +289,16 @@ export class FleetLayer {
     return null;
   }
 
+  // The on-screen center (content-buffer px) of a given ship's module — the FIRST module whose
+  // component id matches, or null. The targeting-visuals weapon glow anchors here so it emanates from
+  // the firing module's rect. Walks the moduleAnchors list relayout built, so it tracks resizes too.
+  moduleCenterFor(shipId: string, componentId: string): { cx: number; cy: number; r: number } | null {
+    for (const m of this.moduleAnchors) {
+      if (m.shipId === shipId && m.componentId === componentId) return { cx: m.cx, cy: m.cy, r: m.r };
+    }
+    return null;
+  }
+
   // Fleet-sprite radius (content-buffer px). With no ship classes, size derives from loadout heft: a
   // base hull plus a per-module increment, so a heavier ship reads bigger (a 2-module ship ≈ 25, a
   // 4-module full kit ≈ 28 — reproducing the old corvette/gunship spread without a class table).
@@ -256,15 +311,73 @@ export class FleetLayer {
     sprite.geometry.dispose();
     sprite.geometry = new PlaneGeometry(d, d);
     sprite.mesh.geometry = sprite.geometry;
+    // The canvas is the same square as the quad (1 texel = 1 px under the parity snap), so resizing
+    // it clears it — paintSprite repaints right after. Round defensively (d is integer by construction).
+    sprite.canvas.width = Math.max(1, Math.round(d));
+    sprite.canvas.height = sprite.canvas.width;
     sprite.diam = d;
   }
 
+  // Paint one ship's ORDERED modules as a segmented hull onto its canvas, and record each module's
+  // on-screen rect center into moduleAnchors. The hull runs rear→nose along the facing axis: the
+  // controlled side faces +x, so its first component (the rear, typically the drive) sits at the
+  // hull's LEFT and dir −1 mirrors it. Each module is a kind-colored rect; the faction color frames
+  // the hull and divides the modules, so fill reads role and border reads side. The CanvasTexture's
+  // flipY only flips Y (the band is vertically centered, so it's symmetric); X is direct, so canvas-
+  // left is screen-left. Repainted on relayout only.
+  private paintSprite(sprite: FleetSprite, ship: Ship, cx: number, cy: number, r: number, dir: number): void {
+    const d = Math.max(1, Math.round(r * 2));
+    const g = sprite.canvas.getContext('2d')!;
+    g.clearRect(0, 0, d, d);
+
+    const comps = ship.components;
+    const n = comps.length;
+    if (n === 0) { sprite.tex.needsUpdate = true; return; } // a ship IS its modules — n>0 in practice
+
+    const band = Math.max(HULL_MIN_BAND, Math.round(d * HULL_BAND_FRAC));
+    const top = Math.round((d - band) / 2);
+    const x0 = HULL_PAD_X;
+    const usable = d - 2 * HULL_PAD_X;
+    // Integer slot boundaries left→right, so adjacent rects butt with no gap/overlap.
+    const bound = (j: number): number => x0 + Math.round((j * usable) / n);
+
+    for (let i = 0; i < n; i++) {
+      // Canvas slot: component i counts from the REAR. dir +1 puts the rear at the left (slot i);
+      // dir −1 mirrors (rear at the right, slot n−1−i).
+      const j = dir > 0 ? i : n - 1 - i;
+      const xa = bound(j);
+      const w = Math.max(1, bound(j + 1) - xa);
+      const kind = COMPONENT_BY_TYPE.get(comps[i]!)?.kind;
+      g.fillStyle = (kind && KIND_COLOR[kind]) || KIND_COLOR.chassis;
+      g.fillRect(xa, top, w, band);
+      // Module center in content-buffer px: canvas x ∈ [0,d] maps to [cx−r, cx+r]; the modules sit on
+      // the hull's mid-line (= cy). r is a glow-sizing half-extent.
+      this.moduleAnchors.push({
+        shipId: ship.id,
+        componentId: comps[i]!,
+        cx: Math.round(cx - r + xa + w / 2),
+        cy: Math.round(cy),
+        r: Math.min(w, band) / 2,
+      });
+    }
+
+    // Faction frame + inter-module dividers — crisp 1-px runs over the fills.
+    g.fillStyle = factionColor(ship.factionId);
+    g.fillRect(x0, top, usable, 1);            // top
+    g.fillRect(x0, top + band - 1, usable, 1); // bottom
+    g.fillRect(x0, top, 1, band);              // left
+    g.fillRect(x0 + usable - 1, top, 1, band); // right
+    for (let j = 1; j < n; j++) g.fillRect(bound(j), top, 1, band); // dividers
+
+    sprite.tex.needsUpdate = true;
+  }
+
   dispose(): void {
-    // makeStarMeshMaterial is not a snapped/registered material, so there is no
-    // unregisterSnappedMaterial here — just release each sprite's GPU resources.
+    // Release each sprite's GPU resources — geometry, the basic material, and its own canvas texture.
     for (const s of this.sprites) {
       s.geometry.dispose();
       s.material.dispose();
+      s.tex.dispose();
     }
   }
 }
