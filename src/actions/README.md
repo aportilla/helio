@@ -1,12 +1,14 @@
 # `src/actions/` — the system action menu
 
-The **general interaction grammar of the system view**: select an **actor**, drill into a
-**category → command**, and execute. The target is **not a menu tier** — scoping into a
-command list *is* the target-selection modality (the Sea-of-Stars idiom): you move vertically
-through the commands while a **'select' bracket** rides one target in the field, moved
-horizontally (←/→ / A/D / click), and confirming a command fires it at the locked target. This
-is *how you act on the world* — not combat chrome. Combat is one **consumer** (an offensive
-action that enters the encounter modality); non-combat verbs (repair a ship, a sensor sweep) are peers.
+The **general interaction grammar of the system view**: select an **actor**, then drill three
+**sequential** levels — **category → command (weapon) → target** — and execute. You choose WHAT
+to do first (a category, then a command) with no target shown; arming the command scopes into a
+**separate target level** where the box hides and the bouncing **focus pointer** moves out onto one
+candidate ship in the field (moved by the arrows / hover / click) and **only confirming the target
+fires**. `back` / Escape walks the
+hierarchy back up one level at a time (target → command → category → close). This is *how you act
+on the world* — not combat chrome. Combat is one **consumer** (an offensive action that enters the
+encounter modality); non-combat verbs (repair a ship, a sensor sweep) are peers.
 This README is the as-built source of truth (the menu shipped through M3); the combat consumer's
 forward design lives in `plans/4x-encounter-combat-system.md`.
 
@@ -67,7 +69,7 @@ path.
 | `types.ts` | The open vocabulary leaf — `ActionGrant` (a provider's declared action) and the merged `ActionCommand` an actor carries, plus `ActionCategory` / `ActionTargeting` / `ActionKind`, the **target-predicate** axis (`TargetCandidate` / `TargetCriteria` / `TargetAllegiance`), and the `Actor` / `ActorSide` / `ActionIntent` shapes. No `ActionType` union — actions are derived. Effect-free: enough to build and run the menu, never what an action *does*. |
 | `derive.ts` | The **derive-and-merge projection** — `deriveCommands(providers)` collects each `GrantProvider`'s grants, merges identical ones (by composed id) into one scaled `ActionCommand`, first-seen order; `grantKeyOf(id)` is the inverse the app-side effect handlers key on. The pure heart both adapters share. |
 | `registry.ts` | The vocabulary's small central remainder after the inversion (no `ACTION_DEFS`): the per-actor-TYPE **category palettes** (`SHIP_CATEGORIES` Attack+Navigation / `BODY_CATEGORIES` Attack+Support), and the grant-keyed display helpers (`commandLabel`, which suffixes `(xN)` for a merged command; `commandColor`). |
-| `menu.ts` | `ActionMenu` — the mechanics-agnostic state machine: a **two-level** stack (category → command) with an orthogonal **target lock** on the command level (`moveCursor` = vertical/command, `moveTarget` / `setTargetById` = horizontal/target), `enter` / `back` / `cancel` / `confirm`, the top-level rows taken from the actor's **category palette** (`Actor.categories`) or, absent one, derived from its commands' categories — empties shown greyed-not-hidden, emitting one effect-free `ActionIntent` aimed at the locked target. Reads the actor's **resolved commands inline** (no central lookup); availability is the energy check `stats.energy >= command.totalCost` (permissive when no energy stat). Also exports the pure `filterCandidates` matcher (applies a grant's `TargetCriteria` to the controller's minted candidates). |
+| `menu.ts` | `ActionMenu` — the mechanics-agnostic state machine: a **three-level** stack (category → command → target). `enter` drills (category → command → arm-and-enter-targeting) and, at the target level, **fires**; `back` / `cancel` walk back up. `moveCursor` / `setCursor` pick the category/command (inert once a weapon is armed at the target level); `moveTarget` / `setTargetById` move the lock, live **only at the target level** — the command level exposes no targets, so the bracket appears only after you arm a weapon. The top-level rows come from the actor's **category palette** (`Actor.categories`) or, absent one, are derived from its commands' categories — empties shown greyed-not-hidden. Emits one effect-free `ActionIntent` aimed at the locked target. Reads the actor's **resolved commands inline** (no central lookup); availability is the energy check `stats.energy >= command.totalCost` (permissive when no energy stat). Also exports the pure `filterCandidates` matcher (applies a grant's `TargetCriteria` to the controller's minted candidates). |
 | `entity-id.ts` | The pure id codec — `encodeBodyEntityId` / `parseEntityId` over the frozen `body:` namespace, so ships (un-prefixed) and bodies (`body:<bodyIdx>`) share one keyspace without collision. |
 | `ships-to-actors.ts` | Projects ready fleet ships into menu `Actor`s split by faction (`ActorSide`, `controlled` flag). Commands are **derived + merged from the ship's component loadout** — its `ShipClassDef.components` (today the corvette's `small-laser` → Laser; its `small-engine` grants no command), each component's inline `grants` run through `deriveCommands`, the same projection the body adapter uses. Pure; the caller scopes ships to a system first. |
 | `bodies-to-actors.ts` | Projects facility-bearing bodies into menu `Actor`s split by ownership — the body twin of `ships-to-actors`, ids in the `body:` namespace. Commands are **derived + merged from each facility's own inline grants** (read via `FACILITY_BY_TYPE`; the registry is sim-free, so the adapter stays sim-free) — no central facility→command map; every body carries the **Attack + Support** category palette. The caller resolves each body's `bodyIdx` + owning faction. |
@@ -96,9 +98,17 @@ The menu is driven live in the system view by `src/scene/actions/system-action-m
 the sealed `SystemDiagram`). Selecting a fleet ship opens it anchored to that ship's slot; it
 routes pointer + keyboard through the same chrome chain the sidebar/HUD use (`handleClick` /
 `handlePointerMove` / `hitTest` / `handleKey`), drives the `ActionMenu` state machine, and paints
-through the `ActionMenuPanel` + the in-field `TargetBracket`
-([`src/ui/action-menu.ts`](../ui/action-menu.ts)) — the bracket rides the locked target while
-you choose a command, and a click on (or ←/→ over) an enemy moves it. On a committed intent the
+through the `ActionMenuPanel` ([`src/ui/action-menu.ts`](../ui/action-menu.ts)). The panel wears
+the **Sea-of-Stars chrome**: the actor's name floats above a tight box of two-state rows, a
+bouncing `MenuPointer` (not a row highlight) is the **single focus mark**, and — at the **category**
+level, when more than one actor is commandable — `ActorArrow`s flank the box as the actor-switch
+affordance (clicking one cycles the focus, the keyboard ←/→ twin). At the **target level the box
+hides** and the focus pointer moves out onto the locked **target ship** in the field (the arrows /
+hover / a click move it; a target click — or Enter — fires); there is no separate bracket, the
+bouncing pointer *is* the target indicator. The controller owns these adornments and bobs the
+pointer from `SystemScene`'s per-frame `tick`. The directional axes change with the level: at the
+target level all arrows move the lock; at the command level ↑/↓ pick the weapon and ←/→ are inert;
+at the category level ←/→ cycle the actor. On a committed intent the
 **execute dispatch** routes by the command's `kind` — `onImmediate` / `onEnterEncounter`, both
 filled by `SystemScene`. `onImmediate` routes to an app-side **effect-handler registry**
 (`src/scene/actions/effect-handlers.ts`) keyed by **grant key** (`grantKeyOf(actionId)`, so a
@@ -111,17 +121,17 @@ the `kind` fork is skipped (flipped on via `setEncounterMode`).
 ## Status
 
 - **M1 (shipped):** the registry + `ActionMenu` + the ship adapter, headless-tested.
-- **M2 (shipped):** the menu anchored live in the system view — select a fleet ship → drill
-  category → command while a target bracket rides an enemy in the field (←/→ / click to move it)
-  → confirm fires at the locked target, mouse + keyboard parity (incl. WASD), the dispatch seam
-  wired (placeholder effects, encounter hand-off stubbed). The de-risking milestone: the hardest
-  UX, validated outside the combat turn loop.
-- **M2c (shipped):** the nested focus hierarchy. Actor selection is an **outer focus** mirroring
+- **M2 (shipped):** the menu anchored live in the system view — select a fleet ship → drill into a
+  command, target an enemy in the field, confirm to fire — mouse + keyboard parity (incl. WASD), the
+  dispatch seam wired (placeholder effects, encounter hand-off stubbed). The de-risking milestone:
+  the hardest UX, validated outside the combat turn loop. (The flow later split into three levels —
+  see the intro + scene-layer above.)
+- **M2c (shipped):** the nested focus hierarchy. Actor selection is an **outer focus** alongside
   the inner target focus — at the category level ←/→ cycle the active **actor** (your commandable
-  ships, the menu re-opening on each); at the command level ←/→ cycle the **target**. A directional
-  tap from idle focuses the first actor (keyboard-first), and Esc ascends one level (target →
-  category → idle). A SystemScene/controller concern (`onCycleActor` + the actor ring); the headless
-  `ActionMenu` is unchanged.
+  ships, the menu re-opening on each); the **target** is moved at the (later, separate) target
+  level. A directional tap from idle focuses the first actor (keyboard-first), and Esc ascends one
+  level (target → command → category → idle). A SystemScene/controller concern (`onCycleActor` +
+  the actor ring).
 - **M3a (shipped):** bodies as even-handed actors/targets, headless. The `body:` entity-id codec
   (`entity-id.ts`); the `TargetCriteria` predicate seam (now on each `ActionGrant`) plus the pure `filterCandidates`
   matcher; the app-side effect-handler routing seam (keyed by grant key), today holding only the
@@ -136,7 +146,7 @@ the `kind` fork is skipped (flipped on via `setEncounterMode`).
   (and `bombard`) gained an enemy `targets` predicate. A
   DEV "+ opponent colony" pill places an opponent colony on the selected body (a facility + an ownership
   flip — the facility claims it) so the body-as-target path is exercisable. Select your colony/belt → its
-  menu opens; select a ship → Attack now brackets enemy ships **and** enemy bodies.
+  menu opens; select a ship → Attack now targets enemy ships **and** enemy bodies.
 - **Body loadouts + always-shown categories (shipped):** bodies now field a real two-category
   menu. New facilities (`railgun-battery`, `missile-battery`, `sensor-network` — economy-inert,
   like the shipyard) each **declare one action grant**: **Attack** weapons Railgun / Missile
@@ -158,6 +168,14 @@ the `kind` fork is skipped (flipped on via `setEncounterMode`).
   facilities. The byte-identical faction-split both adapters carried was extracted to `sides.ts`
   (`actorSides`). **Deferred:** the energy model (`battery`/`recharge`/`costPerUnit`), size-class
   budget, component rendering, and per-ship loadout serialization (Phases 2-energy→4).
+- **Sea-of-Stars chrome + sequential targeting (shipped):** the panel is a tight box with the
+  actor name floating above it and two-state rows (selection is not a row state); a single bouncing
+  **focus pointer** marks the cursor row, and ◄ ► **actor arrows** flank the box at the category
+  level when more than one actor is commandable. The flow split into **three sequential levels**
+  (category → command → target): arming a weapon enters a distinct target mode where **the box
+  hides** and the focus pointer moves out onto the locked **target ship** in the field (no separate
+  bracket); only confirming the target fires, and Esc walks back up one level at a time. A command
+  with no admissible target is **greyed** (can't be armed into a dead end), mirroring the energy gate.
 - **Next:** the encounter **consumes the menu — first-playable** (`4x-encounter-combat-system.md`
   E1–E4 + the effect substrate shipped; see [src/encounter/README.md](../encounter/README.md)) over this
   even-handed, **derived** substrate; E5 body combatants, opponent AI, and event animation remain. The

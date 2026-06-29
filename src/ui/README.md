@@ -12,6 +12,7 @@ icon-button.ts          Texture-pool button (off / hover / on / onHover / disabl
 painter.ts              Shared 2D primitives: surfaces, glyphs, pill + segmented-pill buttons
 theme.ts                Colors, sizes, fonts shared across widgets
 hit-test.ts             'interactive' | 'opaque' | 'transparent' pointer-routing contract
+action-menu.ts          System action-menu chrome (Sea-of-Stars idiom): ActionMenuPanel (label floating above a tight box of two-state rows — selection is NOT a row state), MenuPointer (the bouncing ► focus mark — rides the cursor row, or the locked target ship in the field once the box hides for targeting), ActorArrow (◄ ► actor-switch affordance). Driven by src/scene/actions/
 map-hud/
   index.ts              MapHud: the settings popover (opened from the sidebar header via toggleSettings) + the planet-test trigger
 system-hud/

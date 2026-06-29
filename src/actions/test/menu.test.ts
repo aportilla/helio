@@ -1,9 +1,9 @@
-// ActionMenu state-machine invariants — the two-level stack (category → command) with the
-// orthogonal target LOCK on the command level (vertical = command, horizontal = target), and the
-// two shipped targeting descriptors (single = player-picked among candidates, self = forced to the
-// actor). After the inversion the actor carries RESOLVED
-// ActionCommands (id + grant + count + totalCost); the menu reads them inline, no central lookup.
-// Runs under `node --test` type-stripping.
+// ActionMenu state-machine invariants — the THREE-level stack (category → command → target):
+// you choose WHAT to do (drill a category, pick a command) before scoping into a SEPARATE target
+// level, where the lock rides a candidate and confirming fires. Covers the two shipped targeting
+// descriptors (single = player-picked among candidates, self = forced to the actor). After the
+// inversion the actor carries RESOLVED ActionCommands (id + grant + count + totalCost); the menu
+// reads them inline, no central lookup. Runs under `node --test` type-stripping.
 //
 // Seams not yet exercised by content: energy-cost greying, and 'all'/'multi'/'ally' targeting.
 
@@ -41,45 +41,60 @@ test('opens at the category level with the spanned categories', () => {
   assert.equal(v.targets, undefined, 'no target axis at the category level');
 });
 
-test('drilling a category scopes into the command list with a target auto-locked', () => {
+test('drilling a category scopes into the command list — no target axis yet', () => {
   const m = new ActionMenu(actor, resolve);
   m.enter(); // attack → command
   const v = m.view();
   assert.equal(v.level, 'command');
   assert.equal(v.selectedCategory, 'attack');
   assert.deepEqual(keys(m), ['attack']); // the weapon (its command id), not a target list
-  assert.deepEqual(v.targets, enemies, 'candidate targets are live on the command level');
+  assert.equal(v.targets, undefined, 'no target axis until the weapon is armed');
+});
+
+test('arming a command scopes into targeting with the first target auto-locked', () => {
+  const m = new ActionMenu(actor, resolve);
+  m.enter();                            // category → command
+  assert.equal(m.enter(), null, 'arming drills into targeting, it does not fire');
+  const v = m.view();
+  assert.equal(v.level, 'target');
+  assert.equal(v.cursor, 0, 'the armed weapon stays under the cursor');
+  assert.deepEqual(v.targets, enemies, 'candidate targets are live at the target level');
   assert.equal(v.targetCursor, 0, 'first target auto-locked on entry');
 });
 
-test('horizontal moves the target lock; vertical stays on the command', () => {
+test('at the target level the arrows move the lock; the armed weapon stays frozen', () => {
   const m = new ActionMenu(actor, resolve);
-  m.enter();
+  m.enter(); // category → command
+  m.enter(); // command → target (e1)
   m.moveTarget(1);
   assert.equal(m.view().targetCursor, 1);
   m.moveTarget(1); // wraps over the 2 candidates
   assert.equal(m.view().targetCursor, 0);
-  m.moveCursor(1); // only one weapon → stays
+  m.moveCursor(1); // inert at the target level — the weapon is frozen
   assert.equal(m.view().cursor, 0);
 });
 
-test('confirm fires the cursored command at the LOCKED target', () => {
+test('confirm fires the armed command at the LOCKED target', () => {
   const m = new ActionMenu(actor, resolve);
-  m.enter();        // → command, target e1
+  m.enter();        // category → command
+  m.enter();        // command → target (e1)
   m.moveTarget(1);  // lock e2
   assert.deepEqual(m.confirm(), { actorId: 'a1', actionId: 'attack', targetIds: ['e2'] });
   assert.equal(m.closed, true);
 });
 
-test('enter at the command level also fires (keyboard ↵ parity)', () => {
+test('enter ARMS at the command level, then FIRES at the target level (keyboard ↵)', () => {
   const m = new ActionMenu(actor, resolve);
-  m.enter(); // category → command (target e1 locked)
-  assert.deepEqual(m.enter(), { actorId: 'a1', actionId: 'attack', targetIds: ['e1'] });
+  m.enter(); // category → command
+  assert.equal(m.enter(), null, 'enter at the command level arms + enters targeting, no fire');
+  assert.equal(m.view().level, 'target');
+  assert.deepEqual(m.enter(), { actorId: 'a1', actionId: 'attack', targetIds: ['e1'] }, 'enter at the target level fires');
 });
 
-test('clicking a target locks it by id', () => {
+test('clicking a target locks it by id (target level)', () => {
   const m = new ActionMenu(actor, resolve);
-  m.enter();
+  m.enter(); // category → command
+  m.enter(); // command → target
   m.setTargetById('e2');
   assert.equal(m.view().targetCursor, 1);
   m.setTargetById('nope'); // non-candidate → no-op
@@ -87,12 +102,15 @@ test('clicking a target locks it by id', () => {
   assert.deepEqual(m.confirm(), { actorId: 'a1', actionId: 'attack', targetIds: ['e2'] });
 });
 
-test('back pops command → category, then cancels at the top', () => {
+test('back walks target → command → category, then cancels at the top', () => {
   const m = new ActionMenu(actor, resolve);
-  m.enter();
-  assert.equal(m.view().level, 'command');
+  m.enter(); // category → command
+  m.enter(); // command → target
+  assert.equal(m.view().level, 'target');
   m.back();
-  assert.equal(m.view().level, 'category');
+  assert.equal(m.view().level, 'command', 'target → command');
+  m.back();
+  assert.equal(m.view().level, 'category', 'command → category');
   assert.equal(m.view().cursor, 0, 'parent cursor restored');
   assert.equal(m.closed, false);
   m.back();
@@ -105,13 +123,29 @@ test('a self-targeted command locks onto the actor, never calling the resolver',
     resolverCalls += 1;
     return resolve(command, actor);
   };
-  const m = new ActionMenu(actor, counting);
-  m.setCursor(1); // navigation category
-  m.enter();      // → command (flee)
+  // ONLY the self command, so no sibling weapon pulls the resolver in for a has-target check.
+  const selfOnly: Actor = { id: 'a1', commands: [fleeCmd] };
+  const m = new ActionMenu(selfOnly, counting);
+  m.enter();      // navigation category → command (flee)
   assert.deepEqual(keys(m), ['flee']);
+  m.enter();      // command → target (self → the actor)
   assert.deepEqual(m.view().targets, ['a1'], 'self targeting locks the actor');
   assert.equal(resolverCalls, 0, 'the resolver is bypassed for self targeting');
   assert.deepEqual(m.confirm(), { actorId: 'a1', actionId: 'flee', targetIds: ['a1'] });
+});
+
+test('a command cannot be re-picked at the target level (weapon frozen; back to change)', () => {
+  // A two-weapon attack category, so there IS another weapon to (not) switch to.
+  const railgunCmd = cmd('railgun', grant({ key: 'railgun', label: 'Railgun', category: 'attack', targeting: 'single', kind: 'encounter' }));
+  const twoGun: Actor = { id: 'g1', commands: [attackCmd, railgunCmd, fleeCmd] };
+  const m = new ActionMenu(twoGun, resolve);
+  m.enter();      // category → command (cursor on attack)
+  m.enter();      // command → target (attack armed)
+  m.setCursor(1); // inert at the target level
+  assert.equal(m.view().cursor, 0, 'still the armed weapon');
+  m.back();       // target → command
+  m.setCursor(1); // now free to re-pick
+  assert.equal(m.view().cursor, 1, 'the command cursor moves again at the command level');
 });
 
 test('confirm at the category level commits nothing — you drill into a command first', () => {
@@ -200,10 +234,25 @@ test('a command the actor cannot afford is greyed; an actor with no energy stat 
   assert.equal(new ActionMenu(flush, resolve).view().rows.find((r) => r.key === 'attack')?.enabled, true);
   assert.equal(new ActionMenu(noModel, resolve).view().rows.find((r) => r.key === 'attack')?.enabled, true);
 
-  // A greyed (unaffordable) command refuses to commit.
+  // An unaffordable command greys its whole category — it can't be drilled, let alone fire.
   const m = new ActionMenu(broke, resolve);
-  m.enter(); // drill attack
-  assert.equal(m.confirm(), null, 'an unaffordable command does not fire');
+  assert.equal(m.enter(), null, 'the greyed attack category cannot be drilled');
+  assert.equal(m.view().level, 'category', 'so the menu stays at the top');
+  assert.equal(m.confirm(), null, 'and nothing fires');
+});
+
+// -- no admissible target greys the command (no dead target level) -----
+
+test('a command with no admissible target is greyed and cannot be armed', () => {
+  const empty: TargetResolver = () => []; // nothing in the field to point at
+  const m = new ActionMenu(actor, empty);
+  // The laser (single, needs a candidate) greys, dragging its Attack category greyed with it...
+  assert.equal(m.view().rows.find((r) => r.key === 'attack')?.enabled, false);
+  m.setCursor(0); // Attack
+  assert.equal(m.enter(), null, 'a category with no targetable weapon cannot be drilled');
+  assert.equal(m.view().level, 'category', 'so we never reach a dead target level');
+  // ...but self-targeted Flee (Navigation) always has the actor as its target, so it stays live.
+  assert.equal(m.view().rows.find((r) => r.key === 'navigation')?.enabled, true);
 });
 
 // -- the target criteria seam ------------------------------------------

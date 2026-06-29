@@ -429,6 +429,9 @@ export class SystemScene implements Screen {
       title: actor.title,
       resolveTargets: () => candidates,
       slotCenterFor: (id) => this.slotCenterForEntity(id),
+      // The focus ring size drives the ◄ ► actor-switch arrows: only worth showing when there's
+      // more than one of your ships/bodies to cycle through.
+      actorCount: this.commandableActorIds().length,
     });
   }
 
@@ -525,8 +528,8 @@ export class SystemScene implements Screen {
   // Re-selecting re-opens the menu.
   private cycleActor(delta: number): void {
     // In combat the ←/→ category-level cycle re-anchors onto another of YOUR combatants — the free
-    // in-phase actor choice (§3.8), handled by the encounter controller. (At the command level the menu
-    // cycles the locked TARGET itself, never reaching here.)
+    // in-phase actor choice (§3.8), handled by the encounter controller. (At the target level ←/→
+    // cycle the locked TARGET itself, never reaching here.)
     if (this.inEncounter) { this.encounter.cycleActor(delta); return; }
     const ring = this.commandableActorIds();
     if (ring.length === 0) return;
@@ -747,6 +750,8 @@ export class SystemScene implements Screen {
     // Advance the cargo-ship overlay before rendering — the system view's only
     // per-frame animation. Everything else in the diagram is static layout.
     this.diagram.update(now);
+    // Bounce the action menu's selection pointer (a no-op while the menu is closed).
+    this.actionMenu.tick(now);
     // One full-buffer clear (the reserved sidebar strip stays clear-color), then
     // the diagram clipped to the content rect so its pixel-snapped body materials
     // line up with the content-width uViewport; the HUD spans the full buffer.

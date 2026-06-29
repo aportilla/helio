@@ -216,7 +216,7 @@ export class EncounterController {
 
   // Set up the combatant whose turn it is. You command only YOUR side: the anchored menu opens on a
   // CONTROLLED combatant (carrying its own derived loadout + seeded energy gate, its durable id
-  // anchoring the panel/bracket, candidates built from the live roster relative to it); an opponent's
+  // anchoring the panel/pointer, candidates built from the live roster relative to it); an opponent's
   // turn opens NO menu and is auto-driven by tick via the AI policy (§3.7, chooseAutoIntent). Called on
   // enter and after every commit; re-arms the auto-turn timer.
   private openOnActive(state: EncounterState): void {
@@ -229,6 +229,9 @@ export class EncounterController {
         title: this.nameFor(active.id),
         resolveTargets: () => this.combatCandidates(state, active),
         slotCenterFor: this.slotCenterFor,
+        // The ◄ ► arrows reflect the free in-phase actor choice (§3.8): the living combatants on
+        // your side you can re-anchor onto. >1 ⇒ show them at the category level.
+        actorCount: state.combatants.filter((c) => c.factionId === CONTROLLED_FACTION_ID && !isDown(c)).length,
       });
     } else {
       this.menu.close();
