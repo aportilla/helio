@@ -25,9 +25,10 @@ import { BODY_CATEGORIES } from './registry.ts';
 import { deriveCommands, type GrantProvider } from './derive.ts';
 import { actorSides } from './sides.ts';
 
-// A body always presents the Attack + Support category palette (BODY_CATEGORIES), greyed when no
-// facility grants a command in one, so the menu's shape reads the same on every body (a body
-// never navigates, so Navigation is absent). The menu honors this palette (Actor.categories).
+// A body always presents the Attack + Support + Command category palette (BODY_CATEGORIES), greyed
+// when no facility grants a command in one, so the menu's shape reads the same on every body. Command
+// is a reserved placeholder (no facility grants it yet ⇒ always greyed today). The menu honors this
+// palette (Actor.categories).
 
 // One facility-bearing body's projection input. The caller mints these from the catalog +
 // the save: `bodyIdx` is the BODIES index (== DiagramPick.bodyIdx, the anchor key encoded

@@ -25,11 +25,12 @@ test('a body Actor is id-namespaced under body:; commands are derived from facil
   assert.equal(a.commands[0]!.grant.label, 'Railgun');
 });
 
-test('a body Actor always carries the Attack + Support category palette', () => {
-  // The menu shape is stable per actor TYPE: a body shows Attack + Support even when a
-  // category is empty (the menu greys it), so the palette rides every body regardless of loadout.
-  assert.deepEqual(bodyToActor(body(7, 'player', ['railgun-battery'])).categories, ['attack', 'support']);
-  assert.deepEqual(bodyToActor(body(8, 'player', ['farm'])).categories, ['attack', 'support']);
+test('a body Actor always carries the Attack + Support + Command category palette', () => {
+  // The menu shape is stable per actor TYPE: a body shows Attack + Support + Command even when a
+  // category is empty (the menu greys it — Command always, for now), so the palette rides every body
+  // regardless of loadout.
+  assert.deepEqual(bodyToActor(body(7, 'player', ['railgun-battery'])).categories, ['attack', 'support', 'command']);
+  assert.deepEqual(bodyToActor(body(8, 'player', ['farm'])).categories, ['attack', 'support', 'command']);
 });
 
 test('economy-only facilities (colony, farm) grant no command', () => {

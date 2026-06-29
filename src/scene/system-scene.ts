@@ -139,6 +139,10 @@ export class SystemScene implements Screen {
     this.clusterIdx = clusterIdx;
 
     this.diagram = new SystemDiagram(clusterIdx);
+    // ALWAYS reserve the bottom encounter-bar band in the fleet muster layout — even outside combat,
+    // where the bar isn't drawn. Reserving it permanently (not on encounter entry) is what keeps the
+    // ship formation from reflowing when combat begins/ends: the slots are computed once, bar-aware.
+    this.diagram.setFleetBottomReserve(ENCOUNTER_BAR_HEIGHT);
     this.hud = new SystemHud();
     this.hud.onBack = () => this.onExit();
 
@@ -308,9 +312,8 @@ export class SystemScene implements Screen {
     // No leaving the system view mid-fight: an encounter runs to its terminal (no flee), so the back
     // button greys out alongside Next Turn until the mode tears down.
     this.hud.setBackEnabled(false);
-    // Lift the fleet formation clear of the bottom encounter bar (EB, §15) before the chrome anchors to
-    // the slots; exitEncounter drops it back.
-    this.diagram.setFleetBottomReserve(ENCOUNTER_BAR_HEIGHT);
+    // The fleet formation already clears the bottom encounter-bar band — it's reserved permanently at
+    // setup (see the constructor), so entering combat reflows nothing.
     this.encounter.enter(spec);
   }
 
@@ -320,7 +323,8 @@ export class SystemScene implements Screen {
     if (!this.inEncounter) return;
     this.inEncounter = false;
     this.encounter.exit();
-    this.diagram.setFleetBottomReserve(0);
+    // The fleet's bottom reserve is permanent (set at construction), so there's nothing to restore —
+    // leaving combat reflows nothing either.
     this.sidebar.setNextTurnEnabled(true);
     this.hud.setBackEnabled(true);
   }

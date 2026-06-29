@@ -22,15 +22,16 @@ const command = (count: number): ActionCommand => ({
 });
 
 test('the category palettes are well-formed subsets of the category vocabulary', () => {
-  const valid: ReadonlySet<ActionCategory> = new Set(['attack', 'support', 'navigation']);
+  const valid: ReadonlySet<ActionCategory> = new Set(['attack', 'support', 'command', 'navigation']);
   for (const [name, palette] of [['ship', SHIP_CATEGORIES], ['body', BODY_CATEGORIES]] as const) {
     assert.equal(new Set(palette).size, palette.length, `${name} palette has a duplicate category`);
     for (const c of palette) assert.ok(valid.has(c), `${name} palette has an unknown category '${c}'`);
   }
-  // The shipped split: a ship only attacks (no flee ⇒ no Navigation), a body supports + attacks.
-  // 'navigation' stays a valid category (reserved for future movement), just not on a palette today.
-  assert.deepEqual([...SHIP_CATEGORIES].sort(), ['attack']);
-  assert.deepEqual([...BODY_CATEGORIES].sort(), ['attack', 'support']);
+  // The shipped split: ships and bodies alike show Attack + Support + Command (Command a reserved
+  // placeholder, greyed until a module grants it). 'navigation' stays a valid but dormant category
+  // (reserved for future movement), on no palette today.
+  assert.deepEqual([...SHIP_CATEGORIES].sort(), ['attack', 'command', 'support']);
+  assert.deepEqual([...BODY_CATEGORIES].sort(), ['attack', 'command', 'support']);
 });
 
 test('commandLabel suffixes the stack count only when more than one merged (D2)', () => {

@@ -59,7 +59,8 @@ export interface MenuView {
 }
 
 // Fixed display order for the top-level categories — stable so a ship's menu never reshuffles.
-const CATEGORY_ORDER: readonly ActionCategory[] = ['attack', 'support', 'navigation'];
+// 'navigation' trails (dormant — on no palette today) so its position never perturbs the live rows.
+const CATEGORY_ORDER: readonly ActionCategory[] = ['attack', 'support', 'command', 'navigation'];
 
 type Frame =
   | { level: 'category'; cursor: number }
@@ -77,6 +78,9 @@ export class ActionMenu {
   constructor(actor: Actor, resolveTargets: TargetResolver) {
     this.actor = actor;
     this.resolveTargets = resolveTargets;
+    // Open on the first DRILLABLE category, not blindly row 0 — the pointer must never rest on a
+    // greyed row (e.g. a ship whose Attack is greyed for want of a target opens on a live category).
+    this.stack[0]!.cursor = firstEnabledIndex(this.rows());
   }
 
   get closed(): boolean {
@@ -89,7 +93,7 @@ export class ActionMenu {
 
   // The top-level category rows, in CATEGORY_ORDER. If the actor declares a category PALETTE
   // the menu shows exactly those — always, greyed when empty (rows() marks enablement) — so a
-  // body always offers Attack + Support even before it has a weapon. Absent ⇒ derive from the
+  // ship/body always offers Attack + Support + Command even before it carries a granting module. Absent ⇒ derive from the
   // categories the actor's commands actually span (the original behavior). Either way the order
   // is CATEGORY_ORDER, so the menu never reshuffles.
   private categories(): readonly ActionCategory[] {
@@ -190,19 +194,24 @@ export class ActionMenu {
 
   // -- vertical (rows) --------------------------------------------------
 
-  // Move the row cursor — categories or commands. INERT at the target level: the armed command
-  // is frozen there (you change weapon by backing out, not while targeting).
+  // Move the row cursor — categories or commands — SKIPPING disabled (greyed) rows, so the focus
+  // pointer never lands on a row that can't be drilled (an empty category, an unfireable weapon).
+  // Steps one ENABLED row in `delta`'s direction, wrapping; a no-op when no row is enabled, so a
+  // fully-greyed level keeps a stable cursor. INERT at the target level: the armed command is
+  // frozen there (you change weapon by backing out, not while targeting).
   moveCursor(delta: number): void {
-    if (this.done || this.frame.level === 'target') return;
-    const n = this.rows().length;
-    if (n === 0) return;
-    this.frame.cursor = wrap(this.frame.cursor + delta, n);
+    if (this.done || this.frame.level === 'target' || delta === 0) return;
+    const rows = this.rows();
+    if (rows.length === 0) return;
+    this.frame.cursor = nextEnabledIndex(rows, this.frame.cursor, delta < 0 ? -1 : 1);
   }
 
+  // Lock the cursor onto a specific row (a hover / click). Refuses a DISABLED row, so neither input
+  // path can rest the focus pointer on a greyed item — the same guarantee moveCursor gives the keys.
   setCursor(index: number): void {
     if (this.done || this.frame.level === 'target') return;
-    const n = this.rows().length;
-    if (index >= 0 && index < n) this.frame.cursor = index;
+    const rows = this.rows();
+    if (index >= 0 && index < rows.length && rows[index]!.enabled) this.frame.cursor = index;
   }
 
   // -- horizontal (target lock, target level) ---------------------------
@@ -242,6 +251,7 @@ export class ActionMenu {
     if (f.level === 'category') {
       if (!row.enabled) return null;
       this.stack.push({ level: 'command', cursor: 0, category: row.key as ActionCategory });
+      this.frame.cursor = firstEnabledIndex(this.rows()); // park on the first FIREABLE weapon
       return null;
     }
     if (f.level === 'command') {
@@ -289,8 +299,28 @@ function categoryLabel(category: ActionCategory): string {
   switch (category) {
     case 'attack': return 'Attack';
     case 'support': return 'Support';
+    case 'command': return 'Command';
     case 'navigation': return 'Navigation';
   }
+}
+
+// The next ENABLED row index from `from`, stepping by `dir` (±1) and wrapping. Returns `from` when no
+// other row is enabled, so a fully-greyed level keeps a stable cursor. The shared skip-disabled
+// primitive behind moveCursor.
+function nextEnabledIndex(rows: readonly MenuRow[], from: number, dir: number): number {
+  const n = rows.length;
+  for (let step = 1; step <= n; step++) {
+    const i = wrap(from + dir * step, n);
+    if (rows[i]!.enabled) return i;
+  }
+  return from;
+}
+
+// The first enabled row index (top-down), or 0 if none — where a freshly entered level parks the
+// cursor so the focus pointer never OPENS on a greyed row.
+function firstEnabledIndex(rows: readonly MenuRow[]): number {
+  const i = rows.findIndex((r) => r.enabled);
+  return i < 0 ? 0 : i;
 }
 
 function wrap(i: number, n: number): number {

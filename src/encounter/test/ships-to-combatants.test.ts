@@ -57,9 +57,9 @@ test('a combatant is an Actor + combat identity: kind, components, palette, deri
   assert.equal(c.combatId, 7);
   assert.equal(c.factionId, 'player');
   assert.deepEqual(c.components, ['small-engine', 'small-laser']);
-  // A ship shows only Attack (no flee ⇒ no Navigation; Support is the body's); same SHIP_CATEGORIES
-  // as the live view.
-  assert.deepEqual(c.categories, ['attack']);
+  // A ship shows Attack + Support + Command (no flee ⇒ no Navigation; Command a greyed placeholder);
+  // same SHIP_CATEGORIES as the live view.
+  assert.deepEqual(c.categories, ['attack', 'support', 'command']);
   // Commands ARE the ship's derived loadout — the SAME projection the system-view actor uses, so a
   // combatant and a live-view ship offer an identical menu.
   assert.deepEqual(c.commands, shipLoadout(ship('p1', 'player')));

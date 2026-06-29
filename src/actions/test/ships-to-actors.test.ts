@@ -44,10 +44,11 @@ test("'building' ships are excluded (not in the field yet)", () => {
   assert.deepEqual(sides[0]!.actors.map((a) => a.id), ['p1']);
 });
 
-test('a ship Actor carries the Attack category palette', () => {
-  // The menu shows Attack on every ship (greyed if its loadout is empty there). A ship shows no
-  // Navigation (there is no flee — an encounter is fought to its terminal) and no Support (the body's).
-  assert.deepEqual(shipToActor(ship('p1', 'player')).categories, ['attack']);
+test('a ship Actor carries the Attack + Support + Command category palette', () => {
+  // The menu shows all three on every ship, greying any its loadout leaves empty (Command always, for
+  // now — no module grants it). A ship shows no Navigation (there is no flee — an encounter is fought
+  // to its terminal).
+  assert.deepEqual(shipToActor(ship('p1', 'player')).categories, ['attack', 'support', 'command']);
 });
 
 test('the corvette loadout derives just the laser (encounter), via the SAME projection', () => {

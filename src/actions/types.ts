@@ -23,10 +23,13 @@
 // to bite only when a replay / encounter log persists an actionId. The `body:` target namespace
 // keeps its own guard (./entity-id).
 
-// The top-level menu split. Data, not hardcoded: the menu derives its category rows from
-// the categories an actor's commands span (./menu). For a ship that reads ATTACK /
-// SUPPORT / NAVIGATION; a body or a colony ship spans a different subset.
-export type ActionCategory = 'attack' | 'support' | 'navigation';
+// The top-level menu split. Data, not hardcoded: an actor declares a category PALETTE the menu
+// shows in full (greying any category its loadout leaves empty), or — absent one — the menu derives
+// the rows from the categories its commands span (./menu). A ship and a body both read ATTACK /
+// SUPPORT / COMMAND today. 'command' is a reserved-but-shown placeholder: no module grants it yet,
+// so it renders greyed until a command module (tactical/leadership) lands. 'navigation' stays a
+// valid category, dormant (flee removed) — reserved for future repositioning / galaxy movement.
+export type ActionCategory = 'attack' | 'support' | 'command' | 'navigation';
 
 // What a command's target step admits (drives ./menu's 'target' level). 'self'/'all' are
 // auto-resolved (no player pick — the candidate set is forced); 'single'/'ally'/'multi'
@@ -133,8 +136,8 @@ export interface Actor {
   readonly stats?: Readonly<Record<string, number>>;
   // The category PALETTE this actor always shows — the menu renders exactly these top-level
   // rows (in CATEGORY_ORDER), greying any with no available command, so the menu's SHAPE is
-  // stable per actor TYPE rather than per loadout (a body always offers Attack + Support even
-  // before it has a weapon facility). ABSENT ⇒ the menu derives the rows from the categories
+  // stable per actor TYPE rather than per loadout (a ship/body always offers Attack + Support +
+  // Command even before it carries a module granting one). ABSENT ⇒ the menu derives the rows from the categories
   // the actor's commands span (the original behavior). A display concern only — it never adds
   // commands or changes what can be drilled.
   readonly categories?: readonly ActionCategory[];

@@ -212,13 +212,14 @@ test('a category palette shows ALL its categories (greyed when empty)', () => {
   assert.equal(v.rows.find((r) => r.key === 'support')?.enabled, true, 'Support has recon');
 });
 
-test('a greyed (empty) palette category cannot be drilled', () => {
+test('the cursor skips a greyed (empty) palette category — it cannot be selected or drilled', () => {
   const m = new ActionMenu(palettedActor, resolve);
-  m.setCursor(0); // Attack — empty
-  assert.equal(m.enter(), null, 'entering an empty category is a no-op');
-  assert.equal(m.view().level, 'category', 'stayed at the category level');
-  m.setCursor(1); // Support — has recon
-  m.enter();
+  assert.equal(m.view().cursor, 1, 'opens on Support — the greyed Attack (row 0) is skipped');
+  m.setCursor(0); // try to land on greyed Attack
+  assert.equal(m.view().cursor, 1, 'setCursor refuses the greyed row');
+  m.moveCursor(-1); // arrow up: only Support is enabled, so the cursor skips Attack and stays put
+  assert.equal(m.view().cursor, 1, 'arrow nav skips the greyed Attack');
+  m.enter(); // drills the live Support
   assert.equal(m.view().level, 'command', 'a non-empty palette category still drills');
 });
 
@@ -241,18 +242,34 @@ test('a command the actor cannot afford is greyed; an actor with no energy stat 
   assert.equal(m.confirm(), null, 'and nothing fires');
 });
 
+// -- the cursor skips a greyed COMMAND, not just a greyed category -----
+
+test('entry + arrows skip a greyed COMMAND within a category, landing on the fireable one', () => {
+  // Two attack weapons, the costly one listed FIRST and unaffordable (greyed) at energy 3.
+  const cheap = cmd('cheap', grant({ key: 'cheap', label: 'Cheap', category: 'attack', targeting: 'single', kind: 'encounter' }));
+  const costly: ActionCommand = { ...cmd('costly', grant({ key: 'costly', label: 'Costly', category: 'attack', targeting: 'single', kind: 'encounter' })), totalCost: 5 };
+  const a: Actor = { id: 'g1', commands: [costly, cheap], stats: { energy: 3 } };
+  const m = new ActionMenu(a, resolve);
+  m.enter(); // attack → command
+  assert.equal(m.view().level, 'command');
+  assert.equal(m.view().cursor, 1, 'entry parks on the fireable weapon (index 1), skipping the greyed one at the top');
+  m.moveCursor(-1); // up: only the cheap weapon is enabled, so the cursor skips the greyed costly
+  assert.equal(m.view().cursor, 1, 'arrow nav skips the greyed weapon');
+});
+
 // -- no admissible target greys the command (no dead target level) -----
 
-test('a command with no admissible target is greyed and cannot be armed', () => {
+test('a command with no admissible target greys its category — the cursor skips it, no dead target level', () => {
   const empty: TargetResolver = () => []; // nothing in the field to point at
   const m = new ActionMenu(actor, empty);
-  // The laser (single, needs a candidate) greys, dragging its Attack category greyed with it...
+  // The laser (single, needs a candidate) greys, dragging its Attack category greyed with it; the
+  // self-targeted Flee (Navigation) always has the actor as its target, so it stays live and takes
+  // the cursor — the greyed Attack can't even be selected, so we never reach a dead target level.
   assert.equal(m.view().rows.find((r) => r.key === 'attack')?.enabled, false);
-  m.setCursor(0); // Attack
-  assert.equal(m.enter(), null, 'a category with no targetable weapon cannot be drilled');
-  assert.equal(m.view().level, 'category', 'so we never reach a dead target level');
-  // ...but self-targeted Flee (Navigation) always has the actor as its target, so it stays live.
   assert.equal(m.view().rows.find((r) => r.key === 'navigation')?.enabled, true);
+  assert.equal(keys(m)[m.view().cursor], 'navigation', 'opens on the live category, not the greyed Attack');
+  m.setCursor(0); // try to select greyed Attack
+  assert.equal(keys(m)[m.view().cursor], 'navigation', 'the greyed Attack cannot be selected');
 });
 
 // -- the target criteria seam ------------------------------------------

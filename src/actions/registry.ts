@@ -7,14 +7,15 @@
 
 import type { ActionCategory, ActionCommand } from './types.ts';
 
-// The category PALETTES — the stable top-level row set per actor TYPE. A ship shows Attack (no flee ⇒
-// no Navigation in combat; an encounter is fought to its terminal, never withdrawn), a body Attack +
-// Support; the menu renders exactly the actor's palette (in CATEGORY_ORDER), greying any category its
-// loadout leaves empty, so the menu's SHAPE is stable per type rather than per loadout. Central here (not
-// in the adapters) so the two palettes read side by side. 'navigation' stays a valid ActionCategory,
-// reserved for future in-combat repositioning / galaxy movement — re-add it to a palette when that lands.
-export const SHIP_CATEGORIES: readonly ActionCategory[] = ['attack'];
-export const BODY_CATEGORIES: readonly ActionCategory[] = ['attack', 'support'];
+// The category PALETTES — the stable top-level row set per actor TYPE. Ships and bodies alike show
+// Attack + Support + Command: the menu renders exactly the actor's palette (in CATEGORY_ORDER),
+// greying any category its loadout leaves empty, so the menu's SHAPE is stable per type rather than
+// per loadout. 'command' is a reserved placeholder — no module grants a command-category action yet,
+// so it always renders greyed for now. Central here (not in the adapters) so the palettes read side
+// by side. Kept as two named exports though equal today: ships and bodies may diverge (e.g. a ship
+// regains Navigation once galaxy movement / flee lands; 'navigation' stays a valid, dormant category).
+export const SHIP_CATEGORIES: readonly ActionCategory[] = ['attack', 'support', 'command'];
+export const BODY_CATEGORIES: readonly ActionCategory[] = ['attack', 'support', 'command'];
 
 // A resolved command's menu label — the grant's label, suffixed with its stack count when more
 // than one identical provider merged (D2: `Missile (x3)`). The single source the menu row reads.

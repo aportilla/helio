@@ -170,7 +170,8 @@ export class SystemDiagram {
   }
 
   // Reserve extra bottom space in the fleet muster band so the formation clears the encounter bar
-  // during combat (EB, §15). SystemScene raises it on enter, drops it to 0 on exit. Pass-through.
+  // (EB, §15). SystemScene sets it ONCE at setup so the reserve is permanent — combat never reflows
+  // the fleet. Pass-through.
   setFleetBottomReserve(px: number): void {
     this.fleet.setBottomReserve(px);
   }

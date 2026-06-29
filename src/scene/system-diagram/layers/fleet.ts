@@ -112,8 +112,10 @@ export class FleetLayer {
   private ships: readonly Ship[] = [];
   private contentW = 1;
   private bufferH = 1;
-  // Extra space reserved at the BOTTOM of the muster band (env-px), raised during an encounter so the
-  // formation clears the bottom encounter bar (EB, §15); 0 outside combat.
+  // Extra space reserved at the BOTTOM of the muster band (env-px) for the encounter bar (EB, §15).
+  // Set ONCE at system-view setup and held permanently — even outside combat, where the bar isn't
+  // drawn — so entering/leaving an encounter never reflows the formation. Injected (not baked in) so
+  // this sealed-diagram layer stays decoupled from the encounter-HUD's ENCOUNTER_BAR_HEIGHT.
   private bottomReserve = 0;
   // Hit-test targets for pickAt — one entry per visible sprite, rebuilt in relayout
   // (the only place the formation changes). Reused in place so a pick (or a hover,
@@ -156,7 +158,8 @@ export class FleetLayer {
   }
 
   // Reserve extra space at the BOTTOM of the muster band (env-px) so the formation clears the bottom
-  // encounter bar during combat (EB, §15). Idempotent; relayouts only on a real change. 0 = normal.
+  // encounter bar (EB, §15). SystemScene sets this ONCE at setup (a permanent, bar-aware layout), so
+  // entering/leaving combat never reflows the slots. Idempotent; relayouts only on a real change.
   setBottomReserve(px: number): void {
     if (this.bottomReserve === px) return;
     this.bottomReserve = px;

@@ -123,8 +123,9 @@ export class ActionMenuPanel extends BasePanel {
     return this.visible && this.visibleBounds.contains(bufX, bufY);
   }
 
-  // The box's height (px) — the bordered plate alone, sans the floating-title band. The
-  // controller centers THIS on the anchored sprite (the title floats above it).
+  // The box's height (px) — the bordered plate alone, sans the floating-title band. The controller
+  // centers THIS on the anchored sprite on first placement, then pins its TOP edge across a drill (so
+  // a differing sub-menu row count grows the box downward, no vertical jump); the title floats above.
   get boxHeight(): number {
     return this.boxH;
   }

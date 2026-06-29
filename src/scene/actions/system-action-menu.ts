@@ -90,6 +90,12 @@ export class SystemActionMenu {
   // The pointer's resting placement for the current cursor row (null = hidden); the per-frame
   // bob is added in tick(). Recomputed in refresh() when the cursor or layout changes.
   private pointerBase: { left: number; centerY: number } | null = null;
+  // The box's pinned TOP edge (Y-up buffer px) for the current menu session — seeded on the first
+  // placement (box centered on the anchor) and HELD as you drill category↔command, so a sub-menu with
+  // a different row count grows/shrinks the box DOWNWARD instead of re-centering it (no vertical jump).
+  // null ⇒ recompute centered; reset on open and on a forced re-anchor (resize / fleet relayout, where
+  // the box should follow the sprite's new spot rather than hold a stale top).
+  private boxTopPin: number | null = null;
   // True while the actor-switch arrows are shown + placed (category level, >1 actor) — gates
   // their hit-testing so a click only cycles when they're actually on screen.
   private arrowsShown = false;
@@ -177,6 +183,7 @@ export class SystemActionMenu {
   openFor(opts: OpenMenuOptions): void {
     this.menu = new ActionMenu(opts.actor, opts.resolveTargets);
     this.opts = opts;
+    this.boxTopPin = null; // a fresh session re-centers on this actor's sprite, then pins the top
     this.panel.reset(); // force a repaint even if the previous menu painted the same
     this.refresh();
   }
@@ -421,7 +428,7 @@ export class SystemActionMenu {
     } else {
       const wasHidden = !this.panel.visible; // coming back from a target-level hide
       const changed = this.panel.setModel(this.buildModel());
-      if (changed || force || wasHidden) this.place(); // re-place on re-show in case the anchor moved while hidden
+      if (changed || force || wasHidden) this.place(force); // re-place on re-show in case the anchor moved while hidden
       this.panel.setVisible(true);
     }
     this.updateAdornments();
@@ -434,7 +441,12 @@ export class SystemActionMenu {
   private updateAdornments(): void {
     const view = this.menu!.view();
 
-    const base = view.level === 'target' ? this.targetPointerBase(view) : this.panel.cursorPointerAnchor();
+    // The pointer never rests on a greyed row: the menu's cursor already skips disabled rows, so this
+    // only bites in the degenerate all-greyed level (nothing drillable) — there we hide it outright.
+    const onGreyedRow = view.level !== 'target' && view.rows[view.cursor]?.enabled === false;
+    const base = view.level === 'target' ? this.targetPointerBase(view)
+      : onGreyedRow ? null
+      : this.panel.cursorPointerAnchor();
     this.pointerBase = base;
     if (base) {
       this.pointer.setVisible(true);
@@ -479,7 +491,7 @@ export class SystemActionMenu {
 
   // Place the panel beside the anchored sprite, flipping to the other side and clamping so
   // it never runs under the sidebar strip or off the top/bottom. Mirrors BodyInfoCard.
-  private place(): void {
+  private place(reanchor: boolean): void {
     if (!this.opts) return;
     const anchor = this.opts.slotCenterFor(this.opts.actor.id);
     if (!anchor) {
@@ -489,6 +501,9 @@ export class SystemActionMenu {
     const w = this.panel.width;
     const h = this.panel.height;
     if (w === 0 || h === 0) return;
+    // A forced re-anchor (resize / fleet relayout) follows the sprite to its NEW spot, so drop the pin
+    // and re-center rather than hold a stale top.
+    if (reanchor) this.boxTopPin = null;
 
     // Reserve room for the flanking ◄ ► arrows on BOTH sides whenever this actor can switch —
     // level-independent, so the box doesn't jump when you drill category↔command. The extra
@@ -499,13 +514,17 @@ export class SystemActionMenu {
     const pad = sizes.edgePad;
     let left = anchor.cx + offset;
     if (left + w + arm > this.contentW - pad) left = anchor.cx - offset - w; // flip if the right footprint overflows
-    // Center the BOX (not the whole canvas) on the sprite — the box sits at the canvas bottom,
-    // the label floats above it — then clamp using the full canvas height so the label never
-    // runs off the top, and the arrow span so neither arrow runs off the side.
-    let bottom = anchor.cy - Math.round(this.panel.boxHeight / 2);
+    // Pin the BOX's TOP edge across a drill. The FIRST placement of a session centers the box on the
+    // sprite (the box sits at the canvas bottom, the label floats above); every later level hangs from
+    // that SAME top, so a sub-menu with a different row count grows/shrinks DOWNWARD with no vertical
+    // jump. boxBounds is Y-up, so the top edge is `bottom + boxHeight`. Clamp with the full canvas
+    // height so the label never runs off the top and neither arrow off the side.
+    const boxH = this.panel.boxHeight;
+    let bottom = this.boxTopPin === null ? anchor.cy - Math.round(boxH / 2) : this.boxTopPin - boxH;
     left = Math.max(pad + arm, Math.min(this.contentW - pad - w - arm, left));
-    bottom = Math.max(pad, Math.min(this.bufH - pad - h, bottom));
-    this.panel.placeAt(Math.round(left), Math.round(bottom));
+    bottom = Math.round(Math.max(pad, Math.min(this.bufH - pad - h, bottom)));
+    this.panel.placeAt(Math.round(left), bottom);
+    this.boxTopPin = bottom + boxH; // seed/refresh the pin from the actually-placed (clamped) top
   }
 
   // The horizontal span (px) one actor-switch arrow needs beyond the box edge — reserved on both
