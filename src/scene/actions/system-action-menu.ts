@@ -145,6 +145,12 @@ export class SystemActionMenu {
     return this.menu !== null;
   }
 
+  // The menu's current drill LEVEL, or null when closed — polled by SystemScene to raise the encounter-bar
+  // PREVIEW the moment the player drills past the root ('category') level, and drop it when they back out.
+  currentLevel(): MenuLevel | null {
+    return this.menu && !this.menu.closed ? this.menu.view().level : null;
+  }
+
   // A compact read of the current focus depth for the TargetingVisuals layer. Null while the menu
   // is closed — so the layer hides whenever no actor is focused. The engine glow keys off `actorId`
   // (shown at every level); the weapon glow + target line + reticle key off the target level, where

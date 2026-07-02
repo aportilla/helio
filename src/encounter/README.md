@@ -73,7 +73,8 @@ the rest of the project follows.
   its ships (`turn-order.nextActor` round-robins *within* the side, re-offering a lone ship — a ship may
   act again while icons remain), and when the pool is spent / End-Round'd the phase passes to the next
   living side, whose pool is **re-derived from its living roster each phase** (`baseSideInitiative` =
-  `floor(ships × ratio)` clamped to a floor, plus effect `SideDelta`s, I5). A full pass over the sides
+  `floor(actors × ratio)` — living ships + command-bearing bodies (armed emplacements); a bombard-only
+  body target adds none — clamped to a floor, plus effect `SideDelta`s, I5). A full pass over the sides
   is one `round`; the attacker (`initiator`) opens. Zero gameplay math and **no behaviour fork** —
   `applyCommand` runs every action through ONE path, the on-resolve effect mint (substrate below): a
   weapon's grant installs a one-shot `damage` effect on each target that cascades a flat placeholder hit
@@ -129,9 +130,12 @@ the rest of the project follows.
   formula (timing / typing / boost) is the P-Experiment phase. Design: `plans/4x-encounter-combat-system.md`.
 - **E3 — the mode (shipped).** Combat runs as a MODE on `SystemScene`, in place over the same diagram
   (no second scene — combat is an extra render PASS). `EncounterController` (`src/scene/encounter-
-  controller.ts`) owns the transient `EncounterState` + its own overlay scene; `CombatOverlay`
-  (`encounter-overlay.ts`) paints a bordered HP bar (hull + shield bands), an active-turn marker, and
-  a downed dim over each combatant, anchored to the live fleet slots via `slotCenterForEntity`. During
+  controller.ts`) owns the transient `EncounterState` + its own chrome scene (the encounter bar +
+  tracers). The per-sprite **HP / energy gauges** are the **persistent** `ShipGaugesOverlay`
+  (`src/scene/ship-gauges.ts`) — owned + rendered by `SystemScene` so they show even **at rest** (each
+  ready ship's full charge, loadout-derived); a fight just FEEDS the SAME overlay the live combatant
+  values (depleted hull, raised shields, an active-turn marker, a downed dim), anchored to the live
+  fleet slots via `slotCenterForEntity`. During
   the player's turn the shared menu also drives the scene's `TargetingVisuals` layer
   (`src/scene/targeting-visuals.ts`, menu-focus-keyed: engine glow → weapon-primed glow + aim line +
   reticle) — scene-owned, so it serves the live view too, not part of this package. The
@@ -158,8 +162,8 @@ the rest of the project follows.
   lowest same-side ship that can afford an action (`firstActableOfSide`, run AFTER the phase-start
   recharge), falling back to the first living ship, so the cursor never lands on a drained ship while a
   charged same-side ship still waits.
-  `CombatOverlay` paints each combatant's **HP + energy gauges** (hull/shield bands + the amber salvo
-  bar) and the active-turn marker; the per-side **initiative readout** lives in the bottom **encounter
+  The persistent `ShipGaugesOverlay` paints each combatant's **HP + energy gauges** (hull/shield bands +
+  the amber salvo bar) and the active-turn marker; the per-side **initiative readout** lives in the bottom **encounter
   bar** (EB, below). You command only your side — an opponent's phase opens no menu and is auto-driven by
   the **AI policy** (`ai.ts`, §3.7 — a fleet-aware focus-fire driver): it **loops one activation per interval
   until its pool is spent**, each interval firing whichever same-side ship can afford a salvo at the weakest
@@ -188,10 +192,13 @@ the rest of the project follows.
   `effect` / `install` / `expire` events (heal / shield juice).
 - **EB — the encounter bar + energy (shipped), §15.** The PROMINENT per-side readout: a bottom
   **encounter bar** (`src/ui/encounter-hud/`, a `ui/` HUD reading `encounter/` DTOs — controlled side
-  LEFT, opponent RIGHT, their initiative pips meeting at a center divider and dimming as spent, the
-  acting side lit + ship counts). It **supersedes** `CombatOverlay`'s old top-left corner pip strip
-  (removed); the overlay keeps the per-sprite gauges, now HP **plus a NEW energy bar** (amber,
-  `stats.energy/energyMax`). The **energy slice** makes that gauge live: `small-laser` carries a real
+  LEFT, opponent RIGHT, their initiative pips — right-leaning slashes, vertically centered — draining
+  toward the center plaza as spent, the acting side's frontier pip lifted out of the row and shimmered
+  along its own slant — **crawl-free**, adding/removing whole pixel rows at its ends rather than
+  translating (`ActivePip`, replacing the old pointer) — to mark whose phase; no labels, counts, or
+  divider, just the markers). It **supersedes** the old top-left corner pip strip (removed); the
+  per-sprite gauges moved to the **persistent** `ShipGaugesOverlay` (HP **plus a NEW energy bar** —
+  amber, `stats.energy/energyMax`). The **energy slice** makes that gauge live: `small-laser` carries a real
   `costPerUnit` matched to its own `battery`, and a combatant's `energyMax` is DERIVED as the Σ of its
   loadout's component batteries (`combatantEnergyMax`, seeded by `createEncounterState` as both the cap
   and a charged start) — so a single-laser ship's full charge fires exactly ONE salvo. `applyCommand`
@@ -202,7 +209,11 @@ the rest of the project follows.
   **blinks gold** when no living controlled ship has an affordable, target-having action
   (`controlledHasAnyAction`) — the suggested move; the rest of the band stays display-only (`hitTest`
   opaque). Owned + repainted by the controller; the blink is a cheap per-frame texture swap (not a bar
-  repaint), and the bar reserves a center plaza so pips never run under the button.
+  repaint), and the bar reserves a center plaza so pips never run under the button. The bar also
+  **previews pre-combat**: `SystemScene` raises it (`EncounterController.showPreview`) the moment the action
+  menu drills PAST its root category level — painted from `fullInitiative` (both fleets fresh, the player
+  acting so its frontier pip shimmers, no End Turn) — and retracts it (`hidePreview`) if the menu backs out
+  without entering combat. A live encounter always overrides the preview.
 - **E5 — body combatants.** The `body-role` producer + appending body-combatants to the spec.
 
 Until ship *movement* exists, opponents are placed by a DEV-only spawn action; the single

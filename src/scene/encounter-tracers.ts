@@ -5,12 +5,13 @@
 // combatant's slot to the target's, then an impact flash + (on the last bolt of a target) a rising damage
 // number; a `down` on that target turns the killing bolt's flash into a destruction burst.
 //
-// It is a SIBLING of the static CombatOverlay in the SAME canvas idiom — a content-buffer CanvasTexture
-// redrawn each frame and re-uploaded via `needsUpdate` (the IconButton manage-your-own-texture path, NOT a
-// per-frame setTexture alloc) — so the bolts, flashes, and drawPixelText numbers compose into one surface,
-// composited over the overlay in the encounter mode's ortho pass. This follows the combat chrome the
-// overlay already ships, not the Appendix A `tracers` LineSegments row (the DIAGRAM-scene geometry idiom,
-// whose uViewport snap keys off the diagram camera, not this overlay scene). Positions re-resolve through
+// It is a SIBLING of the static ship-gauges overlay in the SAME canvas idiom — a content-buffer
+// CanvasTexture redrawn each frame and re-uploaded via `needsUpdate` (the IconButton manage-your-own-
+// texture path, NOT a per-frame setTexture alloc) — so the bolts, flashes, and drawPixelText numbers
+// compose into one surface. SystemScene paints the gauges in an EARLIER content-scissor pass, so these
+// tracers (the encounter mode's own ortho pass) read OVER the HP / energy bars for free. This is not the
+// Appendix A `tracers` LineSegments row (the DIAGRAM-scene geometry idiom, whose uViewport snap keys off
+// the diagram camera, not this overlay scene). Positions re-resolve through
 // the same slotCenterFor accessor each frame, so a body target (E5) needs no new path. Render-only:
 // nothing here reaches the integer-milli reducer (§6.4); per-weapon look + timing are DATA (vfxForCommand,
 // §14.5), and the layer is cleared between beats / on exit.
@@ -72,7 +73,7 @@ const KILL_MAX = 9; // destruction-burst half-side (a downed target)
 const POP_RISE = 12; // px the damage number floats up over the impact phase
 const HEAD = '#ffffff'; // bolt head + ordinary impact flash (hot white core)
 const NUMBER_COLOR = '#fff2b0';
-const RENDER_ORDER = 120; // above CombatOverlay (Widget default 100) so the bolt reads over the bars
+const RENDER_ORDER = 120; // above the bar/end-turn in this scene; the ship gauges read over via pass order
 
 export class CombatTracers extends Widget {
   private readonly canvas = document.createElement('canvas');
@@ -88,7 +89,7 @@ export class CombatTracers extends Widget {
   }
 
   // (Re)size the canvas + its persistent texture to the content buffer (the diagram's slot-anchor space),
-  // place the quad at the origin, start hidden. Mirrors CombatOverlay's content-buffer sizing.
+  // place the quad at the origin, start hidden. Mirrors the ship-gauges overlay's content-buffer sizing.
   resize(contentBufferW: number, bufferH: number): void {
     this.contentW = Math.max(1, contentBufferW);
     this.bufH = Math.max(1, bufferH);

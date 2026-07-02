@@ -14,7 +14,7 @@ import { groupByFaction } from '../actions/sides.ts';
 import { SHIP_CATEGORIES } from '../actions/registry.ts';
 import { grantKeyOf } from '../actions/derive.ts';
 import { shipLoadout } from '../actions/ships-to-actors.ts';
-import { COMPONENT_BY_TYPE } from '../ships/components/registry.ts';
+import { COMPONENT_BY_TYPE, shipEnergyMax } from '../ships/components/registry.ts';
 import type { ShipComponentType } from '../ships/components/types.ts';
 import { collectInstalls } from './effects/fold.ts';
 import type { EffectInstall } from './effects/types.ts';
@@ -54,8 +54,7 @@ export function combatantInstalls(combatant: Combatant): readonly EffectInstall[
 // recharges. A body carries no components until E5, so it contributes none (energyMax 0).
 export function combatantEnergyMax(combatant: Combatant): number {
   if (combatant.kind !== 'ship') return 0;
-  const components = combatant.components;
-  return components.reduce((sum, type) => sum + (COMPONENT_BY_TYPE.get(type)?.battery ?? 0), 0);
+  return shipEnergyMax(combatant.components);
 }
 
 // A ship's TIMED on-resolve installs for ONE resolved action — the on-resolve twin of combatantInstalls.

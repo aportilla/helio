@@ -23,8 +23,9 @@ import {
   shipsInSystem,
   startShipBuild,
 } from '../game-state';
+import type { Ship } from '../game-state';
 import { CONTROLLED_FACTION_ID, factionColor, factionLabel } from '../factions/registry';
-import { DEMO_SHIP_LOADOUT, shipBuildTurns } from '../ships/components/registry';
+import { DEMO_SHIP_LOADOUT, shipBuildTurns, shipEnergyMax } from '../ships/components/registry';
 import { shipToActor } from '../actions/ships-to-actors';
 import { bodyToActor } from '../actions/bodies-to-actors';
 import { grantKeyOf } from '../actions/derive';
@@ -33,6 +34,7 @@ import type { Actor, TargetAllegiance, TargetCandidate } from '../actions/types'
 import { SystemActionMenu } from './actions/system-action-menu';
 import { EFFECT_HANDLERS } from './actions/effect-handlers';
 import { EncounterController } from './encounter-controller';
+import { ShipGaugesOverlay, type ShipGauge } from './ship-gauges';
 import { TargetingVisuals } from './targeting-visuals';
 import { ENCOUNTER_BAR_HEIGHT } from '../ui/encounter-hud';
 import { buildEncounterSpec, type EncounterSpec } from '../encounter/encounter-spec';
@@ -70,13 +72,20 @@ export class SystemScene implements Screen {
   private readonly context: SystemContext;
   private readonly viewport = new ViewportSizer(sizes.sidebarW);
 
-  // The encounter MODE (E3/E4): a transient combat reducer + its overlay + the menu-driven round, run
-  // in place over this same diagram (no second scene). Anchors its chrome to the live fleet slots via
-  // slotCenterForEntity, drives the round through the shared action menu, titles combatants by name.
+  // Per-sprite HP + energy gauges — a PERSISTENT part of the ship rendering (shown at rest, not just in
+  // combat). SystemScene owns + renders it in the content scissor: at rest it paints each ready ship's
+  // full charge (loadout-derived), and during an encounter the controller feeds it the live combatant
+  // values through the paintGauges sink below — one renderer, two data sources.
+  private readonly shipGauges = new ShipGaugesOverlay();
+  // The encounter MODE (E3/E4): a transient combat reducer + the menu-driven round + its combat chrome
+  // (bar / tracers), run in place over this same diagram (no second scene). Anchors its chrome to the
+  // live fleet slots via slotCenterForEntity, drives the round through the shared action menu, titles
+  // combatants by name, and FEEDS the persistent shipGauges overlay the live combatant values.
   private readonly encounter = new EncounterController(
     (id) => this.slotCenterForEntity(id),
     this.actionMenu,
     (id) => this.combatantName(id),
+    (gauges) => this.shipGauges.paint(gauges, (id) => this.slotCenterForEntity(id)),
   );
   // In-field targeting FX keyed to the action menu's focus depth (engine glow / weapon-primed glow /
   // target line + reticle). Anchors through the same slot seam as the menu + combat chrome, and
@@ -89,6 +98,10 @@ export class SystemScene implements Screen {
   // backing) AND gates the overlay render + input branch, so the non-combat path is byte-identical
   // when it's down.
   private inEncounter = false;
+  // True while the encounter bar is showing a PRE-COMBAT preview — raised when the action menu drills
+  // past its root ('category') level, dropped when it backs out / closes, and never while a real
+  // encounter owns the bar. Gates the same overlay tick + render branch as `inEncounter`.
+  private previewingBar = false;
 
   private rafId = 0;
   private running = false;
@@ -293,6 +306,7 @@ export class SystemScene implements Screen {
     this.diagram.dispose();
     this.hud.dispose();
     this.actionMenu.dispose();
+    this.shipGauges.dispose();
     this.encounter.dispose();
     this.targeting.dispose();
     this.viewport.dispose();
@@ -327,6 +341,22 @@ export class SystemScene implements Screen {
     // leaving combat reflows nothing either.
     this.sidebar.setNextTurnEnabled(true);
     this.hud.setBackEnabled(true);
+    // Combat left the gauges holding the final combatant values; restore the at-rest (full charge)
+    // readout so they persist as part of the ship rendering instead of freezing on the last frame.
+    this.repaintShipGauges();
+  }
+
+  // Raise/drop the pre-combat encounter-bar PREVIEW from the action menu's drill depth: it appears the
+  // moment the player commits to picking an action (drills PAST the root 'category' level) and retracts if
+  // they back all the way out / close the menu without entering combat. Suppressed while a real encounter
+  // owns the bar. Polled each tick (cheap), so it catches every drill/back path — key, click, or close.
+  private updatePreview(): void {
+    const level = this.actionMenu.currentLevel();
+    const want = !this.inEncounter && level !== null && level !== 'category';
+    if (want === this.previewingBar) return;
+    this.previewingBar = want;
+    if (want) this.encounter.showPreview(shipsToCombatants(this.readyShips()).flatMap((s) => s.combatants));
+    else this.encounter.hidePreview();
   }
 
   // DEV-only: boot straight into a demo encounter (the ?demo-encounter URL path) — seed a friendly +
@@ -664,6 +694,17 @@ export class SystemScene implements Screen {
     // The fleet just relaid out (slots may have moved or a ship may be gone); re-place the
     // open menu against the fresh slots, or let it self-close if its ship vanished.
     this.actionMenu.refreshAnchor();
+    // The gauge set tracks the fleet — a new/removed ship adds/drops a bar (a no-op mid-encounter,
+    // where the controller owns the gauge data; refreshFleet only runs at rest / on Next Turn anyway).
+    this.repaintShipGauges();
+  }
+
+  // Repaint the at-rest per-ship gauges: every ready ship's FULL hull + charge (loadout-derived), anchored
+  // to its live slot. A no-op during an encounter — there the controller feeds the SAME overlay the live
+  // combatant values (depleted hull, raised shields, the active-turn marker) through its paintGauges sink.
+  private repaintShipGauges(): void {
+    if (this.inEncounter) return;
+    this.shipGauges.paint(this.readyShips().map(restShipGauge), (id) => this.slotCenterForEntity(id));
   }
 
   private onPointerMove(e: PointerEvent): void {
@@ -751,25 +792,35 @@ export class SystemScene implements Screen {
     // Diagram lays out + renders in the content rect (left of the reserved sidebar
     // strip); the HUD spans the full buffer.
     this.diagram.resize(this.viewport.contentBufferW, this.viewport.bufferH);
+    // The persistent ship gauges anchor to the diagram's content-buffer slot centers (NOT the full
+    // buffer the menu/hud use), so they share the diagram's content dims.
+    this.shipGauges.resize(this.viewport.contentBufferW, this.viewport.bufferH);
     this.hud.resize(this.viewport.bufferW, this.viewport.bufferH);
     this.sidebar.resize(this.viewport.bufferW, this.viewport.bufferH);
     // Full-buffer camera so the menu's content-buffer anchor coords land correctly; it
     // clamps itself to the content width (left of the sidebar strip) and re-reads the
     // ship's slot center, so a resize re-anchors it for free.
     this.actionMenu.resize(this.viewport.bufferW, this.viewport.bufferH, this.viewport.contentBufferW);
-    // The combat overlay anchors to the diagram's content-buffer slot centers, so it shares the
-    // diagram's content dims (NOT the full buffer the menu/hud use).
+    // The encounter chrome shares the diagram's content dims (NOT the full buffer the menu/hud use):
+    // its tracers anchor to the diagram's content-buffer slot centers, and the bottom bar spans the
+    // content width.
     this.encounter.resize(this.viewport.contentBufferW, this.viewport.bufferH);
     // Same content-buffer space as the diagram/combat chrome — the targeting FX anchor to slot centers.
     this.targeting.resize(this.viewport.contentBufferW, this.viewport.bufferH);
+    // Re-anchor the at-rest gauges to the re-laid-out slots (a no-op mid-encounter, where the controller
+    // owns the gauge data — it repaints them through encounter.resize above).
+    this.repaintShipGauges();
   }
 
   private tick = (): void => {
     if (!this.running) return;
     const now = performance.now();
+    // Raise/drop the pre-combat bar preview from the action-menu drill depth (no-op while in combat).
+    this.updatePreview();
     // The encounter mode advances its own clock (the E3 spectator auto-play) before the render — it
     // may reach a terminal and exit here (lowering inEncounter), so the overlay pass below self-gates.
-    if (this.inEncounter) this.encounter.tick(now);
+    // The bar's pre-combat preview shares this tick + render branch (it only shimmers the frontier pip).
+    if (this.inEncounter || this.previewingBar) this.encounter.tick(now);
     // Advance the cargo-ship overlay before rendering — the system view's only
     // per-frame animation. Everything else in the diagram is static layout.
     this.diagram.update(now);
@@ -790,9 +841,12 @@ export class SystemScene implements Screen {
     this.renderer.setScissor(0, 0, contentCssW, cssH);
     this.renderer.setScissorTest(true);
     this.renderer.render(this.diagram.scene, this.diagram.camera);
+    // The per-sprite HP / energy gauges sit just over the diagram (at-rest charge, or live combatant
+    // values during an encounter), under the combat tracers + targeting FX that later passes paint.
+    this.shipGauges.render(this.renderer);
     // Combat chrome composites over the diagram in the SAME content viewport/scissor (its slot anchors
     // are content-buffer coords). Gated so the non-combat render path is byte-identical.
-    if (this.inEncounter) this.encounter.render(this.renderer);
+    if (this.inEncounter || this.previewingBar) this.encounter.render(this.renderer);
     // Targeting FX paint over the diagram + combat chrome, still inside the content scissor so the
     // aim line can't bleed onto the sidebar strip. Self-gates to a cleared/hidden quad when no actor
     // is focused, so the idle path stays cheap.
@@ -806,6 +860,25 @@ export class SystemScene implements Screen {
     this.renderer.render(this.sidebar.scene, this.sidebar.camera);
     this.renderer.autoClear = true;
     this.rafId = requestAnimationFrame(this.tick);
+  };
+}
+
+// One ready ship → its AT-REST gauge: a full hull bar (hull === max, no shields raised) and a full
+// energy charge (energy === energyMax = Σ the loadout's batteries). The bar widths are fixed, so this
+// reads as a "ship at rest, fully charged" baseline for every ship; an encounter then feeds the SAME
+// overlay the live combatant values. The hull band takes the owning faction's color (player vs rival).
+function restShipGauge(ship: Ship): ShipGauge {
+  const energyMax = shipEnergyMax(ship.components);
+  return {
+    id: ship.id,
+    hull: 1,
+    shields: 0,
+    max: 1,
+    energy: energyMax,
+    energyMax,
+    hullColor: factionColor(ship.factionId),
+    active: false,
+    down: false,
   };
 }
 

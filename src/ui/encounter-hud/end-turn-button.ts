@@ -16,7 +16,6 @@
 
 import { CanvasTexture } from 'three';
 import { Widget, paintToTexture } from '../widget';
-import { paintSurface } from '../painter';
 import { colors, fonts } from '../theme';
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
 
@@ -29,17 +28,23 @@ const HEIGHT = 24; // band is 34 tall; this leaves a ~5px margin top+bottom when
 const GOLD_BRIGHT = colors.starName; // '#ffe98a'
 const GOLD_DIM = '#8a7320';
 
+// The box is a right-leaning parallelogram — horizontal top/bottom, slanted sides — matching the pips'
+// 1-in-2 lean so the bar reads as one sheared family. WIDTH is the interior; BTN_SHEAR is the top row's
+// rightward offset, so the drawn texture is WIDTH + BTN_SHEAR wide.
+const SHEAR_SLOPE = 0.5;
 const WIDTH = measurePixelText(LABEL, fonts.body) + PAD_X * 2;
+const BTN_SHEAR = Math.round((HEIGHT - 1) * SHEAR_SLOPE);
+const TOTAL_W = WIDTH + BTN_SHEAR;
 
 // Half the button's footprint plus a gap — the encounter bar clears this much space on each side of the
 // center divider so its initiative pips never march under the button (index.ts reads it).
-export const END_TURN_RESERVE = Math.round(WIDTH / 2) + 8;
+export const END_TURN_RESERVE = Math.round(TOTAL_W / 2) + 8;
 
 type Variant = 'normal' | 'hover' | 'ctaBright' | 'ctaDim';
 
 function buildTexture(variant: Variant): CanvasTexture {
   const c = document.createElement('canvas');
-  c.width = WIDTH;
+  c.width = TOTAL_W;
   c.height = HEIGHT;
   const g = c.getContext('2d')!;
   const border =
@@ -51,10 +56,23 @@ function buildTexture(variant: Variant): CanvasTexture {
     variant === 'ctaBright' || variant === 'ctaDim' ? GOLD_BRIGHT
     : variant === 'hover' ? colors.glyphOnHover
     : colors.titleBright;
-  paintSurface(g, 0, 0, WIDTH, HEIGHT, { bg: colors.surface, border });
+  // Row by row: fill the interior [off, off+WIDTH), then lay the 1-px frame — a full top & bottom edge,
+  // and a single left/right pixel per interior row — so the slanted sides stair-step crisply.
+  for (let y = 0; y < HEIGHT; y++) {
+    const off = Math.round((HEIGHT - 1 - y) * SHEAR_SLOPE);
+    g.fillStyle = colors.surface;
+    g.fillRect(off, y, WIDTH, 1);
+    g.fillStyle = border;
+    if (y === 0 || y === HEIGHT - 1) {
+      g.fillRect(off, y, WIDTH, 1);
+    } else {
+      g.fillRect(off, y, 1, 1);
+      g.fillRect(off + WIDTH - 1, y, 1, 1);
+    }
+  }
   const tw = measurePixelText(LABEL, fonts.body);
   const ty = Math.round((HEIGHT - getFont(fonts.body).lineHeight) / 2);
-  drawPixelText(g, LABEL, Math.round((WIDTH - tw) / 2), ty, text, fonts.body);
+  drawPixelText(g, LABEL, Math.round((TOTAL_W - tw) / 2), ty, text, fonts.body);
   return paintToTexture(c);
 }
 
@@ -76,7 +94,7 @@ export class EndTurnButton extends Widget {
   // Render above the bar (100) so the button sits ON the band, like the body card over the back button.
   constructor() {
     super(110);
-    this.setSize(WIDTH, HEIGHT);
+    this.setSize(TOTAL_W, HEIGHT);
     this.material.map = this.textures.normal;
   }
 

@@ -26,11 +26,13 @@ export const HULL_RESIST: Readonly<Record<string, number>> = { energy: 600, kine
 // hoisted per Appendix B. The fleet→icons ratio is the ONLY fractional step (floored before play,
 // §3.8.2); everything in the loop is whole icons.
 
-// The fleet→icons ratio (milli, so 500 ≈ ½): a side's base pool is floor(livingShips × ratio).
-// At ½ a 12-ship fleet derives 6 icons — a deliberate tempo throttle (you don't act with EVERY ship
-// each phase). RESERVED seam: this may become a concave diminishing-returns curve so huge fleets
-// don't get enormous phases — the symbol is the lever, the curve is tuning, not structure (I4).
-export const INITIATIVE_PER_SHIP_MILLI = 500;
+// The actor→icons ratio (milli, so 500 ≈ ½): a side's base pool is floor(livingActors × ratio), where an
+// ACTOR is a living ship OR a living body that can act — one whose loadout grants a command (an armed /
+// sensor emplacement, the M3 actor rule); a bombard-only body target adds none. At ½ a 12-actor side
+// derives 6 icons — a deliberate tempo throttle (you don't act with EVERY hull each phase). RESERVED seam:
+// this may become a concave diminishing-returns curve so huge fleets don't get enormous phases — the
+// symbol is the lever, the curve is tuning, not structure (I4).
+export const INITIATIVE_PER_ACTOR_MILLI = 500;
 
 // The per-side floor so any side with a living ship always gets at least one action — fixes the
 // floor(½ × 1) = 0 lone-ship dead state (a lone scout still fights, I4/I5). The side pool is clamped to

@@ -1,7 +1,7 @@
 // initiative — the fleet → Press-Turn icon BASE (§3.8.2). The side-aggregating twin of deriveCommands
-// in spirit: it turns a SIDE's living ships into the whole-integer base pool of initiative icons that
-// side gets to spend this phase. Re-derived at each phase start (a snapshot, I5) so attrition lowers a
-// side's tempo over a long fight, bounded by MIN_INITIATIVE so the last ship always acts.
+// in spirit: it turns a SIDE's living actors (ships + command-bearing bodies) into the whole-integer base
+// pool of initiative icons that side gets to spend this phase. Re-derived at each phase start (a snapshot,
+// I5) so attrition lowers a side's tempo over a long fight, bounded by MIN_INITIATIVE so the last actor acts.
 //
 // This is the FLEET-SIZE tier only. A component's tempo contribution (e.g. tactical-command-module) is
 // NOT summed here — it rides the generic effect substrate as a `tactical-command` effect whose
@@ -17,7 +17,7 @@
 import type { FactionType } from '../factions/types.ts';
 import { FACTION_DEFS } from '../factions/registry.ts';
 import { isDown, type Combatant } from './state.ts';
-import { INITIATIVE_PER_SHIP_MILLI, MIN_INITIATIVE } from './tuning.ts';
+import { INITIATIVE_PER_ACTOR_MILLI, MIN_INITIATIVE } from './tuning.ts';
 
 // A full per-faction initiative record zeroed for every live faction — the seed the reducer fills the
 // live pool from (so indexing by any FactionType is total, never undefined). Present sides overwrite
@@ -28,12 +28,28 @@ export function zeroInitiative(): Record<FactionType, number> {
 }
 
 // A side's per-phase BASE pool from its CURRENT combatants:
-//   max(MIN_INITIATIVE, floor(livingShips × ratio))
-// Pass a side's combatants (downed included — they're filtered here); callers narrow to one side. Only
-// living SHIPS count toward tempo (bodies/E5 are stationary and add none). The floor is the single
-// fractional step; the result is whole icons. Effect SideDeltas (tactical-command, future buffs) are
-// added by the reducer on top of this (effects/fold.foldPhaseStart).
+//   max(MIN_INITIATIVE, floor(livingActors × ratio))
+// Pass a side's combatants (downed included — they're filtered here); callers narrow to one side. An
+// ACTOR that counts is a living ship (always) OR a living body that can act — one carrying a command (an
+// armed / sensor emplacement, the M3 actor rule); a bombard-only body target and an unarmed body grant
+// none. The floor is the single fractional step; the result is whole icons. Effect SideDeltas (tactical-
+// command, future buffs) are added by the reducer on top of this (effects/fold.foldPhaseStart).
 export function baseSideInitiative(sideCombatants: readonly Combatant[]): number {
-  const living = sideCombatants.filter((c) => c.kind === 'ship' && !isDown(c));
-  return Math.max(MIN_INITIATIVE, Math.floor((living.length * INITIATIVE_PER_SHIP_MILLI) / 1000));
+  const actors = sideCombatants.filter((c) => !isDown(c) && (c.kind === 'ship' || c.commands.length > 0));
+  return Math.max(MIN_INITIATIVE, Math.floor((actors.length * INITIATIVE_PER_ACTOR_MILLI) / 1000));
+}
+
+// The full per-side pools from a FLAT combatant list — each present faction at its baseSideInitiative,
+// every other faction 0. The 'fresh', nothing-spent-yet pools: an encounter's opening, or the pre-combat
+// preview the bar shows while the player drills the action menu (so all pips read bright).
+export function fullInitiative(combatants: readonly Combatant[]): Record<FactionType, number> {
+  const out = zeroInitiative();
+  const byFaction = new Map<FactionType, Combatant[]>();
+  for (const c of combatants) {
+    const arr = byFaction.get(c.factionId);
+    if (arr) arr.push(c);
+    else byFaction.set(c.factionId, [c]);
+  }
+  for (const [factionId, roster] of byFaction) out[factionId] = baseSideInitiative(roster);
+  return out;
 }

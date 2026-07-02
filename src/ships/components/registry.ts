@@ -143,6 +143,15 @@ export function shipBuildTurns(components: readonly ShipComponentType[]): number
   return Math.max(MIN_BUILD_TURNS, sum);
 }
 
+// A ship's energy CAPACITY = the Σ of its modules' `battery` (a weapon/shield carries its own charge),
+// the energy-model twin of shipBuildTurns. The neutral home for the derivation: combat's
+// `combatantEnergyMax` delegates here (a charged combatant's cap), and the system view reads it directly
+// to draw a ship's at-rest energy gauge (full = energyMax) — so the at-rest readout never imports the
+// encounter package. Unknown ids contribute 0; a loadout with no battery yields 0 (an empty gauge).
+export function shipEnergyMax(components: readonly ShipComponentType[]): number {
+  return components.reduce((sum, type) => sum + (COMPONENT_BY_TYPE.get(type)?.battery ?? 0), 0);
+}
+
 // Single source of a component's display name — build rows + part labels.
 export function componentLabel(type: ShipComponentType): string {
   return COMPONENT_BY_TYPE.get(type)?.label ?? type;

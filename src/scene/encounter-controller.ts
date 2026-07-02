@@ -1,7 +1,11 @@
 // EncounterController — the thin scene-side glue that runs an encounter as a MODE on SystemScene. It
 // owns the transient EncounterState, its own ortho overlay Scene+camera (the SystemActionMenu
-// precedent), and the combat-chrome overlay; SystemScene owns the freeze flag + the sidebar/turn gates
-// and drives this from its tick/resize/input. It imports the encounter RULES (createEncounterState /
+// precedent), and the combat-specific chrome (the bottom encounter bar + End Turn button + the
+// per-action tracers); SystemScene owns the freeze flag + the sidebar/turn gates and drives this from
+// its tick/resize/input. The per-sprite HP / energy GAUGES are NOT owned here: they are a persistent
+// part of the system view's ship rendering (ShipGaugesOverlay, owned by SystemScene), so combat just
+// FEEDS them the live combatant values through the injected `paintGauges` sink — at rest SystemScene
+// feeds the same overlay each ship's full charge. It imports the encounter RULES (createEncounterState /
 // applyCommand / isTerminal) + DTOs from src/encounter/ — never the reverse. No second SystemDiagram:
 // combat is an extra render PASS over the one live diagram, anchored to the fleet slots via the
 // slotCenterFor accessor SystemScene passes in.
@@ -28,14 +32,16 @@ import { applyCommand, createEncounterState, endPhase, selectActor } from '../en
 import { chooseAutoIntent } from '../encounter/ai';
 import { neighborActor } from '../encounter/turn-order';
 import { isTerminal } from '../encounter/terminal';
-import { ENERGY_STAT, isDown, type Combatant, type EncounterEvent, type EncounterState } from '../encounter/state';
+import { ENERGY_STAT, ENERGY_MAX_STAT, isDown, type Combatant, type EncounterEvent, type EncounterState } from '../encounter/state';
+import { fullInitiative } from '../encounter/initiative';
+import { HULL_POOL } from '../encounter/pools';
 import type { EncounterSpec } from '../encounter/encounter-spec';
 import type { ActionCommand, ActionIntent, TargetAllegiance, TargetCandidate } from '../actions/types';
 import { commandFor } from '../actions/derive';
 import { filterCandidates } from '../actions/menu';
-import { CONTROLLED_FACTION_ID } from '../factions/registry';
-import { CombatOverlay } from './encounter-overlay';
-import { EncounterHud, EndTurnButton, ENCOUNTER_BAR_HEIGHT } from '../ui/encounter-hud';
+import { CONTROLLED_FACTION_ID, factionColor } from '../factions/registry';
+import type { ShipGauge } from './ship-gauges';
+import { EncounterHud, EndTurnButton, ActivePip, ENCOUNTER_BAR_HEIGHT } from '../ui/encounter-hud';
 import { CombatTracers, vfxForCommand, type Bolt } from './encounter-tracers';
 import type { SlotCenter, SystemActionMenu } from './actions/system-action-menu';
 
@@ -49,21 +55,36 @@ const STEP_MS = 800;
 const MAX_BARRAGE = 6;
 const SRC_FAN = 4;
 
+// Active-pip wiggle (render-only): the acting side's frontier pip shimmers along its OWN slant by
+// adding/removing whole pixel rows at its ends (the amplitude, in rows, lives in ActivePip so its
+// stair-steps stay grid-locked). ACTIVE_PIP_PERIOD sets the cycle off the frame clock.
+const ACTIVE_PIP_PERIOD = 120;
+
 export class EncounterController {
   readonly scene = new Scene();
   readonly camera = new OrthographicCamera(0, 1, 1, 0, -1, 1);
-  private readonly overlay = new CombatOverlay();
   private readonly bar = new EncounterHud();
   private readonly endTurn = new EndTurnButton();
+  private readonly activePip = new ActivePip();
   private readonly tracers: CombatTracers;
 
   private state: EncounterState | null = null;
+  // The content width is still read by the encounter bar + the End Turn button placement (the per-sprite
+  // gauges moved to SystemScene's overlay, which holds its OWN content dims — so no buffer height here).
   private contentW = 1;
-  private bufH = 1;
   // Cached at each repaint (it only changes when the state does): true when NONE of the controlled side's
   // living ships has an affordable, target-having action left — the trigger for the End Turn button's gold
   // CTA blink. tick() reads it per frame to drive the blink without re-scanning the roster each frame.
   private noPlayerActions = false;
+  // The home slot of the acting side's frontier pip (null = the acting side holds no initiative). Cached
+  // at each repaint (moves only on state change + resize); tick() slides the ActivePip widget along its
+  // slant from this home each frame.
+  private activePipHome: { left: number; bottom: number } | null = null;
+  // PREVIEW mode (no live encounter): SystemScene raises this while the player drills the action menu past
+  // its root, showing the bar populated with the tactical state a fight WOULD open with (both fleets at
+  // full initiative, the player acting). `previewRoster` is the combatant snapshot, re-painted on resize.
+  // `previewing` reads true only when no real encounter owns the bar.
+  private previewRoster: readonly Combatant[] | null = null;
   private lastStepAt = 0; // 0 = re-arm: the first tick shows the opening state before stepping
   // EV (§14): a post-action animation window in flight. While set, `tick` advances nothing else (the round
   // is paused on the beat), drives the CombatTracers layer each frame, and `settle`s when it elapses.
@@ -84,11 +105,14 @@ export class EncounterController {
     private readonly slotCenterFor: (id: string) => SlotCenter | null,
     private readonly menu: SystemActionMenu,
     private readonly nameFor: (id: string) => string,
+    // The persistent per-sprite HP / energy gauges are owned + rendered by SystemScene (they show even
+    // outside combat); combat just FEEDS them the live combatant values through this sink at each repaint.
+    private readonly paintGauges: (gauges: readonly ShipGauge[]) => void,
   ) {
     this.tracers = new CombatTracers(this.slotCenterFor);
-    this.overlay.addTo(this.scene);
     this.bar.addTo(this.scene);
     this.endTurn.addTo(this.scene);
+    this.activePip.addTo(this.scene);
     this.tracers.addTo(this.scene);
   }
 
@@ -96,11 +120,60 @@ export class EncounterController {
     return this.state !== null;
   }
 
+  // True while the bar is showing a PRE-COMBAT preview (never during a live encounter, which owns the bar
+  // itself). SystemScene gates the encounter overlay's tick + render on `active || previewing`.
+  get previewing(): boolean {
+    return this.previewRoster !== null && this.state === null;
+  }
+
+  // Raise the pre-combat preview: paint the bar from a snapshot of the system's fleets (both sides at full
+  // initiative, the player acting so its frontier pip shimmers) — but NO End Turn button (nothing to end)
+  // and no reducer. SystemScene calls this when the action menu drills past its root.
+  showPreview(combatants: readonly Combatant[]): void {
+    if (this.state) return; // a live encounter owns the bar; a preview never overrides it
+    this.previewRoster = combatants;
+    this.paintPreview();
+  }
+
+  // Drop the preview (menu backed out to root / closed). A no-op on the bar while a live encounter owns it.
+  hidePreview(): void {
+    this.previewRoster = null;
+    if (this.state) return;
+    this.bar.hide();
+    this.activePip.setVisible(false);
+    this.endTurn.setVisible(false);
+  }
+
+  private paintPreview(): void {
+    if (!this.previewRoster) return;
+    const initiative = fullInitiative(this.previewRoster);
+    const phaseSide = CONTROLLED_FACTION_ID;
+    this.bar.paint(this.previewRoster, initiative, phaseSide, this.contentW);
+    this.activePipHome = this.bar.activePipHome(this.previewRoster, initiative, phaseSide, this.contentW);
+    if (this.activePipHome) {
+      this.activePip.setColor(factionColor(phaseSide));
+      this.activePip.moveTo(this.activePipHome.left, this.activePipHome.bottom);
+    }
+    this.endTurn.setVisible(false);
+  }
+
+  // Wiggle the acting side's frontier pip (its slot left empty by the bar) — a variant swap, not a
+  // translate, so the body stays crawl-free. Shared by the live round and the preview.
+  private driveActivePip(now: number, show: boolean): void {
+    if (show && this.activePipHome) {
+      this.activePip.setPhase(Math.sin(now / ACTIVE_PIP_PERIOD));
+      this.activePip.setVisible(true);
+    } else {
+      this.activePip.setVisible(false);
+    }
+  }
+
   // Begin the encounter from a launch spec: seed the reducer state, route the menu's confirm sink to this
   // controller, paint the opening roster, then FIRE the launching attack (`spec.initiator`) as the
   // initiator's opening move — so the action that ENTERED combat also lands (with its animation + effects),
   // not a no-op that merely opens the mode. The menu opens on the NEXT turn, after the opening shot settles.
   enter(spec: EncounterSpec): void {
+    this.previewRoster = null; // a live encounter supersedes any pre-combat preview
     this.state = createEncounterState(spec);
     this.menu.onEncounterCommit = (intent) => this.commit(intent);
     this.menu.setEncounterMode(true);
@@ -125,21 +198,24 @@ export class EncounterController {
     this.menu.setEncounterMode(false);
     this.menu.close();
     this.state = null;
+    this.previewRoster = null; // combat's teardown drops any preview intent too
     this.playback = null; // drop any in-flight beat so it can't gate a re-entered encounter's tick
     this.tracers.clearBolts();
-    this.overlay.hide();
+    // The gauges aren't ours to hide — SystemScene repaints them to the at-rest (full charge) readout on
+    // exitEncounter, so they persist as part of the ship rendering instead of blanking when combat ends.
     this.bar.hide();
     this.endTurn.setVisible(false);
+    this.activePip.setVisible(false);
   }
 
   resize(contentBufferW: number, bufferH: number): void {
     this.contentW = contentBufferW;
-    this.bufH = bufferH;
     this.camera.right = contentBufferW;
     this.camera.top = bufferH;
     this.camera.updateProjectionMatrix();
     this.tracers.resize(contentBufferW, bufferH);
     if (this.state) this.repaint();
+    else if (this.previewRoster) this.paintPreview();
   }
 
   // Per-frame: advance any in-flight animation WINDOW first (the beat the last commit opened) — while one
@@ -148,13 +224,23 @@ export class EncounterController {
   // auto-driven by the AI policy. Lingers one interval before each auto-step (so the menu/turn reads), and on
   // the terminal state before exiting. The live player loop advances on confirm, not here.
   tick(now: number): void {
-    if (!this.state) return;
+    if (!this.state) {
+      // Pre-combat preview (no reducer): just keep the frontier pip shimmering. SystemScene only ticks us
+      // here while previewing, so a bare `previewRoster` check suffices.
+      if (this.previewRoster) this.driveActivePip(now, this.activePipHome !== null);
+      return;
+    }
     // Drive the End Turn button every frame: it shows only on the CONTROLLED side's LIVE phase (hidden
     // mid-beat — the round is paused on the animation window — and during the opponent's auto-driven
     // phase), and runs its gold CTA blink off `now` when the player has no useful action left
     // (noPlayerActions, cached at repaint). A cheap texture swap; nothing here re-scans the roster.
     const showEndTurn = this.playback === null && this.state.phaseSide === CONTROLLED_FACTION_ID;
     this.endTurn.update(now, showEndTurn, showEndTurn && this.noPlayerActions);
+    // Wiggle the acting side's frontier pip along its slant (both phases), hidden mid-beat like the button
+    // — the round is paused on the animation window. The pip is FIXED at its home (placed at repaint); the
+    // slide is a variant swap (ActivePip adds/removes whole rows at its ends), so nothing translates and
+    // the body stays crawl-free. A signed sine drives it up-and-right then down-and-left.
+    this.driveActivePip(now, this.playback === null && this.activePipHome !== null);
     // A beat is playing: hold ALL turn advancement (the auto-driver below AND the player's reopened menu)
     // until its window elapses, then settle. startedAt is stamped on the first tick that sees the window
     // — the commit that opened it had no frame clock (§14.2).
@@ -394,14 +480,16 @@ export class EncounterController {
 
   private repaint(): void {
     if (!this.state) return;
-    this.overlay.paint(
-      this.state.combatants,
-      this.state.activeId,
-      this.slotCenterFor,
-      this.contentW,
-      this.bufH,
-    );
+    const activeId = this.state.activeId;
+    this.paintGauges(this.state.combatants.map((c) => combatantToGauge(c, activeId)));
     this.bar.paint(this.state.combatants, this.state.initiative, this.state.phaseSide, this.contentW);
+    this.activePipHome = this.bar.activePipHome(
+      this.state.combatants, this.state.initiative, this.state.phaseSide, this.contentW,
+    );
+    if (this.activePipHome) {
+      this.activePip.setColor(factionColor(this.state.phaseSide));
+      this.activePip.moveTo(this.activePipHome.left, this.activePipHome.bottom);
+    }
     // Recompute the CTA trigger + re-place the button while we hold the fresh state (the only times it
     // moves: state change + resize, both routed through here). tick() then animates from these cached values.
     this.noPlayerActions = !this.controlledHasAnyAction(this.state);
@@ -464,9 +552,31 @@ export class EncounterController {
   }
 
   dispose(): void {
-    this.overlay.dispose();
     this.bar.dispose();
     this.endTurn.dispose();
+    this.activePip.dispose();
     this.tracers.dispose();
   }
+}
+
+// Project one combatant onto the flat gauge DTO the persistent ShipGaugesOverlay reads: the HP bar splits
+// into the hull band (bottom of the cascade) and the shields stacked above it, the amber gauge reads the
+// energy salvo gate, and the two combat marks (active-turn, downed) ride along. The system view feeds the
+// SAME overlay each ship's full-charge gauge at rest; combat just supplies the live numbers.
+function combatantToGauge(combatant: Combatant, activeId: number): ShipGauge {
+  const pools = combatant.pools ?? [];
+  const max = pools.reduce((s, p) => s + p.max, 0);
+  const hull = pools.find((p) => p.key === HULL_POOL)?.current ?? 0;
+  const shields = pools.filter((p) => p.key !== HULL_POOL).reduce((s, p) => s + p.current, 0);
+  return {
+    id: combatant.id,
+    hull,
+    shields,
+    max,
+    energy: combatant.stats?.[ENERGY_STAT] ?? 0,
+    energyMax: combatant.stats?.[ENERGY_MAX_STAT] ?? 0,
+    hullColor: factionColor(combatant.factionId),
+    active: combatant.combatId === activeId,
+    down: isDown(combatant),
+  };
 }
