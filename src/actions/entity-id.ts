@@ -17,11 +17,17 @@
 // and a facility id 'f'+digits — neither starts with the prefix nor contains a colon.)
 
 export const BODY_ID_PREFIX = 'body:';
+// The galaxy-destination namespace: a warp target is a SYSTEM, not an in-scene entity. Its suffix is the
+// system handle (the cluster primary's slug — the same currency Ship.systemId holds), a string, NOT a
+// numeric index like body:. Frozen like body: — it can enter a serialized ActionIntent.targetIds.
+export const SYS_ID_PREFIX = 'sys:';
 
 // A parsed entity id: a body (carrying its BODIES index — the scene's anchor key, ==
-// DiagramPick.bodyIdx) or a ship (carrying its game-state Ship.id verbatim).
+// DiagramPick.bodyIdx), a system (carrying its stable slug — a galaxy warp destination, with no
+// in-scene anchor), or a ship (carrying its game-state Ship.id verbatim).
 export type EntityRef =
   | { readonly kind: 'body'; readonly bodyIdx: number }
+  | { readonly kind: 'system'; readonly systemId: string }
   | { readonly kind: 'ship'; readonly shipId: string };
 
 // bodyIdx (the BODIES array index) → the body's entity id. The index, not the stable
@@ -29,6 +35,12 @@ export type EntityRef =
 // what an anchor lookup needs back out of the id.
 export function encodeBodyEntityId(bodyIdx: number): string {
   return `${BODY_ID_PREFIX}${bodyIdx}`;
+}
+
+// systemId (the cluster primary's slug) → the system's entity id — a warp destination candidate. The
+// slug is carried verbatim (it's already the durable Ship.systemId currency), so decode is the inverse.
+export function encodeSystemEntityId(systemId: string): string {
+  return `${SYS_ID_PREFIX}${systemId}`;
 }
 
 // Parse any entity id into its coarse discriminant. A `body:` prefix → the body arm (the
@@ -48,6 +60,11 @@ export function parseEntityId(id: string): EntityRef {
       return { kind: 'body', bodyIdx };
     }
   }
+  // A `sys:` prefix → the system arm, the suffix carried verbatim as the slug. No canonical check (a
+  // slug is an opaque string, unlike a body's numeric index); an empty suffix simply yields ''.
+  if (id.startsWith(SYS_ID_PREFIX)) {
+    return { kind: 'system', systemId: id.slice(SYS_ID_PREFIX.length) };
+  }
   return { kind: 'ship', shipId: id };
 }
 
@@ -57,4 +74,10 @@ export function parseEntityId(id: string): EntityRef {
 // is a ship to parseEntityId; use parseEntityId when the index matters).
 export function isBodyEntityId(id: string): boolean {
   return id.startsWith(BODY_ID_PREFIX);
+}
+
+// The cheap namespace test for a system (warp-destination) id — a syntactic prefix check, so a caller
+// can fork "has no in-scene anchor" (the destination lives in galaxy space) without parsing the slug.
+export function isSystemEntityId(id: string): boolean {
+  return id.startsWith(SYS_ID_PREFIX);
 }

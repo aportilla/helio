@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BODY_ID_PREFIX, encodeBodyEntityId, parseEntityId, isBodyEntityId } from '../entity-id.ts';
+import { BODY_ID_PREFIX, SYS_ID_PREFIX, encodeBodyEntityId, encodeSystemEntityId, parseEntityId, isBodyEntityId, isSystemEntityId } from '../entity-id.ts';
 
 test('a body id round-trips through encode → parse', () => {
   const id = encodeBodyEntityId(7);
@@ -45,4 +45,24 @@ test('a non-canonical body suffix is a ship, NOT a Number()-coerced index', () =
   for (const id of ['body:', 'body: 5', 'body:5 ', 'body:0x10', 'body:1e2', 'body:+5', 'body:07']) {
     assert.deepEqual(parseEntityId(id), { kind: 'ship', shipId: id });
   }
+});
+
+// -- the sys: namespace (a galaxy warp destination) --------------------
+
+test('a system id round-trips through encode → parse (the slug carried verbatim)', () => {
+  const id = encodeSystemEntityId('sirius-a');
+  assert.equal(id, 'sys:sirius-a');
+  assert.deepEqual(parseEntityId(id), { kind: 'system', systemId: 'sirius-a' });
+  assert.equal(SYS_ID_PREFIX, 'sys:');
+});
+
+test('the sys: and body: namespaces do not collide, and neither is a ship', () => {
+  assert.equal(isSystemEntityId('sys:vega'), true);
+  assert.equal(isSystemEntityId('body:5'), false);
+  assert.equal(isSystemEntityId('s7'), false);
+  assert.equal(isBodyEntityId('sys:vega'), false);
+  // A sys id is its own arm, never the ship fallback.
+  assert.deepEqual(parseEntityId('sys:vega'), { kind: 'system', systemId: 'vega' });
+  // An un-prefixed slug-looking id is still a ship (only the explicit prefix marks a system).
+  assert.deepEqual(parseEntityId('vega'), { kind: 'ship', shipId: 'vega' });
 });

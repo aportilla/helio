@@ -7,6 +7,10 @@ import { makeStarsMaterial } from './materials';
 export class StarPoints {
   readonly points: Points;
   private readonly material: ShaderMaterial;
+  // Per-star in-range flag (1/0) for the departure-mode range lens — DYNAMIC, unlike the static
+  // aClusterIdx (which cluster a star is IS fixed, but which clusters are REACHABLE depends on the armed
+  // ship), so it's rewritten each time the mode arms and needs a live BufferAttribute handle.
+  private readonly inRangeAttr: BufferAttribute;
 
   constructor(initialPxScale: number) {
     const geom = new BufferGeometry();
@@ -14,6 +18,7 @@ export class StarPoints {
     const colors     = new Float32Array(STARS.length * 3);
     const sizes      = new Float32Array(STARS.length);
     const clusterIdx = new Float32Array(STARS.length);
+    const inRange    = new Float32Array(STARS.length); // all 0 (out of range) until the mode arms
 
     STARS.forEach((s, i) => {
       positions[i * 3 + 0] = s.x;
@@ -34,6 +39,8 @@ export class StarPoints {
     // cluster members back to full brightness while the pivot/camera fade
     // dims everything else. Static at construction; updates are uniforms.
     geom.setAttribute('aClusterIdx', new BufferAttribute(clusterIdx, 1));
+    this.inRangeAttr = new BufferAttribute(inRange, 1);
+    geom.setAttribute('aInRange', this.inRangeAttr);
 
     this.material = makeStarsMaterial(initialPxScale);
     this.points = new Points(geom, this.material);
@@ -78,5 +85,22 @@ export class StarPoints {
   // out camera, including the nearby ones we want bright).
   setDimAmount(a: number): void {
     this.material.uniforms.uDimAmount!.value = a;
+  }
+
+  // Turn the departure-mode range lens on/off. When on, per-star brightness follows aInRange (set via
+  // setInRangeClusters) instead of the pivot/selection ramp; off restores the normal galaxy view.
+  setInRangeMode(on: boolean): void {
+    this.material.uniforms.uInRangeMode!.value = on ? 1.0 : 0.0;
+  }
+
+  // Rewrite the per-star aInRange flag from a set of in-range CLUSTER indices (a star is in range iff its
+  // cluster is in the set) — the reachable-destination set for the armed ship, plus its origin so home
+  // stays lit. null clears every flag. A full-catalog scan, run once per arm (trivial at ~1500 stars).
+  setInRangeClusters(clusterIdxs: ReadonlySet<number> | null): void {
+    const arr = this.inRangeAttr.array as Float32Array;
+    for (let i = 0; i < STARS.length; i++) {
+      arr[i] = clusterIdxs !== null && clusterIdxs.has(clusterIndexFor(i)) ? 1 : 0;
+    }
+    this.inRangeAttr.needsUpdate = true;
   }
 }

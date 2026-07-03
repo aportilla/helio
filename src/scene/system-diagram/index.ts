@@ -15,7 +15,7 @@ import { OrthographicCamera, Scene } from 'three';
 import { STAR_CLUSTERS } from '../../data/stars';
 import { BeltsLayer } from './layers/belts';
 import { FacilitiesLayer } from './layers/facilities';
-import { FleetLayer } from './layers/fleet';
+import { FleetLayer, type FleetBerth } from './layers/fleet';
 import { MoonsLayer } from './layers/moons';
 import { PlanetsLayer } from './layers/planets';
 import { RingsLayer } from './layers/rings';
@@ -24,7 +24,6 @@ import { StarsRowLayer } from './layers/stars-row';
 import { buildRowSlots, layoutRow, type RowSlot } from './layout/row';
 import { type BodyCenter, type BodyCenterIndex, type DiagramHit, type DiagramPick, type PlanetCenterIndex, picksEqual } from './types';
 import type { ShipLane } from '../../facilities/economy-bridge';
-import type { Ship } from '../../game-state';
 
 export type { DiagramPick } from './types';
 
@@ -148,6 +147,8 @@ export class SystemDiagram {
   // motion steps on a fixed cadence (see ShipsLayer.update).
   update(now: number): void {
     this.ships.update(now);
+    // Advance any in-flight ship warp (moving the real muster sprite off/in). No-op when nothing warps.
+    this.fleet.update(now);
   }
 
   // Hand the ships layer this cluster's cargo lanes for the current turn.
@@ -163,10 +164,32 @@ export class SystemDiagram {
     this.facilities.layout(this.bodyCenters);
   }
 
-  // Hand the fleet layer this system's READY ships (the caller pre-filters). A pure
-  // pass-through; the layer re-derives the two formations from the bounds it already has.
-  syncFleet(ships: readonly Ship[]): void {
-    this.fleet.setFleet(ships);
+  // Hand the fleet layer this system's formation ROSTER (berths: ready ships draw, inbound/outbound ships
+  // reserve gaps). A pure pass-through; the layer re-derives the two formations from the bounds it has.
+  syncFleet(berths: readonly FleetBerth[]): void {
+    this.fleet.setFleet(berths);
+  }
+
+  // Begin a ship's warp fly-off / fly-in (moving the real muster sprite). Pass-through to the fleet layer,
+  // which advances the timeline in update(now). onFleetWarpComplete fires when a warp ends.
+  startFleetWarpOut(shipId: string, now: number): void {
+    this.fleet.startWarpOut(shipId, now);
+  }
+
+  startFleetWarpIn(shipId: string, now: number): void {
+    this.fleet.startWarpIn(shipId, now);
+  }
+
+  // Whether a ship is mid-warp (its sprite is in flight, not settled on its berth) — the gauge overlay
+  // suppresses a gauge for it so the bar doesn't float at the empty berth.
+  isFleetShipWarping(shipId: string): boolean {
+    return this.fleet.isWarping(shipId);
+  }
+
+  // Fired when a fleet warp timeline ends (an out-ship is gone / an in-ship settled), so the scene re-reads
+  // the roster + repaints gauges. Wired by SystemScene.
+  set onFleetWarpComplete(fn: () => void) {
+    this.fleet.onWarpComplete = fn;
   }
 
   // Reserve extra bottom space in the fleet muster band so the formation clears the encounter bar
@@ -181,6 +204,11 @@ export class SystemDiagram {
   // fleet layer, which owns the laid-out per-ship centers.
   fleetSlotCenter(shipId: string): { cx: number; cy: number; r: number } | null {
     return this.fleet.slotCenterFor(shipId);
+  }
+
+  // The ships actually rendered (post MAX_FLEET_SPRITES slice) — the commandable/target set filters to this.
+  renderedFleetShipIds(): readonly string[] {
+    return this.fleet.renderedShipIds();
   }
 
   // The on-screen center of a ship's MODULE (content-buffer px) — the firing weapon's rect, the

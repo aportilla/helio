@@ -45,6 +45,7 @@ import { cloneWorldForSpeculation } from './speculation.ts';
 import { projectWorld } from './project.ts';
 import type { SimStarResolver } from './types.ts';
 import { buildGeometry, LY_TO_SIM_UNITS } from './sim-geometry.ts';
+import { REACH_LY } from './reach.ts';
 import { sameBodyIds, transplantLiveState } from './world-sync.ts';
 import { base64FromBytes, bytesFromBase64 } from './base64.ts';
 import { slotKey, readRaw, writeRaw, removeRaw } from '../storage.ts';
@@ -62,14 +63,10 @@ export function clearSimSave(): void {
 // identity for a fresh game; a restored save's PRNG state takes over from here.
 const WORLD_SEED = 0x5e1f0501;
 
-// Current jump reach, in light-years — the farthest a single leg spans; longer
-// hauls route multi-leg over the graph. ~9 ly comfortably exceeds the solar
-// neighborhood's typical nearest-neighbor spacing (~5–6 ly), so systems connect
-// into one routable graph rather than isolated islands, while reach still
-// matters. jumpRadius is a runtime tech tier (excluded from the save's
-// configHash), so retuning it never invalidates a save — a restored world simply
-// adopts the current value (see enforceReach).
-const REACH_LY = 9;
+// Jump reach in sim units, from the shared REACH_LY tier (./reach.ts — authored sim-free so warp range
+// can be pinned equal to it by a node test). jumpRadius is a runtime tech tier (excluded from the save's
+// configHash), so retuning it never invalidates a save — a restored world simply adopts the current
+// value (see enforceReach).
 const REACH_UNITS = Math.round(REACH_LY * LY_TO_SIM_UNITS);
 
 // A binding shortfall on a resource: why this turn's demand went unmet, plus the

@@ -53,7 +53,7 @@ export interface Ship {
   readonly components: readonly ShipComponentType[];
   // Auto-generated at creation; the ship card reads it.
   readonly name: string;
-  readonly status: 'building' | 'ready';
+  readonly status: 'building' | 'ready' | 'transiting';
   // Build-only fields, present iff 'building'. A 'ready' ship omits both — a finished
   // build no longer needs them, and a ship that NEVER built (a bootstrapped opponent
   // dropped straight into a system) never had them.
@@ -64,6 +64,26 @@ export interface Ship {
   //     desync two stored ints).
   readonly shipyardBodyId?: string;
   readonly completesOnTurn?: number;
+  // Transit fields, required iff 'transiting' — the movement twin of the build-only fields. `systemId`
+  // keeps the ORIGIN until arrival (every 'ready' filter already excludes a transiting ship from
+  // rosters/menus/combat), so both endpoints of the trip stay known and a stale order can demote cleanly.
+  //   - destinationSystemId: the system handle the ship warps to (arrival makes it the new systemId).
+  //   - arrivesOnTurn: the absolute turn it flips back to 'ready' at the destination — the same
+  //     replay-safe threshold compare as completesOnTurn.
+  //   - departedOnTurn: the turn it left; stored from day one so the galaxy transit line's progress head
+  //     is exact (never recomputed) and a future recall can price the return leg.
+  readonly destinationSystemId?: string;
+  readonly arrivesOnTurn?: number;
+  readonly departedOnTurn?: number;
+}
+
+// A ship that completed its warp this turn — emitted by advanceShipTransits for the caller to surface
+// (the arrival notification seam + the warp-in FX). Faction-carrying so the rival-mover substrate reuses
+// the exact stream with no player assumption; systemId is the destination it arrived at.
+export interface ArrivalEvent {
+  readonly shipId: string;
+  readonly factionId: FactionType;
+  readonly systemId: string;
 }
 
 // The on-disk ship shape after STRUCTURAL validation but before factionId is
@@ -121,9 +141,9 @@ function isValidShip(s: unknown): s is ParsedShip {
   if (!Array.isArray(o.components) || o.components.length === 0) return false;
   if (!o.components.every((c) => typeof c === 'string' && SHIP_COMPONENT_TYPES.has(c))) return false;
   if (typeof o.name !== 'string') return false;
-  if (o.status !== 'building' && o.status !== 'ready') return false;
+  if (o.status !== 'building' && o.status !== 'ready' && o.status !== 'transiting') return false;
   // Build-only fields: a 'building' ship MUST carry a well-formed shipyard + completion
-  // turn (the in-progress machinery depends on both); a 'ready' ship MAY omit them, but
+  // turn (the in-progress machinery depends on both); a non-building ship MAY omit them, but
   // a present value still has to be well-formed.
   if (o.status === 'building') {
     if (typeof o.shipyardBodyId !== 'string') return false;
@@ -131,6 +151,19 @@ function isValidShip(s: unknown): s is ParsedShip {
   } else {
     if (o.shipyardBodyId !== undefined && typeof o.shipyardBodyId !== 'string') return false;
     if (o.completesOnTurn !== undefined && !isCompletionTurn(o.completesOnTurn)) return false;
+  }
+  // Transit fields: a 'transiting' ship MUST carry a well-formed destination + arrival turn (the
+  // movement twin of the build-only invariant); a non-transiting ship MAY omit them, but a present
+  // value still has to be well-formed. departedOnTurn is optional even while transiting (an older
+  // in-flight order predating the field must still load).
+  if (o.status === 'transiting') {
+    if (typeof o.destinationSystemId !== 'string') return false;
+    if (!isCompletionTurn(o.arrivesOnTurn)) return false;
+    if (o.departedOnTurn !== undefined && !isCompletionTurn(o.departedOnTurn)) return false;
+  } else {
+    if (o.destinationSystemId !== undefined && typeof o.destinationSystemId !== 'string') return false;
+    if (o.arrivesOnTurn !== undefined && !isCompletionTurn(o.arrivesOnTurn)) return false;
+    if (o.departedOnTurn !== undefined && !isCompletionTurn(o.departedOnTurn)) return false;
   }
   // factionId is validate-and-merged (defaulted) by the caller, never gated here.
   return true;
@@ -147,8 +180,8 @@ export function parseGameState(
   raw: string | null,
   bodyExists: (bodyId: string) => boolean,
   systemExists: (systemId: string) => boolean,
-): { state: GameState; droppedFacilities: number; droppedShips: number; droppedOwnership: number } {
-  if (!raw) return { state: { ...DEFAULTS }, droppedFacilities: 0, droppedShips: 0, droppedOwnership: 0 };
+): { state: GameState; droppedFacilities: number; droppedShips: number; droppedOwnership: number; demotedTransits: number } {
+  if (!raw) return { state: { ...DEFAULTS }, droppedFacilities: 0, droppedShips: 0, droppedOwnership: 0, demotedTransits: 0 };
   try {
     const parsed = JSON.parse(raw) as Partial<GameState>;
     const rawFacilities = Array.isArray(parsed.facilities) ? parsed.facilities : [];
@@ -165,14 +198,25 @@ export function parseGameState(
     // faction, so adding ownership can't drop a pre-faction ship. droppedShips, like
     // droppedFacilities, counts malformed + pruned together.
     const rawShips = Array.isArray(parsed.ships) ? parsed.ships : [];
+    // A transiting ship whose DESTINATION the rebuilt catalog no longer carries demotes to
+    // ready-at-origin (the ship is intact — only the order is stale), unlike a building ship whose
+    // vanished yard reaps it: the destination is a target, not a home, so losing it costs the order,
+    // not the ship. Counted separately so the caller can DEV-warn the way it does for drops.
+    let demotedTransits = 0;
     const ships = rawShips
       .filter(isValidShip)
-      .map((s): Ship => ({
-        ...s,
-        factionId: typeof s.factionId === 'string' && FACTION_TYPES.has(s.factionId)
+      .map((s): Ship => {
+        const factionId = typeof s.factionId === 'string' && FACTION_TYPES.has(s.factionId)
           ? (s.factionId as FactionType)
-          : CONTROLLED_FACTION_ID,
-      }))
+          : CONTROLLED_FACTION_ID;
+        if (s.status === 'transiting' && s.destinationSystemId !== undefined && !systemExists(s.destinationSystemId)) {
+          demotedTransits++;
+          // A clean ready ship at the origin — no transit residue. systemId already holds the origin,
+          // which the filter below re-checks.
+          return { id: s.id, systemId: s.systemId, factionId, components: s.components, name: s.name, status: 'ready' };
+        }
+        return { ...s, factionId };
+      })
       .filter((s) => systemExists(s.systemId)
         && (s.status !== 'building' || (s.shipyardBodyId !== undefined && bodyExists(s.shipyardBodyId))));
     const droppedShips = rawShips.length - ships.length;
@@ -187,9 +231,9 @@ export function parseGameState(
     // is fine.
     const seq = typeof parsed.seq === 'number' && parsed.seq >= 0 ? Math.floor(parsed.seq) : 0;
     const turn = typeof parsed.turn === 'number' && parsed.turn >= 1 ? Math.floor(parsed.turn) : 1;
-    return { state: { version: 1, turn, seq, facilities, ships, ownership }, droppedFacilities, droppedShips, droppedOwnership };
+    return { state: { version: 1, turn, seq, facilities, ships, ownership }, droppedFacilities, droppedShips, droppedOwnership, demotedTransits };
   } catch {
-    return { state: { ...DEFAULTS }, droppedFacilities: 0, droppedShips: 0, droppedOwnership: 0 };
+    return { state: { ...DEFAULTS }, droppedFacilities: 0, droppedShips: 0, droppedOwnership: 0, demotedTransits: 0 };
   }
 }
 
@@ -212,6 +256,36 @@ export function advanceShipBuilds(ships: readonly Ship[], turn: number): readonl
     return s;
   });
   return changed ? next : ships;
+}
+
+// Pure transit-stepper kernel: flip every 'transiting' ship that has reached its arrivesOnTurn to
+// 'ready' at its destination, dropping the transit fields, and emit an ArrivalEvent per flip. The pure
+// sibling of advanceShipBuilds — same threshold compare (turn >= arrivesOnTurn, never a decrement, so a
+// skipped/double-fired turn can't desync) and same-ref skip. Returns the SAME array reference (and an
+// empty arrivals list) when nothing is due, so the caller skips a redundant write. An arrived ship is
+// rebuilt as a clean 'ready' record (no transit/build residue) at its destination system.
+export function advanceShipTransits(
+  ships: readonly Ship[],
+  turn: number,
+): { ships: readonly Ship[]; arrivals: readonly ArrivalEvent[] } {
+  let changed = false;
+  const arrivals: ArrivalEvent[] = [];
+  const next = ships.map((s) => {
+    // destinationSystemId/arrivesOnTurn are always present on a 'transiting' ship (the validator + every
+    // order site enforce it); the undefined guards only satisfy the optional type.
+    if (
+      s.status === 'transiting'
+      && s.destinationSystemId !== undefined
+      && s.arrivesOnTurn !== undefined
+      && turn >= s.arrivesOnTurn
+    ) {
+      changed = true;
+      arrivals.push({ shipId: s.id, factionId: s.factionId, systemId: s.destinationSystemId });
+      return { id: s.id, systemId: s.destinationSystemId, factionId: s.factionId, components: s.components, name: s.name, status: 'ready' as const };
+    }
+    return s;
+  });
+  return { ships: changed ? next : ships, arrivals };
 }
 
 // The in-flight build at a yard, if any — the pure kernel behind both the

@@ -110,6 +110,20 @@ export class ActionMenu {
     return this.actor.commands.filter((c) => c.grant.category === category);
   }
 
+  // The actor's rootLevel commands — direct rows at the TOP (category) level, AFTER the category palette
+  // (so a root verb like WARP DRIVE trails Attack/Support/Command). A root command sits under no category
+  // row; arming it skips the command level and goes straight into targeting.
+  private rootCommands(): readonly ActionCommand[] {
+    return this.actor.commands.filter((c) => c.grant.rootLevel === true);
+  }
+
+  // The rootLevel command a category-level row key names, or null for a category row (whose key is an
+  // ActionCategory string, never a composed command id). This distinguishes the two kinds of row that
+  // share the heterogeneous category level — the one fork enter() needs at the top level.
+  private rootCommandFor(key: string): ActionCommand | null {
+    return this.actor.commands.find((c) => c.id === key && c.grant.rootLevel === true) ?? null;
+  }
+
   // A command is available iff the actor can pay its energy cost (D6). ABSENT energy ⇒
   // permissive: the bones carry no energy model yet (no `stats.energy`), so every command is
   // available, exactly as before the inversion. The Phase-2 energy model populates `energy` and
@@ -155,11 +169,21 @@ export class ActionMenu {
   private rows(): readonly MenuRow[] {
     const f = this.frame;
     if (f.level === 'category') {
-      return this.categories().map((c) => ({
+      const categoryRows = this.categories().map((c) => ({
         key: c,
         label: categoryLabel(c),
         enabled: this.commandsIn(c).some((command) => this.canFire(command)),
       }));
+      // The heterogeneous top level: the category palette THEN the actor's rootLevel commands as direct
+      // rows (WARP DRIVE trails as the last row). A root row greys by the SAME canFire as a command row,
+      // so the pre-grey (nothing reachable) and the in-combat grey (no system candidate) fall out of one
+      // gate — no new greying path.
+      const rootRows = this.rootCommands().map((command) => ({
+        key: command.id,
+        label: commandLabel(command),
+        enabled: this.canFire(command),
+      }));
+      return [...categoryRows, ...rootRows];
     }
     return this.commandsIn(f.category).map((command) => ({
       key: command.id,
@@ -250,6 +274,19 @@ export class ActionMenu {
 
     if (f.level === 'category') {
       if (!row.enabled) return null;
+      const rootCommand = this.rootCommandFor(row.key);
+      if (rootCommand) {
+        // A root-level command is a DIRECT action: arm it straight into targeting, skipping the command
+        // level. Its own category holds it, so the existing target frame identifies it with no new frame
+        // shape (cursoredCommand reads commandsIn(category)[cursor]). The chrome intercepts a
+        // 'system'-space root command BEFORE this fires (its destination lives in another view), so in-app
+        // warp never actually pushes this frame; the branch exists for test coherence + a 'local' root
+        // command later.
+        const category = rootCommand.grant.category;
+        const cursor = this.commandsIn(category).indexOf(rootCommand);
+        this.stack.push({ level: 'target', cursor, category, targetCursor: 0 });
+        return null;
+      }
       this.stack.push({ level: 'command', cursor: 0, category: row.key as ActionCategory });
       this.frame.cursor = firstEnabledIndex(this.rows()); // park on the first FIREABLE weapon
       return null;

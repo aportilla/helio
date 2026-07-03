@@ -85,14 +85,18 @@ export function firstLivingOfSide(
   return undefined;
 }
 
-// The lowest-combatId living same-side ship that can AFFORD at least one of its commands — the combatant a
+// The lowest-combatId living same-side ship that can AFFORD at least one COMBAT command — the combatant a
 // phase should OPEN on, so the cursor lands somewhere the player can actually act (or the AI can move),
 // never on a drained ship while a charged same-side ship waits (§3.8). Affordability mirrors the menu's
-// energy gate (D6: cost ≤ energy; a ship with no energy model is permissively affordable). Returns
-// undefined when NO same-side ship can afford an action (a fully spent side — the phase becomes a forfeit /
-// End Turn); the caller falls back to firstLivingOfSide so a phase always opens on someone. The target half
-// of "has an available action" stays in the menu/controller (only it mints targets); for the homogeneous
-// enemy-target loadout the two coincide, since a living enemy always exists off-terminal.
+// energy gate (D6: cost ≤ energy; a ship with no energy model is permissively affordable). A command whose
+// target lives in GALAXY space (targetSpace 'system' — e.g. WARP DRIVE) is EXCLUDED: it can never have a
+// target in an encounter (the combat resolver mints no 'system' candidate, so the menu greys it), and it
+// costs 0 energy, so counting it would falsely make every ship — even a fully drained one — "actable".
+// Returns undefined when NO same-side ship can afford a combat action (a fully spent side — the phase
+// becomes a forfeit / End Turn); the caller falls back to firstLivingOfSide so a phase always opens on
+// someone. The rest of the target half of "has an available action" stays in the menu/controller (only it
+// mints targets); for the homogeneous enemy-target loadout the two coincide, since a living enemy always
+// exists off-terminal.
 export function firstActableOfSide(
   combatants: EncounterState['combatants'],
   factionId: FactionType,
@@ -100,7 +104,7 @@ export function firstActableOfSide(
   for (const c of combatants) {
     if (c.factionId !== factionId || isDown(c)) continue;
     const energy = c.stats?.[ENERGY_STAT] ?? Infinity;
-    if (c.commands.some((cmd) => cmd.totalCost <= energy)) return c.combatId;
+    if (c.commands.some((cmd) => cmd.grant.targetSpace !== 'system' && cmd.totalCost <= energy)) return c.combatId;
   }
   return undefined;
 }

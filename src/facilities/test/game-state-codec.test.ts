@@ -11,6 +11,7 @@ import {
   parseGameState,
   DEFAULTS,
   advanceShipBuilds,
+  advanceShipTransits,
   buildingShipAt,
   type Ship,
 } from '../../game-state-codec.ts';
@@ -240,4 +241,77 @@ test('buildingShipAt finds the in-flight build at a yard (the one-build-per-yard
   assert.equal(buildingShipAt(ships, 'mars'), undefined);  // a free yard
   // A yard holding only a READY ship is free to start a new build.
   assert.equal(buildingShipAt([ship({ id: 's2', status: 'ready', shipyardBodyId: 'earth' })], 'earth'), undefined);
+});
+
+// ── Movement (transit) ───────────────────────────────────────────────────────────────────────────
+
+test("a valid 'transiting' ship survives; a malformed one is dropped (the transit-only invariant)", () => {
+  const raw = blob({
+    version: 1, turn: 3, seq: 9,
+    ships: [
+      // valid: destination + arrival turn present; departedOnTurn optional-but-well-formed
+      { id: 's1', systemId: 'sol', components: ['small-engine'], name: 'A', status: 'transiting', destinationSystemId: 'vega', arrivesOnTurn: 6, departedOnTurn: 3 },
+      // valid without departedOnTurn (an older in-flight order predating the field)
+      { id: 's2', systemId: 'sol', components: ['small-engine'], name: 'B', status: 'transiting', destinationSystemId: 'vega', arrivesOnTurn: 6 },
+      { id: 's3', systemId: 'sol', components: ['small-engine'], name: 'C', status: 'transiting', arrivesOnTurn: 6 },                               // no destination → dropped
+      { id: 's4', systemId: 'sol', components: ['small-engine'], name: 'D', status: 'transiting', destinationSystemId: 'vega' },                    // no arrivesOnTurn → dropped
+      { id: 's5', systemId: 'sol', components: ['small-engine'], name: 'E', status: 'transiting', destinationSystemId: 'vega', arrivesOnTurn: 0 },  // arrivesOnTurn < 1 → dropped
+      { id: 's6', systemId: 'sol', components: ['small-engine'], name: 'F', status: 'transiting', destinationSystemId: 'vega', arrivesOnTurn: 6, departedOnTurn: 3.5 }, // bad departedOnTurn → dropped
+    ],
+  });
+  const { state, droppedShips, demotedTransits } = parseGameState(raw, anyBody, anySystem);
+  assert.deepEqual(state.ships.map((s) => s.id), ['s1', 's2']);
+  assert.equal(droppedShips, 4);
+  assert.equal(demotedTransits, 0, 'a valid destination is not a demotion');
+});
+
+test('a transiting ship whose DESTINATION is gone demotes to ready-at-origin (the ship is kept)', () => {
+  const raw = blob({
+    version: 1, turn: 4, seq: 2,
+    ships: [
+      { id: 's1', systemId: 'sol', factionId: 'player', components: ['small-engine'], name: 'A', status: 'transiting', destinationSystemId: 'gone', arrivesOnTurn: 7, departedOnTurn: 4 },
+    ],
+  });
+  // The origin ('sol') still exists; only the destination ('gone') was dropped by a rebuild.
+  const { state, droppedShips, demotedTransits } = parseGameState(raw, anyBody, (id) => id !== 'gone');
+  assert.equal(droppedShips, 0, 'the ship is intact — only the order is stale');
+  assert.equal(demotedTransits, 1);
+  const s = state.ships[0]!;
+  assert.equal(s.status, 'ready');
+  assert.equal(s.systemId, 'sol', 'stays at its origin');
+  assert.equal(s.destinationSystemId, undefined, 'the stale order is dropped');
+  assert.equal(s.arrivesOnTurn, undefined);
+  assert.equal(s.departedOnTurn, undefined);
+});
+
+test('advanceShipTransits flips at arrivesOnTurn (>=), emits arrivals, idempotent, same-ref skip', () => {
+  const ships: readonly Ship[] = [
+    ship({ id: 's1', factionId: 'player', status: 'transiting', systemId: 'sol', destinationSystemId: 'vega', arrivesOnTurn: 5, departedOnTurn: 2 }),
+  ];
+
+  // One turn early: still transiting, SAME ref (no write), no arrivals.
+  const early = advanceShipTransits(ships, 4);
+  assert.equal(early.ships, ships);
+  assert.deepEqual(early.arrivals, []);
+  assert.equal(early.ships[0]!.status, 'transiting');
+
+  // At the threshold: a NEW array, the ship is READY at its DESTINATION with transit residue gone,
+  // and an ArrivalEvent is emitted (faction-carrying, systemId = the destination it reached).
+  const done = advanceShipTransits(ships, 5);
+  assert.notEqual(done.ships, ships);
+  const arrived = done.ships[0]!;
+  assert.equal(arrived.status, 'ready');
+  assert.equal(arrived.systemId, 'vega');
+  assert.equal(arrived.destinationSystemId, undefined);
+  assert.equal(arrived.arrivesOnTurn, undefined);
+  assert.equal(arrived.departedOnTurn, undefined);
+  assert.deepEqual(done.arrivals, [{ shipId: 's1', factionId: 'player', systemId: 'vega' }]);
+
+  // Double-fire / a later turn over an already-arrived (ready) ship: no-op, same ref, no arrivals.
+  const again = advanceShipTransits(done.ships, 6);
+  assert.equal(again.ships, done.ships);
+  assert.deepEqual(again.arrivals, []);
+
+  // A straggler still arrives when the turn is well past the arrival turn.
+  assert.equal(advanceShipTransits(ships, 9).ships[0]!.status, 'ready');
 });

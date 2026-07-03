@@ -56,7 +56,7 @@ interface Frame {
   lastRamp: number;
 }
 
-function ringPoints(radius: number, segments: number): Vector3[] {
+export function ringPoints(radius: number, segments: number): Vector3[] {
   const pts: Vector3[] = [];
   for (let i = 0; i <= segments; i++) {
     const a = (i / segments) * Math.PI * 2;

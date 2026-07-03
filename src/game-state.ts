@@ -21,12 +21,14 @@
 // below stay put. The game + sim saves cross-reference by Body.id, so a slot
 // switch scopes both from that one resolver (see ./storage).
 
-import { indexOfBodyId, systemExists, systemIdForBodyId } from './data/stars';
+import { clusterDistanceMilliLy, clusterIndexForSystemId, indexOfBodyId, systemExists, systemIdForBodyId } from './data/stars';
 import { ADD_ORDER, FACILITY_BY_TYPE, facilityHasShipbuilding, type FacilityType } from './facilities';
 import {
   advanceShipBuilds,
+  advanceShipTransits,
   buildingShipAt,
   parseGameState,
+  type ArrivalEvent,
   type BodyOwnership,
   type Facility,
   type GameState,
@@ -34,7 +36,7 @@ import {
 } from './game-state-codec';
 import { CONTROLLED_FACTION_ID, FACTION_DEFS } from './factions/registry';
 import type { FactionType } from './factions/types';
-import { DEMO_SHIP_LOADOUT } from './ships/components/registry';
+import { DEMO_SHIP_LOADOUT, shipWarpRangeMilliLy, warpTravelTurns } from './ships/components/registry';
 import type { ShipComponentType } from './ships/components/types';
 import { slotKey, readRaw, writeRaw, removeRaw } from './storage';
 import { recordsOnBody } from './world-overlay';
@@ -43,7 +45,7 @@ import { recordsOnBody } from './world-overlay';
 // reader live in ./game-state-codec (node-testable, no globals); this module owns
 // the live in-memory state, the localStorage I/O, and the mutators. Re-export the
 // shape so existing `import type { Facility } from './game-state'` callers hold.
-export type { Facility, GameState, Ship } from './game-state-codec';
+export type { ArrivalEvent, Facility, GameState, Ship } from './game-state-codec';
 
 const STORAGE_KEY = slotKey('game');
 
@@ -51,7 +53,7 @@ function readFromStorage(): GameState {
   // parseGameState handles a null raw (absent key / disabled storage) → defaults,
   // and applies the skip-on-missing gate: a facility whose body a catalog rebuild
   // (PROCGEN_VERSION bump / CSV id change) no longer contains is dropped, never fatal.
-  const { state, droppedFacilities, droppedShips, droppedOwnership } = parseGameState(
+  const { state, droppedFacilities, droppedShips, droppedOwnership, demotedTransits } = parseGameState(
     readRaw(STORAGE_KEY),
     (id) => indexOfBodyId(id) >= 0,
     (id) => systemExists(id),
@@ -64,6 +66,9 @@ function readFromStorage(): GameState {
   }
   if (import.meta.env.DEV && droppedOwnership > 0) {
     console.warn(`[game-state] dropped ${droppedOwnership} body-ownership record${droppedOwnership === 1 ? '' : 's'} with an unknown body/faction`);
+  }
+  if (import.meta.env.DEV && demotedTransits > 0) {
+    console.warn(`[game-state] demoted ${demotedTransits} transiting ship${demotedTransits === 1 ? '' : 's'} whose destination is gone (order dropped, ship kept at origin)`);
   }
   return state;
 }
@@ -283,4 +288,66 @@ export function stepShipBuilds(turn: number): void {
   if (ships === current.ships) return;
   current = { ...current, ships };
   writeToStorage(current);
+}
+
+// =============================================================================
+// Ship movement — galaxy warp. A 'ready' ship warps from its system to another within its drive's
+// range, arriving after a distance-priced transit. Same mutator discipline as the build path;
+// faction-agnostic (never reads CONTROLLED_FACTION_ID) so a future rival mover drives this exact API.
+// =============================================================================
+
+// Order a warp: flip a 'ready' ship to 'transiting' toward destinationSystemId, stamping the turn it
+// arrives (this turn + a distance-priced transit) and the turn it left. Returns the updated ship, or
+// null on any violation — unknown ship, not 'ready', unknown/self destination, or a destination beyond
+// the drive's range (the last a belt-and-suspenders re-check of the gate the departure pick already
+// applied, like startShipBuild's defensive null). Mutates an EXISTING ship, so unlike startShipBuild it
+// draws no seq. arrivesOnTurn is computed HERE (turn + warpTravelTurns over the cluster distance) so the
+// caller passes only the destination.
+export function orderShipWarp(shipId: string, destinationSystemId: string): Ship | null {
+  const idx = current.ships.findIndex((s) => s.id === shipId);
+  if (idx < 0) return null;
+  const s = current.ships[idx]!;
+  if (s.status !== 'ready') return null;
+  if (!systemExists(destinationSystemId)) return null;
+  if (destinationSystemId === s.systemId) return null; // no warp-to-self
+  const originIdx = clusterIndexForSystemId(s.systemId);
+  const destIdx = clusterIndexForSystemId(destinationSystemId);
+  if (originIdx < 0 || destIdx < 0) return null;
+  const dist = clusterDistanceMilliLy(originIdx, destIdx);
+  if (dist > shipWarpRangeMilliLy(s.components)) return null;
+
+  const turn = current.turn;
+  const updated: Ship = {
+    ...s,
+    status: 'transiting',
+    destinationSystemId,
+    arrivesOnTurn: turn + warpTravelTurns(dist, s.components),
+    departedOnTurn: turn,
+  };
+  const ships = current.ships.slice();
+  ships[idx] = updated;
+  current = { ...current, ships };
+  writeToStorage(current);
+  return updated;
+}
+
+// The transits touching a system, for the sidebar TRANSITS block: OUTBOUND ships (leaving this system —
+// their origin systemId is this one) and INBOUND ships (arriving here — their destinationSystemId is
+// this one). A transiting ship's systemId stays the origin until arrival, so the two lists never overlap.
+export function transitsFor(systemId: string): { outbound: readonly Ship[]; inbound: readonly Ship[] } {
+  const outbound = current.ships.filter((s) => s.status === 'transiting' && s.systemId === systemId);
+  const inbound = current.ships.filter((s) => s.status === 'transiting' && s.destinationSystemId === systemId);
+  return { outbound, inbound };
+}
+
+// The transit turn-phase: flip every 'transiting' ship that reached arrivesOnTurn to 'ready' at its
+// destination, persisting once, and RETURN the arrivals (unlike stepShipBuilds' void) so the caller can
+// seed the arrival notification / warp-in FX. Attaches in AppController.nextTurn right after
+// stepShipBuilds. A no-op write is skipped (advanceShipTransits returns the same ref when none arrive).
+export function stepShipTransits(turn: number): readonly ArrivalEvent[] {
+  const { ships, arrivals } = advanceShipTransits(current.ships, turn);
+  if (ships === current.ships) return arrivals; // [] — nothing arrived, no write
+  current = { ...current, ships };
+  writeToStorage(current);
+  return arrivals;
 }

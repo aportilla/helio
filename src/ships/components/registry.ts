@@ -11,7 +11,7 @@
 // ../../actions/tuning.ts mirrors the facility registry's import of the same hoisted palette.
 
 import type { ShipComponentDef, ShipComponentType } from './types.ts';
-import { CANNON_ACTION_COLOR, LASER_ACTION_COLOR, SHIELD_ACTION_COLOR } from '../../actions/tuning.ts';
+import { CANNON_ACTION_COLOR, LASER_ACTION_COLOR, SHIELD_ACTION_COLOR, WARP_ACTION_COLOR } from '../../actions/tuning.ts';
 
 // The registry, keyed by ShipComponentType. `satisfies Record<ShipComponentType, ...>` is the
 // compile layer of the frozen-key guard: adding a literal to the union without a def here fails to
@@ -23,12 +23,30 @@ const DEFS = {
     label: 'Small Engine',
     kind: 'drive',
     buildTurns: 1,
-    // The drive grants NO action — there is no flee (an encounter is fought to its terminal, never
-    // withdrawn). Its whole job is the per-cycle energy recharge it DECLARES as an effect (worked example
-    // A, 4x-encounter-combat-system §7.5) — not a hardcoded reducer step. `amount` is energy-milli restored
-    // at the ship's own turn start, clamped to energyMax. A second power component would install its own
+    // The drive grants exactly ONE action — WARP DRIVE, the galaxy jump: a ROOT-LEVEL command (a direct
+    // top-menu row beside Attack/Support/Command, not a category) whose target is a destination SYSTEM
+    // (`targetSpace: 'system'`, the reachable-cluster snapshot). It grants no COMBAT action — there is
+    // still no flee (an encounter is fought to its terminal, never withdrawn), and in an encounter WARP
+    // DRIVE greys itself because combat mints no 'system' candidate (canFire is false). `category:
+    // 'navigation'` is a latent family tag (surfaced by rootLevel, not as a palette category); the grant
+    // carries no `costPerUnit` — movement is energy-inert.
+    grants: [{
+      key: 'warp', label: 'WARP DRIVE', color: WARP_ACTION_COLOR, category: 'navigation', rootLevel: true,
+      targeting: 'single', kind: 'immediate', targetSpace: 'system', targets: (c) => c.kind === 'system',
+    }],
+    // The drive's other job is the per-cycle energy recharge it DECLARES as an effect (worked example A,
+    // 4x-encounter-combat-system §7.5) — not a hardcoded reducer step. `amount` is energy-milli restored at
+    // the ship's own turn start, clamped to energyMax. A second power component would install its own
     // `recharge`; the instances simply sum in the one fold, no merge logic.
     installs: [{ effectKey: 'recharge', remaining: -1, params: { amount: 3_000 } }],
+    // Galaxy warp stats — a drive is what lets a ship leave its system. Range is authored EQUAL to the
+    // economy's single-jump trade reach (REACH_LY × LY_TO_SIM_UNITS = 9_000 milli-light-years) so a fleet
+    // reaches exactly where trade does — one adjacency map the player already learns from the cargo lanes
+    // (pinned by a cross-registry test). Speed prices the hop into turns (warpTravelTurns): a max-range
+    // jump costs a small handful (9_000 / 3_000 = 3), a near hop one, so distance is a real positioning
+    // decision. Derived as MAX over a loadout's drives, never a sum.
+    warpRangeMilliLy: 9_000,
+    warpSpeedMilliLyPerTurn: 3_000,
   },
   'small-laser': {
     type: 'small-laser',
@@ -150,6 +168,27 @@ export function shipBuildTurns(components: readonly ShipComponentType[]): number
 // encounter package. Unknown ids contribute 0; a loadout with no battery yields 0 (an empty gauge).
 export function shipEnergyMax(components: readonly ShipComponentType[]): number {
   return components.reduce((sum, type) => sum + (COMPONENT_BY_TYPE.get(type)?.battery ?? 0), 0);
+}
+
+// A ship's WARP RANGE / SPEED = the MAX over its components' drive stats (NOT the Σ — range is a
+// capability ceiling, so stacking engines can't buy reach past the authored band, and a longer-legged
+// drive lands free on the max). Siblings of shipEnergyMax, kept in this neutral home so the galaxy
+// movement code reads them without importing the encounter package. 0 ⇒ no drive ⇒ the ship cannot warp.
+export function shipWarpRangeMilliLy(components: readonly ShipComponentType[]): number {
+  return components.reduce((max, type) => Math.max(max, COMPONENT_BY_TYPE.get(type)?.warpRangeMilliLy ?? 0), 0);
+}
+export function shipWarpSpeedMilliLyPerTurn(components: readonly ShipComponentType[]): number {
+  return components.reduce((max, type) => Math.max(max, COMPONENT_BY_TYPE.get(type)?.warpSpeedMilliLyPerTurn ?? 0), 0);
+}
+
+// Distance-proportional transit time = max(1, ceil(dist / speed)): a max-range hop costs a small handful
+// of turns, a near hop one, nothing is instant — so distance prices positioning. Model-agnostic (the
+// stored arrival turn is a plain integer), so swapping the pricing later is only this body. Called only
+// for a ship whose range check already passed (a real drive, speed > 0); the `|| 1` keeps the arithmetic
+// finite for a driveless loadout instead of dividing by zero.
+export function warpTravelTurns(distMilliLy: number, components: readonly ShipComponentType[]): number {
+  const speed = shipWarpSpeedMilliLyPerTurn(components);
+  return Math.max(1, Math.ceil(distMilliLy / (speed || 1)));
 }
 
 // Single source of a component's display name — build rows + part labels.

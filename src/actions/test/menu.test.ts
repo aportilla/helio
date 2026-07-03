@@ -300,3 +300,58 @@ test('filterCandidates: a criteria may also key off the acting actor', () => {
   const notSelfActor = filterCandidates(mixed, (c) => c.id !== actor.id, actor);
   assert.equal(notSelfActor.length, mixed.length); // none of the mixed ids is 'a1'
 });
+
+// -- rootLevel commands: a direct row at the heterogeneous top level (WARP DRIVE) -----------------
+
+const warpCmd = cmd('small-engine:warp', grant({
+  key: 'warp', label: 'WARP DRIVE', category: 'navigation', targeting: 'single',
+  kind: 'immediate', rootLevel: true, targetSpace: 'system', targets: (c) => c.kind === 'system',
+}));
+// A ship-shaped actor: the Attack/Support/Command palette PLUS the drive's root-level warp.
+const shipActor: Actor = { id: 'p1', commands: [attackCmd, warpCmd], categories: ['attack', 'support', 'command'] };
+const systemCands: readonly TargetCandidate[] = [
+  { id: 'sys:vega', kind: 'system', allegiance: 'neutral', tags: [] },
+  { id: 'sys:sirius-a', kind: 'system', allegiance: 'neutral', tags: [] },
+];
+// A resolver that mints reachable SYSTEMS for a system-space command, enemies otherwise (the in-system set).
+const resolveWithSystems: TargetResolver = (command) =>
+  command.grant.targetSpace === 'system' ? systemCands : enemyCands;
+
+test('a rootLevel command shows as a DIRECT row AFTER the category palette (WARP DRIVE trails as the 4th row)', () => {
+  const v = new ActionMenu(shipActor, resolveWithSystems).view();
+  assert.equal(v.level, 'category');
+  assert.deepEqual(v.rows.map((r) => r.key), ['attack', 'support', 'command', 'small-engine:warp']);
+  assert.equal(v.rows[3]!.label, 'WARP DRIVE', 'the root row renders the command label, not a category name');
+});
+
+test('a rootLevel command greys by its OWN canFire — reachable ⇒ enabled, nothing in range ⇒ greyed', () => {
+  const reachable = new ActionMenu(shipActor, resolveWithSystems).view();
+  assert.equal(reachable.rows.find((r) => r.key === 'small-engine:warp')?.enabled, true, 'enabled when a system is in range');
+  // No 'system' candidate (a rim-islanded ship, or an encounter's ship/body-only resolver): the row greys —
+  // the SAME canFire gate a weapon uses, so the pre-grey and the in-combat grey are one path, not two.
+  const noSystems: TargetResolver = () => enemyCands;
+  const islanded = new ActionMenu(shipActor, noSystems).view();
+  assert.equal(islanded.rows.find((r) => r.key === 'small-engine:warp')?.enabled, false, 'greyed with nothing reachable');
+});
+
+test('arming a rootLevel command goes STRAIGHT into targeting — no command level (the direct action)', () => {
+  const m = new ActionMenu(shipActor, resolveWithSystems);
+  m.setCursor(3); // land the cursor on the WARP DRIVE root row
+  assert.equal(m.view().cursor, 3, 'the cursor rests on the enabled root row');
+  assert.equal(m.enter(), null, 'arming a root command drills into targeting, it does not fire');
+  const v = m.view();
+  assert.equal(v.level, 'target', 'STRAIGHT to the target level — the command level is skipped');
+  assert.deepEqual(v.targets, ['sys:vega', 'sys:sirius-a'], 'the reachable systems are the candidate targets');
+  assert.equal(v.targetCursor, 0, 'the first destination auto-locks');
+  m.moveTarget(1); // lock the second system
+  assert.deepEqual(m.confirm(), { actorId: 'p1', actionId: 'small-engine:warp', targetIds: ['sys:sirius-a'] });
+});
+
+test('back from a root command targeting returns to the top (category) level, not a phantom command level', () => {
+  const m = new ActionMenu(shipActor, resolveWithSystems);
+  m.setCursor(3);
+  m.enter(); // straight into targeting
+  assert.equal(m.view().level, 'target');
+  m.back();
+  assert.equal(m.view().level, 'category', 'one step back lands at the top level (there was no command level to pop)');
+});

@@ -383,9 +383,10 @@ export const RENDER_ORDER_SHIP_THRUST = 29;
 // eventual combat-sprite block (Appendix A10).
 export const RENDER_ORDER_FLEET = 35;
 export const Z_FLEET = 0.006;
-// Hard ceiling on simultaneously-rendered fleet sprites. Ready ships have no exit
-// path in v1 (no movement/combat), so the rendered count is capped rather than
-// growing unbounded; surplus ships beyond this are simply not drawn.
+// Hard ceiling on simultaneously-rendered fleet sprites. Warp movement + combat are a ready
+// ship's exit paths (movement is also the cap's documented relief), so the rendered count stays
+// bounded; surplus ships beyond this are simply not drawn — and FleetLayer.renderedShipIds() lets
+// the menu / target mint filter to the drawn subset so an undrawn ship is never addressed.
 export const MAX_FLEET_SPRITES = 32;
 // The fleet's RESERVED BAND — the open field below the planets the two formations
 // spread to fill. Its TOP tracks the dome edge baseline (domeBaselineY, the lowest

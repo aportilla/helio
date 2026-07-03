@@ -68,4 +68,13 @@ export interface ShipComponentDef {
   // grant's `costPerUnit` and this value match: a single-laser ship fires exactly one salvo, then the
   // drive's recharge refills it. ABSENT ⇒ contributes none (a chassis/drive holds no charge of its own).
   readonly battery?: number;
+  // Galaxy WARP stats, declared by DRIVES only (a weapon/chassis omits them). A ship's warp range and
+  // speed derive as the MAX over its components (shipWarpRangeMilliLy / shipWarpSpeedMilliLyPerTurn) — a
+  // capability ceiling, not an accumulating pool, so stacking drives never buys reach past the authored
+  // band and a longer-legged drive lands free on the max. `warpRangeMilliLy` is the farthest single hop
+  // (milli-light-years), authored equal to the economy's trade reach so a fleet reaches exactly where
+  // trade does; `warpSpeedMilliLyPerTurn` prices the hop into turns (warpTravelTurns). ABSENT ⇒ 0 (a
+  // non-drive contributes no reach/speed). Movement is energy-inert — a drive holds no combat battery.
+  readonly warpRangeMilliLy?: number;
+  readonly warpSpeedMilliLyPerTurn?: number;
 }

@@ -31,6 +31,7 @@
 
 import { Color } from 'three';
 import { KDTree3 } from './kdtree';
+import { clustersWithinRange, distanceMilliLy } from './cluster-geometry';
 import catalog from './catalog.generated.json';
 
 export type SpectralClass = 'O' | 'B' | 'A' | 'F' | 'G' | 'K' | 'M' | 'WD' | 'BD';
@@ -637,10 +638,40 @@ export function systemExists(systemId: string): boolean {
   return SYSTEM_PRIMARY_IDS.has(systemId);
 }
 
+// The inverse of systemIdForCluster: a system handle → its cluster index, or -1 if the rebuilt catalog
+// no longer carries that system (skip-on-missing). Built beside SYSTEM_PRIMARY_IDS with the same IIFE
+// idiom. Backs galaxy movement — orderShipWarp and the departure pick resolve a stored system slug back
+// to its cluster to measure warp distance.
+const CLUSTER_INDEX_BY_SYSTEM_ID: ReadonlyMap<string, number> = (() => {
+  const m = new Map<string, number>();
+  STAR_CLUSTERS.forEach((c, idx) => m.set(STARS[c.primary]!.id, idx));
+  return m;
+})();
+
+export function clusterIndexForSystemId(systemId: string): number {
+  return CLUSTER_INDEX_BY_SYSTEM_ID.get(systemId) ?? -1;
+}
+
 // Nearest cluster (by COM) to (x, y, z). Returns -1 only if STAR_CLUSTERS is
 // empty (defensive — in practice the catalog always has Sol).
 export function nearestClusterIdxTo(x: number, y: number, z: number): number {
   return CLUSTER_TREE.nearest(x, y, z);
+}
+
+// Cluster COMs, materialized once so the linear range scan below doesn't re-map STAR_CLUSTERS per call
+// (the KDTree only answers nearest(), not a radius query). References into the immutable catalog — no copy.
+const CLUSTER_COMS: readonly { readonly x: number; readonly y: number; readonly z: number }[] =
+  STAR_CLUSTERS.map((c) => c.com);
+
+// Distance between two clusters' COMs, in milli-light-years — galaxy movement's positioning currency.
+export function clusterDistanceMilliLy(a: number, b: number): number {
+  return distanceMilliLy(STAR_CLUSTERS[a]!.com, STAR_CLUSTERS[b]!.com);
+}
+
+// Every cluster within `rangeMilli` of the origin cluster, EXCLUDING the origin — a warp order's
+// reachable-destination set (the same set greys the WARP DRIVE row and lights the departure range ring).
+export function clustersWithinRangeMilliLy(originIdx: number, rangeMilli: number): readonly number[] {
+  return clustersWithinRange(CLUSTER_COMS, originIdx, rangeMilli);
 }
 
 // Curated waypoint stars — bright, well-known anchors distributed across the

@@ -6,7 +6,7 @@
 // a static screen diagram, not a navigable space. SystemHud sits on top.
 
 import { type WebGLRenderer } from 'three';
-import { BODIES, clusterDisplayName, systemIdForCluster } from '../data/stars';
+import { BODIES, clusterDisplayName, clusterDistanceMilliLy, clusterIndexForSystemId, clustersWithinRangeMilliLy, systemIdForCluster } from '../data/stars';
 import { addableTypesFor } from '../facilities';
 import type { EconomyBridge } from '../facilities/economy-bridge';
 import {
@@ -22,16 +22,18 @@ import {
   removeShip,
   shipsInSystem,
   startShipBuild,
+  transitsFor,
 } from '../game-state';
-import type { Ship } from '../game-state';
+import type { ArrivalEvent, Ship } from '../game-state';
 import { CONTROLLED_FACTION_ID, factionColor, factionLabel } from '../factions/registry';
-import { DEMO_SHIP_LOADOUT, shipBuildTurns, shipEnergyMax } from '../ships/components/registry';
+import { DEMO_SHIP_LOADOUT, shipBuildTurns, shipEnergyMax, shipWarpRangeMilliLy, warpTravelTurns } from '../ships/components/registry';
 import { shipToActor } from '../actions/ships-to-actors';
 import { bodyToActor } from '../actions/bodies-to-actors';
 import { grantKeyOf } from '../actions/derive';
-import { encodeBodyEntityId, parseEntityId } from '../actions/entity-id';
+import { encodeBodyEntityId, encodeSystemEntityId, parseEntityId } from '../actions/entity-id';
 import type { Actor, TargetAllegiance, TargetCandidate } from '../actions/types';
 import { SystemActionMenu } from './actions/system-action-menu';
+import type { DepartureRequest } from './departure';
 import { EFFECT_HANDLERS } from './actions/effect-handlers';
 import { EncounterController } from './encounter-controller';
 import { ShipGaugesOverlay, type ShipGauge } from './ship-gauges';
@@ -94,6 +96,12 @@ export class SystemScene implements Screen {
     (id) => this.slotCenterForEntity(id),
     (id, componentId) => this.moduleAnchorFor(id, componentId),
   );
+  // A warp-OUT to trigger on this scene's first frames — set only when AppController re-enters the origin
+  // system right after a confirmed departure (the departed ship's id). The ship is an outbound GAP berth by
+  // now, so FleetLayer flies its real muster sprite off that berth. Fired + cleared once in start().
+  private warpOutHint?: { shipId: string };
+  // DEV-only ?demo-warp=loop interval handle, cleared on stop(). Undefined in normal play + prod.
+  private warpDemoTimer?: ReturnType<typeof setInterval>;
   // True while combat is live. Backs the readonly Screen.freezesTurn (a getter is the only legal
   // backing) AND gates the overlay render + input branch, so the non-combat path is byte-identical
   // when it's down.
@@ -138,24 +146,35 @@ export class SystemScene implements Screen {
   // button click).
   onExit: () => void = () => {};
 
+  // Fired when the player arms WARP DRIVE — carries a fully-formed DepartureRequest (ship + origin + reach +
+  // reachable destinations). AppController drives the system→galaxy destination pick from here.
+  onBeginDeparture: (req: DepartureRequest) => void = () => {};
+
   constructor(
     canvas: HTMLCanvasElement,
     renderer: WebGLRenderer,
     clusterIdx: number,
     sidebar: Sidebar,
     bridge: EconomyBridge,
+    // Optional: a warp-OUT to trigger on mount (AppController hands it in when re-entering the origin after a
+    // confirmed departure). Trailing + optional so the galaxy/test enter paths + the DEV demo are unchanged.
+    warpOutHint?: { shipId: string },
   ) {
     this.canvas = canvas;
     this.renderer = renderer;
     this.sidebar = sidebar;
     this.bridge = bridge;
     this.clusterIdx = clusterIdx;
+    this.warpOutHint = warpOutHint;
 
     this.diagram = new SystemDiagram(clusterIdx);
     // ALWAYS reserve the bottom encounter-bar band in the fleet muster layout — even outside combat,
     // where the bar isn't drawn. Reserving it permanently (not on encounter entry) is what keeps the
     // ship formation from reflowing when combat begins/ends: the slots are computed once, bar-aware.
     this.diagram.setFleetBottomReserve(ENCOUNTER_BAR_HEIGHT);
+    // A finished warp re-reads the roster (an out-ship becomes a clean gap, an in-ship a settled sprite) and
+    // repaints gauges (a landed ship regains its bar).
+    this.diagram.onFleetWarpComplete = () => this.refreshFleet();
     this.hud = new SystemHud();
     this.hud.onBack = () => this.onExit();
 
@@ -246,6 +265,23 @@ export class SystemScene implements Screen {
       this.enterEncounter(buildEncounterSpec(shipsToCombatants(this.readyShips()), intent));
     // The reducer reaching a terminal tells the mode to tear down + unfreeze the turn (there is no flee).
     this.encounter.onExit = () => this.exitEncounter();
+    // Movement: arming WARP DRIVE hands off to the galaxy destination pick instead of drilling. Build the
+    // full DepartureRequest here (this scene alone knows the ship's origin + drive) and pass it up; the
+    // reachable set + per-destination distance/ETA are precomputed so the mode reads no game state.
+    this.actionMenu.onBeginDestinationPick = (actorId, actionId) => {
+      const ship = this.readyShips().find((s) => s.id === actorId);
+      if (!ship) return;
+      const originClusterIdx = clusterIndexForSystemId(ship.systemId);
+      if (originClusterIdx < 0) return;
+      const rangeMilliLy = shipWarpRangeMilliLy(ship.components);
+      const reachable = clustersWithinRangeMilliLy(originClusterIdx, rangeMilliLy)
+        .map((clusterIdx) => {
+          const distanceMilli = clusterDistanceMilliLy(originClusterIdx, clusterIdx);
+          return { clusterIdx, systemId: systemIdForCluster(clusterIdx), distanceMilli, etaTurns: warpTravelTurns(distanceMilli, ship.components) };
+        })
+        .sort((a, b) => a.distanceMilli - b.distanceMilli); // nearest first — the pre-lock takes [0]
+      this.onBeginDeparture({ shipId: ship.id, shipName: ship.name, actionId, originClusterIdx, rangeMilliLy, reachable });
+    };
     // The outer focus axis: ←/→ at the category level cycles the active actor (the menu re-opens
     // on the next ship). The controller routes the key; the actor ring lives here (game-state).
     this.actionMenu.onCycleActor = (delta) => this.cycleActor(delta);
@@ -267,6 +303,7 @@ export class SystemScene implements Screen {
     // System-view settings are deferred (the panel's toggles are galaxy-specific);
     // the header glyph is a no-op here for now.
     this.sidebar.onSettings = () => {};
+    this.refreshTransits();
     this.pushSelectionToSidebar();
     // resize() has laid out the diagram (the ships layer has anchors + bounds),
     // so seed the cargo lanes before the first frame.
@@ -277,6 +314,10 @@ export class SystemScene implements Screen {
     // occupancy so the view opens with traffic already in flight (one-shot; never
     // re-applied on the resizes/turns that re-resolve lanes).
     this.diagram.prime();
+    // If AppController re-entered this system right after a confirmed departure, fly the departed ship's
+    // sprite off its (now-vacated) berth. Registered BEFORE the first tick so it renders in-flight from
+    // frame one (no gap flash). Fires once (the hint is cleared inside).
+    this.emitPendingWarpOut();
     this.tick();
     // DEV visual-test affordance: ?demo-encounter boots straight into a combat overlay. Bare = a
     // spectator (auto-runs the whole fight); =play = playable (your menu opens + waits for input, the
@@ -285,12 +326,49 @@ export class SystemScene implements Screen {
     if (import.meta.env.DEV && demo.has('demo-encounter')) {
       this.devDemoEncounter(demo.get('demo-encounter') !== 'play');
     }
+    if (import.meta.env.DEV && demo.has('demo-warp')) {
+      this.devDemoWarp(demo.get('demo-warp'));
+    }
+  }
+
+  // DEV-only: exercise the warp fly-off/in reproducibly (?demo-warp[=in|out|loop]). Tree-shaken from prod.
+  //   bare  — seed a friendly ready ship + open its menu on the WARP DRIVE root row (the departure chrome).
+  //   =out  — fly that ship's real sprite off its slot (the warp-OUT motion), no galaxy round-trip.
+  //   =in   — fly it in from off-screen onto its slot (the warp-IN motion).
+  //   =loop — alternate out/in on an interval so a warp is always mid-flight for a screenshot.
+  private devDemoWarp(mode: string | null): void {
+    const systemId = systemIdForCluster(this.clusterIdx);
+    // Seed a few friendly ships so the gap-left-behind (no back-fill) reads: one warps, the others hold.
+    while (this.readyShips().filter((s) => s.factionId === CONTROLLED_FACTION_ID).length < 3) addFriendlyShip(systemId);
+    this.refreshFleet();
+    const mine = this.readyShips().find((s) => s.factionId === CONTROLLED_FACTION_ID);
+    if (!mine) return;
+    // Fire a warp on the demo ship and drop its at-rest gauge for the flight (it's a ready ship here, so
+    // unlike a real transit its gauge would otherwise linger at the vacated berth).
+    const warp = (kind: 'out' | 'in'): void => {
+      if (kind === 'out') this.diagram.startFleetWarpOut(mine.id, performance.now());
+      else this.diagram.startFleetWarpIn(mine.id, performance.now());
+      this.repaintShipGauges();
+    };
+    if (mode === 'out') { warp('out'); return; }
+    if (mode === 'in') { warp('in'); return; }
+    if (mode === 'loop') {
+      // Alternate out/in a touch over the warp duration, so a warp is (almost) always mid-flight for a
+      // screenshot (fire once immediately so there's no initial dead frame).
+      let out = true;
+      const step = (): void => { warp(out ? 'out' : 'in'); out = !out; };
+      step();
+      this.warpDemoTimer = setInterval(step, 520);
+      return;
+    }
+    this.select({ kind: 'ship', shipId: mine.id });
   }
 
   stop(): void {
     if (!this.running) return;
     this.running = false;
     cancelAnimationFrame(this.rafId);
+    if (this.warpDemoTimer !== undefined) clearInterval(this.warpDemoTimer);
     this.detachListeners();
   }
 
@@ -467,10 +545,15 @@ export class SystemScene implements Screen {
     // actor. The menu applies each def's TargetCriteria to this flat list, so ships-as-targets
     // and bodies-as-targets fall out of one pass (Attack ⇒ enemies; a self verb ⇒ the actor).
     const candidates = this.targetCandidatesFor(actor);
+    // A system-space command (WARP DRIVE) targets the GALAXY, not this system — so it gets a SEPARATE
+    // reachable-cluster snapshot; every in-system verb gets the untouched local set (zero pollution of
+    // the in-system candidate model). Minted once per open, like the local set, so canFire's per-frame
+    // greying never re-scans the catalog.
+    const warpDestinations = this.warpDestinationsFor(actor.actor.id);
     this.actionMenu.openFor({
       actor: actor.actor,
       title: actor.title,
-      resolveTargets: () => candidates,
+      resolveTargets: (command) => (command.grant.targetSpace === 'system' ? warpDestinations : candidates),
       slotCenterFor: (id) => this.slotCenterForEntity(id),
       // The focus ring size drives the ◄ ► actor-switch arrows: only worth showing when there's
       // more than one of your ships/bodies to cycle through.
@@ -506,7 +589,12 @@ export class SystemScene implements Screen {
     const allegiance = (faction: string, id: string): TargetAllegiance =>
       id === actor.actor.id ? 'self' : faction === actor.factionId ? 'ally' : 'enemy';
     const out: TargetCandidate[] = [];
+    // Only RENDERED ships are candidates: readyShips() returns every ready ship in the system, but the
+    // fleet layer draws (and pick-anchors) at most MAX_FLEET_SPRITES. An unrendered overflow ship has no
+    // slotCenterFor anchor — as a target it would be keyboard-lockable with no reticle, so filter it out.
+    const rendered = new Set(this.diagram.renderedFleetShipIds());
     for (const s of this.readyShips()) {
+      if (!rendered.has(s.id)) continue;
       out.push({ id: s.id, kind: 'ship', allegiance: allegiance(s.factionId, s.id), tags: [] });
     }
     for (const bodyIdx of this.diagram.laidOutBodyIndices()) {
@@ -522,11 +610,33 @@ export class SystemScene implements Screen {
     return out;
   }
 
+  // The reachable-cluster snapshot for a ship's WARP DRIVE — every system within the ship's drive range,
+  // as neutral 'system' candidates (id in the sys: namespace, the ORIGIN excluded). This one set both
+  // greys the WARP DRIVE row (zero reachable ⇒ canFire false) and, once the departure mode lands, lights
+  // the galaxy range ring, so the menu and the pick can never disagree. Empty for a non-ship actor or a
+  // driveless ship (range 0), which greys the row — exactly the in-encounter grey, too (no origin there).
+  private warpDestinationsFor(actorId: string): readonly TargetCandidate[] {
+    const ship = this.readyShips().find((s) => s.id === actorId);
+    if (!ship) return [];
+    const range = shipWarpRangeMilliLy(ship.components);
+    if (range <= 0) return [];
+    const originIdx = clusterIndexForSystemId(ship.systemId);
+    if (originIdx < 0) return [];
+    return clustersWithinRangeMilliLy(originIdx, range).map((idx) => ({
+      id: encodeSystemEntityId(systemIdForCluster(idx)),
+      kind: 'system' as const,
+      allegiance: 'neutral' as const,
+      tags: [],
+    }));
+  }
+
   // The live on-screen center of any entity id (content-buffer px) — the action menu's anchor
   // + target-bracket seam, dispatched by id namespace (body ⇒ disc center, ship ⇒ fleet slot).
   private slotCenterForEntity(id: string): { cx: number; cy: number; r: number } | null {
     const ref = parseEntityId(id);
-    return ref.kind === 'body' ? this.diagram.bodyCenter(ref.bodyIdx) : this.diagram.fleetSlotCenter(ref.shipId);
+    if (ref.kind === 'body') return this.diagram.bodyCenter(ref.bodyIdx);
+    if (ref.kind === 'ship') return this.diagram.fleetSlotCenter(ref.shipId);
+    return null; // a 'system' (warp destination) lives in galaxy space — no in-scene slot to anchor
   }
 
   // The on-screen center of an actor's MODULE (content-buffer px) — the firing weapon's rect, for the
@@ -554,7 +664,10 @@ export class SystemScene implements Screen {
   // legible). Clicking one of these directly opens its menu; the keyboard ←/→ walks the same
   // ring (opponents are never in it). A body with no commands is not in it.
   private commandableActorIds(): readonly string[] {
-    const ships = this.readyShips().filter((s) => s.factionId === CONTROLLED_FACTION_ID).map((s) => s.id);
+    // Filter to RENDERED ships (the MAX_FLEET_SPRITES-sliced subset): an unrendered overflow ship has no
+    // slot anchor, so opening its menu via the ring would self-close. Twin of the target-candidate filter.
+    const rendered = new Set(this.diagram.renderedFleetShipIds());
+    const ships = this.readyShips().filter((s) => s.factionId === CONTROLLED_FACTION_ID && rendered.has(s.id)).map((s) => s.id);
     const bodies: string[] = [];
     for (const bodyIdx of this.diagram.laidOutBodyIndices()) {
       const body = BODIES[bodyIdx];
@@ -597,7 +710,10 @@ export class SystemScene implements Screen {
   private pickForActorId(id: string): DiagramPick {
     const ref = parseEntityId(id);
     if (ref.kind === 'ship') return { kind: 'ship', shipId: ref.shipId };
-    return { kind: BODIES[ref.bodyIdx]!.kind, bodyIdx: ref.bodyIdx };
+    if (ref.kind === 'body') return { kind: BODIES[ref.bodyIdx]!.kind, bodyIdx: ref.bodyIdx };
+    // A 'system' id names a warp destination, which is a TARGET, never an actor — so it never reaches
+    // the actor-pick path. Loud on the contract violation rather than minting a bogus pick.
+    throw new Error(`[system-scene] pickForActorId received a non-actor entity id: ${id}`);
   }
 
   // A pick is selectable if it's a ship, or a facility-eligible body. Body eligibility
@@ -666,12 +782,45 @@ export class SystemScene implements Screen {
 
   // Re-read the selected body's economy after the sim steps (Next Turn), so the
   // sidebar's stock/flow numbers reflect the turn just processed.
-  afterTurnAdvance(): void {
+  afterTurnAdvance(arrivals: readonly ArrivalEvent[] = []): void {
+    // Ships that left or arrived this turn (stepShipTransits ran just before this in AppController.nextTurn)
+    // update the TRANSITS block; an arrival also re-musters the fleet below.
+    this.refreshTransits();
     this.pushSelectionToSidebar();
     this.refreshFlows();
     // A build that completed this turn (stepShipBuilds ran just before this in
-    // AppController.nextTurn) joins the fleet now.
+    // AppController.nextTurn) joins the fleet now. This also lays out every arrived ship at its (previously
+    // reserved) berth, so the warp-in flies into a settled spot.
     this.refreshFleet();
+    // Ships that arrived in THIS system this turn fly into the berth refreshFleet just laid out for them —
+    // its slot was already reserved while the ship was inbound, so nothing reflows. ArrivalEvent.systemId is
+    // the DESTINATION, so the filter drops an arrival into any other cluster (silent).
+    const now = performance.now();
+    const here = systemIdForCluster(this.clusterIdx);
+    for (const a of arrivals) if (a.systemId === here) this.diagram.startFleetWarpIn(a.shipId, now);
+    // Suppress the just-arrived ships' at-rest gauges while they fly in (the bar would float at the empty berth).
+    this.repaintShipGauges();
+  }
+
+  // Rebuild the sidebar's TRANSITS block from the durable store: outbound ships (leaving this system) as
+  // "<ship> → <dest> · T-n", inbound ships (arriving here) as "◄ <ship> · T-n". The T-n countdown is
+  // DERIVED from arrivesOnTurn − turn (never a stored decrement — the same replay-safety as a build's
+  // turns-left). Pushed on open and each turn; the block is omitted when there are no transits.
+  private refreshTransits(): void {
+    const systemId = systemIdForCluster(this.clusterIdx);
+    const turn = getGameState().turn;
+    const { outbound, inbound } = transitsFor(systemId);
+    const lines: string[] = [];
+    // ASCII arrows only — the bitmap font carries no →/◄ glyph (the menu's ► pointer is a drawn sprite).
+    for (const s of outbound) {
+      const destIdx = s.destinationSystemId !== undefined ? clusterIndexForSystemId(s.destinationSystemId) : -1;
+      const destName = destIdx >= 0 ? clusterDisplayName(destIdx) : (s.destinationSystemId ?? '?');
+      lines.push(`${s.name} -> ${destName} · T-${Math.max(0, (s.arrivesOnTurn ?? turn) - turn)}`);
+    }
+    for (const s of inbound) {
+      lines.push(`<- ${s.name} · T-${Math.max(0, (s.arrivesOnTurn ?? turn) - turn)}`);
+    }
+    this.context.setTransits(lines);
   }
 
   // Push this cluster's cargo lanes into the diagram's ships overlay. Fired from
@@ -683,14 +832,19 @@ export class SystemScene implements Screen {
     this.diagram.setFlows(this.bridge.predictedClusterFlows(this.clusterIdx));
   }
 
-  // Push this system's READY ships into the fleet overlay. The fleet is system-keyed
-  // (ships are peers of planets, never tied to a body), so resolve the system handle
-  // from the cluster and filter the durable store to 'ready'. Fired on open and on
-  // Next Turn (a completed build joins the fleet) — NOT on build/cancel/reap, which
-  // only ever touch 'building' ships, which aren't in the fleet.
+  // Push this system's formation ROSTER into the fleet overlay. The fleet is system-keyed (ships are peers
+  // of planets, never tied to a body). Berths = READY ships (drawn) + INBOUND ships (arriving here — a
+  // reserved gap they warp into) + OUTBOUND ships (departed from here, still in transit — a vacated gap): a
+  // warp in/out re-categorizes a ship without changing the roster, so the other berths never move (no
+  // reflow); a stable id order pins each berth's position. Fired on open and on Next Turn.
   private refreshFleet(): void {
     const systemId = systemIdForCluster(this.clusterIdx);
-    this.diagram.syncFleet(shipsInSystem(systemId).filter((s) => s.status === 'ready'));
+    const ready = shipsInSystem(systemId).filter((s) => s.status === 'ready');
+    const { inbound, outbound } = transitsFor(systemId);
+    const berths = [...ready, ...inbound, ...outbound]
+      .map((s) => ({ shipId: s.id, factionId: s.factionId, components: s.components, render: s.status === 'ready' }))
+      .sort((a, b) => (a.shipId < b.shipId ? -1 : a.shipId > b.shipId ? 1 : 0));
+    this.diagram.syncFleet(berths);
     // The fleet just relaid out (slots may have moved or a ship may be gone); re-place the
     // open menu against the fresh slots, or let it self-close if its ship vanished.
     this.actionMenu.refreshAnchor();
@@ -699,12 +853,26 @@ export class SystemScene implements Screen {
     this.repaintShipGauges();
   }
 
-  // Repaint the at-rest per-ship gauges: every ready ship's FULL hull + charge (loadout-derived), anchored
-  // to its live slot. A no-op during an encounter — there the controller feeds the SAME overlay the live
-  // combatant values (depleted hull, raised shields, the active-turn marker) through its paintGauges sink.
+  // Repaint the at-rest per-ship gauges: every settled ready ship's FULL hull + charge (loadout-derived),
+  // anchored to its live slot. A ship mid-warp is skipped — its sprite is in flight, so a bar at its berth
+  // would float over empty space. A no-op during an encounter — there the controller feeds the SAME overlay
+  // the live combatant values (depleted hull, raised shields, the active-turn marker) through its sink.
   private repaintShipGauges(): void {
     if (this.inEncounter) return;
-    this.shipGauges.paint(this.readyShips().map(restShipGauge), (id) => this.slotCenterForEntity(id));
+    this.shipGauges.paint(
+      this.readyShips().filter((s) => !this.diagram.isFleetShipWarping(s.id)).map(restShipGauge),
+      (id) => this.slotCenterForEntity(id),
+    );
+  }
+
+  // Trigger the warp-OUT for a ship that just left this system (AppController re-entered origin after the
+  // player confirmed its warp). By now the ship is an outbound GAP berth, so FleetLayer flies its real
+  // muster sprite off that berth. Fires once (the hint is cleared here so a resize / re-entry never re-fires).
+  private emitPendingWarpOut(): void {
+    const hint = this.warpOutHint;
+    if (!hint) return;
+    this.warpOutHint = undefined;
+    this.diagram.startFleetWarpOut(hint.shipId, performance.now());
   }
 
   private onPointerMove(e: PointerEvent): void {

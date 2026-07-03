@@ -55,7 +55,10 @@ export type TargetAllegiance = 'self' | 'ally' | 'enemy' | 'neutral';
 // the criteria a consumer authors do.
 export interface TargetCandidate {
   readonly id: string;
-  readonly kind: 'ship' | 'body';
+  // Coarse: an in-system 'ship'/'body', or a galaxy 'system' — a warp destination the controller mints
+  // from the reachable-cluster snapshot (id in the `sys:` namespace). 'system' candidates only appear for
+  // a targetSpace: 'system' command, so an in-system predicate never sees one.
+  readonly kind: 'ship' | 'body' | 'system';
   readonly allegiance: TargetAllegiance;
   readonly tags: readonly string[];
 }
@@ -102,6 +105,16 @@ export interface ActionGrant {
   // (`targeting`) then shapes how many of the survivors commit. Effect-free: it selects WHICH
   // targets a command admits, never what hitting them does.
   readonly targets?: TargetCriteria;
+  // Surface this command at the TOP (category) level as a DIRECT row — beside the category palette,
+  // not under its category — and arm it STRAIGHT into targeting (no command level). The "direct action"
+  // grammar: one step from the root into the pick. ABSENT ⇒ the command lives under its `category` (the
+  // default). The `category` stays a latent family tag even when rootLevel (it's on no palette).
+  readonly rootLevel?: boolean;
+  // The SPACE a target is acquired in, orthogonal to `targeting` (cardinality), `kind` (dispatch), and
+  // `rootLevel` (placement): 'local' picks an in-system ship/body; 'system' picks a GALAXY system (a warp
+  // destination — the controller mints the reachable-cluster snapshot as the candidate set). ABSENT ⇒
+  // 'local' (every existing verb targets in-system).
+  readonly targetSpace?: 'local' | 'system';
 }
 
 // A RESOLVED, merged command an Actor carries — the derive-and-merge output (./derive) the menu

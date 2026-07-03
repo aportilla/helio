@@ -70,7 +70,7 @@ path.
 | `derive.ts` | The **derive-and-merge projection** — `deriveCommands(providers)` collects each `GrantProvider`'s grants, merges identical ones (by composed id) into one scaled `ActionCommand`, first-seen order; `grantKeyOf(id)` is the inverse the app-side effect handlers key on. The pure heart both adapters share. |
 | `registry.ts` | The vocabulary's small central remainder after the inversion (no `ACTION_DEFS`): the per-actor-TYPE **category palettes** (`SHIP_CATEGORIES` / `BODY_CATEGORIES`, both Attack + Support + Command today — `command` a reserved, always-greyed placeholder until a module grants it), and the grant-keyed display helpers (`commandLabel`, which suffixes `(xN)` for a merged command; `commandColor`). |
 | `menu.ts` | `ActionMenu` — the mechanics-agnostic state machine: a **three-level** stack (category → command → target). `enter` drills (category → command → arm-and-enter-targeting) and, at the target level, **fires**; `back` / `cancel` walk back up. `moveCursor` / `setCursor` pick the category/command and **skip greyed (disabled) rows** — the cursor opens on, arrows onto, and clicks only ever rest on a *drillable* row, so the focus pointer is never parked on a dead option (a no-op when a whole level is greyed); inert once a weapon is armed at the target level. `moveTarget` / `setTargetById` move the lock, live **only at the target level** — the command level exposes no targets, so the bracket appears only after you arm a weapon. The top-level rows come from the actor's **category palette** (`Actor.categories`) or, absent one, are derived from its commands' categories — empties shown greyed-not-hidden (shown, but unreachable by the cursor). Emits one effect-free `ActionIntent` aimed at the locked target. Reads the actor's **resolved commands inline** (no central lookup); availability is the energy check `stats.energy >= command.totalCost` (permissive when no energy stat). Also exports the pure `filterCandidates` matcher (applies a grant's `TargetCriteria` to the controller's minted candidates). |
-| `entity-id.ts` | The pure id codec — `encodeBodyEntityId` / `parseEntityId` over the frozen `body:` namespace, so ships (un-prefixed) and bodies (`body:<bodyIdx>`) share one keyspace without collision. |
+| `entity-id.ts` | The pure id codec — `parseEntityId` over three frozen namespaces so one resolver/anchor pipeline addresses all: ships (un-prefixed), bodies (`body:<bodyIdx>`), and **systems** (`sys:<slug>` — a galaxy warp destination, `encodeSystemEntityId`, no in-scene anchor). |
 | `ships-to-actors.ts` | Projects ready fleet ships into menu `Actor`s split by faction (`ActorSide`, `controlled` flag). Commands are **derived + merged from the ship's component loadout** — its `ShipClassDef.components` (today the corvette's `small-laser` → Laser; its `small-engine` grants no command), each component's inline `grants` run through `deriveCommands`, the same projection the body adapter uses. Pure; the caller scopes ships to a system first. |
 | `bodies-to-actors.ts` | Projects facility-bearing bodies into menu `Actor`s split by ownership — the body twin of `ships-to-actors`, ids in the `body:` namespace. Commands are **derived + merged from each facility's own inline grants** (read via `FACILITY_BY_TYPE`; the registry is sim-free, so the adapter stays sim-free) — no central facility→command map; every body carries the **Attack + Support + Command** category palette. The caller resolves each body's `bodyIdx` + owning faction. |
 | `sides.ts` | `actorSides(entries)` — the shared faction/ownership split both adapters end on: groups `(factionId, actor)` entries into `ActorSide`s, marks the `controlled` side, preserves first-seen faction order. Extracted so that rule lives in one place as the platform→actor pattern extends (the encounter's combatant sides reuse it). Each adapter does its own domain filtering first; `actorSides` only groups. |
@@ -90,6 +90,19 @@ registry to look it up in:
 The dispatcher and the anchored scene layer are **M2** (the menu live in the system view) — see
 "The scene layer" below. `src/actions/` itself is the **headless core**, fully covered by `npm
 run test:actions`.
+
+### Root-level commands + target spaces (galaxy movement)
+
+A grant can opt out of the category drill. `ActionGrant.rootLevel` surfaces a command as a **direct
+row at the top (category) level** — beside Attack/Support/Command, arming straight into targeting
+(no command level). Orthogonally, `ActionGrant.targetSpace` (`'local'` default | `'system'`) names
+where the target is acquired: a `'system'` command targets a **galaxy system** (`TargetCandidate.kind`
+gains `'system'`, ids in the `sys:` namespace), so `canFire`'s empty-candidate greying gives free
+pre-grey (nothing reachable ⇒ the row greys) and free in-combat grey (the combat resolver mints no
+`'system'` candidate). The shipped consumer is the drive-granted **WARP DRIVE** (galaxy movement): the
+chrome intercepts an armed `'system'`-space root command and hands off to the starmap's departure mode
+(`onBeginDestinationPick`) instead of drilling; the pick + transit resolution live in `src/scene/` +
+`src/game-state`. Warp is `kind: 'immediate'` (no third `ActionKind`).
 
 ## The scene layer (M2)
 

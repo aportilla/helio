@@ -221,10 +221,16 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
       // side from view.distance via STAR_DIM_FULL_BELOW / STAR_DIM_OFF_ABOVE
       // in cluster-fade.ts so zooming out smoothly disables the effect.
       uDimAmount: { value: 1.0 },
+      // The DEPARTURE-mode range lens: 1.0 while picking a warp destination, 0.0 (off) otherwise. When
+      // on, a star's brightness is driven by the per-star aInRange flag (in-range bright, rest at the
+      // fade floor) instead of the pivot/selection ramp — so the reachable set reads at a glance. Gated
+      // so the normal galaxy view never touches it (aInRange is 0 everywhere until the mode arms).
+      uInRangeMode: { value: 0.0 },
     },
     vertexShader: `
       attribute float aSize;
       attribute float aClusterIdx;
+      attribute float aInRange;
       varying vec3 vColor;
       varying float vRadius;
       varying vec2 vCenter;
@@ -236,6 +242,7 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
       uniform float uSelectedCluster;
       uniform float uCandidateCluster;
       uniform float uDimAmount;
+      uniform float uInRangeMode;
       // All tuning constants below are hoisted JS values interpolated into
       // the shader source — see the "Stars shader style constants" block
       // at the top of this file for full descriptions. PIVOT_FADE_*
@@ -268,6 +275,13 @@ export function makeStarsMaterial(initialPxScale: number): ShaderMaterial {
         float bypass = (abs(aClusterIdx - uSelectedCluster)  < 0.5 ||
                         abs(aClusterIdx - uCandidateCluster) < 0.5) ? 1.0 : 0.0;
         vBrightness = max(mix(FADE_MIN, 1.0, effPivotFade), bypass);
+
+        // Departure-mode range lens: while picking a warp destination, in-range clusters stay bright and
+        // everything else dims to the fade floor, OVERRIDING the pivot/selection ramp so the reachable
+        // set reads at a glance. Gated behind uInRangeMode so it never affects the normal galaxy view.
+        if (uInRangeMode > 0.5) {
+          vBrightness = aInRange > 0.5 ? 1.0 : FADE_MIN;
+        }
 
         // Cube-root compression on the close-up side only (rawScale > 1)
         // so absolute growth tames sharply while the per-class ratio stays

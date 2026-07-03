@@ -55,12 +55,16 @@ export interface SelectedShipInfo {
   // the fleet sprite's tint (both come from the faction registry).
   readonly factionLabel: string;
   readonly factionColor: string;
-  readonly status: 'building' | 'ready';
+  // Mirrors the codec Ship.status union (fed straight from it in system-scene). 'transiting' is carried
+  // for type-completeness — a transiting ship is unpickable in v1 (out of the fleet muster), so the card
+  // never actually renders that arm; its presence surfaces instead as the sidebar's TRANSITS rows.
+  readonly status: 'building' | 'ready' | 'transiting';
 }
 
 const SHIP_STATUS_LABEL: Record<SelectedShipInfo['status'], string> = {
   building: 'Building',
   ready: 'Ready',
+  transiting: 'In transit',
 };
 
 const KIND_LABEL: Record<BodyKind, string> = {
@@ -112,6 +116,10 @@ export class SystemContext implements SidebarContext {
   // or a ship (a read-only card). The setters keep them mutually exclusive.
   private info: SelectedBodyInfo | null = null;
   private ship: SelectedShipInfo | null = null;
+  // Pre-formatted TRANSITS lines (outbound "<ship> → <dest> · T-n" at the origin, inbound "◄ <ship> · T-n"
+  // at the destination) — a SYSTEM-level readout the scene rebuilds from transitsFor each turn, so it shows
+  // in every selection state. Empty ⇒ the block is omitted.
+  private transitLines: readonly string[] = [];
   private hovered: HoverHit = null;
   // Cached hit-rects in absolute canvas coords, rebuilt every paint().
   private addRects: Array<{ type: FacilityType; rect: Rect }> = [];
@@ -158,6 +166,13 @@ export class SystemContext implements SidebarContext {
     this.hovered = null;
   }
 
+  // The system's in-flight transits, as pre-formatted lines (the scene owns the wording + the T-n
+  // countdown, derived from arrivesOnTurn − turn so it's never a stored decrement). System-scoped, so it
+  // is independent of the body/ship selection.
+  setTransits(lines: readonly string[]): void {
+    this.transitLines = lines;
+  }
+
   paint(g: CanvasRenderingContext2D, region: Region): void {
     this.addRects = [];
     this.removeRects = [];
@@ -190,6 +205,19 @@ export class SystemContext implements SidebarContext {
         this.devOpponentColonyRect = { x: x0, y, w: colony.w, h: colony.h };
         y += colony.h + sizes.cardActionGap;
       }
+    }
+
+    // TRANSITS — ships leaving this system or inbound to it, shown regardless of selection (a system-level
+    // readout, like the galaxy's civ summary). Omitted when there are none.
+    if (this.transitLines.length > 0) {
+      const transitLineH = getFont(fonts.body).lineHeight;
+      drawPixelText(g, 'TRANSITS', x0, y, colors.textKey, fonts.body);
+      y += transitLineH + sizes.cardNameGap;
+      for (const line of this.transitLines) {
+        drawPixelText(g, line, x0, y, colors.textBody, fonts.body);
+        y += transitLineH + ROW_GAP;
+      }
+      y += sizes.cardActionGap;
     }
 
     // A selected ship is a read-only card (no controls in v1), painted in place of the

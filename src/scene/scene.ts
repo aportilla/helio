@@ -10,6 +10,8 @@ import {
 
 import { ClusterBrackets } from './cluster-brackets';
 import { Grid } from './grid';
+import { RangeRing } from './range-ring';
+import { TransitLines, type TransitView } from './transit-lines';
 import { Droplines } from './droplines';
 import { FocusMarker } from './focus-marker';
 import { InputController, type InputHandlers } from './input-controller';
@@ -22,9 +24,16 @@ import { ViewportSizer } from './viewport-sizer';
 import { MapHud } from '../ui/map-hud';
 import { Sidebar } from '../ui/sidebar/sidebar';
 import { GalaxyContext } from '../ui/sidebar/galaxy-context';
+import { DepartureContext } from '../ui/sidebar/departure-context';
 import type { EconomyBridge } from '../facilities/economy-bridge';
 import { sizes } from '../ui/theme';
-import { STARS, STAR_CLUSTERS, clusterIndexFor, nearestClusterIdxTo } from '../data/stars';
+import { STARS, STAR_CLUSTERS, clusterDisplayName, clusterIndexFor, clusterIndexForSystemId, nearestClusterIdxTo, systemIdForCluster } from '../data/stars';
+import { MILLI_PER_LY } from '../data/cluster-geometry';
+import { encodeSystemEntityId } from '../actions/entity-id';
+import type { ActionIntent } from '../actions/types';
+import { factionColor } from '../factions/registry';
+import { getGameState } from '../game-state';
+import type { DepartureRequest } from './departure';
 import { getSettings } from '../settings';
 import type { Screen } from './screen';
 
@@ -96,7 +105,35 @@ export class StarmapScene implements Screen {
   // selected-system info + View System/Focus). Set as the sidebar's context on
   // start(); fed selection via setCluster.
   private readonly galaxyContext = new GalaxyContext();
+  // The data-driven range ring drawn around a ship's origin while picking a warp destination — a sibling
+  // of the (suppressed) selection grid, so the pick shows exactly one ring.
+  private readonly rangeRing = new RangeRing();
+  // The galaxy-view overlay for ships in warp — a dotted origin→destination line + a faction-coloured
+  // progress head per transit. Rebuilt on galaxy resume + each turn.
+  private readonly transitLines = new TransitLines();
+  // The sidebar context shown while the departure pick is armed (ship / origin / range + destination + ETA
+  // + CONFIRM / CANCEL). Replaces the galaxy context for the duration of the pick.
+  private readonly departureContext = new DepartureContext();
   private readonly input: InputController;
+
+  // The armed warp DEPARTURE, or null in the normal galaxy view. Set by armDeparture() BEFORE start()
+  // resumes this scene (so the first resumed frame paints in-mode), read by start() to enter the pick, and
+  // by the input handlers + freezesTurn to reroute while it's live. Also the single source for "am I picking
+  // a warp destination right now".
+  private departure: DepartureRequest | null = null;
+  // The locked destination cluster in the pick, or -1 while browsing. Rides the selection brackets.
+  private departureLockClusterIdx = -1;
+  // The reachable-destination cluster set (+ origin) for the armed ship — gates the click-to-lock and the
+  // in-range shader lens. Empty in the normal view.
+  private reachableClusterSet = new Set<number>();
+
+  // Fired when the player CONFIRMS a warp destination — carries the ready-to-dispatch intent (actorId +
+  // warp actionId + the `sys:` destination). AppController runs it through EFFECT_HANDLERS, seeds the
+  // warp-out FX, and re-enters the origin system.
+  onConfirmDeparture: (intent: ActionIntent) => void = () => {};
+  // Fired when the player CANCELS the pick (writes nothing). AppController re-enters the origin system with
+  // the menu-reopen hint (cursor back on WARP DRIVE).
+  onCancelDeparture: () => void = () => {};
 
   // Hover-pointer state, written by the input controller via the
   // onPointerHoverChanged handler and read each tick. Drives the per-tick
@@ -206,6 +243,10 @@ export class StarmapScene implements Screen {
     // nothing is drawn until the first selection lands.
     this.grid = new Grid();
     this.scene.add(this.grid.group);
+    // The warp range ring shares the 3D scene (world-space, like the grid); hidden until the pick arms.
+    this.scene.add(this.rangeRing.group);
+    // Transit lines share the 3D scene too (world-space origin→destination legs), floated over the field.
+    this.scene.add(this.transitLines.group);
 
     this.starPoints = new StarPoints(window.innerHeight / 2);
     this.scene.add(this.starPoints.points);
@@ -284,6 +325,15 @@ export class StarmapScene implements Screen {
     window.addEventListener('resize', this._onResize);
     this.input.start();
     this.resize();
+    // Mode-aware resume: if this scene was armed for a warp destination pick BEFORE start() (the
+    // system→galaxy swap), enter the departure mode instead of the galaxy reset — install the departure
+    // sidebar, glide home, raise the range ring + lens, freeze the turn, and paint the first frame in-mode
+    // (no galaxy-selection flash, no Sol auto-select, settings glyph inert).
+    if (this.departure) {
+      this.enterDepartureMode();
+      this.tick();
+      return;
+    }
     // Show the galaxy context on the persistent sidebar (turn header stays); the
     // current selection survives a system-view round-trip on the singleton scene.
     this.galaxyContext.setCluster(this.selectedClusterIdx);
@@ -291,6 +341,8 @@ export class StarmapScene implements Screen {
     this.sidebar.setContext(this.galaxyContext);
     // The sidebar's settings glyph opens this view's settings panel.
     this.sidebar.onSettings = () => this.hud.toggleSettings();
+    // Show any ships currently in warp (e.g. re-entering the galaxy after ordering one).
+    this.refreshTransitLines();
     this.tick();
     if (this.autoSelectTimer === null && this.selectedClusterIdx < 0) {
       this.autoSelectTimer = window.setTimeout(() => {
@@ -332,6 +384,8 @@ export class StarmapScene implements Screen {
     this.hud.dispose();
     this.selectionBrackets.dispose();
     this.candidateBrackets.dispose();
+    this.rangeRing.dispose();
+    this.transitLines.dispose();
     this.viewport.dispose();
   }
 
@@ -357,6 +411,12 @@ export class StarmapScene implements Screen {
       applyTouchPan: (dx, dy) => this.applyTouchPan(dx, dy),
       zoomBy: (factor) => this.setZoom(this.view.distance * factor),
       onClickStar: (clusterIdx, button) => {
+        // In the warp pick, BOTH mouse buttons lock/confirm a reachable destination — right-click is the
+        // accelerator INTO the same lock state (never an instant irrevocable fire), left-click the primary.
+        if (this.departure) {
+          if (button === 0 || button === 2) this.departureLockOrConfirm(clusterIdx);
+          return;
+        }
         if (button === 2) {
           // Right-click hook. Logs in dev so the wiring is observable in
           // DevTools (silent in prod); becomes a real game action when
@@ -366,7 +426,11 @@ export class StarmapScene implements Screen {
         }
         if (button === 0) this.selectAndFocusCluster(clusterIdx);
       },
-      onDoubleClickStar: (clusterIdx) => this.onViewSystem(clusterIdx),
+      // In the warp pick a double-click reads as lock+confirm on the target, NOT enter-system.
+      onDoubleClickStar: (clusterIdx) => {
+        if (this.departure) { this.departureLockOrConfirm(clusterIdx); return; }
+        this.onViewSystem(clusterIdx);
+      },
       onLongPressStar: (clusterIdx) => {
         // Long-press hook. Same shape as the right-click hook above —
         // logs in dev only; becomes a real action when touch long-press
@@ -382,8 +446,26 @@ export class StarmapScene implements Screen {
           this.pointer.has = false;
         }
       },
-      onEscape: () => this.deselect(),
+      onEscape: () => {
+        // In the warp pick, Esc walks back one step: a lock unlocks (back to browsing); an unlocked pick
+        // cancels (writes nothing). Only the un-armed galaxy view deselects.
+        if (this.departure) {
+          if (this.departureLockClusterIdx >= 0) this.departureUnlock();
+          else this.departureCancel();
+          return;
+        }
+        this.deselect();
+      },
       onFocusCandidate: () => {
+        // In the warp pick, Space re-locks the hovered in-range cluster (the candidate-advance idiom, rebound).
+        if (this.departure) {
+          const star = this.pointer.has ? this.pickStar(this.pointer.x, this.pointer.y) : -1;
+          if (star >= 0) {
+            const c = clusterIndexFor(star);
+            if (this.reachableClusterSet.has(c) && c !== this.departure.originClusterIdx) this.departureLock(c);
+          }
+          return;
+        }
         // Spacebar: candidate beats selection. Pressing space while panned
         // off the current selection (so a candidate is visible) switches
         // selection to the candidate and glides the pivot to it. Falls
@@ -398,6 +480,12 @@ export class StarmapScene implements Screen {
         this.animateFocusTo(com.x, com.y, com.z);
       },
       onFocusSelection: () => {
+        // In the warp pick, F re-centres the origin (home) — the pick's twin of "back to selection".
+        if (this.departure) {
+          const com = STAR_CLUSTERS[this.departure.originClusterIdx]!.com;
+          this.animateFocusTo(com.x, com.y, com.z);
+          return;
+        }
         // F: always re-focus the current selection. Ignores any candidate
         // so F is a dedicated "back to selection" key, separate from
         // spacebar's "advance to candidate". Mirrors the Focus pill button
@@ -407,6 +495,8 @@ export class StarmapScene implements Screen {
         this.animateFocusTo(com.x, com.y, com.z);
       },
       onEnter: () => {
+        // In the warp pick, Enter confirms the locked destination (its keyboard twin of the second click).
+        if (this.departure) { this.departureConfirm(); return; }
         // Enter: keyboard equivalent of the View System pill button + the
         // double-click gesture. Routes through the same onViewSystem
         // callback so the AppController scene swap stays one path.
@@ -446,6 +536,27 @@ export class StarmapScene implements Screen {
   afterTurnAdvance(): void {
     this.setSystemEconomy();
     this.sidebar.refreshContent();
+    // Ships in warp advanced a step this turn — restep the transit-line progress heads.
+    this.refreshTransitLines();
+  }
+
+  // Rebuild the galaxy transit overlay from the durable store: one dotted origin→destination leg per
+  // 'transiting' ship, its progress head at (turn − departedOnTurn)/(arrivesOnTurn − departedOnTurn) so the
+  // fraction is exact (never recomputed from live stats). Called on galaxy resume + each turn.
+  private refreshTransitLines(): void {
+    const turn = getGameState().turn;
+    const views: TransitView[] = [];
+    for (const s of getGameState().ships) {
+      if (s.status !== 'transiting' || s.destinationSystemId === undefined
+        || s.arrivesOnTurn === undefined || s.departedOnTurn === undefined) continue;
+      const oi = clusterIndexForSystemId(s.systemId);
+      const di = clusterIndexForSystemId(s.destinationSystemId);
+      if (oi < 0 || di < 0) continue;
+      const span = s.arrivesOnTurn - s.departedOnTurn;
+      const frac = span > 0 ? (turn - s.departedOnTurn) / span : 1;
+      views.push({ o: STAR_CLUSTERS[oi]!.com, d: STAR_CLUSTERS[di]!.com, frac, color: factionColor(s.factionId) });
+    }
+    this.transitLines.setTransits(views);
   }
 
   // Push the selected system's (cluster's) aggregate balance into the galaxy
@@ -536,6 +647,134 @@ export class StarmapScene implements Screen {
     this.droplines.setSelectedCluster(-1);
     this.droplines.setFade(0);
     this.focusMarker.setSelectedCluster(-1);
+  }
+
+  // -- warp departure mode (galaxy destination pick) --------------------
+
+  // While a warp destination is being picked the outer galaxy turn is frozen (a modality, like combat).
+  // This is the programmatic gate (AppController.nextTurn reads it); Sidebar.setNextTurnEnabled is the
+  // user-click gate, raised in enterDepartureMode. False whenever the pick isn't armed.
+  get freezesTurn(): boolean {
+    return this.departure !== null;
+  }
+
+  // Arm this scene for a warp destination pick. Called by AppController BEFORE exitOverlay resumes the
+  // scene, so the very first resumed frame (start()'s synchronous tick) paints in-mode. Stores the request;
+  // enterDepartureMode does the visual / sidebar / freeze setup on start().
+  armDeparture(req: DepartureRequest): void {
+    this.departure = req;
+  }
+
+  // Enter the pick: install the departure sidebar, freeze the turn, suppress the selection grid + labels,
+  // raise the range ring + in-range lens, glide the camera home, and pre-lock the nearest reachable system
+  // (parked — no glide; the eye stays home until the player moves). Teardown lives in teardownDeparture,
+  // which every exit path routes through.
+  private enterDepartureMode(): void {
+    const req = this.departure;
+    if (!req) return;
+    // Reachable set (+ origin so home stays lit) drives the click-to-lock gate and the shader lens.
+    this.reachableClusterSet = new Set(req.reachable.map((d) => d.clusterIdx));
+    this.reachableClusterSet.add(req.originClusterIdx);
+    this.starPoints.setInRangeClusters(this.reachableClusterSet);
+    this.starPoints.setInRangeMode(true);
+    this.starPoints.setSelectedCluster(-1);
+    this.starPoints.setCandidateCluster(-1);
+
+    // The single range ring at the origin, radius = the drive's reach in world light-years. Suppress the
+    // standard selection grid + labels + droplines + focus marker: one ring means one thing.
+    const com = STAR_CLUSTERS[req.originClusterIdx]!.com;
+    this.rangeRing.setRing(com.x, com.y, com.z, req.rangeMilliLy / MILLI_PER_LY);
+    this.grid.setSelection(null);
+    this.labels.setSelectedCluster(-1);
+    this.labels.setCandidateCluster(-1);
+    this.candidateBrackets.setCluster(-1);
+    this.droplines.setSelectedCluster(-1);
+    this.droplines.setFade(0);
+    this.focusMarker.setSelectedCluster(-1);
+    // Glide home via the focus-glide PRIMITIVE (not selectAndFocusCluster, which would raise exactly the
+    // selection chrome the mode suppresses).
+    this.animateFocusTo(com.x, com.y, com.z);
+
+    // Sidebar: the departure context + a frozen Next Turn + an inert settings glyph.
+    this.departureContext.setInfo(req.shipName, clusterDisplayName(req.originClusterIdx), req.rangeMilliLy / MILLI_PER_LY);
+    this.departureContext.onConfirm = () => this.departureConfirm();
+    this.departureContext.onCancel = () => this.departureCancel();
+    this.sidebar.onSettings = () => {}; // inert — the popover's actions would bypass the mode teardown
+    this.sidebar.setContext(this.departureContext);
+    this.sidebar.setNextTurnEnabled(false);
+
+    // Pre-lock the nearest reachable (req.reachable is distance-ordered) — WITHOUT a glide.
+    this.departureLockClusterIdx = -1;
+    const first = req.reachable[0];
+    if (first) this.departureLock(first.clusterIdx);
+    else this.departureContext.setLock(null);
+    this.sidebar.refreshContent();
+  }
+
+  // A click / right-click on a cluster during the pick: out of range (or the origin) ⇒ inert; the
+  // already-locked cluster ⇒ confirm (the second-click commit); otherwise ⇒ lock it.
+  private departureLockOrConfirm(clusterIdx: number): void {
+    if (!this.reachableClusterSet.has(clusterIdx) || clusterIdx === this.departure?.originClusterIdx) return;
+    if (clusterIdx === this.departureLockClusterIdx) { this.departureConfirm(); return; }
+    this.departureLock(clusterIdx);
+  }
+
+  // Lock a reachable destination: arm the selection brackets on it and push its name / distance / ETA into
+  // the sidebar. No camera glide — the lock parks; the player flies the camera themselves.
+  private departureLock(clusterIdx: number): void {
+    const dest = this.departure?.reachable.find((d) => d.clusterIdx === clusterIdx);
+    if (!dest) return;
+    this.departureLockClusterIdx = clusterIdx;
+    this.selectionBrackets.setCluster(clusterIdx);
+    this.departureContext.setLock({
+      destName: clusterDisplayName(clusterIdx),
+      distanceLy: dest.distanceMilli / MILLI_PER_LY,
+      etaTurns: dest.etaTurns,
+    });
+    this.sidebar.refreshContent();
+  }
+
+  // Esc with a lock → unlock (back to browsing, staying in the pick); the banner/CONFIRM revert.
+  private departureUnlock(): void {
+    this.departureLockClusterIdx = -1;
+    this.selectionBrackets.setCluster(-1);
+    this.departureContext.setLock(null);
+    this.sidebar.refreshContent();
+  }
+
+  // Confirm the locked destination: mint the standard warp intent (the `sys:` target), tear the mode down,
+  // and hand the intent to AppController (which dispatches it, seeds the warp-out FX, and re-enters origin).
+  private departureConfirm(): void {
+    const req = this.departure;
+    if (!req || this.departureLockClusterIdx < 0) return;
+    const intent: ActionIntent = {
+      actorId: req.shipId,
+      actionId: req.actionId,
+      targetIds: [encodeSystemEntityId(systemIdForCluster(this.departureLockClusterIdx))],
+    };
+    this.teardownDeparture();
+    this.onConfirmDeparture(intent);
+  }
+
+  // Cancel the pick (writes nothing): tear down + let AppController re-enter the origin with the reopen hint.
+  private departureCancel(): void {
+    if (!this.departure) return;
+    this.teardownDeparture();
+    this.onCancelDeparture();
+  }
+
+  // The SINGLE teardown every exit path (confirm / cancel) routes through — restores the frozen turn and
+  // clears the mode's visuals + state. The sidebar context itself is restored by AppController re-entering
+  // the system (its fresh SystemScene installs its own context), so this only lowers the freeze.
+  private teardownDeparture(): void {
+    this.departure = null;
+    this.departureLockClusterIdx = -1;
+    this.reachableClusterSet = new Set();
+    this.selectionBrackets.setCluster(-1);
+    this.rangeRing.clear();
+    this.starPoints.setInRangeMode(false);
+    this.starPoints.setInRangeClusters(null);
+    this.sidebar.setNextTurnEnabled(true);
   }
 
   // -- camera + zoom -----------------------------------------------------
@@ -659,6 +898,8 @@ export class StarmapScene implements Screen {
     // Droplines fade is binary (set in selectAndFocusCluster / deselect),
     // so no per-tick scaling is needed here.
     this.grid.update(now, this.camera.position);
+    // The warp range ring (only visible during the departure pick) zoom-fades off the camera distance.
+    this.rangeRing.update(this.camera.position);
 
     this.starPoints.setFocus(this.view.target);
     this.starPoints.setPivot(this.view.target);
@@ -685,16 +926,22 @@ export class StarmapScene implements Screen {
     // resolveCandidateCluster (see selection-policy.ts for the full rationale).
     // Snap visibility, no fade ramp — candidate is a discrete state. The
     // unified index is pushed to brackets, labels (yellow promotion +
-    // fade-bypass), and stashed for the spacebar handler.
-    const candidate = resolveCandidateCluster(
-      hoveredCluster, nearestClusterIdx,
-      nearestClusterIdx >= 0 ? STAR_CLUSTERS[nearestClusterIdx]!.com : null,
-      this.selectedClusterIdx, this.view.target, this.focusAnimating,
-    );
-    this.candidateClusterIdx = candidate;
-    this.candidateBrackets.setCluster(candidate);
-    this.labels.setCandidateCluster(candidate);
-    this.starPoints.setCandidateCluster(candidate);
+    // fade-bypass), and stashed for the spacebar handler. SUPPRESSED during the
+    // warp pick: the in-range lens + the locked-destination brackets own the
+    // highlight there, so the ordinary candidate has no meaning.
+    if (this.departure) {
+      this.candidateClusterIdx = -1;
+    } else {
+      const candidate = resolveCandidateCluster(
+        hoveredCluster, nearestClusterIdx,
+        nearestClusterIdx >= 0 ? STAR_CLUSTERS[nearestClusterIdx]!.com : null,
+        this.selectedClusterIdx, this.view.target, this.focusAnimating,
+      );
+      this.candidateClusterIdx = candidate;
+      this.candidateBrackets.setCluster(candidate);
+      this.labels.setCandidateCluster(candidate);
+      this.starPoints.setCandidateCluster(candidate);
+    }
 
     this.labels.update(this.camera, this.view.target);
     this.selectionBrackets.update(this.camera, this.view.target);
