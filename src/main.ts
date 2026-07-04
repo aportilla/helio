@@ -1,6 +1,7 @@
 import './styles.css';
 import { initFonts } from './data/font-provider';
 import { AppController } from './scene/app-controller';
+import { installDesktopFullscreen } from './desktop-fullscreen';
 import { STARS, clusterIndexFor } from './data/stars';
 
 // Parse the bundled BDF fonts before any scene/HUD code constructs label
@@ -12,6 +13,10 @@ document.body.appendChild(canvas);
 
 const controller = new AppController(canvas);
 controller.start();
+
+// Desktop (Tauri) only: bind the borderless-fullscreen toggle (Alt+Enter). No-op in
+// the browser build.
+installDesktopFullscreen();
 
 // DEV visual-test affordance: ?demo-encounter boots straight into the Sol system, whose SystemScene
 // then auto-launches a demo combat overlay; ?demo-warp instead seeds a friendly ship and opens its menu

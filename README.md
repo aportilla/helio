@@ -13,6 +13,7 @@ Think 1980s starbase HUD: inline bitmap-font labels, cyan-on-near-black palette,
 - **Vite 8** — dev server + build (`vite.config.ts` opens the browser on `npm run dev`)
 - **TypeScript 6** — strict mode, `noUncheckedIndexedAccess`, `noUnusedLocals`/`noUnusedParameters`, `noEmit` (Vite handles emit)
 - **Three.js r184** — WebGL renderer, scene graph, shaders
+- **Tauri 2** — native macOS desktop shell (system WKWebView) wrapping the same web build; see [src-tauri/README.md](src-tauri/README.md)
 
 No CSS framework, no state library, no third-party test framework — the test suites run on Node's built-in `node --test`.
 
@@ -70,12 +71,13 @@ One deep doc per subsystem. Start in the root for orientation, then open the doc
 | `src/encounter/` | The combat encounter — a transient *mode* on the live system view. A combat-rules leaf: the `Combatant` contract (an `Actor` + combat identity), the `EncounterSpec` launch bundle, and the fleet→combatant adapter that specializes `ships-to-actors`. The headless reducer + effect substrate build on top | [src/encounter/README.md](src/encounter/README.md) |
 | `scripts/` | Star-data tooling + the catalog/procgen **build pipeline** that emits the JSON; `scripts/lib/` is also a shared kernel the runtime consumes (body-traits / PRNG / gas-potency), so it isn't build-only | [scripts/README.md](scripts/README.md) |
 | `sim/` | Standalone deterministic economy/logistics sim | [sim/README.md](sim/README.md) |
+| `src-tauri/` | Tauri v2 desktop shell — wraps the built web app in a native macOS WKWebView window; isolated from the Pages deploy via its own relative-base build path | [src-tauri/README.md](src-tauri/README.md) |
 | `docs/` | Game-systems status + roadmap; dev/verification tooling | [docs/game-systems.md](docs/game-systems.md), [docs/dev-tooling.md](docs/dev-tooling.md) |
 | `plans/` | Detailed design docs (gitignored, ephemeral) | — |
 
 ## Planned architecture
 
-Forward-looking, not yet built: a WASM port of the sim and desktop (Electron) distribution — each has decided boundaries but no committed roadmap doc, designed when concrete work on it begins. The economy sim and the save-state layer are already in progress; their status lives in [docs/game-systems.md](docs/game-systems.md). Session-scoped planning artifacts stay local-only in the gitignored `plans/` directory.
+Forward-looking, not yet built: a WASM port of the sim — decided boundaries but no committed roadmap doc, designed when concrete work on it begins. Desktop distribution has landed: a Tauri v2 shell wraps the web build into a native macOS app, kept isolated from the GitHub Pages deploy — see [src-tauri/README.md](src-tauri/README.md). The economy sim and the save-state layer are already in progress; their status lives in [docs/game-systems.md](docs/game-systems.md). Session-scoped planning artifacts stay local-only in the gitignored `plans/` directory.
 
 ## Coding conventions
 
