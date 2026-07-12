@@ -91,18 +91,19 @@ The dispatcher and the anchored scene layer are **M2** (the menu live in the sys
 "The scene layer" below. `src/actions/` itself is the **headless core**, fully covered by `npm
 run test:actions`.
 
-### Root-level commands + target spaces (galaxy movement)
+### Root-level commands + target spaces (dormant machinery)
 
 A grant can opt out of the category drill. `ActionGrant.rootLevel` surfaces a command as a **direct
 row at the top (category) level** — beside Attack/Support/Command, arming straight into targeting
 (no command level). Orthogonally, `ActionGrant.targetSpace` (`'local'` default | `'system'`) names
 where the target is acquired: a `'system'` command targets a **galaxy system** (`TargetCandidate.kind`
 gains `'system'`, ids in the `sys:` namespace), so `canFire`'s empty-candidate greying gives free
-pre-grey (nothing reachable ⇒ the row greys) and free in-combat grey (the combat resolver mints no
-`'system'` candidate). The shipped consumer is the drive-granted **WARP DRIVE** (galaxy movement): the
-chrome intercepts an armed `'system'`-space root command and hands off to the starmap's departure mode
-(`onBeginDestinationPick`) instead of drilling; the pick + transit resolution live in `src/scene/` +
-`src/game-state`. Warp is `kind: 'immediate'` (no third `ActionKind`).
+pre-grey (nothing reachable ⇒ the row greys). This vocabulary is **generic machinery with no live
+consumer today**: its original consumer was WARP DRIVE, but star-to-star navigation is a galaxy-view
+modality now (galaxy sidebar → destination pick → `orderShipWarp`, entirely in `src/scene/` +
+`src/game-state`), so no grant declares `rootLevel` / `targetSpace: 'system'`. The headless grammar +
+the `sys:` codec stay (exercised by `menu.test.ts` / `entity-id.test.ts`), ready for the next
+top-level or galaxy-scoped command.
 
 ## The scene layer (M2)
 

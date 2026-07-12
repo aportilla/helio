@@ -119,11 +119,6 @@ export class SystemActionMenu {
   // The IN-ENCOUNTER confirm sink (E4): while encounter mode is set, a committed intent routes HERE
   // (into the reducer) instead of the live-view kind fork. The EncounterController fills it.
   onEncounterCommit: (intent: ActionIntent) => void = () => {};
-  // The GALAXY-DESTINATION hand-off (movement): when a root-level command whose target lives in SYSTEM
-  // space (WARP DRIVE) is armed, the chrome fires THIS instead of drilling — the destination is chosen in
-  // another view (the departure mode on the starmap), so the menu closes here. SystemScene fills it to
-  // build the DepartureRequest. `actionId` is the composed warp command id; `actorId` the current actor.
-  onBeginDestinationPick: (actorId: string, actionId: string) => void = () => {};
 
   // The OUTER focus axis: at the category level, ←/→ cycle the active ACTOR (the SoS ◄ ►), which
   // SystemScene fills by re-opening the menu on the next commandable actor. At the command level
@@ -239,7 +234,6 @@ export class SystemActionMenu {
       const row = this.panel.hitRow(bufX, bufY);
       if (row !== null) {
         this.menu.setCursor(row);
-        if (this.tryBeginSystemPick()) return true; // a root warp row hands off to the destination pick
         this.commit(this.menu.enter()); // category → command; command → arm + enter targeting
         return true;
       }
@@ -343,7 +337,6 @@ export class SystemActionMenu {
         }
         return true;
       case 'enter':
-        if (this.tryBeginSystemPick()) return true; // a root warp row hands off to the destination pick
         this.commit(this.menu.enter());
         return true;
       case 'escape':
@@ -424,28 +417,6 @@ export class SystemActionMenu {
     this.close();
     if (kind === 'encounter') this.onEnterEncounter(intent);
     else this.onImmediate(intent);
-  }
-
-  // If the cursored row at the category level is an ENABLED root command whose target lives in GALAXY
-  // space (targetSpace 'system' — WARP DRIVE), hand off to the destination pick INSTEAD of drilling: the
-  // destination is chosen in another view, so the menu closes and onBeginDestinationPick fires. Returns
-  // true when it intercepted (the caller then skips the normal drill). commandFor cleanly returns
-  // undefined for a category-name row key, so a category row never matches — this distinguishes a root
-  // command from a category row for free, and the `enabled` gate keeps the pre-grey guarantee (a
-  // dead-end warp can't be armed). Not reached in an encounter: there the resolver mints no 'system'
-  // candidate, so the row is greyed and `enabled` is false.
-  private tryBeginSystemPick(): boolean {
-    if (!this.menu || !this.opts) return false;
-    const view = this.menu.view();
-    if (view.level !== 'category') return false;
-    const row = view.rows[view.cursor];
-    if (!row || !row.enabled) return false;
-    const command = commandFor(this.opts.actor, row.key);
-    if (!command || command.grant.targetSpace !== 'system') return false;
-    const actorId = this.opts.actor.id;
-    this.close();
-    this.onBeginDestinationPick(actorId, command.id);
-    return true;
   }
 
   private refresh(force = false): void {

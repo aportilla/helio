@@ -11,7 +11,7 @@
 // ../../actions/tuning.ts mirrors the facility registry's import of the same hoisted palette.
 
 import type { ShipComponentDef, ShipComponentType } from './types.ts';
-import { CANNON_ACTION_COLOR, LASER_ACTION_COLOR, SHIELD_ACTION_COLOR, WARP_ACTION_COLOR } from '../../actions/tuning.ts';
+import { CANNON_ACTION_COLOR, LASER_ACTION_COLOR, SHIELD_ACTION_COLOR } from '../../actions/tuning.ts';
 
 // The registry, keyed by ShipComponentType. `satisfies Record<ShipComponentType, ...>` is the
 // compile layer of the frozen-key guard: adding a literal to the union without a def here fails to
@@ -23,21 +23,15 @@ const DEFS = {
     label: 'Small Engine',
     kind: 'drive',
     buildTurns: 1,
-    // The drive grants exactly ONE action — WARP DRIVE, the galaxy jump: a ROOT-LEVEL command (a direct
-    // top-menu row beside Attack/Support/Command, not a category) whose target is a destination SYSTEM
-    // (`targetSpace: 'system'`, the reachable-cluster snapshot). It grants no COMBAT action — there is
-    // still no flee (an encounter is fought to its terminal, never withdrawn), and in an encounter WARP
-    // DRIVE greys itself because combat mints no 'system' candidate (canFire is false). `category:
-    // 'navigation'` is a latent family tag (surfaced by rootLevel, not as a palette category); the grant
-    // carries no `costPerUnit` — movement is energy-inert.
-    grants: [{
-      key: 'warp', label: 'WARP DRIVE', color: WARP_ACTION_COLOR, category: 'navigation', rootLevel: true,
-      targeting: 'single', kind: 'immediate', targetSpace: 'system', targets: (c) => c.kind === 'system',
-    }],
-    // The drive's other job is the per-cycle energy recharge it DECLARES as an effect (worked example A,
-    // 4x-encounter-combat-system §7.5) — not a hardcoded reducer step. `amount` is energy-milli restored at
-    // the ship's own turn start, clamped to energyMax. A second power component would install its own
-    // `recharge`; the instances simply sum in the one fold, no merge logic.
+    // The drive grants NO action-menu command. Star-to-star navigation is a GALAXY-view modality — you
+    // click a ready ship in the galaxy sidebar's fleet list, pick a destination system, and the warp is
+    // dispatched straight to orderShipWarp — not a command you arm in the system menu. What the drive
+    // contributes is the warp STATS below (range/speed, still a real positioning decision) and the
+    // per-cycle energy recharge it DECLARES as an effect (worked example A, 4x-encounter-combat-system
+    // §7.5) — not a hardcoded reducer step. `amount` is energy-milli restored at the ship's own turn
+    // start, clamped to energyMax. A second power component would install its own `recharge`; the
+    // instances simply sum in the one fold, no merge logic. (It grants no combat action either — there is
+    // no flee; an encounter is fought to its terminal.)
     installs: [{ effectKey: 'recharge', remaining: -1, params: { amount: 3_000 } }],
     // Galaxy warp stats — a drive is what lets a ship leave its system. Range is authored EQUAL to the
     // economy's single-jump trade reach (REACH_LY × LY_TO_SIM_UNITS = 9_000 milli-light-years) so a fleet

@@ -2,14 +2,13 @@
 // screens to come: research tree, fleet, diplomacy, …) implements, so
 // AppController holds and swaps them uniformly instead of knowing each concrete
 // type. start()/stop() are pause/resume (cheap, state-preserving — used for the
-// galaxy↔overlay round-trip); dispose() is teardown. afterTurnAdvance(arrivals?)
-// is optional: only screens that surface turn-driven state (the economy read-outs)
-// implement it, so the turn loop can call it without a type test. It carries the
-// ships that completed a warp this turn (stepShipTransits' ArrivalEvent stream) so
-// the live system view can play their warp-in FX; a screen that ignores them omits
-// the arg.
-
-import type { ArrivalEvent } from '../game-state';
+// galaxy↔overlay round-trip); dispose() is teardown. afterTurnAdvance() is
+// optional: only screens that surface turn-driven state (the economy read-outs /
+// the fleet muster) implement it, so the turn loop can call it without a type test.
+// (Arrival warp-in FX are NOT driven through here — AppController holds a per-system
+// PENDING-ARRIVAL set the system view consumes on first display, so a ship animates
+// in whenever you first open its destination this turn, not only if you happened to
+// be watching it at Next Turn.)
 //
 // AppController keeps the galaxy scene as a persistent ROOT with a stack of
 // lazily-built OVERLAYS (system / test, and a modal-over-system to come) layered
@@ -20,7 +19,7 @@ export interface Screen {
   start(): void;
   stop(): void;
   dispose(): void;
-  afterTurnAdvance?(arrivals?: readonly ArrivalEvent[]): void;
+  afterTurnAdvance?(): void;
   // When true on the live screen, the outer galaxy turn is suspended: nextTurn()
   // short-circuits so neither a programmatic call nor a turn phase can step the
   // economy/turn scalar while it's up. The seam the encounter mode sets to run its

@@ -45,22 +45,13 @@ test('every grant carries a well-formed sRGB hex accent', () => {
   }
 });
 
-test('the small engine grants WARP DRIVE (a root-level system-space jump) but no combat action', () => {
+test('the small engine grants NO action-menu command (navigation is a galaxy-view modality)', () => {
   const engine = COMPONENT_BY_TYPE.get('small-engine')!;
   assert.equal(engine.kind, 'drive');
-  const grants = engine.grants ?? [];
-  assert.equal(grants.length, 1, 'exactly one grant — the galaxy warp; no flee, no combat verb');
-  const warp = grants[0]!;
-  assert.deepEqual(
-    [warp.key, warp.category, warp.targeting, warp.kind, warp.rootLevel, warp.targetSpace],
-    ['warp', 'navigation', 'single', 'immediate', true, 'system'],
-  );
-  // Movement is energy-inert — the warp grant carries no salvo cost.
-  assert.equal(warp.costPerUnit, undefined);
-  // Its predicate admits only a galaxy 'system' candidate — so in an encounter (ship/body candidates
-  // only) it matches none and the row greys, which IS the "disabled in combat" behavior.
-  assert.equal(warp.targets!({ id: 'sys:vega', kind: 'system', allegiance: 'neutral', tags: [] }, { id: 's', commands: [] }), true);
-  assert.equal(warp.targets!({ id: 's2', kind: 'ship', allegiance: 'enemy', tags: [] }, { id: 's', commands: [] }), false);
+  // The drive grants no command at all — star-to-star navigation is initiated from the galaxy sidebar and
+  // dispatched straight to orderShipWarp, not armed as a menu verb. Its contribution is the warp STATS
+  // (asserted below) + the per-cycle energy recharge effect. No flee / no combat verb either.
+  assert.deepEqual(engine.grants ?? [], []);
   assert.deepEqual(
     engine.installs,
     [{ effectKey: 'recharge', remaining: -1, params: { amount: 3_000 } }],

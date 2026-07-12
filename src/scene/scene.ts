@@ -29,11 +29,9 @@ import type { EconomyBridge } from '../facilities/economy-bridge';
 import { sizes } from '../ui/theme';
 import { STARS, STAR_CLUSTERS, clusterDisplayName, clusterIndexFor, clusterIndexForSystemId, nearestClusterIdxTo, systemIdForCluster } from '../data/stars';
 import { MILLI_PER_LY } from '../data/cluster-geometry';
-import { encodeSystemEntityId } from '../actions/entity-id';
-import type { ActionIntent } from '../actions/types';
-import { factionColor } from '../factions/registry';
-import { getGameState } from '../game-state';
-import type { DepartureRequest } from './departure';
+import { CONTROLLED_FACTION_ID, factionColor } from '../factions/registry';
+import { getGameState, orderShipWarp } from '../game-state';
+import { buildDepartureRequest, type DepartureRequest } from './departure';
 import { getSettings } from '../settings';
 import type { Screen } from './screen';
 
@@ -116,24 +114,16 @@ export class StarmapScene implements Screen {
   private readonly departureContext = new DepartureContext();
   private readonly input: InputController;
 
-  // The armed warp DEPARTURE, or null in the normal galaxy view. Set by armDeparture() BEFORE start()
-  // resumes this scene (so the first resumed frame paints in-mode), read by start() to enter the pick, and
-  // by the input handlers + freezesTurn to reroute while it's live. Also the single source for "am I picking
-  // a warp destination right now".
+  // The live warp DEPARTURE pick, or null in the normal galaxy view. Set by beginShipDeparture() when the
+  // player clicks a ready ship in the sidebar fleet list, read by the input handlers + freezesTurn to
+  // reroute while it's live. The single source for "am I picking a warp destination right now". The pick
+  // is entirely a galaxy modality now — confirm/cancel restore the selection in place (no view swap).
   private departure: DepartureRequest | null = null;
   // The locked destination cluster in the pick, or -1 while browsing. Rides the selection brackets.
   private departureLockClusterIdx = -1;
-  // The reachable-destination cluster set (+ origin) for the armed ship — gates the click-to-lock and the
+  // The reachable-destination cluster set (+ origin) for the picking ship — gates the click-to-lock and the
   // in-range shader lens. Empty in the normal view.
   private reachableClusterSet = new Set<number>();
-
-  // Fired when the player CONFIRMS a warp destination — carries the ready-to-dispatch intent (actorId +
-  // warp actionId + the `sys:` destination). AppController runs it through EFFECT_HANDLERS, seeds the
-  // warp-out FX, and re-enters the origin system.
-  onConfirmDeparture: (intent: ActionIntent) => void = () => {};
-  // Fired when the player CANCELS the pick (writes nothing). AppController re-enters the origin system with
-  // the menu-reopen hint (cursor back on WARP DRIVE).
-  onCancelDeparture: () => void = () => {};
 
   // Hover-pointer state, written by the input controller via the
   // onPointerHoverChanged handler and read each tick. Drives the per-tick
@@ -303,6 +293,9 @@ export class StarmapScene implements Screen {
       const com = STAR_CLUSTERS[idx]!.com;
       this.animateFocusTo(com.x, com.y, com.z);
     };
+    // Clicking a ready ship in the sidebar fleet list opens its warp destination pick — the galaxy-only
+    // entry point for star-to-star navigation (there is no system-view path).
+    this.galaxyContext.onSelectShip = (shipId) => this.beginShipDeparture(shipId);
 
     this.input = new InputController(canvas, this.buildInputHandlers());
 
@@ -325,15 +318,6 @@ export class StarmapScene implements Screen {
     window.addEventListener('resize', this._onResize);
     this.input.start();
     this.resize();
-    // Mode-aware resume: if this scene was armed for a warp destination pick BEFORE start() (the
-    // system→galaxy swap), enter the departure mode instead of the galaxy reset — install the departure
-    // sidebar, glide home, raise the range ring + lens, freeze the turn, and paint the first frame in-mode
-    // (no galaxy-selection flash, no Sol auto-select, settings glyph inert).
-    if (this.departure) {
-      this.enterDepartureMode();
-      this.tick();
-      return;
-    }
     // Show the galaxy context on the persistent sidebar (turn header stays); the
     // current selection survives a system-view round-trip on the singleton scene.
     this.galaxyContext.setCluster(this.selectedClusterIdx);
@@ -447,13 +431,10 @@ export class StarmapScene implements Screen {
         }
       },
       onEscape: () => {
-        // In the warp pick, Esc walks back one step: a lock unlocks (back to browsing); an unlocked pick
-        // cancels (writes nothing). Only the un-armed galaxy view deselects.
-        if (this.departure) {
-          if (this.departureLockClusterIdx >= 0) this.departureUnlock();
-          else this.departureCancel();
-          return;
-        }
+        // Selection drill-down — Esc pops ONE level each press: the ship-selection (warp destination pick)
+        // backs out to the system selection, then a second Esc deselects the system. (A pre-locked
+        // destination is part of the pick, not its own level, so it backs out in one press, not two.)
+        if (this.departure) { this.departureCancel(); return; }
         this.deselect();
       },
       onFocusCandidate: () => {
@@ -658,11 +639,20 @@ export class StarmapScene implements Screen {
     return this.departure !== null;
   }
 
-  // Arm this scene for a warp destination pick. Called by AppController BEFORE exitOverlay resumes the
-  // scene, so the very first resumed frame (start()'s synchronous tick) paints in-mode. Stores the request;
-  // enterDepartureMode does the visual / sidebar / freeze setup on start().
-  armDeparture(req: DepartureRequest): void {
-    this.departure = req;
+  // Open a warp destination pick for a ready ship the player clicked in the sidebar fleet list — the
+  // galaxy-only entry point for star-to-star navigation. Validates the ship is a commandable, in-cluster
+  // player ship, bakes its reachable set into a DepartureRequest, and enters the pick in place (no view
+  // swap — we're already on the map). No-op if a pick is already up or the ship isn't warp-ready.
+  beginShipDeparture(shipId: string): void {
+    if (this.departure) return;
+    const ship = getGameState().ships.find(
+      (s) => s.id === shipId && s.status === 'ready' && s.factionId === CONTROLLED_FACTION_ID,
+    );
+    if (!ship) return;
+    const originClusterIdx = clusterIndexForSystemId(ship.systemId);
+    if (originClusterIdx < 0) return;
+    this.departure = buildDepartureRequest(ship, originClusterIdx);
+    this.enterDepartureMode();
   }
 
   // Enter the pick: install the departure sidebar, freeze the turn, suppress the selection grid + labels,
@@ -734,38 +724,39 @@ export class StarmapScene implements Screen {
     this.sidebar.refreshContent();
   }
 
-  // Esc with a lock → unlock (back to browsing, staying in the pick); the banner/CONFIRM revert.
-  private departureUnlock(): void {
-    this.departureLockClusterIdx = -1;
-    this.selectionBrackets.setCluster(-1);
-    this.departureContext.setLock(null);
-    this.sidebar.refreshContent();
-  }
-
-  // Confirm the locked destination: mint the standard warp intent (the `sys:` target), tear the mode down,
-  // and hand the intent to AppController (which dispatches it, seeds the warp-out FX, and re-enters origin).
+  // Confirm the locked destination: order the warp straight into the durable store (orderShipWarp re-checks
+  // readiness + range and no-ops on any violation), tear the mode down, and restore the galaxy selection in
+  // place. The ship is now 'transiting' — it drops out of the sidebar fleet list and rides the transit
+  // overlay. No view swap: warp is a galaxy modality now.
   private departureConfirm(): void {
     const req = this.departure;
     if (!req || this.departureLockClusterIdx < 0) return;
-    const intent: ActionIntent = {
-      actorId: req.shipId,
-      actionId: req.actionId,
-      targetIds: [encodeSystemEntityId(systemIdForCluster(this.departureLockClusterIdx))],
-    };
+    orderShipWarp(req.shipId, systemIdForCluster(this.departureLockClusterIdx));
     this.teardownDeparture();
-    this.onConfirmDeparture(intent);
+    this.resumeGalaxyAfterDeparture();
   }
 
-  // Cancel the pick (writes nothing): tear down + let AppController re-enter the origin with the reopen hint.
+  // Cancel the pick (writes nothing): tear down + restore the galaxy selection in place.
   private departureCancel(): void {
     if (!this.departure) return;
     this.teardownDeparture();
-    this.onCancelDeparture();
+    this.resumeGalaxyAfterDeparture();
   }
 
-  // The SINGLE teardown every exit path (confirm / cancel) routes through — restores the frozen turn and
-  // clears the mode's visuals + state. The sidebar context itself is restored by AppController re-entering
-  // the system (its fresh SystemScene installs its own context), so this only lowers the freeze.
+  // Restore the galaxy view when a pick ends (confirm or cancel): re-install the galaxy sidebar + its
+  // settings glyph (both swapped out for the departure context), re-raise the selection chrome for the
+  // still-selected origin cluster (a near-noop camera-wise — the pick already glided there), and rebuild
+  // the transit overlay so a just-ordered warp shows immediately.
+  private resumeGalaxyAfterDeparture(): void {
+    this.sidebar.setContext(this.galaxyContext);
+    this.sidebar.onSettings = () => this.hud.toggleSettings();
+    if (this.selectedClusterIdx >= 0) this.selectAndFocusCluster(this.selectedClusterIdx);
+    this.refreshTransitLines();
+  }
+
+  // The SINGLE teardown every exit path (confirm / cancel) routes through — clears the mode's visuals +
+  // state and lowers the turn freeze. The galaxy sidebar context + selection chrome are re-raised by the
+  // caller's resumeGalaxyAfterDeparture (this only tears the mode down).
   private teardownDeparture(): void {
     this.departure = null;
     this.departureLockClusterIdx = -1;

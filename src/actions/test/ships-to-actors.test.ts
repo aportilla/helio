@@ -46,21 +46,20 @@ test("'building' ships are excluded (not in the field yet)", () => {
 
 test('a ship Actor carries the Attack + Support + Command category palette', () => {
   // The menu shows all three on every ship, greying any its loadout leaves empty (Command always, for
-  // now — no module grants it). WARP DRIVE is a ROOT-LEVEL command, not a category, so it never appears
-  // in this palette (and there is still no flee — an encounter is fought to its terminal).
+  // now — no module grants it). Star-to-star navigation is a galaxy-view modality now, not a menu command,
+  // so nothing warp-related appears here (and there is still no flee — an encounter is fought to its terminal).
   assert.deepEqual(shipToActor(ship('p1', 'player')).categories, ['attack', 'support', 'command']);
 });
 
-test('the corvette loadout derives WARP DRIVE + the laser, via the SAME projection', () => {
-  // A corvette flies a small-engine + small-laser: the engine grants WARP DRIVE (a root-level galaxy
-  // jump — movement, not a combat action), the laser an ATTACK that enters an encounter. Composed wire
-  // ids are `<componentId>:<key>`, in component (provider) order.
-  assert.deepEqual(shipLoadout(ship('p1', 'player')).map((c) => c.id), ['small-engine:warp', 'small-laser:laser']);
+test('the corvette loadout derives ONLY the laser — the drive grants no menu command', () => {
+  // A corvette flies a small-engine + small-laser. The engine grants NO action-menu command (warp is a
+  // galaxy-view modality dispatched straight to orderShipWarp, not a command you arm), so only the laser —
+  // an ATTACK that enters an encounter — derives. Composed wire ids are `<componentId>:<key>`.
+  assert.deepEqual(shipLoadout(ship('p1', 'player')).map((c) => c.id), ['small-laser:laser']);
   const laser = shipLoadout(ship('p1', 'player')).find((c) => c.grant.category === 'attack')!;
   assert.equal(laser.grant.kind, 'encounter', 'the laser enters the encounter modality');
   assert.deepEqual([laser.count, laser.totalCost], [1, 9000], 'one laser, its full-charge salvo cost (costPerUnit == placeholder energyMax)');
-  const warp = shipLoadout(ship('p1', 'player')).find((c) => c.grant.rootLevel)!;
-  assert.deepEqual([warp.grant.kind, warp.grant.targetSpace], ['immediate', 'system'], 'warp is a root-level immediate galaxy jump, not combat');
+  assert.equal(shipLoadout(ship('p1', 'player')).some((c) => c.grant.rootLevel), false, 'no root-level command — warp is not an action');
 });
 
 test('an actor gets its class loadout by default', () => {

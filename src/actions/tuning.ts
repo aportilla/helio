@@ -43,8 +43,3 @@ export const REPAIR_ACTION_COLOR = '#6ad6a0';
 
 // — Tactical Data: the sensor sweep. A recon teal, distinct from the colony cyan. (sensor-network)
 export const TACTICAL_DATA_ACTION_COLOR = '#5ed8e0';
-
-// — Warp Drive: a ship's galaxy jump — the one movement verb, a root-level command whose target is a
-// destination system. A warp violet, clearly apart from the offensive reds/ambers and the cooler
-// shield/UI blues, so the sole movement row reads as "leave this system". (small-engine)
-export const WARP_ACTION_COLOR = '#9b7bf0';

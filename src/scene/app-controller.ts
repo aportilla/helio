@@ -23,10 +23,6 @@ import { EconomyBridge, clearSimSave } from '../facilities/economy-bridge';
 import { advanceTurn, clearGameSave, getGameState, stepShipBuilds, stepShipTransits } from '../game-state';
 import { OverlayStack } from './overlay-stack';
 import type { Screen } from './screen';
-import type { DepartureRequest } from './departure';
-import { EFFECT_HANDLERS } from './actions/effect-handlers';
-import { grantKeyOf } from '../actions/derive';
-import type { ActionIntent } from '../actions/types';
 
 // Opt out of Three.js color management. Without this, hex values in shader
 // uniforms (new Color(0x1e6fc4)) and hex strings in canvas fillStyle
@@ -61,9 +57,12 @@ export class AppController {
   // warm-shaders.ts. Undefined until the deferred idle warm runs.
   private warmedShaders?: ShaderMaterial[];
 
-  // The in-flight warp DEPARTURE, held here (not on any scene) because it must survive the system→galaxy
-  // view swap — the SystemScene that minted it is disposed the moment the pick opens. Null in normal play.
-  private departure: DepartureRequest | null = null;
+  // Ships that finished a warp this turn, grouped by DESTINATION system, awaiting their warp-in animation.
+  // A system view consumes its own on first display + on a turn advance while it's up; nextTurn rebuilds it
+  // each turn (a prior turn's un-viewed arrival is stale — the animation is scoped to the turn a ship lands).
+  // Held HERE (not on a scene) so the animation survives view swaps: warp a ship, roam other systems, then
+  // open its destination and still see it fly in. In-memory only — ephemeral UX, never persisted.
+  private pendingArrivals = new Map<string, string[]>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -83,10 +82,6 @@ export class AppController {
     this.starmap.onViewSystem = (idx) => this.enterSystem(idx);
     this.starmap.onViewTest = () => this.enterTest();
     this.starmap.onResetGame = () => this.resetGame();
-    // The warp destination pick resolves back through these: confirm dispatches the order + re-enters the
-    // origin system; cancel re-enters it untouched.
-    this.starmap.onConfirmDeparture = (intent) => this.confirmDeparture(intent);
-    this.starmap.onCancelDeparture = () => this.cancelDeparture();
   }
 
   // Wipe the persisted GAME (game + sim saves; user settings are kept) and reload. A reload is the simplest
@@ -149,9 +144,28 @@ export class AppController {
     if (import.meta.env.DEV && arrivals.length > 0) {
       console.debug('[game-state] arrivals this turn:', arrivals);
     }
-    // Hand the arrivals to the live screen so the system view can play the warp-in FX for any that landed
-    // in the cluster it's showing (it filters by system; other screens ignore the arg).
-    this.current.afterTurnAdvance?.(arrivals);
+    // Stage this turn's arrivals as PENDING per destination system (replacing any un-viewed set from a prior
+    // turn). A system view consumes its pending arrivals on first display + on the turn advance below, so a
+    // ship animates in the FIRST time you open its destination this turn — even if you were elsewhere now.
+    this.pendingArrivals = new Map();
+    for (const a of arrivals) {
+      const ids = this.pendingArrivals.get(a.systemId) ?? [];
+      ids.push(a.shipId);
+      this.pendingArrivals.set(a.systemId, ids);
+    }
+    // Refresh the live screen's turn-driven read-outs; a system view showing a destination that gained an
+    // arrival also consumes + plays its pending warp-ins here (the "arrived while watching it" case).
+    this.current.afterTurnAdvance?.();
+  }
+
+  // Pull (and clear) the shipIds freshly arrived in a system this turn — the arrival-animation seam a system
+  // view calls on first display + on a turn advance while it's up, so each fresh arrival flies in exactly
+  // once (clearing prevents a replay on leave-and-re-enter). Empty for a system with no pending arrival.
+  private consumeArrivals(systemId: string): readonly string[] {
+    const ids = this.pendingArrivals.get(systemId);
+    if (!ids) return [];
+    this.pendingArrivals.delete(systemId);
+    return ids;
   }
 
   // Compile the planet-shader variants during galaxy-view idle, off both the
@@ -194,47 +208,17 @@ export class AppController {
     this.current.start();
   }
 
-  // Enter (or re-enter) a system view. `warpOut` is set only when re-entering the ORIGIN right after a
-  // confirmed departure: it carries the departed ship's id so the fresh scene flies its (now-outbound-gap)
-  // muster sprite off-screen (the warp-OUT motion).
-  enterSystem(clusterIdx: number, warpOut?: { shipId: string }): void {
+  // Enter (or re-enter) a system view. Star-to-star navigation lives in the galaxy view now, so the system
+  // overlay no longer participates in the warp flow — it's a pure inspect/act-in-system screen.
+  enterSystem(clusterIdx: number): void {
     this.enterOverlay((exit) => {
-      const system = new SystemScene(this.canvas, this.renderer, clusterIdx, this.sidebar, this.bridge, warpOut);
+      const system = new SystemScene(this.canvas, this.renderer, clusterIdx, this.sidebar, this.bridge);
       system.onExit = exit;
-      // Arming WARP DRIVE hands a fully-formed request up here; drive the system→galaxy pick swap.
-      system.onBeginDeparture = (req) => this.beginDeparture(req);
+      // Arrival-animation seam: on start() the fresh scene pulls its system's pending warp-ins, so a ship
+      // that landed here this turn flies in the first time you open the system — even if you were elsewhere.
+      system.pullArrivals = (systemId) => this.consumeArrivals(systemId);
       return system;
     });
-  }
-
-  // Open the warp destination pick: hold the request (it must survive the swap — the SystemScene that minted
-  // it is about to be disposed), arm the starmap, and drop the system overlay. exitOverlay resumes the
-  // now-mode-aware starmap, which paints the pick in-mode on its first frame.
-  private beginDeparture(req: DepartureRequest): void {
-    this.departure = req;
-    this.starmap.armDeparture(req);
-    this.exitOverlay(); // dispose the system overlay → starmap.start() enters the pick
-  }
-
-  // Confirm the pick: dispatch the warp order through the SAME immediate-effect map every verb uses (a
-  // deliberate SECOND call site — the origin SystemScene's onImmediate was disposed with it), then re-enter
-  // the origin system so the outbound TRANSITS row shows. The ship is now 'transiting' and drops out of the
-  // ready-only fleet muster. The starmap already tore its own pick down before firing this.
-  private confirmDeparture(intent: ActionIntent): void {
-    const origin = this.departure?.originClusterIdx ?? -1;
-    // Capture the departing ship's id BEFORE clearing the request, so the re-entered origin scene can fly
-    // its (now-outbound-gap) muster sprite off-screen (the warp-OUT motion).
-    const warpOut = this.departure ? { shipId: this.departure.shipId } : undefined;
-    this.departure = null;
-    EFFECT_HANDLERS.get(grantKeyOf(intent.actionId))?.(intent);
-    if (origin >= 0) this.enterSystem(origin, warpOut);
-  }
-
-  // Cancel the pick: nothing was written — just re-enter the origin system, where the ship still sits ready.
-  private cancelDeparture(): void {
-    const origin = this.departure?.originClusterIdx ?? -1;
-    this.departure = null;
-    if (origin >= 0) this.enterSystem(origin);
   }
 
   enterTest(): void {

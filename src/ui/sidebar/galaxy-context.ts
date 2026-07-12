@@ -13,10 +13,11 @@
 // the galaxy view resumes after a facility was placed in the system view.
 
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
-import { STARS, STAR_CLUSTERS, clusterDisplayName } from '../../data/stars';
+import { STARS, STAR_CLUSTERS, clusterDisplayName, systemIdForCluster } from '../../data/stars';
 import type { SystemEconomyView } from '../../facilities/economy-bridge';
 import { facilityLabel } from '../../facilities';
-import { facilityCounts } from '../../game-state';
+import { facilityCounts, shipsInSystem } from '../../game-state';
+import { CONTROLLED_FACTION_ID } from '../../factions/registry';
 import { paintPillButton } from '../painter';
 import { colors, fonts, sizes } from '../theme';
 import type { Region, SidebarContext } from './context';
@@ -51,16 +52,25 @@ export class GalaxyContext implements SidebarContext {
   private hovered: Control = null;
   private viewRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
   private focusRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
+  // The clickable fleet rows for the selected cluster (ready player ships), cached in paint() and read
+  // back by the hit methods. Rebuilt every paint from a fresh game-state read, so a warped ship (now
+  // 'transiting') drops out on the next repaint — the "disappears once ordered" behaviour is free.
+  private shipRects: Array<{ shipId: string; rect: Rect }> = [];
+  private hoveredShipId: string | null = null;
 
   // Fired from the action pills; StarmapScene wires these to its view methods.
   onViewSystem: (clusterIdx: number) => void = () => {};
   onFocus: (clusterIdx: number) => void = () => {};
+  // Fired when a fleet row is clicked; StarmapScene wires it to open the warp destination pick for that
+  // ship. Only ready player ships are listed, so the id is always a commandable ship.
+  onSelectShip: (shipId: string) => void = () => {};
 
   // -1 clears the selected-system block. The scene drives this on select/deselect.
   setCluster(idx: number): void {
     if (this.clusterIdx === idx) return;
     this.clusterIdx = idx;
     this.hovered = null;
+    this.hoveredShipId = null;
   }
 
   // The selected system's economy summary, pushed alongside setCluster and after
@@ -72,6 +82,7 @@ export class GalaxyContext implements SidebarContext {
   paint(g: CanvasRenderingContext2D, region: Region): void {
     this.viewRect = { x: 0, y: 0, w: 0, h: 0 };
     this.focusRect = { x: 0, y: 0, w: 0, h: 0 };
+    this.shipRects = [];
     const x0 = region.x;
     const bodyH = getFont(fonts.body).lineHeight;
     let y = region.y;
@@ -143,6 +154,26 @@ export class GalaxyContext implements SidebarContext {
       }
     }
 
+    // --- Fleet (ready player ships stationed here) ---
+    // Read fresh (like the civ tallies) so a ship that just warped out — now 'transiting' — is gone on the
+    // next repaint. Clicking a row opens the warp destination pick for that ship (onSelectShip).
+    y += sizes.cardActionGap;
+    drawPixelText(g, 'SHIPS', x0, y, colors.textKey, fonts.body);
+    y += bodyH + sizes.cardNameGap;
+    const ships = shipsInSystem(systemIdForCluster(this.clusterIdx))
+      .filter((s) => s.status === 'ready' && s.factionId === CONTROLLED_FACTION_ID);
+    if (ships.length === 0) {
+      drawPixelText(g, 'None stationed', x0, y, colors.titleDim, fonts.body);
+      y += bodyH;
+    } else {
+      for (const s of ships) {
+        const hov = this.hoveredShipId === s.id;
+        drawPixelText(g, s.name, x0, y, hov ? colors.starName : colors.textBody, fonts.body);
+        this.shipRects.push({ shipId: s.id, rect: { x: x0, y, w: region.w, h: bodyH } });
+        y += bodyH;
+      }
+    }
+
     // --- Actions ---
     y += sizes.cardActionGap;
     const view = paintPillButton(g, x0, y, 'View System', { hover: this.hovered === 'view' });
@@ -153,20 +184,25 @@ export class GalaxyContext implements SidebarContext {
   }
 
   isInteractive(cx: number, cy: number): boolean {
-    return inRect(cx, cy, this.viewRect) || inRect(cx, cy, this.focusRect);
+    return inRect(cx, cy, this.viewRect) || inRect(cx, cy, this.focusRect)
+      || this.shipRects.some((s) => inRect(cx, cy, s.rect));
   }
 
   handleClick(cx: number, cy: number): void {
     if (this.clusterIdx < 0) return;
-    if (inRect(cx, cy, this.viewRect)) this.onViewSystem(this.clusterIdx);
-    else if (inRect(cx, cy, this.focusRect)) this.onFocus(this.clusterIdx);
+    if (inRect(cx, cy, this.viewRect)) { this.onViewSystem(this.clusterIdx); return; }
+    if (inRect(cx, cy, this.focusRect)) { this.onFocus(this.clusterIdx); return; }
+    const ship = this.shipRects.find((s) => inRect(cx, cy, s.rect));
+    if (ship) this.onSelectShip(ship.shipId);
   }
 
   setHover(cx: number, cy: number): boolean {
-    const next: Control = inRect(cx, cy, this.viewRect) ? 'view'
+    const nextPill: Control = inRect(cx, cy, this.viewRect) ? 'view'
       : inRect(cx, cy, this.focusRect) ? 'focus' : null;
-    if (next === this.hovered) return false;
-    this.hovered = next;
-    return true;
+    const nextShip = this.shipRects.find((s) => inRect(cx, cy, s.rect))?.shipId ?? null;
+    let changed = false;
+    if (nextPill !== this.hovered) { this.hovered = nextPill; changed = true; }
+    if (nextShip !== this.hoveredShipId) { this.hoveredShipId = nextShip; changed = true; }
+    return changed;
   }
 }

@@ -8,7 +8,7 @@ A pure declaration + registry leaf: its app-side imports are **type-only** — t
 
 | id | kind | grants / effects |
 |---|---|---|
-| `small-engine` | `drive` | Grants **WARP DRIVE** — the galaxy jump: a **root-level** command (a direct top-menu row, not a category) whose target is a destination SYSTEM (`targetSpace: 'system'`). No *combat* action — still no flee, and it greys itself in an encounter (no `'system'` candidate). Installs a permanent `recharge` effect (worked example A); carries the galaxy `warpRangeMilliLy` / `warpSpeedMilliLyPerTurn` drive stats; contributes no `battery` |
+| `small-engine` | `drive` | Grants **no action-menu command** — star-to-star navigation is a galaxy-view modality (galaxy sidebar → destination pick → `orderShipWarp`), not a verb you arm in the menu; and no *combat* action either (still no flee). Installs a permanent `recharge` effect (worked example A); carries the galaxy `warpRangeMilliLy` / `warpSpeedMilliLyPerTurn` drive stats (what makes a ship able to warp at all); contributes no `battery` |
 | `small-laser` | `weapon` | ATTACK **Laser** (single enemy) — its on-resolve `damage` carries `damageType: 'energy'`; defensive bands' `resistByType` make energy **strong vs shields, weak vs hull**. Carries its own `battery` (= its salvo `costPerUnit`) |
 | `small-cannon` | `weapon` | ATTACK **Cannon** (single enemy) — the kinetic counterpart (`damageType: 'kinetic'`), the INVERSE matchup (**weak vs shields, strong vs hull**). Firing the right weapon at the right defensive state is the dynamic |
 | `small-shield` | `defense` | SUPPORT **Raise Shields** (self, immediate) — its `installsOnResolve` mints a 3-cycle `shield-segment` effect (worked example B); registered but **not** on a default loadout |
