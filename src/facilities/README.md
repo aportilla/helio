@@ -12,8 +12,6 @@ action), and **the action-menu commands it grants** (`grants` — read by
 `src/actions/bodies-to-actors` to derive a body's menu; a military / service
 facility grants commands but contributes nothing to the sim) all flow from that
 one edit.
-This replaced a definition that used to be smeared across `game-state.ts`, the
-system-view facilities UI, and `system-scene.ts`.
 
 > This file describes the **shipped** package; roadmap / cross-system status lives
 > in [docs/game-systems.md](../../docs/game-systems.md).
@@ -95,7 +93,7 @@ Providers are demand-pull **faucets**: a `*_PRODUCE_MILLI` is a per-turn rating
 the sim mints on pull, not a stockpile, so v1 facilities set **no**
 `storageCeiling` (the `cap()` builder + `combineCeiling` stay as a future
 warehouse/depot lever — a real larder cap — but no producer uses them today, and
-the sim no longer reads the column as a production gate).
+the sim does not read the column as a production gate).
 
 `projectWorld` allocates dense `PlanetId`s in the order of the `bodies` it's
 given and returns the `bodyIdByPlanet[]` side-table the flow visualization

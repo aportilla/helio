@@ -8,7 +8,7 @@ It is built **standalone**: a self-contained TypeScript module with its own
 pipeline — the import wall is one-directional and CI-enforced
 (`scripts/check-sim-boundary.mjs`). The app reaches it through `sim/src/index.ts`,
 imported only from `src/facilities/` (see [its doc](../src/facilities/README.md)),
-where `economy-bridge.ts` now instantiates and steps a live `EconomyEngine`. It is
+where `economy-bridge.ts` instantiates and steps a live `EconomyEngine`. It is
 also exercised by `sim/test` and that seam's tests.
 
 ## Running
@@ -34,7 +34,7 @@ as Node's loader requires).
 src/
   ids.ts            Branded id types (PlanetId/StarId/ResourceId/EdgeId/Turn/…) + constructors
   math.ts           Integer-only isqrt / ceilDiv / clampInt (float-free results)
-  prng.ts           xoshiro128** integer PRNG (4-word serializable state) — net-new for bit-stable replay
+  prng.ts           xoshiro128** integer PRNG (4-word serializable state) for bit-stable replay
   constants.ts      MILLI_PER_UNIT + the BalanceConfig tuning surface + integer emaStep
   resources.ts      TransportTier (Transportable/LocalOnly/Intangible) + ResourceMeta table
   geometry.ts       Static integer star coordinates + exact distance
@@ -67,8 +67,7 @@ Mapped to the plan's `v1 / deferred / deleted` banner.
 - 0-turn intra-cluster transfers: a same-node (same-star) order is deposited
   straight into the destination the same turn — never minted into the ring — so
   intra-system surplus covers deficit instantly and nothing is aloft at a resting
-  boundary, while inter-cluster hauls keep their multi-turn transit. Provably
-  balance-equivalent to the old 1-turn self-leg (deposit replaces a mint+arrival);
+  boundary, while inter-cluster hauls keep their multi-turn transit.
   `step()` exposes the moves via `localDelivered` + `getLocalTransfers()`, the
   read surface's intra-node analogue of `edgeFlows`. The deposit happens at P7,
   after P3 consume, so a post-dispatch **residual consume** (P7.5) eats it the same

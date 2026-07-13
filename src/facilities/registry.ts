@@ -2,8 +2,8 @@
 // facility is one object here plus one literal in the FacilityType union: its
 // save-key, UI label, Add-button order, build cap, body-eligibility predicate,
 // economic projection, AND the action-menu commands it grants all live in the one
-// def, so a facility reads top-to-bottom in one place. This collapses what used to
-// be smeared across game-state.ts, the system-view facilities UI, and system-scene.ts.
+// def, so a facility reads top-to-bottom in one place: its save-persistence, UI,
+// and scene behaviour all derive from this single def.
 //
 // SIM-FREE: contribute() needs only the EconResource ids (a plain const) + the
 // sim-free ContributionBuilder, so this module never imports the sim. That keeps

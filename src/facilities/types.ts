@@ -73,9 +73,9 @@ export interface FacilityDef {
   // discipline as canBuildOn.
   readonly enablesShipbuilding?: boolean;
 
-  // Eligibility as a per-def predicate over catalog physics — replaces the old
-  // inline kind gate, honouring the repo's "non-exclusive predicates, no single
-  // body classifier" convention. Null physics fields are treated as absent.
+  // Eligibility as a per-def predicate over catalog physics, honouring the repo's
+  // "non-exclusive predicates, no single body classifier" convention. Null physics
+  // fields are treated as absent.
   readonly canBuildOn: (body: Body) => boolean;
 
   // THE seam method: this facility's emission for one placement on `body`.

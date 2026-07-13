@@ -1,7 +1,6 @@
-// actorSides invariants — the shared faction split both adapters end on. Pins the rule that used to
-// live (duplicated) inside ships-to-actors + bodies-to-actors: deterministic first-seen faction
-// order, the controlled-side flag, and grouping (NOT filtering — the caller filters first). Runs
-// under `node --test`: pure, no DOM/sim.
+// actorSides invariants — the shared faction split both adapters (ships-to-actors + bodies-to-actors)
+// end on. Pins the rule: deterministic first-seen faction order, the controlled-side flag, and
+// grouping (NOT filtering — the caller filters first). Runs under `node --test`: pure, no DOM/sim.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

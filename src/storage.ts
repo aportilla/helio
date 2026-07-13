@@ -7,10 +7,10 @@
 // (game + sim) cross-reference by Body.id, so a future slot switch scopes them
 // together from this one resolver.
 //
-// I/O is hardened the way every layer needs: reads tolerate localStorage being
-// unavailable (private browsing) or an absent key → null; writes swallow
-// quota/disabled errors (the session still runs, it just won't persist). This
-// replaces the near-identical try/catch each layer used to hand-roll.
+// I/O is hardened the way every layer needs, in ONE place: reads tolerate
+// localStorage being unavailable (private browsing) or an absent key → null;
+// writes swallow quota/disabled errors (the session still runs, it just won't
+// persist).
 //
 // Versioning convention (each layer owns its own `version`/`v` field): the JSON
 // saves (settings, game-state) use validate-and-merge-over-defaults, so an

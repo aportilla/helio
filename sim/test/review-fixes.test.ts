@@ -39,7 +39,7 @@ test('A: a save taken after researching reach/speed tech reloads and continues i
   a.engine.applyTech({ jumpRadius: 130, travelSpeedTier: 1 }); // research reach + speed
   stepN(a.engine, 10);
 
-  const saved = a.engine.serialize(); // previously: unloadable after any applyTech
+  const saved = a.engine.serialize(); // must round-trip with the applied tech tiers
   const b = new EconomyEngine(deserialize(a.skeleton, saved), { checkInvariants: true });
   assert.ok(bytesEqual(saved, serialize(b.world)), 'reload re-serializes identically (tech tiers restored)');
   for (let i = 0; i < 25; i++) {

@@ -19,8 +19,8 @@
 // both the player and the headless verification.
 //
 // EV (§14) — the action-event animation seam: the reducer is synchronous, but an action's beat (a bolt
-// crossing to its target, the HP drop landing) needs frames of wall-clock time. So `commit` no longer
-// reopens the menu in its own call stack — it applies the reducer, fans the returned events into the
+// crossing to its target, the HP drop landing) needs frames of wall-clock time. So `commit` does not
+// reopen the menu in its own call stack — it applies the reducer, fans the returned events into the
 // CombatTracers layer's BOLTS, and opens an animation `playback` WINDOW; the existing per-frame `tick`
 // advances the tracers and only `settle`s (repaint to the post-action truth, terminal check, reopen the
 // menu) once the window elapses. The HP drop thus lands at the END of the beat, not at the click. A
@@ -270,7 +270,7 @@ export class EncounterController {
     }
     // Auto-drive the opponent's phase via the AI policy (§3.7): chooseAutoIntent reasons over the WHOLE
     // phase side — picking which same-side ship fires and focus-firing the weakest enemy — so a mixed
-    // loadout no longer forfeits the phase the instant the active ship can't fire. A null intent means the
+    // loadout does not forfeit the phase the instant the active ship can't fire. A null intent means the
     // side is stranded (no affordable, target-having action): end the phase so a held pool never soft-
     // locks the round (§3.8.3 auto-pass). The driver LOOPS across ticks — one activation per interval —
     // spending the pool down, then hands the phase back (the player's phase opens its menu via openOnActive).

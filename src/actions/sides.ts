@@ -47,9 +47,9 @@ export function groupByFaction<F extends string, T>(
 }
 
 // One actor tagged with the faction that owns it — the pair both system-view adapters
-// (ships-to-actors, bodies-to-actors) hand to actorSides. Kept with its own `actor` field (rather
-// than the generic `item`) so those call sites read unchanged after groupByFaction was generalized
-// for the encounter; actorSides maps it onto the generic core below.
+// (ships-to-actors, bodies-to-actors) hand to actorSides. Carries its own `actor` field (rather
+// than the generic `item`) so those call sites read naturally; actorSides maps it onto the generic
+// groupByFaction core below.
 export interface FactionActor {
   readonly factionId: string;
   readonly actor: Actor;

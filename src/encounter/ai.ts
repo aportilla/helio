@@ -1,7 +1,6 @@
 // ai — the opponent's combat policy (§3.7): a PURE function picking the auto-driven side's next
-// activation. It replaces the bones placeholder that inspected only the ACTIVE ship; this reasons over
-// the WHOLE phase side, so a mixed-energy fleet spends its initiative instead of forfeiting the phase
-// the moment the active ship can't fire. Pure + deterministic (no PRNG, no float): combat math is still
+// activation. It reasons over the WHOLE phase side, so a mixed-energy fleet spends its initiative
+// instead of forfeiting the phase the moment the active ship can't fire. Pure + deterministic (no PRNG, no float): combat math is still
 // the flat placeholder, so a focus-fire argmax needs no roll — the §3.7 fixed-phase-point draw
 // discipline only bites once a real damage roll exists. The controller drives it: it re-anchors the
 // cursor onto the returned actor (selectActor) and commits, one activation per interval, until the
@@ -23,13 +22,13 @@ import { ENERGY_STAT, isDown, remainingHp, type Combatant, type EncounterState }
 export function chooseAutoIntent(state: EncounterState): ActionIntent | null {
   const side = state.phaseSide;
   // Focus-fire: every attacker this phase aims at the SAME weakest living enemy, so the side
-  // concentrates fire to finish targets rather than spreading it (the first real "intelligence" over the
-  // placeholder's first-in-roster pick). Computed once per activation off the current truth.
+  // concentrates fire to finish targets rather than spreading it. Computed once per activation off the
+  // current truth.
   const target = weakestEnemy(state, side);
   if (target === null) return null;
   // The first living same-side ship that can afford an attack (combatId order — the deterministic
-  // within-side walk). Iterating the whole side is the fix for the placeholder's active-ship-only
-  // forfeit: a charged ship fires even when a lower-combatId one is drained.
+  // within-side walk). Iterating the whole side means a charged ship fires even when a lower-combatId
+  // one is drained (no phase forfeit when the active ship can't fire).
   for (const c of state.combatants) {
     if (c.factionId !== side || isDown(c)) continue;
     const attack = affordableAttack(c);

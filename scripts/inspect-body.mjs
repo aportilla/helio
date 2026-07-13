@@ -26,9 +26,9 @@ import * as traits from './lib/body-traits.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-// Every body-traits predicate that fires for this body — the multi-axis view
-// that replaced the single collapsed archetype string. A body can read as both
-// (say) iron and glacial; printing all of them is the point.
+// Every body-traits predicate that fires for this body — the multi-axis view.
+// A body can read as both (say) iron and glacial; printing all of them is the
+// point.
 function traitsOf(b) {
   const fired = Object.entries(traits)
     .filter(([name, fn]) => typeof fn === 'function' && name.startsWith('is') && name !== 'isClassifiable' && fn(b))

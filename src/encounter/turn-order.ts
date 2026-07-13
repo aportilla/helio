@@ -1,9 +1,8 @@
 // turn-order — the Press-Turn turn cursor (§3.8). `nextActor` walks the ACTIVE side's living ships
 // (round-robin by combatId WITHIN the side) while that side still holds initiative icons; when the
 // side's pool is spent or it has no living ship left, it yields (undefined) and the reducer hands the
-// phase to the next side (`nextLivingSide` + `firstLivingOfSide`). This is the side-aware replacement
-// for the bones' faction-agnostic round-robin; the per-combatant speed/`readyTick` refinement is
-// RETIRED (I8) — a side freely activates any of its ships, icons (not one-action-per-ship) are the
+// phase to the next side (`nextLivingSide` + `firstLivingOfSide`). A side freely activates any of its
+// ships (I8): there is no per-combatant speed/`readyTick` gate — icons (not one-action-per-ship) are the
 // limiter. Pure — reads only EncounterState + the down predicate.
 
 import type { FactionType } from '../factions/types.ts';

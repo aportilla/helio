@@ -1,6 +1,6 @@
-// ai policy invariants — the fleet-aware opponent driver (§3.7). Asserts the two behaviours that
-// distinguish it from the retired active-ship-only placeholder: it reasons over the WHOLE phase side
-// (a drained active ship no longer forfeits the phase) and it FOCUS-FIRES the weakest living enemy
+// ai policy invariants — the fleet-aware opponent driver (§3.7). Asserts the two core behaviours:
+// it reasons over the WHOLE phase side (a drained active ship does not forfeit the phase) and it
+// FOCUS-FIRES the weakest living enemy
 // (not the first in roster order). Plus the null cases (no living enemy / a fully drained side) the
 // controller turns into an auto-pass, and purity. Drives real corvette combatants through the E1
 // adapter; runs under `node --test` type-stripping.
@@ -45,8 +45,8 @@ test('fires a phase-side ship and focus-fires the weakest living enemy', () => {
 });
 
 test('chooses a charged same-side ship when the active (lower-combatId) ship is drained — no forfeit', () => {
-  // The KEY fix over the placeholder: r1 (active, combatId 0) is out of salvo energy but r2 is charged.
-  // The active-ship-only placeholder forfeited the whole phase here; the fleet-aware policy fires r2.
+  // r1 (active, combatId 0) is out of salvo energy but r2 is charged: the fleet-aware policy fires r2
+  // rather than forfeiting the whole phase because the active ship can't fire.
   let s = encounterOf([ship('r1', 'rival'), ship('r2', 'rival'), ship('p1', 'player')], 'r1');
   s = withEnergy(s, 'r1', 0);
   const intent = chooseAutoIntent(s);

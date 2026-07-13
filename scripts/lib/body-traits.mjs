@@ -1,13 +1,12 @@
 // Body traits — a library of pure, physics-derived predicates over a body's
-// settled state. Replaces the single-string classifier: instead of collapsing a
-// body's multi-axis physics to ONE archetype at the first matching branch and
-// handing that lone string to every consumer, this exposes each physical bucket
-// as an independent boolean. The buckets are NON-EXCLUSIVE and carry NO
-// precedence — a metal-rich icy world answers true to both `isIron` and
-// `isGlacial`, and each consumer composes the precedence IT needs (the label
-// owns one noun cascade; the audits bucket by overlap). A single shared ordered
-// cascade would just be the old classifier under another name, so the ordering
-// deliberately lives in the callers, not here.
+// settled state. Rather than collapse a body's multi-axis physics to ONE
+// archetype at the first matching branch and hand that lone string to every
+// consumer, this exposes each physical bucket as an independent boolean. The
+// buckets are NON-EXCLUSIVE and carry NO precedence — a metal-rich icy world
+// answers true to both `isIron` and `isGlacial`, and each consumer composes the
+// precedence IT needs (the label owns one noun cascade; the audits bucket by
+// overlap). A single shared ordered cascade would just be a classifier under
+// another name, so the ordering deliberately lives in the callers, not here.
 //
 // Shared across the .mjs/.ts boundary via body-traits.d.mts, the same pattern
 // prng.mjs / gas-potency.mjs use: imported by `scripts/` audits (Node) AND
@@ -93,8 +92,8 @@ export function isGaseousBody(b) {
 }
 
 // Terrestrial bracket with a usable temperature — the precondition every
-// surface predicate shares (the old terrestrial cascade ran only here; without a
-// temperature the old classifier returned `unknown`).
+// surface predicate shares; without a settled temperature no surface trait can
+// fire.
 function terr(b) {
   return b.radiusEarth != null && b.radiusEarth < W.gasDwarfRadius && b.avgSurfaceTempK != null;
 }
@@ -130,15 +129,15 @@ export function isVeiledIce(b) {
     b.atm1 === 'H2';
 }
 
-// Helium-dominated envelope (an evolved giant). Checked ahead of the Jovian /
-// Neptune splits in the old cascade, so the other gaseous predicates exclude it.
+// Helium-dominated envelope (an evolved giant). Takes precedence over the
+// Jovian / Neptune splits, so the other gaseous predicates exclude it.
 export function isHelium(b) {
   return isGaseousBody(b) && b.atm1 === 'He' && b.atm2 !== 'H2' && b.atm3 !== 'H2';
 }
 
-// Jupiter-class gaseous envelope — the union of the old gas_giant + hot_jupiter
-// (helium wins ahead of this branch, so it's excluded; veiled_ice can't reach
-// jupiterRadius). This is the disc-tint predicate.
+// Jupiter-class gaseous envelope (helium wins ahead of this branch, so it's
+// excluded; veiled_ice can't reach jupiterRadius). This is the disc-tint
+// predicate.
 export function isGasGiant(b) {
   return isGaseousBody(b) && !isHelium(b) && b.radiusEarth >= W.jupiterRadius;
 }
@@ -156,7 +155,7 @@ export function isIceGiant(b) {
 }
 
 // Sub-Neptune / gas dwarf — the residual gaseous bracket: gaseous, not helium /
-// veiled-ice / Jovian / ice-giant (the old `return 'sub_neptune'` fall-through).
+// veiled-ice / Jovian / ice-giant.
 export function isSubNeptune(b) {
   return isGaseousBody(b) && !isHelium(b) && !isVeiledIce(b) && !isGasGiant(b) && !isIceGiant(b);
 }
@@ -259,7 +258,7 @@ export function isSuperEarth(b) {
     b.radiusEarth >= W.solidGiantRadiusMin;
 }
 
-// A dry rock — no surface water or ice (the old desert gate).
+// A dry rock — no surface water or ice.
 export function isDesert(b) {
   return terr(b) && liquidWaterCover(b) < W.desertWaterCeiling &&
     (b.iceFraction ?? 0) < W.desertIceCeiling;

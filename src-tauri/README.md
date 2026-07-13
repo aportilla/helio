@@ -6,9 +6,8 @@ code, scene, or `vite.config.ts` change: the browser build under `src/` stays th
 single source of truth, and this directory only adds the native window, lifecycle,
 and packaging around it.
 
-Tauri (not Electron) because it uses the OS webview — WebKit on macOS — so the
-bundle is a few MB and the renderer is the same Metal-backed WebGL2 as Safari,
-rather than shipping a whole Chromium.
+Tauri uses the OS webview — WebKit on macOS — so the bundle is a few MB and the
+renderer is the same Metal-backed WebGL2 as Safari.
 
 ## Two build paths — the load-bearing split
 

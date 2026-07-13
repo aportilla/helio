@@ -1,6 +1,6 @@
-// Every SHIPPED action grant is well-formed — the universal sweep the pre-inversion ACTION_DEFS
-// color + kind checks used to provide, restored over the DERIVED grants now that there is no
-// central registry. It walks every grant declared inline on a provider — each FacilityDef (body
+// Every SHIPPED action grant is well-formed — the universal color + kind sweep over the DERIVED
+// grants, since there is no central registry to enforce it. It walks every grant declared inline
+// on a provider — each FacilityDef (body
 // side) AND each ShipComponentDef (ship side) — so a malformed color, an out-of-vocabulary kind, or
 // a colon-bearing key on ANY shipped grant fails CI, not just the few spot-checked ones. Both
 // registries are sim-free (their definitions need only the action vocab + EconResource ids, not the

@@ -141,8 +141,8 @@ export function intraInboundByResource(
 // The forward-looking inbound the M3 cue reads for one (planet, resource):
 // interstellar ledger-inbound (from the speculative digest, `null` when that digest
 // has no row for the pair) PLUS the instant intra-cluster relief. Null only when
-// there is neither — preserving the no-prediction baseline, so the cue stays silent
-// exactly when it did before, and now also fires for an intra-system fix.
+// there is neither — the no-prediction baseline that keeps the cue silent, so it
+// fires for an interstellar prediction and for an intra-system fix alike.
 export function foldInboundNextTurn(
   ledgerInboundMilli: number | null,
   intraInboundMilli: number,

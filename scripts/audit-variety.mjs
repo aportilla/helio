@@ -204,8 +204,8 @@ const veiledIce = procgenPlanets.filter(b => arch(b) === 'veiled_ice');
 row('Veiled Ice worlds (cold H2 dwarf, ice-rich)', veiledIce,
     procgenPlanets.length, topExamples(veiledIce, b => b.massEarth));
 
-// Gaian — living temperate water ocean (Earth). A first-class archetype
-// promoted out of the old 'ocean' worldClass by complex biosphere + temp band.
+// Gaian — living temperate water ocean (Earth). A first-class archetype,
+// distinguished from a plain ocean by complex biosphere + temp band.
 const gaians = procgenPlanets.filter(b => arch(b) === 'gaian');
 row('Gaian worlds (living temperate ocean)', gaians,
     procgenPlanets.length, topExamples(gaians, b => b.massEarth));
@@ -292,8 +292,8 @@ row('Super-Earths (m≥3 M⊕, R<3 R⊕)', superEarths,
     procgenPlanets.length, topExamples(superEarths, b => b.massEarth));
 
 // Mega-Earth — m≥5 and a rocky/ocean-ish solid archetype (Kepler-10c-class).
-// Old worldClass {rocky, ocean, desert, iron, solid_giant} expands across the
-// iconic ocean promotions (gaian/ammonia_sea) + super_earth.
+// The solid-body set {rocky, ocean, desert, iron, solid_giant} plus the iconic
+// ocean promotions (gaian/ammonia_sea) + super_earth.
 const MEGA_EARTH_ARCHETYPES = new Set([
   'rocky', 'ocean', 'gaian', 'ammonia_sea', 'desert', 'iron', 'super_earth',
 ]);
@@ -318,8 +318,8 @@ const volcanicWorlds = procgenPlanets.filter(b => arch(b) === 'volcanic');
 row('Volcanic worlds (crusted, active)', volcanicWorlds,
     procgenPlanets.length, topExamples(volcanicWorlds, b => b.avgSurfaceTempK));
 
-// Brimstone — molten-sulfur seas (Io-class). A first-class archetype now,
-// promoted out of the old desert/magma_ocean buckets by sulfur surface liquid.
+// Brimstone — molten-sulfur seas (Io-class). A first-class archetype,
+// distinguished by sulfur surface liquid.
 const brimstone = procgenPlanets.filter(b => arch(b) === 'brimstone');
 row('Brimstone worlds (molten-sulfur seas, Io-class)', brimstone,
     procgenPlanets.length, topExamples(brimstone, b => b.avgSurfaceTempK));
@@ -335,14 +335,13 @@ const tholin = [...procgenPlanets, ...procgenMoons].filter(b => arch(b) === 'tho
 row('Tholin worlds (hydrocarbon lakes, Titan-class)', tholin,
     procgenPlanets.length + procgenMoons.length, topExamples(tholin, b => b.surfacePressureBar));
 
-// Frostbound — volatile-ice-dominated (Pluto/Triton/Eris). The old 'carbon'
-// worldClass survives under this flavour name.
+// Frostbound — volatile-ice-dominated (Pluto/Triton/Eris).
 const frostbound = procgenPlanets.filter(b => arch(b) === 'frostbound');
 row('Frostbound worlds (Pluto/Triton-class)', frostbound,
     procgenPlanets.length, topExamples(frostbound, b => b.massEarth));
 
-// Glacial — globally frozen water-ice (Callisto-class). Old 'ice' worldClass
-// maps to {glacial, subglacial_ocean}; subglacial is reported above.
+// Glacial — globally frozen water-ice (Callisto-class); the subglacial-ocean
+// sibling is reported above.
 const glacialWorlds = procgenPlanets.filter(b => arch(b) === 'glacial');
 row('Glacial worlds (Callisto-class water ice)', glacialWorlds,
     procgenPlanets.length, topExamples(glacialWorlds, b => b.massEarth));
@@ -674,9 +673,8 @@ if (zeroArchs === 6) {
 }
 
 // Archetype concentration — flag if any single archetype dominates >40%.
-// The richer enum spreads bodies across more buckets, so a single archetype
-// clearing 40% is a sharper "the classifier is collapsing" signal than the
-// old worldClass concentration was.
+// The rich archetype set spreads bodies across many buckets, so a single
+// archetype clearing 40% is a sharp "the classifier is collapsing" signal.
 const classCount = {};
 for (const b of [...procgenPlanets, ...procgenMoons]) {
   const a = arch(b);

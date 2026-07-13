@@ -77,7 +77,7 @@ One deep doc per subsystem. Start in the root for orientation, then open the doc
 
 ## Planned architecture
 
-Forward-looking, not yet built: a WASM port of the sim — decided boundaries but no committed roadmap doc, designed when concrete work on it begins. Desktop distribution has landed: a Tauri v2 shell wraps the web build into a native macOS app, kept isolated from the GitHub Pages deploy — see [src-tauri/README.md](src-tauri/README.md). The economy sim and the save-state layer are already in progress; their status lives in [docs/game-systems.md](docs/game-systems.md). Session-scoped planning artifacts stay local-only in the gitignored `plans/` directory.
+Forward-looking, not yet built: a WASM port of the sim — decided boundaries but no committed roadmap doc, designed when concrete work on it begins. The economy sim and the save-state layer are in progress; their status lives in [docs/game-systems.md](docs/game-systems.md). Session-scoped planning artifacts stay local-only in the gitignored `plans/` directory.
 
 ## Coding conventions
 

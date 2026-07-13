@@ -1,6 +1,6 @@
 # src/ships/
 
-The neutral **ship vocabulary** — what a ship is *made of*. A ship has **no class**: it carries its own ordered list of **modules** (`components: ShipComponentType[]`, persisted in the save), and everything about it — its menu actions, its combat installs, its energy capacity, its build time, its sprite size — **derives from those modules**. So this directory is now just the **component registry** ([`components/`](components/README.md)) plus the loadout-level helpers built on it. A near-pure leaf: its only app-side dependency is a **type-only** import of the action vocabulary (a component's grants), the same dependency `src/facilities/` takes; nothing from the DOM/catalog or the combat package.
+The neutral **ship vocabulary** — what a ship is *made of*. A ship has **no class**: it carries its own ordered list of **modules** (`components: ShipComponentType[]`, persisted in the save), and everything about it — its menu actions, its combat installs, its energy capacity, its build time, its sprite size — **derives from those modules**. So this directory is just the **component registry** ([`components/`](components/README.md)) plus the loadout-level helpers built on it. A near-pure leaf: its only app-side dependency is a **type-only** import of the action vocabulary (a component's grants), the same dependency `src/facilities/` takes; nothing from the DOM/catalog or the combat package.
 
 ## Ships are module lists, not classes
 

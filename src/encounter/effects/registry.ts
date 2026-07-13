@@ -70,9 +70,9 @@ const DEFS = {
       phaseStart: (ctx) => [{ kind: 'side', initiative: ctx.params.initiative ?? 0 }],
     },
   },
-  // A one-shot HIT as a DECLARED effect — the cut that retired the reducer's last hardcoded behaviour
-  // fork (the old `category === 'attack'` branch). A weapon mints it on each resolved TARGET via
-  // installsOnResolve (the same path the shield's raise-shields uses, now non-self), with `remaining: 0`
+  // A one-shot HIT as a DECLARED effect — so the reducer holds no hardcoded attack behaviour fork.
+  // A weapon mints it on each resolved TARGET via
+  // installsOnResolve (the same path the shield's raise-shields uses, non-self), with `remaining: 0`
   // so it applies once and never rides on. Its `install` handler cascades a `damage` pool outcome through
   // the target's stack — shields absorb before hull purely by stack order, so there is zero attack-
   // specific code in the fold. The hit MAGNITUDE is install param (the weapon's stat, declared on the

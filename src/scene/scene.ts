@@ -35,9 +35,8 @@ import { buildDepartureRequest, type DepartureRequest } from './departure';
 import { getSettings } from '../settings';
 import type { Screen } from './screen';
 
-// Orbit radius bounds (camera-to-target ly). Replaces the old ortho frustum
-// height; under perspective, distance directly drives apparent size of
-// objects at the focus.
+// Orbit radius bounds (camera-to-target ly). Under perspective, distance
+// directly drives apparent size of objects at the focus.
 const ZOOM_MIN = 4;
 const ZOOM_MAX = 150;
 const FOV_DEG = 45;

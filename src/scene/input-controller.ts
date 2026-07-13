@@ -1,8 +1,7 @@
-// Pointer/keyboard gesture controller. Owns every listener StarmapScene
-// used to bind directly — pinch classifier, drag-vs-click discrimination,
-// touch long-press, double-click window, WASD/QE/ZX held-key set — and
-// dispatches high-level intents back to the scene through the InputHandlers
-// callback bundle.
+// Pointer/keyboard gesture controller. Owns every scene input listener —
+// pinch classifier, drag-vs-click discrimination, touch long-press,
+// double-click window, WASD/QE/ZX held-key set — and dispatches high-level
+// intents back to the scene through the InputHandlers callback bundle.
 //
 // The split: this module decides *what gesture is happening* (orbit drag,
 // pinch zoom, pinch pan, click vs drag, long-press, etc.); the scene

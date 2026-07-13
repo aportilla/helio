@@ -208,8 +208,8 @@ export class AppController {
     this.current.start();
   }
 
-  // Enter (or re-enter) a system view. Star-to-star navigation lives in the galaxy view now, so the system
-  // overlay no longer participates in the warp flow — it's a pure inspect/act-in-system screen.
+  // Enter (or re-enter) a system view. Star-to-star navigation lives in the galaxy view, so the system
+  // overlay is a pure inspect/act-in-system screen and takes no part in the warp flow.
   enterSystem(clusterIdx: number): void {
     this.enterOverlay((exit) => {
       const system = new SystemScene(this.canvas, this.renderer, clusterIdx, this.sidebar, this.bridge);

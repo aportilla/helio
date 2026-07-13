@@ -39,11 +39,11 @@ export function setSnappedLineViewport(w: number, h: number): void {
 }
 
 // Remove a material from the registry when its owning layer disposes. The
-// system-view disc/moon layers register a fresh material on every rebuild but
-// only ever .dispose()d them — so each enter→exit of SystemScene used to leave
-// the already-disposed material in this push-only list, and the next resize
-// re-touched dead GPU handles forever. Layers call this from dispose()
-// alongside material.dispose(). No-op if the material was never registered.
+// system-view disc/moon layers register a fresh material on every rebuild; the
+// registry is push-only, so without this a disposed material would linger in
+// the list and the next resize would re-touch its dead GPU handles. Layers
+// call this from dispose() alongside material.dispose(). No-op if the material
+// was never registered.
 export function unregisterSnappedMaterial(m: ShaderMaterial): void {
   const i = snappedMaterials.indexOf(m);
   if (i >= 0) snappedMaterials.splice(i, 1);

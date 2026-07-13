@@ -1321,8 +1321,8 @@ function invariant(id, label, ok, detail) {
 }
 
 // B5 — the cold extreme is floored at absolute zero. A large swing on a hot,
-// high-tilt airless body used to drive surfaceTempMinK negative (unphysical,
-// and it feeds surfaceIceCover as T_pole).
+// high-tilt airless body can otherwise drive surfaceTempMinK negative
+// (unphysical, and it feeds surfaceIceCover as T_pole).
 {
   const neg = bodies.filter(b => b.surfaceTempMinK != null && b.surfaceTempMinK < 0);
   invariant('B5', 'no body has surfaceTempMinK < 0 K', neg.length === 0,

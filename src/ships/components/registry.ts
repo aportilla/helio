@@ -60,8 +60,8 @@ const DEFS = {
     battery: 9_000,
     grants: [{ key: 'laser', label: 'Laser', color: LASER_ACTION_COLOR, category: 'attack', targeting: 'single', kind: 'encounter', costPerUnit: 9_000, targets: (c) => c.allegiance === 'enemy' }],
     // On resolve the laser mints a one-shot `damage` effect on each target — the same installsOnResolve
-    // path the shield uses for a self buff, now landing on an enemy (the reducer's old attack branch is
-    // gone; damage is a declared effect, src/encounter/effects). `amount` 40_000 is the placeholder hit; its
+    // path the shield uses for a self buff, now landing on an enemy (damage is a declared effect, not a
+    // reducer branch; src/encounter/effects). `amount` 40_000 is the placeholder hit; its
     // `damageType` 'energy' is the BEAM type — the cascade scales it by each target band's resistance to
     // energy (shields weak to it, hull resists it; src/encounter/tuning SHIELD_RESIST/HULL_RESIST), so a
     // laser SHREDS shields and glances off hull, the cannon below the mirror. Literals HERE (ships ↛
@@ -146,9 +146,9 @@ export const SHIP_COMPONENT_TYPES: ReadonlySet<string> = new Set(Object.keys(DEF
 // constant so the build flow, both DEV spawns, and tests agree on what "a real ship" is.
 export const DEMO_SHIP_LOADOUT: readonly ShipComponentType[] = ['small-engine', 'small-laser', 'small-cannon', 'small-shield-generator'];
 
-// A ship's build time = the Σ of its modules' `buildTurns` (heavier loadout = longer build), the
-// per-ship successor to the old per-class buildTurns. Floored at MIN so a sparse/degenerate loadout still
-// takes a turn. Unknown ids (shouldn't occur — validated on load) contribute 0.
+// A ship's build time = the Σ of its modules' `buildTurns` (heavier loadout = longer build).
+// Floored at MIN so a sparse/degenerate loadout still takes a turn. Unknown ids (shouldn't occur —
+// validated on load) contribute 0.
 const MIN_BUILD_TURNS = 1;
 export function shipBuildTurns(components: readonly ShipComponentType[]): number {
   const sum = components.reduce((n, type) => n + (COMPONENT_BY_TYPE.get(type)?.buildTurns ?? 0), 0);

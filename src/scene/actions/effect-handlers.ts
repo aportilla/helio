@@ -6,9 +6,9 @@
 // re-read), which is exactly why these live app-side and NOT in the pure src/actions/ leaf.
 //
 // Every handler here is currently a NO-OP stub marking where its real world-mutation (and the reconcile
-// that must follow it) will land; M3 built the ROUTING (confirm → dispatch by kind → handler keyed by
-// grant key), not their mechanics. (Warp used to live here, but star-to-star navigation is a galaxy-view
-// modality now — it dispatches straight to orderShipWarp from the departure pick, not through this map.)
+// that must follow it) will land; the ROUTING is in place (confirm → dispatch by kind → handler keyed by
+// grant key), not their mechanics. (Star-to-star navigation is a galaxy-view modality — it dispatches
+// straight to orderShipWarp from the departure pick, not through this map.)
 //
 // An 'immediate' action with no handler registered here (grant keys like repair / recon — verbs
 // that resolve elsewhere) falls through to SystemScene's DEV placeholder log. A grant key shared by

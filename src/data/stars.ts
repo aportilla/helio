@@ -246,8 +246,7 @@ export interface Body {
   // 0..1 mass fraction of body that is non-water condensable volatiles
   // — NH3, CH4, CO, CO2, N2, organics. Captures what bulkWater doesn't:
   // the inventory that drives ammonia/methane-world variety and the
-  // CO2/N2 outgassing budget for inner rockies (replaces the implicit
-  // OUTGASSING.volatileFloor proxy). Sampled at Architect time from
+  // CO2/N2 outgassing budget for inner rockies. Sampled at Architect time from
   // the same four-zone formation gate as bulkWater/bulkMetal; values
   // climb past each successive snow line as NH3 then CH4 condense.
   //

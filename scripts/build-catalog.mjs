@@ -8,8 +8,7 @@
 // the CSVs or this pipeline. Re-run (via prebuild/predev/pretypecheck or
 // `npm run build:catalog`) whenever a CSV changes.
 //
-// Mirrors the algorithm that used to live in src/data/stars.ts. KDTree
-// pair scans are replaced with brute-force O(n²) here — build-time, not
+// Neighbour pairs are found by brute-force O(n²) here — build-time, not
 // per-frame, and ~1500 stars at ~2M ops still completes in milliseconds.
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';

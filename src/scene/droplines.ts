@@ -113,11 +113,11 @@ export class Droplines {
     this.masterVisible = initialMasterVisible;
     for (let cIdx = 0; cIdx < STAR_CLUSTERS.length; cIdx++) {
       const cluster = STAR_CLUSTERS[cIdx]!;
-      // Sol's cluster used to be skipped (its COM at the origin gave a
-      // zero-length pin against the fixed z=0 plane). With the focus plane
-      // now keyed to the selected cluster's COM.z, Sol's pin is a real pin
-      // whenever the user selects any non-Sol cluster — visualizes Sol's
-      // altitude relative to the system under inspection. Per-frame
+      // The focus plane is keyed to the selected cluster's COM.z, so Sol's
+      // pin is a real pin whenever the user selects any non-Sol cluster —
+      // visualizes Sol's altitude relative to the system under inspection
+      // (Sol's own COM sits at the origin, giving a zero-length pin against
+      // the z=0 plane only when Sol itself is selected). Per-frame
       // degeneracy hiding (DROPLINE_DEGENERATE_DIST) handles the on-plane case
       // (Sol selected, or any cluster co-planar with the selection).
       const com = cluster.com;

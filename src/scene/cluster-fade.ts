@@ -32,8 +32,8 @@ export const CAMERA_FADE_FAR  = 60;
 // clampRamp: ≤near → 1, ≥far → 0 (the dominant polarity — closer is
 // brighter). invRamp: ≤near → 0, ≥far → 1 (waymarker / focus-marker
 // fade-IN — closer is dimmer). Both clamp to [0, 1] at the bounds, so a
-// caller can drop them in unconditionally where it previously guarded the
-// interior case by hand.
+// caller can drop them in unconditionally rather than guarding the interior
+// case by hand.
 export function clampRamp(d: number, near: number, far: number): number {
   if (d <= near) return 1;
   if (d >= far) return 0;

@@ -348,36 +348,27 @@ export const MOON_COUNT_MAX = MOON_COUNT_MAX_TUNE;
 //   binary edge log10(M_host × MOON_BINARY_RATIO_LIMIT), then soft-tapered
 //   toward MOON_MASS_LOG_ABS_CEILING (a soft-min knee, not a clamp).
 //
-// Why host-coupled instead of a fixed distribution + a hard host-ratio
-// cap: the old model drew a host-independent N(-1.5, 2.0) and then hard-
-// clamped the upper bound at 5% of host mass. Because the mean sat above
-// that clamp for any small host, the truncation PILED every small-planet
-// moon right at the 5% wall — small worlds came out ringed with moons
-// each ~5% of the planet (audit section 5b: median ratio pinned at 5%,
-// %ratio≥5% at 30–37%). Sliding μ down for small hosts moves the bulk to
-// a small fraction of the planet and pushes the high-ratio cases (the
-// Earth–Moon giant-impact anomaly) out to a thin, reachable tail — no
-// hard wall, just odds.
+// Host-coupled: μ slides down for small hosts so their moons come out a
+// small fraction of the planet by odds — small worlds don't come out ringed
+// with equal-ratio moons — while the high-ratio cases (the Earth–Moon
+// giant-impact anomaly) sit in a thin, reachable tail, not a hard wall.
+// Audit section 5b tracks the ratio distribution (median ratio, %ratio≥5%).
 //
-// The μ-slide fixed the small-host ratio wall, but the absolute mass
-// ceiling stayed a hard clamp, and for Jovian hosts (μ=-1.5, sd=2.0) it
-// sits only ~0.9σ out — so ~19% of giant-host moons drew above 2 M⊕ and
-// piled on that exact value (≈8% of all moons at one radius). The ceiling
-// is now a soft-min taper (MOON_MASS_CEILING_KNEE): draws approaching
-// 2 M⊕ compress smoothly so the upper tail decays to a thin shoulder
-// rather than a spike, while the asymptote still holds moons below the
-// super-Earth line. The lone remaining hard edge is the binary boundary
+// The absolute mass ceiling is a soft-min taper (MOON_MASS_CEILING_KNEE):
+// draws approaching 2 M⊕ compress smoothly so the upper tail decays to a
+// thin shoulder rather than a spike, while the asymptote holds moons below
+// the super-Earth line. The lone hard edge is the binary boundary
 // (MOON_BINARY_RATIO_LIMIT), far out in every bucket's tail.
 //
-// HI is anchored at the Jovian end to REPRODUCE the legacy giant
-// distribution (μ=-1.5, sd=2.0) so the gas-giant moon spread — which is
-// already where we want it — is untouched. LO is the new Earth-class
-// anchor: a lower centre and a tighter spread. Behaviour at the anchors
+// HI is anchored at the Jovian end to the target giant spread (μ=-1.5,
+// sd=2.0) — the gas-giant moon distribution we want — so it's untouched by
+// the small-host slide. LO is the Earth-class anchor: a lower centre and a
+// tighter spread. Behaviour at the anchors
 // and a few interpolated hosts (median moon mass / median moon-host ratio):
 //   0.1 M⊕ : μ≈-3.04 sd≈0.50(floor) → ~9e-4 M⊕ / ~0.9%   (tiny moonlets)
 //   Earth  : μ=-2.6  sd=0.9          → ~2.5e-3 M⊕ / ~0.25% (Luna 1.2% ≈ +0.8σ tail)
 //   Saturn : μ≈-1.73 sd≈1.77         → ~1.9e-2 M⊕ / ~2e-4  (≈ Titan)
-//   Jupiter: μ=-1.5  sd=2.0          → ~3.2e-2 M⊕ / ~1e-4  (≡ legacy giant draw)
+//   Jupiter: μ=-1.5  sd=2.0          → ~3.2e-2 M⊕ / ~1e-4  (≡ the target giant spread)
 // Heller & Pudritz 2015 put exomoon habitability at ≥0.25 M⊕ — still
 // reachable on the giant buckets via the HI-anchor right tail (audit
 // `%moon≥0.25M` column).
@@ -396,9 +387,8 @@ export const MOON_MASS_CEILING_KNEE    = 0.7;
 // quarter of its host without the pair reading as a binary planet
 // (Pluto/Charon = 0.12; Earth/Moon = 0.012). Far out in the tail of every
 // bucket above, so it guards against impossible bodies without shaping
-// the distribution. Replaces the old 5% MOON_MAX_HOST_MASS_RATIO gameplay
-// cap, whose job (keeping small-host moons small) the μ-slide now does
-// probabilistically.
+// the distribution — keeping small-host moons small is the μ-slide's job,
+// done probabilistically rather than at a hard ratio cap.
 export const MOON_BINARY_RATIO_LIMIT = 0.25;
 
 // Circumplanetary-disk delivered water floor for moons. Real moons of
@@ -711,7 +701,7 @@ export const BULK_METAL_FRACTION_BY_ZONE = {
 // CO, CO2, N2, organics. Captures the inventory that water doesn't, so
 // downstream atmosphere / cloud / haze / biosphere decisions can read a
 // real "non-water volatile budget" rather than papering over with a
-// per-body floor (cf. OUTGASSING.volatileFloor — the proxy this replaces).
+// per-body floor (cf. OUTGASSING.volatileFloor, the coarser proxy).
 //
 // Each zone adds the volatiles that just condensed plus carryover from
 // upstream:
@@ -907,9 +897,8 @@ const BELT_RESOURCE_OCCURRENCE_REALISTIC = {
 };
 
 // No gameplay flatten on belts — their rocky/icy character is the point, and
-// the strategic-dominance tune the old per-field model carried is now
-// inherent in the abundance spec (primary deposit ≈ 9-10). Kept as a split
-// for structural parity + a future tuning home.
+// strategic dominance is inherent in the abundance spec (primary deposit ≈
+// 9-10). Kept as a split for structural parity + a future tuning home.
 const BELT_RESOURCE_OCCURRENCE_TUNE = {};
 
 export const BELT_RESOURCE_OCCURRENCE = mergeTunes(
@@ -1067,8 +1056,8 @@ export const SHEPHERD_MIN_MASS_EARTH = 3;
 //   Earth       (R =  1.00 R⊕): P ≈ 0.0024
 //   Mercury     (R =  0.38 R⊕): P ≈ 0.00035
 //
-// The R² curve concentrates rings on gas giants more sharply than the
-// prior per-type tune did: super-Earth rate drops from ~7% to ~1%.
+// The R² curve concentrates rings sharply on gas giants: the super-Earth
+// rate lands near ~1%.
 // At the procgen scale (4000+ super-earth-class planets per build),
 // this still produces ~40 ringed super-earths galaxy-wide — enough
 // for the "settle here, look at the sky" iconic SF beat to remain a
@@ -1743,10 +1732,10 @@ export const TEMP_SWING = {
 // ---------------------------------------------------------------------------
 //
 // field = (capBase × mass^capExponent) × (tect × sqrt(24/rot)) × noise.
-// The mass-based cap replaces the per-class baseline — bigger bodies
-// sustain larger fields by virtue of larger conducting cores. Gas giants
-// land high because they're high-mass; rocky M-dwarf worlds with active
-// tectonics still get respectable fields.
+// The cap is mass-based, not per-class — bigger bodies sustain larger
+// fields by virtue of larger conducting cores. Gas giants land high because
+// they're high-mass; rocky M-dwarf worlds with active tectonics still get
+// respectable fields.
 //
 // Earth (M=1, tect≈0.4, rot≈24): cap=0.5 × dynamo=0.4×1=0.4 → 0.20 G.
 // Real Earth 0.31. Within an sd.
@@ -2268,7 +2257,7 @@ export const DUST_GATE = {
   dryFall: [0.0, 0.3], pressFall: [0.001, 1], tempRise: [150, 200], tempFall: [300, 400], maxPressureBar: 1,
 };
 
-// Resource occurrence — the resource grid is no longer a physics-derived
+// Resource occurrence — the resource grid is not a physics-derived
 // bulk-composition readout. It records the body's NOTABLE MINERAL DEPOSITS:
 // `resourcesFor` (procgen.mjs) draws TWO resource types per body from a
 // context-weighted probability table and rolls a context-driven abundance
@@ -2276,13 +2265,10 @@ export const DUST_GATE = {
 // silicate rock, etc. is everywhere and gameplay-boring, so it stops being
 // a tracked-everywhere scalar and becomes "is it a notable deposit here?"
 //
-// Why a draw, not a derivation: the old `gain × bulk-fraction` model was
-// chained to the identity silicates = 1 − metal − water, which guaranteed a
-// bulk resource always dominated the top-2 — no amount of gain tuning could
-// surface scarce resources or let arbitrary pairs co-occur (proven: even at
-// exotics-in-55%-of-worlds the rare|rare pairs stayed at zero). A weighted
-// draw without replacement makes any two resources able to land together,
-// with their odds shaped by physical context rather than a hard floor.
+// A weighted draw without replacement lets ANY two resources co-occur —
+// including two rare ones — and lets a scarce resource surface; the odds are
+// shaped by physical context. Every pair stays reachable, none structurally
+// locked to zero.
 //
 // Per resource: `base` weight × the product of whichever `context`-axis
 // multipliers apply to this body (absent axis ⇒ ×1). The axes ARE the
