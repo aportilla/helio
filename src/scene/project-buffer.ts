@@ -30,7 +30,18 @@
 //    X.25 / X.75, which the projection essentially never lands on, so the
 //    downstream round/ceil is deterministic regardless of noise.
 
-import type { Camera, Vector3 } from 'three';
+import type { Camera, Mesh, Vector3 } from 'three';
+
+// Place a fixed-size overlay quad so its top-left texel lands on an integer buffer pixel — every texel then
+// renders (snapping only the center silently drops an edge row/column for odd dims) with no half-pixel
+// straddle at any render scale. The placement companion to projectWorldToBuffer: both halves of the
+// overlay-quad idiom (labels, ship markers) live here so a snapping tweak stays in lockstep. sx/sy is the
+// quad CENTER in buffer px; w/h its size.
+export function placeAtBufferPixel(mesh: Mesh, sx: number, sy: number, w: number, h: number): void {
+  const cornerX = Math.round(sx - w * 0.5);
+  const cornerY = Math.round(sy - h * 0.5);
+  mesh.position.set(cornerX + w * 0.5, cornerY + h * 0.5, 0);
+}
 
 export function projectWorldToBuffer(
   world: Vector3,

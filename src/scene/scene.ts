@@ -13,6 +13,8 @@ import { Grid } from './grid';
 import { RangeRing } from './range-ring';
 import { RouteLine } from './route-line';
 import { TransitLines, type TransitView } from './transit-lines';
+import { ShipMarkers, type MarkerSpec } from './ship-markers';
+import { SHIP_MARKER_SIZES, shipMarkerSize, packStationedGroups, MAX_MARKERS_PER_SYSTEM } from './ship-marker-geometry';
 import { Droplines } from './droplines';
 import { FocusMarker } from './focus-marker';
 import { InputController, type InputHandlers } from './input-controller';
@@ -30,7 +32,7 @@ import { sizes } from '../ui/theme';
 import { STARS, STAR_CLUSTERS, clusterIndexFor, clusterIndexForSystemId, nearestClusterIdxTo, systemIdForCluster } from '../data/stars';
 import { MILLI_PER_LY } from '../data/cluster-geometry';
 import { CONTROLLED_FACTION_ID, factionColor } from '../factions/registry';
-import { getGameState, orderShipWarp } from '../game-state';
+import { getGameState, orderShipWarp, type Ship } from '../game-state';
 import { buildDepartureRequest, type DepartureRequest } from './departure';
 import { getSettings } from '../settings';
 import type { Screen } from './screen';
@@ -102,9 +104,13 @@ export class StarmapScene implements Screen {
   // The data-driven range ring drawn around a ship's origin while picking a warp destination — a sibling
   // of the (suppressed) selection grid, so the pick shows exactly one ring.
   private readonly rangeRing = new RangeRing();
-  // The galaxy-view overlay for ships in warp — a dotted origin→destination line + a faction-coloured
-  // progress head per transit. Rebuilt on galaxy resume + each turn.
+  // The galaxy-view overlay for ships in warp — a dotted origin→destination line per transit. Rebuilt on
+  // galaxy resume + each turn.
   private readonly transitLines = new TransitLines();
+  // Fixed-size arrow glyphs for every ship on the galaxy map: a stationed muster beside each star holding
+  // ready ships + one triangle riding each transit leg. Its own ortho overlay (like Labels); rebuilt
+  // alongside the transit lines.
+  private readonly shipMarkers = new ShipMarkers();
   // The thick GOLD "proposed route" line drawn from origin to the locked destination during a warp pick.
   // Shown/updated as the pick locks a destination, cleared on unlock/teardown.
   private readonly routeLine = new RouteLine();
@@ -328,8 +334,8 @@ export class StarmapScene implements Screen {
     this.sidebar.setContext(this.galaxyContext);
     // The sidebar's settings glyph opens this view's settings panel.
     this.sidebar.onSettings = () => this.hud.toggleSettings();
-    // Show any ships currently in warp (e.g. re-entering the galaxy after ordering one).
-    this.refreshTransitLines();
+    // Show the galaxy fleet overlays (stationed markers + any ships currently in warp).
+    this.refreshGalaxyFleetOverlays();
     this.tick();
     if (this.autoSelectTimer === null && this.selectedClusterIdx < 0) {
       this.autoSelectTimer = window.setTimeout(() => {
@@ -378,6 +384,7 @@ export class StarmapScene implements Screen {
     this.candidateBrackets.dispose();
     this.rangeRing.dispose();
     this.transitLines.dispose();
+    this.shipMarkers.dispose();
     this.routeLine.dispose();
     this.departureBanner.dispose();
     this.viewport.dispose();
@@ -527,27 +534,84 @@ export class StarmapScene implements Screen {
   // AppController on Next Turn.
   afterTurnAdvance(): void {
     this.sidebar.refreshContent();
-    // Ships in warp advanced a step this turn — restep the transit-line progress heads.
-    this.refreshTransitLines();
+    // The fleet moved this turn — built ships appear stationed, warped ships advance a step, arrivals
+    // reappear stationed. Rebuild both galaxy overlays.
+    this.refreshGalaxyFleetOverlays();
   }
 
-  // Rebuild the galaxy transit overlay from the durable store: one dotted origin→destination leg per
-  // 'transiting' ship, its progress head at (turn − departedOnTurn)/(arrivesOnTurn − departedOnTurn) so the
-  // fraction is exact (never recomputed from live stats). Called on galaxy resume + each turn.
-  private refreshTransitLines(): void {
-    const turn = getGameState().turn;
-    const views: TransitView[] = [];
-    for (const s of getGameState().ships) {
+  // Rebuild both galaxy-view fleet overlays from the durable store in one pass — the dotted transit legs and
+  // the ship markers (stationed triangles + transit triangles). They share triggers (galaxy resume, each
+  // turn, warp confirm/cancel), so one call keeps them in lockstep. Iterates the (few) ships, not the ~1200
+  // clusters. Called on galaxy resume + each turn.
+  private refreshGalaxyFleetOverlays(): void {
+    const { turn, ships } = getGameState();
+    const transitViews: TransitView[] = [];
+    const markers: MarkerSpec[] = [];
+    // Ready ships grouped by system → stationed musters (built after this pass); transiting ships →
+    // a dotted leg + a triangle riding it, both in one loop.
+    const readyBySystem = new Map<string, Ship[]>();
+    for (const s of ships) {
+      if (s.status === 'ready') {
+        const group = readyBySystem.get(s.systemId);
+        if (group) group.push(s); else readyBySystem.set(s.systemId, [s]);
+        continue;
+      }
       if (s.status !== 'transiting' || s.destinationSystemId === undefined
         || s.arrivesOnTurn === undefined || s.departedOnTurn === undefined) continue;
       const oi = clusterIndexForSystemId(s.systemId);
       const di = clusterIndexForSystemId(s.destinationSystemId);
       if (oi < 0 || di < 0) continue;
+      const o = STAR_CLUSTERS[oi]!.com, d = STAR_CLUSTERS[di]!.com;
+      transitViews.push({ o, d });
       const span = s.arrivesOnTurn - s.departedOnTurn;
-      const frac = span > 0 ? (turn - s.departedOnTurn) / span : 1;
-      views.push({ o: STAR_CLUSTERS[oi]!.com, d: STAR_CLUSTERS[di]!.com, frac, color: factionColor(s.factionId) });
+      // Midpoint of the current turn-step: half a step in at departure, a whole step per turn after. Never
+      // reaches 1 (the ship arrives — flips to 'ready' and leaves the overlay — the turn its glyph would
+      // hit the destination), so the triangle stays visibly mid-hop. Exact (never recomputed from live stats).
+      const frac = span > 0 ? Math.min(1, Math.max(0, (turn - s.departedOnTurn + 0.5) / span)) : 1;
+      const dim = SHIP_MARKER_SIZES[shipMarkerSize(s)];
+      markers.push({
+        world: new Vector3(o.x + (d.x - o.x) * frac, o.y + (d.y - o.y) * frac, o.z + (d.z - o.z) * frac),
+        offsetX: 0, offsetY: 0, w: dim.w, h: dim.h, members: null,
+        color: factionColor(s.factionId), toward: new Vector3(d.x, d.y, d.z),
+      });
     }
-    this.transitLines.setTransits(views);
+    // Stationed markers: every READY ship (all factions, faction-tinted), packed into a size-aware grid
+    // beside the cluster primary. Stable muster order (size desc, then id) keeps the grid from reshuffling
+    // frame-to-frame; capped per system.
+    for (const [systemId, group] of readyBySystem) {
+      const ci = clusterIndexForSystemId(systemId);
+      if (ci < 0) continue;
+      const cluster = STAR_CLUSTERS[ci]!;
+      const primary = STARS[cluster.primary]!;
+      // The cluster's member stars (world + disc size), shared by all this system's stationed markers so the
+      // muster clears EVERY member disc, not just the primary's — a multi-star cluster overlaps otherwise.
+      const members = cluster.members.map((idx) => {
+        const st = STARS[idx]!;
+        return { world: new Vector3(st.x, st.y, st.z), pxSize: st.pxSize };
+      });
+      const ordered = [...group].sort((a, b) => {
+        const da = SHIP_MARKER_SIZES[shipMarkerSize(a)], db = SHIP_MARKER_SIZES[shipMarkerSize(b)];
+        return (db.w * db.h) - (da.w * da.h) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      }).slice(0, MAX_MARKERS_PER_SYSTEM);
+      // Split the muster into faction blocks — the controlled faction musters LEFT, every other faction
+      // RIGHT — so a mixed system reads like the system-view stand-off (player left / opponents right). Each
+      // block packs into its own columns via packStationedGroups; `flat` re-flattens in the same order.
+      const mine = ordered.filter((s) => s.factionId === CONTROLLED_FACTION_ID);
+      const others = ordered.filter((s) => s.factionId !== CONTROLLED_FACTION_ID);
+      const blocks = [mine, others].filter((b) => b.length > 0);
+      const flat = blocks.flat();
+      const offsets = packStationedGroups(blocks.map((b) => b.map((s) => SHIP_MARKER_SIZES[shipMarkerSize(s)])));
+      flat.forEach((s, i) => {
+        const dim = SHIP_MARKER_SIZES[shipMarkerSize(s)], off = offsets[i]!;
+        markers.push({
+          world: new Vector3(primary.x, primary.y, primary.z),
+          offsetX: off.offsetX, offsetY: off.offsetY, w: dim.w, h: dim.h, members,
+          color: factionColor(s.factionId), toward: null,
+        });
+      });
+    }
+    this.transitLines.setTransits(transitViews);
+    this.shipMarkers.setMarkers(markers);
   }
 
   // Touch-pan: midpoint translation drives view.target along the
@@ -676,14 +740,52 @@ export class StarmapScene implements Screen {
     if (dest && dest.clusterIdx !== this.departure!.originClusterIdx) this.departureLock(dest.clusterIdx);
   }
 
+  // DEV visual-test seam (the ?demo-route sibling ?demo-transit, tree-shaken from prod): dispatch a warp for
+  // the first ready player ship to its farthest reachable and leave it mid-transit, so a screenshot on the
+  // galaxy view reproducibly shows a TransitLines leg + its step-midpoint ship-marker triangle (which sits
+  // half a step onto the line the instant the warp is confirmed). Reached only from main.ts's ?demo-transit branch.
+  devDemoTransit(): void {
+    const ship = getGameState().ships.find((s) => s.status === 'ready' && s.factionId === CONTROLLED_FACTION_ID);
+    if (!ship) return;
+    const c = clusterIndexForSystemId(ship.systemId);
+    if (c >= 0) this.selectAndFocusCluster(c);
+    this.beginShipDeparture(ship.id);
+    const reachable = this.departure?.reachable ?? [];
+    const dest = reachable[reachable.length - 1];
+    if (!dest || dest.clusterIdx === this.departure!.originClusterIdx) { this.departureCancel(); return; }
+    // Lock the farthest reachable then confirm — orderShipWarp flips the ship to 'transiting' and
+    // resumeGalaxyAfterDeparture refreshes the overlay, so the triangle paints at frac = 0.5/span straight away.
+    this.departureLock(dest.clusterIdx);
+    this.departureConfirm();
+  }
+
+  // DEV visual-test seam (the ?demo-fleet screenshot harness, tree-shaken from prod): select + focus the
+  // given cluster, zoom in tight (so the shot shows the muster riding clear of a LARGE disc — the clearance
+  // case), and rebuild the fleet overlays for whatever ready ships main.ts seeded there. Reached only from
+  // main.ts's ?demo-fleet branch.
+  devDemoFleet(clusterIdx: number): void {
+    if (clusterIdx >= 0) {
+      this.selectAndFocusCluster(clusterIdx);
+      // SNAP the pivot to the cluster COM + a tight zoom (cancelling the focus glide, which otherwise leaves
+      // the target at its start for a deterministic single-frame screenshot).
+      const com = STAR_CLUSTERS[clusterIdx]!.com;
+      this.view.target.set(com.x, com.y, com.z);
+      this.view.distance = ZOOM_MIN * 2;
+      this.focusAnimating = false;
+    }
+    this.refreshGalaxyFleetOverlays();
+  }
+
   // Enter the pick: light the departing ship in the sidebar fleet list, freeze the turn, suppress the
-  // selection grid + labels, raise the range ring + in-range lens, glide the camera home, and float the
-  // on-map departure banner in its "Select a destination" state (NO pre-locked destination — the player
-  // picks one). Teardown lives in teardownDeparture, which every exit path routes through.
+  // selection grid, raise the range ring + in-range lens (with labels + droplines restricted to the
+  // reachable set, always lit), glide the camera home, and float the on-map departure banner in its
+  // "Select a destination" state (NO pre-locked destination — the player picks one). Teardown lives in
+  // teardownDeparture, which every exit path routes through.
   private enterDepartureMode(): void {
     const req = this.departure;
     if (!req) return;
-    // Reachable set (+ origin so home stays lit) drives the click-to-lock gate and the shader lens.
+    // Reachable set (+ origin so home stays lit) drives the click-to-lock gate, the shader lens, and the
+    // in-range label + dropline restriction below.
     this.reachableClusterSet = new Set(req.reachable.map((d) => d.clusterIdx));
     this.reachableClusterSet.add(req.originClusterIdx);
     this.starPoints.setInRangeClusters(this.reachableClusterSet);
@@ -691,16 +793,22 @@ export class StarmapScene implements Screen {
     this.starPoints.setSelectedCluster(-1);
     this.starPoints.setCandidateCluster(-1);
 
-    // The single range ring at the origin, radius = the drive's reach in world light-years. Suppress the
-    // standard selection grid + labels + droplines + focus marker: one ring means one thing.
+    // The single range ring at the origin, radius = the drive's reach in world light-years. The pick shows
+    // labels + droplines for EXACTLY the in-range clusters — always lit, out-of-range hidden — with the
+    // droplines dropping to the origin's altitude so their depth spread reads relative to home. Suppress the
+    // standard selection grid + focus marker + candidate: one ring, one reachable set.
     const com = STAR_CLUSTERS[req.originClusterIdx]!.com;
     this.rangeRing.setRing(com.x, com.y, com.z, req.rangeMilliLy / MILLI_PER_LY);
     this.grid.setSelection(null);
+    this.labels.setInRangeClusters(this.reachableClusterSet);
+    this.labels.setInRangeMode(true);
     this.labels.setSelectedCluster(-1);
     this.labels.setCandidateCluster(-1);
     this.candidateBrackets.setCluster(-1);
-    this.droplines.setSelectedCluster(-1);
-    this.droplines.setFade(0);
+    this.droplines.setInRangeClusters(this.reachableClusterSet);
+    this.droplines.setInRangeMode(true);
+    this.droplines.setSelectedCluster(req.originClusterIdx);
+    this.droplines.setFade(1);
     this.focusMarker.setSelectedCluster(-1);
     // Glide home via the focus-glide PRIMITIVE (not selectAndFocusCluster, which would raise exactly the
     // selection chrome the mode suppresses).
@@ -770,7 +878,7 @@ export class StarmapScene implements Screen {
   private resumeGalaxyAfterDeparture(): void {
     this.sidebar.onSettings = () => this.hud.toggleSettings();
     if (this.selectedClusterIdx >= 0) this.selectAndFocusCluster(this.selectedClusterIdx);
-    this.refreshTransitLines();
+    this.refreshGalaxyFleetOverlays();
   }
 
   // The SINGLE teardown every exit path (confirm / cancel / ship-switch) routes through — clears the
@@ -786,6 +894,10 @@ export class StarmapScene implements Screen {
     this.routeLine.clear();
     this.starPoints.setInRangeMode(false);
     this.starPoints.setInRangeClusters(null);
+    this.labels.setInRangeMode(false);
+    this.labels.setInRangeClusters(null);
+    this.droplines.setInRangeMode(false);
+    this.droplines.setInRangeClusters(null);
     this.departureBanner.hide();
     this.galaxyContext.setSelectedShip(null);
     this.sidebar.setNextTurnEnabled(true);
@@ -873,6 +985,7 @@ export class StarmapScene implements Screen {
     // content rect so labels/brackets track their stars left of the sidebar.
     this.hud.resize(bufferW, bufferH);
     this.labels.resize(bufferW, bufferH, contentBufferW);
+    this.shipMarkers.resize(bufferW, bufferH, contentBufferW);
     this.selectionBrackets.resize(contentBufferW, bufferH);
     this.candidateBrackets.resize(contentBufferW, bufferH);
     this.sidebar.resize(bufferW, bufferH);
@@ -960,6 +1073,7 @@ export class StarmapScene implements Screen {
     }
 
     this.labels.update(this.camera, this.view.target);
+    this.shipMarkers.update(this.camera, this.view.target);
     this.selectionBrackets.update(this.camera, this.view.target);
     this.candidateBrackets.update(this.camera, this.view.target);
 
@@ -982,6 +1096,10 @@ export class StarmapScene implements Screen {
     // label (projectWorldToBuffer only depth-culls, not x) doesn't appear there.
     this.renderer.setViewport(0, 0, cssW, cssH);
     this.renderer.render(this.labels.scene, this.labels.camera);
+    // Ship markers ride the same overlay treatment (full-buffer viewport, content-rect scissor still on), so
+    // a marker whose star sits at the sidebar edge clips there like a label does. After labels so a marker
+    // wins any pixel contest with a name label.
+    this.renderer.render(this.shipMarkers.scene, this.shipMarkers.camera);
     // HUD, then the floating departure banner (only visible during a pick — it renders over the
     // stars, depthTest off), then the persistent sidebar, all at full buffer. The sidebar draws
     // last so it owns the reserved strip on the right.

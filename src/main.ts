@@ -2,8 +2,8 @@ import './styles.css';
 import { initFonts } from './data/font-provider';
 import { AppController } from './scene/app-controller';
 import { installDesktopFullscreen } from './desktop-fullscreen';
-import { STARS, clusterIndexFor, systemIdForCluster } from './data/stars';
-import { addFriendlyShip } from './game-state';
+import { STARS, STAR_CLUSTERS, clusterIndexFor, systemIdForCluster } from './data/stars';
+import { addFriendlyShip, addOpponentShip } from './game-state';
 
 // Parse the bundled BDF fonts before any scene/HUD code constructs label
 // textures — pixel-font.ts looks them up by name via the registry.
@@ -31,14 +31,34 @@ if (import.meta.env.DEV && (new URLSearchParams(location.search).has('demo-encou
 
 // ?demo-route stays in the GALAXY view: seed a ready ship at Sol, then open its warp pick with the nearest
 // destination locked — so the gold departure banner + gold route line are reproducibly screenshot-able
-// (scripts/screenshot.mjs --query=demo-route). Tree-shaken from prod.
-if (import.meta.env.DEV && new URLSearchParams(location.search).has('demo-route')) {
+// (scripts/screenshot.mjs --query=demo-route). ?demo-transit instead DISPATCHES the warp and leaves the ship
+// mid-transit, so the galaxy TransitLines leg + its step-midpoint ship-marker triangle are screenshot-able
+// (--query=demo-transit). Both tree-shaken from prod.
+if (import.meta.env.DEV && (new URLSearchParams(location.search).has('demo-route') || new URLSearchParams(location.search).has('demo-transit'))) {
   const sunIdx = STARS.findIndex((s) => s.id === 'sol');
   const solCluster = sunIdx >= 0 ? clusterIndexFor(sunIdx) : -1;
   const sysId = solCluster >= 0 ? systemIdForCluster(solCluster) : null;
   if (sysId) {
     addFriendlyShip(sysId);
-    controller.devDemoRoute();
+    if (new URLSearchParams(location.search).has('demo-transit')) controller.devDemoTransit();
+    else controller.devDemoRoute();
+  }
+}
+
+// ?demo-fleet also stays in the GALAXY view: seed a muster of ready ships (a few player + one rival) and
+// select the cluster, so the stationed ship-marker grid beside the star is reproducibly screenshot-able
+// (scripts/screenshot.mjs --query=demo-fleet). It targets the richest MULTI-STAR cluster so the muster's
+// disc clearance is exercised against several member discs (a single star is the trivial case). Tree-shaken
+// from prod.
+if (import.meta.env.DEV && new URLSearchParams(location.search).has('demo-fleet')) {
+  let clusterIdx = -1, mostMembers = 0;
+  STAR_CLUSTERS.forEach((c, i) => { if (c.members.length > mostMembers) { mostMembers = c.members.length; clusterIdx = i; } });
+  if (clusterIdx < 0) { const sun = STARS.findIndex((s) => s.id === 'sol'); clusterIdx = sun >= 0 ? clusterIndexFor(sun) : -1; }
+  const sysId = clusterIdx >= 0 ? systemIdForCluster(clusterIdx) : null;
+  if (sysId) {
+    for (let i = 0; i < 5; i++) addFriendlyShip(sysId);
+    addOpponentShip(sysId);
+    controller.devDemoFleet(clusterIdx);
   }
 }
 

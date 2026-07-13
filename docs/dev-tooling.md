@@ -77,7 +77,10 @@ auto-selects Sol and warms shaders), and writes a PNG. Output lands in
 `screenshots/` (gitignored). Flags: `--out`, `--width`, `--height`, `--wait` (ms),
 `--query` (append a DEV boot-state query — `demo-encounter` for the combat overlay,
 `demo-warp` for the in-system warp chrome, `demo-route` for the galaxy departure pick
-with a destination locked so the gold banner + route line are captured).
+with a destination locked so the gold banner + route line are captured, `demo-transit`
+to dispatch that warp and leave the ship mid-transit so the galaxy transit line + its
+step-midpoint ship-marker triangle are captured, `demo-fleet` to seed a mixed-faction
+muster at the richest multi-star cluster so the stationed ship-marker grid (faction-split, disc-cleared) is captured).
 
 - Needs the `puppeteer` devDependency; `npm install` fetches its Chromium binary.
   WebGL renders through headless Chromium's software path — no display required.

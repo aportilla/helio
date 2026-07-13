@@ -70,8 +70,8 @@ export interface Ship {
   //   - destinationSystemId: the system handle the ship warps to (arrival makes it the new systemId).
   //   - arrivesOnTurn: the absolute turn it flips back to 'ready' at the destination — the same
   //     replay-safe threshold compare as completesOnTurn.
-  //   - departedOnTurn: the turn it left; stored from day one so the galaxy transit line's progress head
-  //     is exact (never recomputed) and a future recall can price the return leg.
+  //   - departedOnTurn: the turn it left; stored from day one so the galaxy transit marker's step-midpoint
+  //     position is exact (never recomputed) and a future recall can price the return leg.
   readonly destinationSystemId?: string;
   readonly arrivesOnTurn?: number;
   readonly departedOnTurn?: number;

@@ -234,4 +234,16 @@ export class AppController {
   devDemoRoute(): void {
     this.starmap.devDemoRoute();
   }
+
+  // DEV: forward to the live galaxy scene to dispatch a warp and leave a ship mid-transit (the ?demo-transit
+  // screenshot harness in main.ts). No-op unless the galaxy is the current scene.
+  devDemoTransit(): void {
+    this.starmap.devDemoTransit();
+  }
+
+  // DEV: forward to the live galaxy scene to select a cluster + rebuild the fleet overlays, so a stationed
+  // ship-marker grid is screenshot-able (the ?demo-fleet harness in main.ts). No-op unless the galaxy is up.
+  devDemoFleet(clusterIdx: number): void {
+    this.starmap.devDemoFleet(clusterIdx);
+  }
 }

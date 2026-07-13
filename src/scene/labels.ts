@@ -15,7 +15,7 @@ import {
   invRamp,
   clusterFadeOpacity,
 } from './cluster-fade';
-import { projectWorldToBuffer } from './project-buffer';
+import { placeAtBufferPixel, projectWorldToBuffer } from './project-buffer';
 
 // Labels render in their own ortho overlay pass at 1 unit = 1 buffer pixel,
 // the same scheme as Hud. World-locked anchors (cluster primary, galactic-
@@ -115,6 +115,12 @@ export class Labels {
   // index lands here.
   private selectedCluster = -1;
   private candidateCluster = -1;
+  // Warp-pick in-range restriction (mirrors StarPoints' range lens). When inRangeMode is on, labels render
+  // ONLY for clusters in inRangeClusters, and ALWAYS — the master showLabels toggle and the distance fade
+  // ramps are bypassed, so exactly the reachable set reads clean and complete. Out-of-range labels are
+  // hidden outright. Off in the normal galaxy view.
+  private inRangeMode = false;
+  private inRangeClusters: ReadonlySet<number> | null = null;
 
   // Reusable per-frame scratch.
   private readonly _world = new Vector3();
@@ -190,14 +196,14 @@ export class Labels {
     this.candidateCluster = clusterIdx;
   }
 
-  // Place a label so its top-left texel lands on an integer buffer pixel —
-  // necessary so all four texture corners align with the buffer pixel grid
-  // and every texel renders. Snapping just the center silently drops a row
-  // or column of edge pixels for odd-dimension labels.
-  private placeAt(mesh: Mesh, sx: number, sy: number, w: number, h: number): void {
-    const cornerX = Math.round(sx - w * 0.5);
-    const cornerY = Math.round(sy - h * 0.5);
-    mesh.position.set(cornerX + w * 0.5, cornerY + h * 0.5, 0);
+  // Turn the warp-pick in-range restriction on/off. See the inRangeMode field.
+  setInRangeMode(on: boolean): void {
+    this.inRangeMode = on;
+  }
+
+  // The in-range cluster set for the armed ship (reachable destinations + origin), or null to clear.
+  setInRangeClusters(clusterIdxs: ReadonlySet<number> | null): void {
+    this.inRangeClusters = clusterIdxs;
   }
 
   update(camera: Camera, viewTarget: Vector3): void {
@@ -226,11 +232,20 @@ export class Labels {
     // Without the per-renderOrder depth sort, all cluster labels would share
     // a uniform z, and draw order would fall back to scene-add (catalog)
     // order — far labels could paint over near ones.
+    // In the warp pick, labels are restricted to exactly the in-range set and shown ALWAYS (master toggle +
+    // fade ramps bypassed). Off in the normal galaxy view.
+    const inRange = this.inRangeMode && this.inRangeClusters !== null;
     for (const L of this.clusterLabels) {
       const isSelected = L.clusterIdx === this.selectedCluster;
       const isCandidate = L.clusterIdx === this.candidateCluster;
       const isYellow = isSelected || isCandidate;
-      if (!this.showLabels && !isYellow) {
+      // Visibility gate. In-range mode shows ONLY in-range clusters (everything else hidden outright);
+      // otherwise the master showLabels toggle hides plain (non-yellow) labels.
+      if (inRange) {
+        if (!this.inRangeClusters!.has(L.clusterIdx)) {
+          L.plainMesh.visible = false; L.yellowMesh.visible = false; continue;
+        }
+      } else if (!this.showLabels && !isYellow) {
         L.plainMesh.visible = false; L.yellowMesh.visible = false; continue;
       }
       const s = STARS[L.primaryStarIdx]!;
@@ -239,8 +254,9 @@ export class Labels {
       // the OR fade gate below would zero out can be skipped without ever
       // projecting it. Yellow (selected/candidate) bypasses — it's always
       // visible; waypoints bypass too — their opacity can be lifted by the
-      // camera-from-Sol ramp even when both normal ramps are at zero.
-      if (!isYellow && !L.isWaypoint) {
+      // camera-from-Sol ramp even when both normal ramps are at zero; in-range
+      // labels bypass — they're always fully lit.
+      if (!inRange && !isYellow && !L.isWaypoint) {
         const dFocusSq = this._world.distanceToSquared(viewTarget);
         const dCamSq = this._world.distanceToSquared(camera.position);
         if (dFocusSq >= PIVOT_FADE_FAR_SQ || dCamSq >= CAMERA_FADE_FAR_SQ) {
@@ -252,7 +268,8 @@ export class Labels {
       }
       const dCam = this._world.distanceTo(camera.position);
       let opacity = 1;
-      if (!isYellow) {
+      // In-range labels stay at full opacity (the always-lit pick read); only the normal view fades.
+      if (!inRange && !isYellow) {
         // Standard per-label fade — the shared pivot × camera ramp product
         // (0 when either distance is past its FAR threshold).
         const dFocus = this._world.distanceTo(viewTarget);
@@ -275,7 +292,7 @@ export class Labels {
       active.visible = true;
       (active.material as MeshBasicMaterial).opacity = opacity;
       const cy = this._screen.y + LABEL_OFFSET_PX + L.h * 0.5;
-      this.placeAt(active, this._screen.x, cy, L.w, L.h);
+      placeAtBufferPixel(active, this._screen.x, cy, L.w, L.h);
       active.renderOrder = -dCam;
     }
   }
