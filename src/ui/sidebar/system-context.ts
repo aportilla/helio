@@ -370,22 +370,25 @@ export class SystemContext implements SidebarContext {
       || inRect(cx, cy, this.devOpponentColonyRect);
   }
 
-  handleClick(cx: number, cy: number): void {
+  // Every branch fires a scene callback that refreshes the sidebar, so this never asks for a self-repaint
+  // (returns false) — see the SidebarContext.handleClick contract.
+  handleClick(cx: number, cy: number): boolean {
     // DEV debug pill first — it's system-scoped, reachable in every selection state.
     // The rect is zero-size in production (the paint branch is stripped), so this is
     // inert there even without the env guard.
-    if (inRect(cx, cy, this.devOpponentRect)) { this.onAddOpponentShip(); return; }
-    if (inRect(cx, cy, this.devOpponentColonyRect)) { this.onAddOpponentColony(); return; }
+    if (inRect(cx, cy, this.devOpponentRect)) { this.onAddOpponentShip(); return false; }
+    if (inRect(cx, cy, this.devOpponentColonyRect)) { this.onAddOpponentColony(); return false; }
     if (this.info) {
-      if (inRect(cx, cy, this.buildRect)) { this.onBuildShip(this.info.bodyId); return; }
-      if (this.info.build && inRect(cx, cy, this.cancelRect)) { this.onCancelBuild(this.info.build.shipId); return; }
+      if (inRect(cx, cy, this.buildRect)) { this.onBuildShip(this.info.bodyId); return false; }
+      if (this.info.build && inRect(cx, cy, this.cancelRect)) { this.onCancelBuild(this.info.build.shipId); return false; }
       for (const a of this.addRects) {
-        if (inRect(cx, cy, a.rect)) { this.onAddFacility(this.info.bodyId, a.type); return; }
+        if (inRect(cx, cy, a.rect)) { this.onAddFacility(this.info.bodyId, a.type); return false; }
       }
     }
     for (const r of this.removeRects) {
-      if (inRect(cx, cy, r.rect)) { this.onRemoveFacility(r.id); return; }
+      if (inRect(cx, cy, r.rect)) { this.onRemoveFacility(r.id); return false; }
     }
+    return false;
   }
 
   setHover(cx: number, cy: number): boolean {

@@ -246,4 +246,10 @@ export class AppController {
   devDemoFleet(clusterIdx: number): void {
     this.starmap.devDemoFleet(clusterIdx);
   }
+
+  // DEV: forward to the live galaxy scene to check a convoy + arm its nav destination pick, so the multi-ship
+  // "travel together" mode is screenshot-able (the ?demo-convoy harness in main.ts). No-op unless galaxy is up.
+  devDemoConvoy(clusterIdx: number): void {
+    this.starmap.devDemoConvoy(clusterIdx);
+  }
 }

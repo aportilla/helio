@@ -32,7 +32,7 @@ import { sizes } from '../ui/theme';
 import { STARS, STAR_CLUSTERS, clusterIndexFor, clusterIndexForSystemId, nearestClusterIdxTo, systemIdForCluster } from '../data/stars';
 import { MILLI_PER_LY } from '../data/cluster-geometry';
 import { CONTROLLED_FACTION_ID, factionColor } from '../factions/registry';
-import { getGameState, orderShipWarp, type Ship } from '../game-state';
+import { getGameState, orderGroupWarp, type Ship } from '../game-state';
 import { buildDepartureRequest, type DepartureRequest } from './departure';
 import { getSettings } from '../settings';
 import type { Screen } from './screen';
@@ -301,7 +301,7 @@ export class StarmapScene implements Screen {
     this.galaxyContext.onDeselect = () => this.deselect();
     this.galaxyContext.onZoomIn = () => { this.focusAnimating = false; this.setZoom(this.view.distance * 0.8); };
     this.galaxyContext.onZoomOut = () => { this.focusAnimating = false; this.setZoom(this.view.distance / 0.8); };
-    this.galaxyContext.onSelectShip = (shipId) => this.beginShipDeparture(shipId);
+    this.galaxyContext.onConvoyChange = (shipIds) => this.syncConvoyPick(shipIds);
 
     // The on-map departure banner's pills — the click twins of Enter (confirm) / Esc (cancel).
     this.departureBanner.onConfirm = () => this.departureConfirm();
@@ -704,24 +704,42 @@ export class StarmapScene implements Screen {
     return this.departure !== null;
   }
 
-  // Open a warp destination pick for a ready ship the player clicked in the sidebar fleet list — the
-  // galaxy-only entry point for star-to-star navigation. Validates the ship is a commandable, in-cluster
-  // player ship, bakes its reachable set into a DepartureRequest, and enters the pick in place (no view
-  // swap — we're already on the map). Clicking a DIFFERENT ready ship while a pick is armed switches the
-  // pick to it; clicking the ship already being picked is a no-op.
-  beginShipDeparture(shipId: string): void {
-    if (this.departure?.shipId === shipId) return;
-    const ship = getGameState().ships.find(
-      (s) => s.id === shipId && s.status === 'ready' && s.factionId === CONTROLLED_FACTION_ID,
-    );
-    if (!ship) return;
-    const originClusterIdx = clusterIndexForSystemId(ship.systemId);
+  // Open a warp destination pick for a CONVOY — one or more ready ships the player sends together from a
+  // system's galaxy-sidebar fleet list (the galaxy-only entry point for star-to-star navigation). Keeps only
+  // commandable player ships that share the origin cluster, bakes their shared reachable set (D2 intersection
+  // = within the MIN member range) into a DepartureRequest, and enters the pick in place (no view swap).
+  // Re-entering the SAME group is a no-op; a different group tears the current pick down first.
+  beginGroupDeparture(shipIds: readonly string[]): void {
+    if (this.departure
+      && this.departure.shipIds.length === shipIds.length
+      && this.departure.shipIds.every((id) => shipIds.includes(id))) return;
+    const all = getGameState().ships;
+    const ready = shipIds
+      .map((id) => all.find((s) => s.id === id))
+      .filter((s): s is Ship => !!s && s.status === 'ready' && s.factionId === CONTROLLED_FACTION_ID);
+    if (ready.length === 0) return;
+    // A convoy departs ONE system — anchor on the first member's cluster (the sidebar lists a single
+    // system's ships) and keep only members sharing it, so a stray cross-system id can't skew the range.
+    const originClusterIdx = clusterIndexForSystemId(ready[0]!.systemId);
     if (originClusterIdx < 0) return;
-    // Switching ships mid-pick: tear the current pick's visuals down first (its origin/range may differ),
-    // then re-enter fresh for the new ship. Stays in the mode — no galaxy resume between the two.
+    const members = ready.filter((s) => clusterIndexForSystemId(s.systemId) === originClusterIdx);
+    // Re-arm (a convoy edit while already picking) vs a fresh entry — the latter glides the camera home.
+    const reArm = this.departure !== null;
     if (this.departure) this.teardownDeparture();
-    this.departure = buildDepartureRequest(ship, originClusterIdx);
-    this.enterDepartureMode();
+    this.departure = buildDepartureRequest(members, originClusterIdx);
+    this.enterDepartureMode(reArm);
+  }
+
+  // The sidebar's checked convoy changed: arm / re-arm the destination pick for a non-empty convoy, or cancel
+  // it (exit nav mode) when the last ship is unchecked. The single seam the checkbox toggles drive.
+  private syncConvoyPick(shipIds: readonly string[]): void {
+    if (shipIds.length > 0) this.beginGroupDeparture(shipIds);
+    else this.departureCancel();
+  }
+
+  // Single-ship warp — a convoy of one (the DEV demo seams arm a pick directly through this).
+  beginShipDeparture(shipId: string): void {
+    this.beginGroupDeparture([shipId]);
   }
 
   // DEV visual-test seam (the ?demo-route screenshot harness, tree-shaken from prod): select the first
@@ -776,12 +794,29 @@ export class StarmapScene implements Screen {
     this.refreshGalaxyFleetOverlays();
   }
 
-  // Enter the pick: light the departing ship in the sidebar fleet list, freeze the turn, suppress the
-  // selection grid, raise the range ring + in-range lens (with labels + droplines restricted to the
-  // reachable set, always lit), glide the camera home, and float the on-map departure banner in its
-  // "Select a destination" state (NO pre-locked destination — the player picks one). Teardown lives in
-  // teardownDeparture, which every exit path routes through.
-  private enterDepartureMode(): void {
+  // DEV visual-test seam (the ?demo-convoy screenshot harness, tree-shaken from prod): select a cluster, check
+  // two ready ships into a CONVOY, and arm the nav destination pick — so a screenshot shows the range ring +
+  // in-range lens with the sidebar ship list in nav-target mode (two tiles checked, footer suppressed).
+  // Reached only from main.ts's ?demo-convoy branch.
+  devDemoConvoy(clusterIdx: number): void {
+    if (clusterIdx < 0) return;
+    this.selectAndFocusCluster(clusterIdx);
+    const ids = getGameState().ships
+      .filter((s) => s.status === 'ready' && s.factionId === CONTROLLED_FACTION_ID && clusterIndexForSystemId(s.systemId) === clusterIdx)
+      .slice(0, 2)
+      .map((s) => s.id);
+    this.galaxyContext.checkShips(ids); // sidebar reflects the checked convoy...
+    this.beginGroupDeparture(ids);      // ...and arm the pick (ring + lens + banner), matching a real toggle
+  }
+
+  // Enter (or re-enter) the pick: freeze the turn, suppress the selection grid, raise the range ring +
+  // in-range lens (with labels + droplines restricted to the reachable set, always lit), glide the camera
+  // home, and float the on-map departure banner in its "Select a destination" state (NO pre-locked
+  // destination — the player picks one). The convoy's checked tiles in the sidebar ARE the highlight (owned
+  // by GalaxyContext). `reArm` is true when a convoy edit re-armed the mode: skip the camera glide so
+  // adding/removing a ship doesn't yank the view home. Teardown lives in teardownDeparture, which every exit
+  // path routes through.
+  private enterDepartureMode(reArm: boolean): void {
     const req = this.departure;
     if (!req) return;
     // Reachable set (+ origin so home stays lit) drives the click-to-lock gate, the shader lens, and the
@@ -811,13 +846,13 @@ export class StarmapScene implements Screen {
     this.droplines.setFade(1);
     this.focusMarker.setSelectedCluster(-1);
     // Glide home via the focus-glide PRIMITIVE (not selectAndFocusCluster, which would raise exactly the
-    // selection chrome the mode suppresses).
-    this.animateFocusTo(com.x, com.y, com.z);
+    // selection chrome the mode suppresses) — but NOT on a re-arm, so growing/shrinking the convoy leaves the
+    // camera where the player put it.
+    if (!reArm) this.animateFocusTo(com.x, com.y, com.z);
 
-    // Sidebar stays on the galaxy fleet list — light the departing ship, freeze Next Turn, and make the
-    // settings glyph inert (its popover's actions would bypass the mode teardown). Close the popover too
-    // if it's already open: a neutered glyph can't reopen it, but its live rows would otherwise persist.
-    this.galaxyContext.setSelectedShip(req.shipId);
+    // Sidebar stays on the galaxy fleet list (the checked convoy tiles are the highlight): freeze Next Turn
+    // and make the settings glyph inert (its popover's actions would bypass the mode teardown). Close the
+    // popover too if it's already open: a neutered glyph can't reopen it, but its live rows would otherwise persist.
     this.hud.closeSettings();
     this.sidebar.onSettings = () => {};
     this.sidebar.setNextTurnEnabled(false);
@@ -852,22 +887,24 @@ export class StarmapScene implements Screen {
     });
   }
 
-  // Confirm the locked destination: order the warp straight into the durable store (orderShipWarp re-checks
-  // readiness + range and no-ops on any violation), tear the mode down, and restore the galaxy selection in
-  // place. The ship is now 'transiting' — it drops out of the sidebar fleet list and rides the transit
-  // overlay. No view swap: warp is a galaxy modality now.
+  // Confirm the locked destination: order the whole convoy straight into the durable store (orderGroupWarp
+  // re-checks each member's readiness + range and stamps them all with the slowest member's arrival turn so
+  // they travel together), tear the mode down, and restore the galaxy selection in place. Every member is now
+  // 'transiting' — they drop out of the sidebar fleet list and ride the transit overlay. No view swap.
   private departureConfirm(): void {
     const req = this.departure;
     if (!req || this.departureLockClusterIdx < 0) return;
-    orderShipWarp(req.shipId, systemIdForCluster(this.departureLockClusterIdx));
+    orderGroupWarp(req.shipIds, systemIdForCluster(this.departureLockClusterIdx));
     this.teardownDeparture();
+    this.galaxyContext.clearConvoy(); // the convoy warped out — drop the checked set (nav mode ends)
     this.resumeGalaxyAfterDeparture();
   }
 
-  // Cancel the pick (writes nothing): tear down + restore the galaxy selection in place.
+  // Cancel the pick (writes nothing): tear down, uncheck the convoy (exit nav mode), restore the selection.
   private departureCancel(): void {
     if (!this.departure) return;
     this.teardownDeparture();
+    this.galaxyContext.clearConvoy();
     this.resumeGalaxyAfterDeparture();
   }
 
@@ -881,10 +918,11 @@ export class StarmapScene implements Screen {
     this.refreshGalaxyFleetOverlays();
   }
 
-  // The SINGLE teardown every exit path (confirm / cancel / ship-switch) routes through — clears the
-  // mode's visuals + state, drops the on-map banner + the sidebar ship highlight, and lowers the turn
-  // freeze. The selection chrome is re-raised by the caller's resumeGalaxyAfterDeparture (this only tears
-  // the mode down; a ship-switch re-enters straight after without resuming).
+  // The SINGLE teardown every exit path (confirm / cancel / convoy re-arm) routes through — clears the mode's
+  // visuals + state, drops the on-map banner, and lowers the turn freeze. It does NOT clear the checked convoy
+  // (a re-arm must preserve it; only cancel/confirm clear it via clearConvoy). The selection chrome is
+  // re-raised by the caller's resumeGalaxyAfterDeparture (this only tears the mode down; a re-arm re-enters
+  // straight after without resuming).
   private teardownDeparture(): void {
     this.departure = null;
     this.departureLockClusterIdx = -1;
@@ -899,7 +937,6 @@ export class StarmapScene implements Screen {
     this.droplines.setInRangeMode(false);
     this.droplines.setInRangeClusters(null);
     this.departureBanner.hide();
-    this.galaxyContext.setSelectedShip(null);
     this.sidebar.setNextTurnEnabled(true);
   }
 

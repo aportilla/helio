@@ -26,7 +26,7 @@ import { drawPixelText, getFont } from '../../data/pixel-font';
 import { clusterDisplayName, systemIdForCluster } from '../../data/stars';
 import { shipsInSystem } from '../../game-state';
 import { CONTROLLED_FACTION_ID } from '../../factions/registry';
-import { paintSurface } from '../painter';
+import { paintCheckbox, paintSurface } from '../painter';
 import { paintShipHull } from '../ship-hull';
 import { colors, fonts, sizes } from '../theme';
 import type { FooterAction, Region, SidebarContext } from './context';
@@ -40,7 +40,10 @@ const SHIP_TILE_GAP = 4;
 const SHIP_SPRITE_D = 22;      // sprite diameter, drawn centered in the tile's left region
 const SHIP_SPRITE_PAD_X = 5;   // left inset of the sprite box
 const SHIP_NAME_GAP = 5;       // gap between the sprite box and the name
-const SHIP_TILE_PAD_R = 5;     // right inset of the name column
+const SHIP_TILE_PAD_R = 5;     // right inset of the checkbox
+// Right-edge convoy-select column: the checkbox + generous click padding, so tapping "the right side of the
+// tile" reliably toggles membership. The name column shrinks by this so a long name can't run under the box.
+const SHIP_CHECK_W = sizes.checkbox + 10;
 
 // The top-level game screens listed in the idle menu. Only 'galaxy' is live today; the
 // rest are placeholders (dim, non-interactive) marking where future screens will hang.
@@ -58,13 +61,17 @@ export class GalaxyContext implements SidebarContext {
   // into this space).
   private shipRects: Array<{ shipId: string; rect: Rect }> = [];
   private hoveredShipId: string | null = null;
-  // The ship whose warp destination is currently being picked, or null. Its tile paints in a
-  // persistent SELECTED style, and its presence suppresses the nav footer. The scene drives it
-  // via setSelectedShip on departure enter / teardown.
-  private selectedShipId: string | null = null;
+  // The player-checked convoy — the ships to warp TOGETHER, AND the nav-target-selection state itself:
+  // checking any ship puts the galaxy view into the warp destination pick (armed via onConvoyChange), and the
+  // ship list stays live throughout — check/uncheck to grow/shrink the convoy, unchecking the last one exits.
+  // A checked tile paints LIT; a non-empty set suppresses the footer's nav actions (the on-map DepartureBanner
+  // owns confirm/cancel). Owned here (the single source of the convoy); cleared on system-change + on the
+  // scene's pick teardown (clearConvoy), and pruned against the live ready list each paint.
+  private readonly checkedShipIds = new Set<string>();
 
-  // Fired when a fleet row is clicked → open the warp destination pick for that ship.
-  onSelectShip: (shipId: string) => void = () => {};
+  // Fired whenever the checked convoy changes (any toggle). The scene arms / re-arms the destination pick for
+  // a non-empty convoy, or cancels it (exits nav mode) when the last ship is unchecked.
+  onConvoyChange: (shipIds: readonly string[]) => void = () => {};
   // Footer actions. onViewSystem / onDeselect fire for a selected system; onZoomIn /
   // onZoomOut are the galaxy footer's camera buttons.
   onViewSystem: (clusterIdx: number) => void = () => {};
@@ -77,11 +84,19 @@ export class GalaxyContext implements SidebarContext {
     if (this.clusterIdx === idx) return;
     this.clusterIdx = idx;
     this.hoveredShipId = null;
+    this.checkedShipIds.clear(); // a different system's ship list — the convoy selection doesn't carry over
   }
 
-  // Mark the ship being warp-picked (null = none). Highlights its tile + suppresses the footer.
-  setSelectedShip(shipId: string | null): void {
-    this.selectedShipId = shipId;
+  // Clear the checked convoy — the scene calls this when the destination pick ends (confirm warps them out,
+  // cancel/Esc exits nav mode), so the sidebar drops back to the plain ship list + nav footer.
+  clearConvoy(): void {
+    this.checkedShipIds.clear();
+  }
+
+  // Pre-check a set of ships into the convoy — the seam the demo screenshot harness uses to show the checked
+  // (nav-mode) sidebar state without a click (stale ids are pruned on the next paint anyway).
+  checkShips(shipIds: readonly string[]): void {
+    for (const id of shipIds) this.checkedShipIds.add(id);
   }
 
   paint(g: CanvasRenderingContext2D, region: Region): number {
@@ -109,17 +124,24 @@ export class GalaxyContext implements SidebarContext {
     y += bodyH + sizes.cardNameGap;
     const ships = shipsInSystem(systemIdForCluster(this.clusterIdx))
       .filter((s) => s.status === 'ready' && s.factionId === CONTROLLED_FACTION_ID);
+    // Reconcile the checked convoy against the live ready list: drop any member that warped out / is no longer
+    // ready, so the checkbox state + the nav-mode footer suppression never reference a ship that isn't shown.
+    if (this.checkedShipIds.size > 0) {
+      const live = new Set(ships.map((s) => s.id));
+      for (const id of this.checkedShipIds) if (!live.has(id)) this.checkedShipIds.delete(id);
+    }
     if (ships.length === 0) {
       drawPixelText(g, 'None stationed', x0, y, colors.titleDim, fonts.body);
       y += bodyH;
     } else {
       const nameX = x0 + SHIP_SPRITE_PAD_X + SHIP_SPRITE_D + SHIP_NAME_GAP;
-      const nameW = region.w - (nameX - x0) - SHIP_TILE_PAD_R;
+      const nameW = region.w - (nameX - x0) - SHIP_CHECK_W; // leave the right column for the checkbox
+      const boxX = x0 + region.w - SHIP_TILE_PAD_R - sizes.checkbox;
       for (const s of ships) {
-        // Selected (being warp-picked) is a persistent highlight that outranks transient hover.
-        const sel = this.selectedShipId === s.id;
-        const lit = sel || this.hoveredShipId === s.id;
-        // Full-width selectable tile: solid plate, lit frame + surfaceOn fill when selected/hovered.
+        // Lit = checked into the convoy (the nav-target selection) or hovered — both outrank the plain tile.
+        const checked = this.checkedShipIds.has(s.id);
+        const lit = checked || this.hoveredShipId === s.id;
+        // Full-width selectable tile: solid plate, lit frame + surfaceOn fill when picked/checked/hovered.
         paintSurface(g, x0, y, region.w, SHIP_TILE_H, {
           bg: lit ? colors.surfaceOn : colors.surface,
           border: lit ? colors.borderAccent : colors.borderDim,
@@ -135,6 +157,11 @@ export class GalaxyContext implements SidebarContext {
         drawPixelText(g, s.name, nameX, y + Math.floor((SHIP_TILE_H - bodyH) / 2),
           lit ? colors.starName : colors.textBody, fonts.body);
         g.restore();
+        // Convoy multi-select checkbox, right-aligned + vertically centered in the tile.
+        paintCheckbox(g, boxX, y + Math.floor((SHIP_TILE_H - sizes.checkbox) / 2), {
+          on: checked,
+          borderColor: lit ? colors.borderAccent : colors.borderDim,
+        });
         this.shipRects.push({ shipId: s.id, rect: { x: x0, y, w: region.w, h: SHIP_TILE_H } });
         y += SHIP_TILE_H + SHIP_TILE_GAP;
       }
@@ -146,9 +173,21 @@ export class GalaxyContext implements SidebarContext {
     return this.shipRects.some((s) => inRect(cx, cy, s.rect));
   }
 
-  handleClick(cx: number, cy: number): void {
-    const ship = this.shipRects.find((s) => inRect(cx, cy, s.rect));
-    if (ship) this.onSelectShip(ship.shipId);
+  handleClick(cx: number, cy: number): boolean {
+    const hit = this.shipRects.find((s) => inRect(cx, cy, s.rect));
+    if (!hit) return false;
+    // The right-edge CHECKBOX column adds/removes a ship (multi-select); a click on the tile BODY selects JUST
+    // that ship, replacing any existing convoy (single-select). Either way onConvoyChange re-arms the nav pick
+    // for the new convoy — or cancels it when the checkbox toggled off the last ship — and the sidebar repaints.
+    if (cx >= hit.rect.x + hit.rect.w - SHIP_CHECK_W) {
+      if (this.checkedShipIds.has(hit.shipId)) this.checkedShipIds.delete(hit.shipId);
+      else this.checkedShipIds.add(hit.shipId);
+    } else {
+      this.checkedShipIds.clear();
+      this.checkedShipIds.add(hit.shipId);
+    }
+    this.onConvoyChange([...this.checkedShipIds]);
+    return true;
   }
 
   setHover(cx: number, cy: number): boolean {
@@ -159,17 +198,21 @@ export class GalaxyContext implements SidebarContext {
   }
 
   footerActions(): FooterAction[] {
-    // Mid-pick (a ship selected for departure): no footer — the on-map DepartureBanner owns
-    // confirm/cancel, and View System / Deselect would orphan the armed pick.
-    if (this.selectedShipId !== null) return [];
-    // Idle → camera pan/zoom (pan buttons pending real icons; zoom ships now). A
-    // selected system → its nav actions.
+    // Idle → camera pan/zoom (pan buttons pending real icons; zoom ships now).
     if (this.clusterIdx < 0) {
       return [
         { id: 'zoom-out', label: '−', enabled: true, onClick: () => this.onZoomOut() },
         { id: 'zoom-in', label: '+', enabled: true, onClick: () => this.onZoomIn() },
       ];
     }
+    // Any CHECKED ship means we're in the nav destination pick (the on-map DepartureBanner owns
+    // confirm/cancel) — no footer, and NOT View System / Deselect, which would orphan the armed pick.
+    // Reconcile against the live ready list (footerActions runs BEFORE the paint-prune in a rebuild), so a
+    // just-warped / no-longer-ready member can't keep the footer suppressed after the convoy is gone.
+    const live = new Set(shipsInSystem(systemIdForCluster(this.clusterIdx))
+      .filter((s) => s.status === 'ready' && s.factionId === CONTROLLED_FACTION_ID)
+      .map((s) => s.id));
+    if ([...this.checkedShipIds].some((id) => live.has(id))) return [];
     const idx = this.clusterIdx;
     return [
       { id: 'view', label: 'View System', enabled: true, onClick: () => this.onViewSystem(idx) },

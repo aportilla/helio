@@ -62,6 +62,20 @@ if (import.meta.env.DEV && new URLSearchParams(location.search).has('demo-fleet'
   }
 }
 
+// ?demo-convoy stays in the GALAXY view: seed ready ships at Sol, check TWO into a convoy, and arm the nav
+// destination pick — so the multi-ship "travel together" mode (range ring + in-range lens + the sidebar ship
+// list in nav-target mode, two tiles checked) is reproducibly screenshot-able (scripts/screenshot.mjs
+// --query=demo-convoy). Tree-shaken from prod.
+if (import.meta.env.DEV && new URLSearchParams(location.search).has('demo-convoy')) {
+  const sunIdx = STARS.findIndex((s) => s.id === 'sol');
+  const solCluster = sunIdx >= 0 ? clusterIndexFor(sunIdx) : -1;
+  const sysId = solCluster >= 0 ? systemIdForCluster(solCluster) : null;
+  if (sysId) {
+    for (let i = 0; i < 3; i++) addFriendlyShip(sysId);
+    controller.devDemoConvoy(solCluster);
+  }
+}
+
 // Splash markup is inlined in index.html so it paints before the bundle
 // loads; we just dismiss it once the scene is up.
 const splash = document.getElementById('boot-splash');

@@ -286,39 +286,51 @@ export function stepShipBuilds(turn: number): void {
 // faction-agnostic (never reads CONTROLLED_FACTION_ID) so a future rival mover drives this exact API.
 // =============================================================================
 
-// Order a warp: flip a 'ready' ship to 'transiting' toward destinationSystemId, stamping the turn it
-// arrives (this turn + a distance-priced transit) and the turn it left. Returns the updated ship, or
-// null on any violation — unknown ship, not 'ready', unknown/self destination, or a destination beyond
-// the drive's range (the last a belt-and-suspenders re-check of the gate the departure pick already
-// applied, like startShipBuild's defensive null). Mutates an EXISTING ship, so unlike startShipBuild it
-// draws no seq. arrivesOnTurn is computed HERE (turn + warpTravelTurns over the cluster distance) so the
-// caller passes only the destination.
-export function orderShipWarp(shipId: string, destinationSystemId: string): Ship | null {
-  const idx = current.ships.findIndex((s) => s.id === shipId);
-  if (idx < 0) return null;
-  const s = current.ships[idx]!;
-  if (s.status !== 'ready') return null;
-  if (!systemExists(destinationSystemId)) return null;
-  if (destinationSystemId === s.systemId) return null; // no warp-to-self
-  const originIdx = clusterIndexForSystemId(s.systemId);
+// Order a CONVOY warp: flip every eligible 'ready' ship in `shipIds` to 'transiting' toward
+// destinationSystemId, all sharing ONE arrival turn so they travel together — the convoy arrives on the
+// SLOWEST member's ETA (max over members of warpTravelTurns), never piecemeal. A member failing the re-check
+// (unknown, not 'ready', self-destination, or a destination beyond THAT ship's range — the belt-and-
+// suspenders gate the departure pick already applied) is silently skipped, matching startShipBuild's
+// defensive null. Mutates existing ships (no seq), stamping departedOnTurn/arrivesOnTurn HERE so the caller
+// passes only the destination. Persists once; returns the updated ships (empty ⇒ nothing warped).
+export function orderGroupWarp(shipIds: readonly string[], destinationSystemId: string): readonly Ship[] {
+  if (!systemExists(destinationSystemId)) return [];
   const destIdx = clusterIndexForSystemId(destinationSystemId);
-  if (originIdx < 0 || destIdx < 0) return null;
-  const dist = clusterDistanceMilliLy(originIdx, destIdx);
-  if (dist > shipWarpRangeMilliLy(s.components)) return null;
-
+  if (destIdx < 0) return [];
   const turn = current.turn;
-  const updated: Ship = {
-    ...s,
-    status: 'transiting',
-    destinationSystemId,
-    arrivesOnTurn: turn + warpTravelTurns(dist, s.components),
-    departedOnTurn: turn,
-  };
-  const ships = current.ships.slice();
-  ships[idx] = updated;
+  // Eligible members + each one's OWN transit time to the destination (dist is per-member origin).
+  const orders: Array<{ idx: number; eta: number }> = [];
+  for (const id of shipIds) {
+    const idx = current.ships.findIndex((s) => s.id === id);
+    if (idx < 0) continue;
+    const s = current.ships[idx]!;
+    if (s.status !== 'ready' || destinationSystemId === s.systemId) continue; // not ready / warp-to-self
+    const originIdx = clusterIndexForSystemId(s.systemId);
+    if (originIdx < 0) continue;
+    const dist = clusterDistanceMilliLy(originIdx, destIdx);
+    if (dist > shipWarpRangeMilliLy(s.components)) continue; // beyond this ship's range
+    orders.push({ idx, eta: warpTravelTurns(dist, s.components) });
+  }
+  if (orders.length === 0) return [];
+  // Convoy arrival: the slowest member sets the shared arrival turn (they arrive together).
+  const arrivesOnTurn = turn + Math.max(...orders.map((o) => o.eta));
+  const stamp = new Set(orders.map((o) => o.idx));
+  const updated: Ship[] = [];
+  const ships = current.ships.map((s, i) => {
+    if (!stamp.has(i)) return s;
+    const u: Ship = { ...s, status: 'transiting', destinationSystemId, arrivesOnTurn, departedOnTurn: turn };
+    updated.push(u);
+    return u;
+  });
   current = { ...current, ships };
   writeToStorage(current);
   return updated;
+}
+
+// Single-ship warp — a convoy of one. The whole gate + stamp lives in orderGroupWarp (a one-ship group's
+// ETA is just that ship's), so warp order dispatch stays one code path.
+export function orderShipWarp(shipId: string, destinationSystemId: string): Ship | null {
+  return orderGroupWarp([shipId], destinationSystemId)[0] ?? null;
 }
 
 // The transits touching a system, for the sidebar TRANSITS block: OUTBOUND ships (leaving this system —

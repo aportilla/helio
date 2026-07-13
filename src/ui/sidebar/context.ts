@@ -35,8 +35,9 @@ export interface SidebarContext {
   // True if a canvas-space point is over one of this context's controls.
   isInteractive(cx: number, cy: number): boolean;
   // Dispatch a click at a canvas-space point — fires the context's own callbacks.
-  // No-op when the point isn't over a control.
-  handleClick(cx: number, cy: number): void;
+  // No-op when the point isn't over a control. Returns true when the click changed the context's OWN render
+  // state (e.g. a toggle) so the Sidebar repaints; false when a callback already drives the refresh (or nothing hit).
+  handleClick(cx: number, cy: number): boolean;
   // Update hover state for a canvas-space point; returns true when it changed, so
   // the Sidebar knows to repaint. Pass an off-panel point to clear hover.
   setHover(cx: number, cy: number): boolean;

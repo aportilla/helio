@@ -134,7 +134,9 @@ export class Sidebar extends BasePanel {
     const f = this.footerRects.find((fr) => inRect(cx, cy, fr.rect));
     if (f) { if (f.action.enabled) f.action.onClick(); return true; }
     const mapped = this.scrollView.mapInto(cx, cy);
-    if (mapped) this.context?.handleClick(mapped.x, mapped.y);
+    // Repaint when the context reports it changed its own render state (a convoy checkbox toggle); a
+    // callback-driven click (footer nav) refreshes through the scene instead.
+    if (mapped && this.context?.handleClick(mapped.x, mapped.y)) this.rebuild();
     return true; // absorb every click within the strip
   }
 
