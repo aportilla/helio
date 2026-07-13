@@ -1,163 +1,83 @@
-// GalaxyContext — the sidebar's contextual region while the galaxy view is up.
-// Stacked blocks:
-//   - Civilization summary (always): per-type facility tallies from the save.
-//   - Selected system (when a cluster is selected): the cluster + its members'
-//     key/value rows (class / distance / mass / radius) + View System / Focus pills.
-//   - System economy (when the selected system hosts a facility): per-resource net
-//     balances, with a dim speculative next-turn forecast cue under a deficit the
-//     next turn is set to relieve.
+// GalaxyContext — the sidebar's scrolling body while the galaxy view is up. Two states:
+//   - No system selected → the GAME-VIEWS menu: the top-level screens of the game
+//     (Galaxy is the live one today; Ships / Planets / Research are dim placeholders
+//     for the screens that land later).
+//   - System selected → the SHIPS list: the ready player ships stationed in that
+//     system. Clicking a row opens its warp destination pick (the galaxy-only nav
+//     entry). Read fresh each paint, so a ship that just warped out (now 'transiting')
+//     drops off the list on the next repaint.
 //
-// StarmapScene owns one of these, sets it as the sidebar's context on start, feeds
-// it the selection via setCluster, and routes View System / Focus back through the
-// callbacks. Facility tallies are re-pulled every paint() so they stay fresh when
-// the galaxy view resumes after a facility was placed in the system view.
+// The footer (owned + drawn by the Sidebar) carries the contextual nav actions this
+// context declares via footerActions(): pan/zoom when nothing is selected, View System
+// / Deselect when a system is selected. StarmapScene owns one of these, drives it via
+// setCluster, and wires the callbacks.
+//
+// Civilization tallies, per-body detail, and the economy readout were removed from the
+// sidebar in the scroll-frame rework — the economy data still lives in the bridge; it
+// just surfaces on a dedicated screen later, not here.
 
-import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
-import { STARS, STAR_CLUSTERS, clusterDisplayName, systemIdForCluster } from '../../data/stars';
-import type { SystemEconomyView } from '../../facilities/economy-bridge';
-import { facilityLabel } from '../../facilities';
-import { facilityCounts, shipsInSystem } from '../../game-state';
+import { drawPixelText, getFont } from '../../data/pixel-font';
+import { clusterDisplayName, systemIdForCluster } from '../../data/stars';
+import { shipsInSystem } from '../../game-state';
 import { CONTROLLED_FACTION_ID } from '../../factions/registry';
-import { paintPillButton } from '../painter';
 import { colors, fonts, sizes } from '../theme';
-import type { Region, SidebarContext } from './context';
-import { fmtMilli, inRect, type Rect } from './shared';
+import type { FooterAction, Region, SidebarContext } from './context';
+import { inRect, type Rect } from './shared';
 
-// Gap above each member sub-header (after the first), mirroring the old info card.
-const MEMBER_BLOCK_GAP = 4;
-const SECTION_GAP = 6;   // between the civ block and the selected-system block
-const PILL_GAP = 4;      // between the stacked action pills
-
-interface BodyRow { readonly key: string; readonly val: string }
-
-// Padded keys (monospace Monaco) so the values line up in a column — same shape
-// the bottom-right info card used before it moved into the sidebar.
-function bodyForStar(starIdx: number): BodyRow[] {
-  const s = STARS[starIdx]!;
-  return [
-    { key: 'class    ', val: s.rawClass },
-    { key: 'distance ', val: `${s.distLy.toFixed(2)} ly` },
-    { key: 'mass     ', val: `${s.mass.toFixed(2)} Msun` },
-    { key: 'radius   ', val: `${s.radiusSolar.toFixed(2)} Rsun` },
-  ];
-}
-
-type Control = 'view' | 'focus' | null;
+// The top-level game screens listed in the idle menu. Only 'galaxy' is live today; the
+// rest are placeholders (dim, non-interactive) marking where future screens will hang.
+const GAME_VIEWS: ReadonlyArray<{ readonly label: string; readonly live: boolean }> = [
+  { label: 'Galaxy', live: true },
+  { label: 'Ships', live: false },
+  { label: 'Planets', live: false },
+  { label: 'Research', live: false },
+];
 
 export class GalaxyContext implements SidebarContext {
   private clusterIdx = -1;
-  // The selected system's aggregated economy, pushed by StarmapScene on select
-  // and after each turn. Null when nothing is selected / hosts no facility.
-  private economy: SystemEconomyView | null = null;
-  private hovered: Control = null;
-  private viewRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
-  private focusRect: Rect = { x: 0, y: 0, w: 0, h: 0 };
-  // The clickable fleet rows for the selected cluster (ready player ships), cached in paint() and read
-  // back by the hit methods. Rebuilt every paint from a fresh game-state read, so a warped ship (now
-  // 'transiting') drops out on the next repaint — the "disappears once ordered" behaviour is free.
+  // The clickable fleet rows for the selected cluster, cached in paint() and read back
+  // by the hit methods (content coords — the Sidebar's ScrollView maps pointer hits
+  // into this space).
   private shipRects: Array<{ shipId: string; rect: Rect }> = [];
   private hoveredShipId: string | null = null;
 
-  // Fired from the action pills; StarmapScene wires these to its view methods.
-  onViewSystem: (clusterIdx: number) => void = () => {};
-  onFocus: (clusterIdx: number) => void = () => {};
-  // Fired when a fleet row is clicked; StarmapScene wires it to open the warp destination pick for that
-  // ship. Only ready player ships are listed, so the id is always a commandable ship.
+  // Fired when a fleet row is clicked → open the warp destination pick for that ship.
   onSelectShip: (shipId: string) => void = () => {};
+  // Footer actions. onViewSystem / onDeselect fire for a selected system; onZoomIn /
+  // onZoomOut are the galaxy footer's camera buttons.
+  onViewSystem: (clusterIdx: number) => void = () => {};
+  onDeselect: () => void = () => {};
+  onZoomIn: () => void = () => {};
+  onZoomOut: () => void = () => {};
 
-  // -1 clears the selected-system block. The scene drives this on select/deselect.
+  // -1 clears the selection (→ the game-views menu). The scene drives this on select/deselect.
   setCluster(idx: number): void {
     if (this.clusterIdx === idx) return;
     this.clusterIdx = idx;
-    this.hovered = null;
     this.hoveredShipId = null;
   }
 
-  // The selected system's economy summary, pushed alongside setCluster and after
-  // each turn so the galaxy info-card's net balances stay current.
-  setEconomy(view: SystemEconomyView | null): void {
-    this.economy = view;
-  }
-
-  paint(g: CanvasRenderingContext2D, region: Region): void {
-    this.viewRect = { x: 0, y: 0, w: 0, h: 0 };
-    this.focusRect = { x: 0, y: 0, w: 0, h: 0 };
+  paint(g: CanvasRenderingContext2D, region: Region): number {
     this.shipRects = [];
     const x0 = region.x;
     const bodyH = getFont(fonts.body).lineHeight;
     let y = region.y;
 
-    // --- Civilization summary ---
-    drawPixelText(g, 'CIVILIZATION', x0, y, colors.textKey, fonts.body);
-    y += bodyH + sizes.cardNameGap;
-    for (const [type, n] of facilityCounts()) {
-      drawPixelText(g, facilityLabel(type), x0, y, colors.textBody, fonts.body);
-      const valStr = String(n);
-      drawPixelText(g, valStr, x0 + region.w - measurePixelText(valStr), y, colors.starName, fonts.body);
-      y += bodyH;
-    }
-    y += SECTION_GAP;
-
-    // --- Selected system ---
+    // Nothing selected → the game-views menu (display-only placeholders today).
     if (this.clusterIdx < 0) {
-      drawPixelText(g, 'No system selected', x0, y, colors.textKey, fonts.body);
-      return;
+      drawPixelText(g, 'VIEWS', x0, y, colors.textKey, fonts.body);
+      y += bodyH + sizes.cardNameGap;
+      for (const v of GAME_VIEWS) {
+        drawPixelText(g, v.label, x0, y, v.live ? colors.starName : colors.titleDim, fonts.body);
+        y += bodyH;
+      }
+      return y - region.y;
     }
-    const cluster = STAR_CLUSTERS[this.clusterIdx]!;
-    const isMulti = cluster.members.length > 1;
+
+    // System selected → its ready player ships (click a row → warp pick).
     drawPixelText(g, clusterDisplayName(this.clusterIdx), x0, y, colors.starName, fonts.cardName);
     y += getFont(fonts.cardName).lineHeight + sizes.cardNameGap;
 
-    for (let i = 0; i < cluster.members.length; i++) {
-      const memIdx = cluster.members[i]!;
-      if (isMulti) {
-        if (i > 0) y += MEMBER_BLOCK_GAP;
-        drawPixelText(g, STARS[memIdx]!.name, x0, y, colors.starName, fonts.body);
-        y += bodyH;
-      }
-      for (const row of bodyForStar(memIdx)) {
-        drawPixelText(g, row.key, x0, y, colors.textKey, fonts.body);
-        drawPixelText(g, row.val, x0 + measurePixelText(row.key), y, colors.textBody, fonts.body);
-        y += bodyH;
-      }
-    }
-
-    // --- System economy ---
-    // Net balance per resource across the system's stars (surplus green / deficit
-    // red), right-aligned like the civ tallies. Absent until a facility here
-    // projects into the economy.
-    if (this.economy) {
-      y += sizes.cardActionGap;
-      drawPixelText(g, 'ECONOMY', x0, y, colors.textKey, fonts.body);
-      y += bodyH + sizes.cardNameGap;
-      for (const rl of this.economy.resources) {
-        drawPixelText(g, rl.name, x0, y, colors.textBody, fonts.body);
-        const up = rl.netMilli >= 0;
-        const valStr = (up ? '+' : '') + fmtMilli(rl.netMilli);
-        drawPixelText(g, valStr, x0 + region.w - measurePixelText(valStr), y,
-          up ? colors.signalPositive : colors.signalNegative, fonts.body);
-        y += bodyH;
-
-        // Forecast: a system in deficit that the next turn improves (a fix the
-        // player just placed taking hold). Dim, right-aligned under the live net,
-        // read off the speculative next-turn world — the galaxy-scan cue that an
-        // action is working before the turn is committed. Shows the IMPROVEMENT
-        // (predicted − live net), which the gate guarantees is positive, so
-        // "++ N" reads as "net gains N next turn" rather than gluing the marker to
-        // a still-negative absolute.
-        const pred = rl.predictedNetMilli;
-        if (pred !== null && rl.netMilli < 0 && pred > rl.netMilli) {
-          const fStr = `++ ${fmtMilli(pred - rl.netMilli)}`;
-          drawPixelText(g, fStr, x0 + region.w - measurePixelText(fStr), y, colors.titleDim, fonts.body);
-          y += bodyH;
-        }
-      }
-    }
-
-    // --- Fleet (ready player ships stationed here) ---
-    // Read fresh (like the civ tallies) so a ship that just warped out — now 'transiting' — is gone on the
-    // next repaint. Clicking a row opens the warp destination pick for that ship (onSelectShip).
-    y += sizes.cardActionGap;
     drawPixelText(g, 'SHIPS', x0, y, colors.textKey, fonts.body);
     y += bodyH + sizes.cardNameGap;
     const ships = shipsInSystem(systemIdForCluster(this.clusterIdx))
@@ -173,36 +93,44 @@ export class GalaxyContext implements SidebarContext {
         y += bodyH;
       }
     }
-
-    // --- Actions ---
-    y += sizes.cardActionGap;
-    const view = paintPillButton(g, x0, y, 'View System', { hover: this.hovered === 'view' });
-    this.viewRect = { x: x0, y, w: view.w, h: view.h };
-    y += view.h + PILL_GAP;
-    const focus = paintPillButton(g, x0, y, 'Focus', { hover: this.hovered === 'focus' });
-    this.focusRect = { x: x0, y, w: focus.w, h: focus.h };
+    return y - region.y;
   }
 
   isInteractive(cx: number, cy: number): boolean {
-    return inRect(cx, cy, this.viewRect) || inRect(cx, cy, this.focusRect)
-      || this.shipRects.some((s) => inRect(cx, cy, s.rect));
+    return this.shipRects.some((s) => inRect(cx, cy, s.rect));
   }
 
   handleClick(cx: number, cy: number): void {
-    if (this.clusterIdx < 0) return;
-    if (inRect(cx, cy, this.viewRect)) { this.onViewSystem(this.clusterIdx); return; }
-    if (inRect(cx, cy, this.focusRect)) { this.onFocus(this.clusterIdx); return; }
     const ship = this.shipRects.find((s) => inRect(cx, cy, s.rect));
     if (ship) this.onSelectShip(ship.shipId);
   }
 
   setHover(cx: number, cy: number): boolean {
-    const nextPill: Control = inRect(cx, cy, this.viewRect) ? 'view'
-      : inRect(cx, cy, this.focusRect) ? 'focus' : null;
     const nextShip = this.shipRects.find((s) => inRect(cx, cy, s.rect))?.shipId ?? null;
-    let changed = false;
-    if (nextPill !== this.hovered) { this.hovered = nextPill; changed = true; }
-    if (nextShip !== this.hoveredShipId) { this.hoveredShipId = nextShip; changed = true; }
-    return changed;
+    if (nextShip === this.hoveredShipId) return false;
+    this.hoveredShipId = nextShip;
+    return true;
+  }
+
+  footerActions(): FooterAction[] {
+    // Idle → camera pan/zoom (pan buttons pending real icons; zoom ships now). A
+    // selected system → its nav actions.
+    if (this.clusterIdx < 0) {
+      return [
+        { id: 'zoom-out', label: '−', enabled: true, onClick: () => this.onZoomOut() },
+        { id: 'zoom-in', label: '+', enabled: true, onClick: () => this.onZoomIn() },
+      ];
+    }
+    const idx = this.clusterIdx;
+    return [
+      { id: 'view', label: 'View System', enabled: true, onClick: () => this.onViewSystem(idx) },
+      { id: 'deselect', label: 'Deselect', enabled: true, onClick: () => this.onDeselect() },
+    ];
+  }
+
+  // Body identity: the game-views menu vs a specific system's ship list. Changing the
+  // selected system (or select↔deselect) resets the scroll to the top.
+  contentKey(): string {
+    return this.clusterIdx < 0 ? 'g:views' : `g:ships:${this.clusterIdx}`;
   }
 }

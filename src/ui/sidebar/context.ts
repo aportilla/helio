@@ -16,10 +16,22 @@ export interface Region {
   readonly h: number;
 }
 
+// One button in the sidebar's fixed footer band. The context declares WHAT buttons
+// its current state offers (and what they do); the Sidebar owns HOW they're drawn
+// (uniform slots) and hit-tested. A disabled button paints greyed and absorbs its
+// hit without firing — chrome, never a fall-through to the scene.
+export interface FooterAction {
+  readonly id: string;
+  readonly label: string;
+  readonly enabled: boolean;
+  readonly onClick: () => void;
+}
+
 export interface SidebarContext {
   // Paint the content into `region` (canvas coords, top-down). Cache layout for
-  // the hit methods below.
-  paint(g: CanvasRenderingContext2D, region: Region): void;
+  // the hit methods below. Returns the content height (region.y-relative) so the
+  // host's ScrollView can clamp the scroll offset and size its scrollbar.
+  paint(g: CanvasRenderingContext2D, region: Region): number;
   // True if a canvas-space point is over one of this context's controls.
   isInteractive(cx: number, cy: number): boolean;
   // Dispatch a click at a canvas-space point — fires the context's own callbacks.
@@ -28,4 +40,13 @@ export interface SidebarContext {
   // Update hover state for a canvas-space point; returns true when it changed, so
   // the Sidebar knows to repaint. Pass an off-panel point to clear hover.
   setHover(cx: number, cy: number): boolean;
+  // The footer buttons for the current state (may be empty). Rebuilt each call from
+  // fresh state; the Sidebar reads it when it paints and hit-tests the footer band.
+  footerActions(): FooterAction[];
+  // A stable token identifying WHAT the body is currently showing (which selection /
+  // menu state). The Sidebar resets the scroll offset to the top whenever this changes
+  // between paints, so a fresh selection opens at the top — but a plain re-render of the
+  // same content (a post-turn number refresh, a hover) keeps the scroll position. Must
+  // differ across contexts (namespace it) so a context swap always reads as a change.
+  contentKey(): string;
 }

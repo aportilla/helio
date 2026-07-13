@@ -22,7 +22,7 @@
 // switch scopes both from that one resolver (see ./storage).
 
 import { clusterDistanceMilliLy, clusterIndexForSystemId, indexOfBodyId, systemExists, systemIdForBodyId } from './data/stars';
-import { ADD_ORDER, FACILITY_BY_TYPE, facilityHasShipbuilding, type FacilityType } from './facilities';
+import { FACILITY_BY_TYPE, facilityHasShipbuilding, type FacilityType } from './facilities';
 import {
   advanceShipBuilds,
   advanceShipTransits,
@@ -146,16 +146,6 @@ export function advanceTurn(): number {
   current = { ...current, turn: current.turn + 1 };
   writeToStorage(current);
   return current.turn;
-}
-
-// Per-type facility tallies for the galaxy civ summary. Seeded in ADD_ORDER so the
-// display order is stable and every buildable type is present (0 when none built).
-// This is the only honest civilization-level aggregate today — no economy implied.
-export function facilityCounts(): ReadonlyMap<FacilityType, number> {
-  const counts = new Map<FacilityType, number>();
-  for (const type of ADD_ORDER) counts.set(type, 0);
-  for (const f of current.facilities) counts.set(f.type, (counts.get(f.type) ?? 0) + 1);
-  return counts;
 }
 
 // =============================================================================

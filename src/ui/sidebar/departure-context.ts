@@ -10,7 +10,7 @@
 import { drawPixelText, getFont, measurePixelText } from '../../data/pixel-font';
 import { paintPillButton } from '../painter';
 import { colors, fonts, sizes } from '../theme';
-import type { Region, SidebarContext } from './context';
+import type { FooterAction, Region, SidebarContext } from './context';
 import { inRect, type Rect } from './shared';
 
 export interface DepartureLock {
@@ -50,7 +50,7 @@ export class DepartureContext implements SidebarContext {
     this.lock = lock;
   }
 
-  paint(g: CanvasRenderingContext2D, region: Region): void {
+  paint(g: CanvasRenderingContext2D, region: Region): number {
     this.confirmRect = { x: 0, y: 0, w: 0, h: 0 };
     this.cancelRect = { x: 0, y: 0, w: 0, h: 0 };
     const x0 = region.x;
@@ -89,6 +89,7 @@ export class DepartureContext implements SidebarContext {
     y += confirm.h + PILL_GAP;
     const cancel = paintPillButton(g, x0, y, 'Cancel', { hover: this.hovered === 'cancel' });
     this.cancelRect = { x: x0, y, w: cancel.w, h: cancel.h };
+    return y + cancel.h - region.y;
   }
 
   isInteractive(cx: number, cy: number): boolean {
@@ -109,5 +110,17 @@ export class DepartureContext implements SidebarContext {
     if (next === this.hovered) return false;
     this.hovered = next;
     return true;
+  }
+
+  // Confirm / Cancel stay inline in the pick body (they're integral to the mode, and
+  // its content is short — it never scrolls), so no footer buttons.
+  footerActions(): FooterAction[] {
+    return [];
+  }
+
+  // One identity for the whole pick — locking a destination re-renders in place (and it
+  // never scrolls anyway), so the key stays fixed.
+  contentKey(): string {
+    return 'd:pick';
   }
 }

@@ -78,7 +78,7 @@ export class AppController {
     this.sidebar.onNextTurn = () => this.nextTurn();
     this.sidebar.setTurn(getGameState().turn);
 
-    this.starmap = new StarmapScene(canvas, this.renderer, this.sidebar, this.bridge);
+    this.starmap = new StarmapScene(canvas, this.renderer, this.sidebar);
     this.starmap.onViewSystem = (idx) => this.enterSystem(idx);
     this.starmap.onViewTest = () => this.enterTest();
     this.starmap.onResetGame = () => this.resetGame();

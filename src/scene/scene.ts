@@ -25,7 +25,6 @@ import { MapHud } from '../ui/map-hud';
 import { Sidebar } from '../ui/sidebar/sidebar';
 import { GalaxyContext } from '../ui/sidebar/galaxy-context';
 import { DepartureContext } from '../ui/sidebar/departure-context';
-import type { EconomyBridge } from '../facilities/economy-bridge';
 import { sizes } from '../ui/theme';
 import { STARS, STAR_CLUSTERS, clusterDisplayName, clusterIndexFor, clusterIndexForSystemId, nearestClusterIdxTo, systemIdForCluster } from '../data/stars';
 import { MILLI_PER_LY } from '../data/cluster-geometry';
@@ -96,12 +95,9 @@ export class StarmapScene implements Screen {
   // view. The scene renders + resizes + input-routes it but does not own its
   // lifecycle. Consulted before the HUD so it intercepts clicks in its strip.
   private readonly sidebar: Sidebar;
-  // The live economy, owned by AppController. Read for the selected system's
-  // aggregate balance shown in the galaxy info-card.
-  private readonly bridge: EconomyBridge;
-  // The galaxy view's contextual region inside the sidebar (civ summary +
-  // selected-system info + View System/Focus). Set as the sidebar's context on
-  // start(); fed selection via setCluster.
+  // The galaxy view's contextual region inside the sidebar (the game-views menu when
+  // idle / the selected system's ship list). Set as the sidebar's context on start();
+  // fed the selection via setCluster.
   private readonly galaxyContext = new GalaxyContext();
   // The data-driven range ring drawn around a ship's origin while picking a warp destination — a sibling
   // of the (suppressed) selection grid, so the pick shows exactly one ring.
@@ -167,7 +163,7 @@ export class StarmapScene implements Screen {
   private autoSelectTimer: number | null = null;
 
   // Fired when the user requests the system view for a cluster — either
-  // by clicking the "View System" button on the info card or by double-
+  // by clicking the "View System" button in the sidebar footer or by double-
   // clicking a star. AppController wires this to enterSystem().
   onViewSystem: (clusterIdx: number) => void = () => {};
 
@@ -209,10 +205,9 @@ export class StarmapScene implements Screen {
   // Pixel ratio + size are still driven from this scene's resize() (see
   // resize() for the integer-multiple-of-N rounding that guarantees a
   // clean nearest-neighbor upscale).
-  constructor(canvas: HTMLCanvasElement, renderer: WebGLRenderer, sidebar: Sidebar, bridge: EconomyBridge) {
+  constructor(canvas: HTMLCanvasElement, renderer: WebGLRenderer, sidebar: Sidebar) {
     this.renderer = renderer;
     this.sidebar = sidebar;
-    this.bridge = bridge;
     const sun = STARS.find(s => s.id === 'sol')!;
     this.view = {
       target: new Vector3(sun.x, sun.y, sun.z),
@@ -286,15 +281,14 @@ export class StarmapScene implements Screen {
     };
     this.hud.onViewTest = () => this.onViewTest();
 
-    // Selected-system info + View System / Focus live in the sidebar's galaxy
-    // context now; wire its actions to the same scene methods the info card used.
+    // The galaxy sidebar's footer nav actions: View System / Deselect when a system is
+    // selected, zoom in/out when idle (a manual zoom cancels any in-flight focus glide,
+    // like the wheel path). Clicking a ready ship row opens its warp destination pick —
+    // the galaxy-only entry point for star-to-star navigation (no system-view path).
     this.galaxyContext.onViewSystem = (idx) => this.onViewSystem(idx);
-    this.galaxyContext.onFocus = (idx) => {
-      const com = STAR_CLUSTERS[idx]!.com;
-      this.animateFocusTo(com.x, com.y, com.z);
-    };
-    // Clicking a ready ship in the sidebar fleet list opens its warp destination pick — the galaxy-only
-    // entry point for star-to-star navigation (there is no system-view path).
+    this.galaxyContext.onDeselect = () => this.deselect();
+    this.galaxyContext.onZoomIn = () => { this.focusAnimating = false; this.setZoom(this.view.distance * 0.8); };
+    this.galaxyContext.onZoomOut = () => { this.focusAnimating = false; this.setZoom(this.view.distance / 0.8); };
     this.galaxyContext.onSelectShip = (shipId) => this.beginShipDeparture(shipId);
 
     this.input = new InputController(canvas, this.buildInputHandlers());
@@ -321,7 +315,6 @@ export class StarmapScene implements Screen {
     // Show the galaxy context on the persistent sidebar (turn header stays); the
     // current selection survives a system-view round-trip on the singleton scene.
     this.galaxyContext.setCluster(this.selectedClusterIdx);
-    this.setSystemEconomy();
     this.sidebar.setContext(this.galaxyContext);
     // The sidebar's settings glyph opens this view's settings panel.
     this.sidebar.onSettings = () => this.hud.toggleSettings();
@@ -391,6 +384,7 @@ export class StarmapScene implements Screen {
         return s !== 'transparent' ? s : this.hud.hitTest(x, y);
       },
       hudHandlePointerMove: (x, y) => { this.sidebar.handlePointerMove(x, y); this.hud.handlePointerMove(x, y); },
+      hudHandleWheel: (x, y, d, m) => this.sidebar.handleWheel(x, y, d, m),
       applyOrbitDelta: (dx, dy) => this.applyOrbitDelta(dx, dy),
       applyTouchPan: (dx, dy) => this.applyTouchPan(dx, dy),
       zoomBy: (factor) => this.setZoom(this.view.distance * factor),
@@ -469,8 +463,7 @@ export class StarmapScene implements Screen {
         }
         // F: always re-focus the current selection. Ignores any candidate
         // so F is a dedicated "back to selection" key, separate from
-        // spacebar's "advance to candidate". Mirrors the Focus pill button
-        // on the info card.
+        // spacebar's "advance to candidate" (F key only — no sidebar button).
         if (this.selectedClusterIdx < 0) return;
         const com = STAR_CLUSTERS[this.selectedClusterIdx]!.com;
         this.animateFocusTo(com.x, com.y, com.z);
@@ -499,7 +492,6 @@ export class StarmapScene implements Screen {
     this.starPoints.setSelectedCluster(clusterIdx);
     this.selectionBrackets.setCluster(clusterIdx);
     this.galaxyContext.setCluster(clusterIdx);
-    this.setSystemEconomy();
     this.sidebar.refreshContent();
     const com = STAR_CLUSTERS[clusterIdx]!.com;
     // Grid runs its own sequential expand/collapse off this call.
@@ -512,10 +504,9 @@ export class StarmapScene implements Screen {
     this.animateFocusTo(com.x, com.y, com.z);
   }
 
-  // Re-read the selected system's economy after a turn and repaint the sidebar
-  // (the galaxy info-card's net balances). Called by AppController on Next Turn.
+  // Repaint the sidebar after a turn and restep the transit overlay. Called by
+  // AppController on Next Turn.
   afterTurnAdvance(): void {
-    this.setSystemEconomy();
     this.sidebar.refreshContent();
     // Ships in warp advanced a step this turn — restep the transit-line progress heads.
     this.refreshTransitLines();
@@ -538,14 +529,6 @@ export class StarmapScene implements Screen {
       views.push({ o: STAR_CLUSTERS[oi]!.com, d: STAR_CLUSTERS[di]!.com, frac, color: factionColor(s.factionId) });
     }
     this.transitLines.setTransits(views);
-  }
-
-  // Push the selected system's (cluster's) aggregate balance into the galaxy
-  // info-card, or clear it when nothing is selected. Data only — callers repaint.
-  private setSystemEconomy(): void {
-    this.galaxyContext.setEconomy(
-      this.selectedClusterIdx >= 0 ? this.bridge.systemEconomy(this.selectedClusterIdx) : null,
-    );
   }
 
   // Touch-pan: midpoint translation drives view.target along the
@@ -622,7 +605,6 @@ export class StarmapScene implements Screen {
     this.starPoints.setSelectedCluster(-1);
     this.selectionBrackets.setCluster(-1);
     this.galaxyContext.setCluster(-1);
-    this.setSystemEconomy();
     this.sidebar.refreshContent();
     this.grid.setSelection(null);
     this.droplines.setSelectedCluster(-1);

@@ -22,7 +22,7 @@ import { facilityHasShipbuilding, facilityLabel, type FacilityType } from '../..
 import type { Facility } from '../../game-state';
 import { paintPillButton } from '../painter';
 import { colors, fonts, sizes } from '../theme';
-import type { Region, SidebarContext } from './context';
+import type { FooterAction, Region, SidebarContext } from './context';
 import { fmtMilli, inRect, type Rect } from './shared';
 
 // The selected body, plus its facilities, as the context needs to render it.
@@ -173,7 +173,7 @@ export class SystemContext implements SidebarContext {
     this.transitLines = lines;
   }
 
-  paint(g: CanvasRenderingContext2D, region: Region): void {
+  paint(g: CanvasRenderingContext2D, region: Region): number {
     this.addRects = [];
     this.removeRects = [];
     this.buildRect = { x: 0, y: 0, w: 0, h: 0 };
@@ -207,8 +207,8 @@ export class SystemContext implements SidebarContext {
       }
     }
 
-    // TRANSITS — ships leaving this system or inbound to it, shown regardless of selection (a system-level
-    // readout, like the galaxy's civ summary). Omitted when there are none.
+    // TRANSITS — ships leaving this system or inbound to it, a system-level readout shown
+    // regardless of the body/ship selection. Omitted when there are none.
     if (this.transitLines.length > 0) {
       const transitLineH = getFont(fonts.body).lineHeight;
       drawPixelText(g, 'TRANSITS', x0, y, colors.textKey, fonts.body);
@@ -232,12 +232,12 @@ export class SystemContext implements SidebarContext {
       drawPixelText(g, this.ship.factionLabel, x0, y, this.ship.factionColor, fonts.body);
       y += lineH + ROW_GAP;
       drawPixelText(g, SHIP_STATUS_LABEL[this.ship.status], x0, y, colors.textKey, fonts.body);
-      return;
+      return y + lineH - region.y;
     }
 
     if (!this.info) {
       drawPixelText(g, 'Select a body or ship', x0, y, colors.textKey, fonts.body);
-      return;
+      return y + getFont(fonts.body).lineHeight - region.y;
     }
 
     // Selected body: name + dim kind suffix.
@@ -357,6 +357,8 @@ export class SystemContext implements SidebarContext {
         y += h + ADD_BUTTON_GAP;
       }
     }
+
+    return y - region.y;
   }
 
   isInteractive(cx: number, cy: number): boolean {
@@ -403,5 +405,20 @@ export class SystemContext implements SidebarContext {
     if (hoverEqual(next, this.hovered)) return false;
     this.hovered = next;
     return true;
+  }
+
+  // The system view's footer is still being designed (its body content rides the new
+  // scroll frame unchanged for now); no footer buttons yet. The band collapses when
+  // this is empty.
+  footerActions(): FooterAction[] {
+    return [];
+  }
+
+  // Body identity: which body/ship is selected (or nothing). Changing the selection
+  // resets the scroll to the top; a same-selection refresh (post-turn economy, a
+  // facility add) keeps it, since bodyId is stable across those.
+  contentKey(): string {
+    if (this.ship) return 's:ship';
+    return this.info ? `s:body:${this.info.bodyId}` : 's:none';
   }
 }

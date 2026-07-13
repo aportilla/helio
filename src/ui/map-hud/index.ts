@@ -8,9 +8,9 @@
 //                     resets to 'general' on each open.
 //   - panelClose — IconButton at the panel's top-right corner.
 //
-// The selected-system info card + its View System / Focus buttons moved into the
-// sidebar's GalaxyContext (src/ui/sidebar/galaxy-context.ts), and the settings
-// trigger moved into the sidebar header; selection no longer routes through MapHud.
+// Selection + its nav actions live in the sidebar's GalaxyContext + footer
+// (src/ui/sidebar/galaxy-context.ts), and the settings trigger is a glyph in the
+// sidebar header; selection doesn't route through MapHud.
 //
 // External API: scene, camera, onToggle/onAction/onViewTest/onSettingsChanged
 // callbacks; resize, toggleSettings, setAutoScale (called by the scene when a DPR
@@ -83,10 +83,9 @@ export class MapHud {
   // setSetting() on toggle so refresh restores the same state.
   private readonly toggleState: { [K in ToggleId]: boolean };
 
-  // Composed widgets. The selected-system info card + its View System / Focus
-  // buttons moved into the sidebar's GalaxyContext, and the settings trigger is
-  // now a glyph in the sidebar header (it calls toggleSettings()); MapHud keeps
-  // the settings popover itself and the planet-test trigger.
+  // Composed widgets. Selection + its nav actions live in the sidebar's GalaxyContext,
+  // and the settings trigger is a glyph in the sidebar header (it calls toggleSettings());
+  // MapHud keeps the settings popover itself and the planet-test trigger.
   private readonly settingsPanel: Panel;
   private readonly panelClose: IconButton;
   // Planet-test trigger (top-left). Always visible in galaxy view.

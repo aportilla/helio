@@ -121,6 +121,7 @@ export class SystemScene implements Screen {
   private readonly _onPointerLeave = ()                => this.onPointerLeave();
   private readonly _onKeyDown      = (e: KeyboardEvent) => this.onKeyDown(e);
   private readonly _onResize       = () => this.resize();
+  private readonly _onWheel        = (e: WheelEvent) => this.onWheel(e);
 
   private readonly _hudPt = { x: 0, y: 0 };
 
@@ -440,6 +441,7 @@ export class SystemScene implements Screen {
     this.canvas.addEventListener('pointerdown',  this._onPointerDown);
     this.canvas.addEventListener('pointermove',  this._onPointerMove);
     this.canvas.addEventListener('pointerleave', this._onPointerLeave);
+    this.canvas.addEventListener('wheel',        this._onWheel, { passive: false });
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('resize',  this._onResize);
   }
@@ -448,8 +450,16 @@ export class SystemScene implements Screen {
     this.canvas.removeEventListener('pointerdown',  this._onPointerDown);
     this.canvas.removeEventListener('pointermove',  this._onPointerMove);
     this.canvas.removeEventListener('pointerleave', this._onPointerLeave);
+    this.canvas.removeEventListener('wheel',        this._onWheel);
     window.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('resize',  this._onResize);
+  }
+
+  // The system diagram has no camera zoom, so a wheel only scrolls the sidebar body
+  // (when the cursor is over it); preventDefault then keeps the page from scrolling.
+  private onWheel(e: WheelEvent): void {
+    this.viewport.clientToHud(e.clientX, e.clientY, this._hudPt);
+    if (this.sidebar.handleWheel(this._hudPt.x, this._hudPt.y, e.deltaY, e.deltaMode)) e.preventDefault();
   }
 
   private onPointerDown(e: PointerEvent): void {

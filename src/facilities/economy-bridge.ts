@@ -327,6 +327,9 @@ export class EconomyBridge {
   // in the cluster. Summing cover gives the system's surplus/deficit AFTER its own
   // internal + cross-system trade — what a player scanning the galaxy wants: which
   // systems feed, which starve.
+  //
+  // Reserved seam: no live caller since the galaxy sidebar dropped its economy readout;
+  // kept as the per-system aggregate the planned economy screen will read.
   systemEconomy(clusterIdx: number): SystemEconomyView | null {
     const w = this.engine.world;
     const R = w.R;

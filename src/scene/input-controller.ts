@@ -88,6 +88,10 @@ export interface InputHandlers {
   hudHandleClick(bufX: number, bufY: number): boolean;
   hudHitTest(bufX: number, bufY: number): HitResult;
   hudHandlePointerMove(bufX: number, bufY: number): void;
+  // Wheel over the HUD. Returns true when consumed — the sidebar scrolls its body
+  // (or absorbs the notch as chrome) — so the controller skips the camera zoom.
+  // deltaMode is the WheelEvent's unit (0 = pixel, 1 = line, 2 = page).
+  hudHandleWheel(bufX: number, bufY: number, deltaY: number, deltaMode: number): boolean;
 
   // Camera mutations — controller computes deltas in CSS pixels and the
   // scene applies them to view-state with the right sensitivity / clamps.
@@ -110,8 +114,8 @@ export interface InputHandlers {
   // back to re-focusing the current selection (or no-op if nothing is
   // selected).
   onFocusCandidate(): void;
-  // F key + the Focus pill button: always re-focus the currently-selected
-  // cluster's COM. Ignores any candidate — F is "go home", not "advance".
+  // F key: always re-focus the currently-selected cluster's COM. Ignores any
+  // candidate — F is "go home", not "advance".
   // No-op when nothing is selected.
   onFocusSelection(): void;
   // Enter key: open the system view for the currently-selected cluster.
@@ -524,6 +528,10 @@ export class InputController {
 
   private onWheel(e: WheelEvent): void {
     e.preventDefault();
+    // HUD gets first refusal: a wheel over the sidebar scrolls its body / is absorbed
+    // as chrome, and must not also zoom the map beneath it.
+    this.handlers.clientToHud(e.clientX, e.clientY, this._hudPt);
+    if (this.handlers.hudHandleWheel(this._hudPt.x, this._hudPt.y, e.deltaY, e.deltaMode)) return;
     // User taking manual control cancels any in-flight focus glide,
     // otherwise the per-frame lerp would overwrite the wheel notch.
     this.handlers.cancelFocusAnimation();
