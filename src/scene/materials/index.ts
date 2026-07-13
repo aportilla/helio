@@ -12,6 +12,7 @@ export {
   renderedStarPxSize,
   snappedDotsMat,
   snappedLineMat,
+  snappedThickLineMat,
   type SnappedLineOptions,
 } from './galaxy';
 export {

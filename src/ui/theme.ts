@@ -41,6 +41,16 @@ export const colors = {
   textKey:       '#2d7ab8',         // info card keys, panel section headers
   starName:      '#ffe98a',         // info card star name, panel title
 
+  // Navigation channel — the warp/route accent. A warm SOLID gold, deliberately outside the cyan HUD
+  // family so "where am I sending a ship" reads as its own thing: the departure banner is a gold plate,
+  // and the proposed route is a thick gold line on the map. navInk is the dark text/pill fill that sits
+  // on the gold; navGoldDim frames it; navGoldBright is the hover/emphasis lift. (The scene's RouteLine
+  // mirrors navGold as the numeric 0xf2c14e — ColorManagement is off, so the two match verbatim.)
+  navGold:       '#f2c14e',         // solid gold: banner fill + route line
+  navGoldBright: '#ffe0a0',         // hover / emphasis lift on gold chrome
+  navGoldDim:    '#a67c1a',         // darker gold: banner + pill framing
+  navInk:        '#241a04',         // dark ink: text + pill fill on the gold plate
+
   // Generic positive/negative signal — surplus vs. deficit today, reusable by any
   // future screen's good/bad readout. Muted, literal-sRGB to sit in the cyan
   // palette without breaking the pixel aesthetic. (Kept domain-neutral so the

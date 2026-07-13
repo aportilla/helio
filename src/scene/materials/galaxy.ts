@@ -3,7 +3,7 @@
 // focus marker, bracket arms). The size-capable dot variant (snappedDotsMat)
 // is also consumed by the system-view cargo-ship overlay.
 
-import { Color, ShaderMaterial, Vector2, Vector3 } from 'three';
+import { Color, DoubleSide, ShaderMaterial, Vector2, Vector3 } from 'three';
 import { PIVOT_FADE_FAR, PIVOT_FADE_NEAR } from '../cluster-fade';
 import { glsl, PIXEL_SNAP_GLSL, RASTER_PAD, snapClipToGlPosition, snappedMaterials } from './shared';
 
@@ -178,6 +178,67 @@ export function snappedDotsMat(opts: { color?: number; opacity?: number; size?: 
   });
   // Reuse the snapped-line registry so resize() pushes the new viewport into
   // dot materials too — same uViewport uniform name.
+  snappedMaterials.push(m);
+  return m;
+}
+
+// A pixel-crisp THICK straight line — a screen-space quad ribbon. GL's native line width is clamped to
+// 1px on virtually every GPU, so a 2–3px line has to be a filled quad expanded perpendicular to the
+// segment IN SCREEN SPACE (constant pixel width at any zoom / angle). The two endpoints (uO, uD, world
+// space) are projected, snapped to the buffer-pixel grid (the shared crisp-pixel snap), then each of the
+// 4 quad corners rides ±uHalfWidth px off the centerline; the fill is a flat color (AA is off globally,
+// so the hard edges rasterize crisply). The single consumer today is the departure RouteLine, but the
+// material is geometry-agnostic — it reads its endpoints from uniforms, so the mesh is a static unit quad
+// carrying only `aEnd` (0 at uO, 1 at uD) + `aSide` (∓1 across the line). Registered for viewport pushes.
+export function snappedThickLineMat(opts: { color: number; opacity?: number; halfWidthPx: number }): ShaderMaterial {
+  const m = new ShaderMaterial({
+    uniforms: {
+      uColor:     { value: new Color(opts.color) },
+      uOpacity:   { value: opts.opacity ?? 1.0 },
+      uViewport:  { value: new Vector2() },
+      uO:         { value: new Vector3() },
+      uD:         { value: new Vector3() },
+      uHalfWidth: { value: opts.halfWidthPx },
+    },
+    vertexShader: `
+      uniform vec2 uViewport;
+      uniform vec3 uO;
+      uniform vec3 uD;
+      uniform float uHalfWidth;
+      attribute float aEnd;   // 0 at the origin endpoint, 1 at the destination
+      attribute float aSide;  // -1 / +1 — which side of the centerline this corner sits on
+      ${PIXEL_SNAP_GLSL}
+      void main() {
+        vec4 clipO = projectionMatrix * modelViewMatrix * vec4(uO, 1.0);
+        vec4 clipD = projectionMatrix * modelViewMatrix * vec4(uD, 1.0);
+        // Screen-space expansion breaks if an endpoint is at/behind the camera (w <= 0 flips the divide),
+        // so cull the whole quad off-screen rather than draw a garbage streak (the route just vanishes if
+        // you orbit an endpoint behind you — better than a wild line).
+        if (clipO.w <= 0.0 || clipD.w <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+        // Snap both endpoints to the pixel grid (boundary parity, like the 1-px lines) so the band stops
+        // shimmering as the camera moves, then expand this corner perpendicular to the snapped centerline.
+        vec2 pO = snapToPixelGrid(clipO.xy / clipO.w, uViewport, 0.0);
+        vec2 pD = snapToPixelGrid(clipD.xy / clipD.w, uViewport, 0.0);
+        vec2 dir = pD - pO;
+        dir /= max(length(dir), 1e-4);
+        vec2 perp = vec2(-dir.y, dir.x);
+        vec4 clip = mix(clipO, clipD, aEnd);
+        vec2 px = mix(pO, pD, aEnd) + perp * (aSide * uHalfWidth);
+        vec2 ndc = (px / uViewport) * 2.0 - 1.0;
+        gl_Position = vec4(ndc * clip.w, clip.z, clip.w);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      uniform float uOpacity;
+      void main() { gl_FragColor = vec4(uColor, uOpacity); }
+    `,
+    transparent: true,
+    depthWrite: false,
+    // The screen-space quad's winding flips with the line's on-screen direction, so it must not be
+    // back-face-culled — otherwise the band would vanish for half of all origin→destination angles.
+    side: DoubleSide,
+  });
   snappedMaterials.push(m);
   return m;
 }

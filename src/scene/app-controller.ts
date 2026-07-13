@@ -228,4 +228,10 @@ export class AppController {
       return test;
     });
   }
+
+  // DEV: forward to the live galaxy scene to open a warp pick with a destination locked (the ?demo-route
+  // screenshot harness in main.ts). No-op unless the galaxy is the current scene.
+  devDemoRoute(): void {
+    this.starmap.devDemoRoute();
+  }
 }

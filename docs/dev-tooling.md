@@ -67,13 +67,17 @@ Keep such probes throwaway (delete after); promote one to a committed
 ```bash
 npm run screenshot                                    # → screenshots/galaxy.png
 npm run screenshot -- --out=screenshots/wide.png --width=1920 --height=1080 --wait=4000
+npm run screenshot -- --query=demo-route              # the gold warp banner + route line
 ```
 
 `scripts/screenshot.mjs` boots the Vite dev server **in-process** (with
 `server.open` forced off, so nothing pops up), drives a headless Chromium
 (puppeteer) to the galaxy view, waits for the WebGL canvas to settle (the scene
 auto-selects Sol and warms shaders), and writes a PNG. Output lands in
-`screenshots/` (gitignored). Flags: `--out`, `--width`, `--height`, `--wait` (ms).
+`screenshots/` (gitignored). Flags: `--out`, `--width`, `--height`, `--wait` (ms),
+`--query` (append a DEV boot-state query — `demo-encounter` for the combat overlay,
+`demo-warp` for the in-system warp chrome, `demo-route` for the galaxy departure pick
+with a destination locked so the gold banner + route line are captured).
 
 - Needs the `puppeteer` devDependency; `npm install` fetches its Chromium binary.
   WebGL renders through headless Chromium's software path — no display required.

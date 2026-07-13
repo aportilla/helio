@@ -249,12 +249,26 @@ export function paintSegmentedPill(
   return { h: H };
 }
 
+// A non-default color scheme for a pill (bg + border + text, each with a hover
+// variant). Lets a themed host — e.g. the gold navigation banner — reuse the pill
+// geometry without the cyan default palette. When omitted, the standard HUD colors
+// apply. `disabled` is ignored when a palette is set (themed pills don't disable).
+export interface PillPalette {
+  readonly bg: string;
+  readonly border: string;
+  readonly borderHover: string;
+  readonly text: string;
+  readonly textHover: string;
+}
+
 export interface PillButtonOpts {
   hover: boolean;
   // Disabled overrides hover: dim border + dim text, no hover swap. The
   // host widget is responsible for ignoring hover/click hits while in
-  // this state — paint just renders the visual.
+  // this state — paint just renders the visual. Ignored when `palette` is set.
   disabled?: boolean;
+  // Non-default color scheme (see PillPalette). Omit for the standard cyan pill.
+  palette?: PillPalette;
   font?: FontSpec;
 }
 
@@ -273,19 +287,21 @@ export function paintPillButton(
   const W = textW + padX * 2;
   const H = getFont(opts.font).lineHeight + padY * 2;
 
-  const borderColor = opts.disabled
-    ? colors.borderDim
-    : (opts.hover ? colors.borderAccent : colors.borderDim);
-  const textColor = opts.disabled
-    ? colors.titleDim
-    : (opts.hover ? colors.glyphOnHover : colors.titleBright);
+  const pal = opts.palette;
+  const bgColor = pal ? pal.bg : colors.surface;
+  const borderColor = pal
+    ? (opts.hover ? pal.borderHover : pal.border)
+    : (opts.disabled ? colors.borderDim : (opts.hover ? colors.borderAccent : colors.borderDim));
+  const textColor = pal
+    ? (opts.hover ? pal.textHover : pal.text)
+    : (opts.disabled ? colors.titleDim : (opts.hover ? colors.glyphOnHover : colors.titleBright));
 
   // Solid bg fill — buttons read as opaque against the scene so stars
   // behind them don't show through, matching the panel/card surface
   // family. Without this fill, the pointer-blocking added at the HUD
   // layer would be invisible: the user would see a star under the
   // button and expect hover/click to reach it.
-  paintSurface(g, x, y, W, H, { bg: colors.surface, border: borderColor });
+  paintSurface(g, x, y, W, H, { bg: bgColor, border: borderColor });
 
   const textX = x + Math.round((W - textW) / 2);
   drawPixelText(g, text, textX, y + padY, textColor, opts.font);

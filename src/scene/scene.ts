@@ -11,6 +11,7 @@ import {
 import { ClusterBrackets } from './cluster-brackets';
 import { Grid } from './grid';
 import { RangeRing } from './range-ring';
+import { RouteLine } from './route-line';
 import { TransitLines, type TransitView } from './transit-lines';
 import { Droplines } from './droplines';
 import { FocusMarker } from './focus-marker';
@@ -24,9 +25,9 @@ import { ViewportSizer } from './viewport-sizer';
 import { MapHud } from '../ui/map-hud';
 import { Sidebar } from '../ui/sidebar/sidebar';
 import { GalaxyContext } from '../ui/sidebar/galaxy-context';
-import { DepartureContext } from '../ui/sidebar/departure-context';
+import { DepartureBanner } from '../ui/departure-banner';
 import { sizes } from '../ui/theme';
-import { STARS, STAR_CLUSTERS, clusterDisplayName, clusterIndexFor, clusterIndexForSystemId, nearestClusterIdxTo, systemIdForCluster } from '../data/stars';
+import { STARS, STAR_CLUSTERS, clusterIndexFor, clusterIndexForSystemId, nearestClusterIdxTo, systemIdForCluster } from '../data/stars';
 import { MILLI_PER_LY } from '../data/cluster-geometry';
 import { CONTROLLED_FACTION_ID, factionColor } from '../factions/registry';
 import { getGameState, orderShipWarp } from '../game-state';
@@ -105,9 +106,13 @@ export class StarmapScene implements Screen {
   // The galaxy-view overlay for ships in warp — a dotted origin→destination line + a faction-coloured
   // progress head per transit. Rebuilt on galaxy resume + each turn.
   private readonly transitLines = new TransitLines();
-  // The sidebar context shown while the departure pick is armed (ship / origin / range + destination + ETA
-  // + CONFIRM / CANCEL). Replaces the galaxy context for the duration of the pick.
-  private readonly departureContext = new DepartureContext();
+  // The thick GOLD "proposed route" line drawn from origin to the locked destination during a warp pick.
+  // Shown/updated as the pick locks a destination, cleared on unlock/teardown.
+  private readonly routeLine = new RouteLine();
+  // The floating on-map overlay shown while the departure pick is armed: "Select a destination" until a
+  // system is locked, then its distance + ETA, with CONFIRM / CANCEL pills. A HUD layer that floats over
+  // the stars (no layout reserve) — the sidebar keeps showing the fleet list with the departing ship lit.
+  private readonly departureBanner = new DepartureBanner();
   private readonly input: InputController;
 
   // The live warp DEPARTURE pick, or null in the normal galaxy view. Set by beginShipDeparture() when the
@@ -232,6 +237,8 @@ export class StarmapScene implements Screen {
     this.scene.add(this.rangeRing.group);
     // Transit lines share the 3D scene too (world-space origin→destination legs), floated over the field.
     this.scene.add(this.transitLines.group);
+    // The proposed-route gold line shares the scene as well (only visible mid-pick, depthTest off).
+    this.scene.add(this.routeLine.group);
 
     this.starPoints = new StarPoints(window.innerHeight / 2);
     this.scene.add(this.starPoints.points);
@@ -291,6 +298,10 @@ export class StarmapScene implements Screen {
     this.galaxyContext.onZoomOut = () => { this.focusAnimating = false; this.setZoom(this.view.distance / 0.8); };
     this.galaxyContext.onSelectShip = (shipId) => this.beginShipDeparture(shipId);
 
+    // The on-map departure banner's pills — the click twins of Enter (confirm) / Esc (cancel).
+    this.departureBanner.onConfirm = () => this.departureConfirm();
+    this.departureBanner.onCancel = () => this.departureCancel();
+
     this.input = new InputController(canvas, this.buildInputHandlers());
 
     // Re-resize whenever DPR crosses an integer-N boundary (browser zoom,
@@ -336,6 +347,11 @@ export class StarmapScene implements Screen {
 
   stop(): void {
     if (!this.running) return;
+    // A warp pick armed when the scene pauses (View System / planet-test / app teardown) would be
+    // ORPHANED — stop() drops the input handlers, so nothing could confirm/cancel it, and freezesTurn
+    // would strand Next Turn on. Cancel it cleanly first (writes nothing; restores the normal galaxy
+    // selection) so no pause path can leave a stale, turn-frozen mode behind. Self-guards on no pick.
+    this.departureCancel();
     this.running = false;
     if (this.autoSelectTimer !== null) {
       clearTimeout(this.autoSelectTimer);
@@ -363,6 +379,8 @@ export class StarmapScene implements Screen {
     this.candidateBrackets.dispose();
     this.rangeRing.dispose();
     this.transitLines.dispose();
+    this.routeLine.dispose();
+    this.departureBanner.dispose();
     this.viewport.dispose();
   }
 
@@ -376,14 +394,16 @@ export class StarmapScene implements Screen {
       clientToHud: (x, y, out) => this.viewport.clientToHud(x, y, out),
       pickStar: (x, y) => this.pickStar(x, y),
       starToCluster: (idx) => clusterIndexFor(idx),
-      // Sidebar is consulted before the HUD: it owns the reserved strip, so a
-      // click/hover there must intercept before the (covered) HUD or scene pick.
-      hudHandleClick: (x, y) => this.sidebar.handleClick(x, y) || this.hud.handleClick(x, y),
+      // Sidebar first (it owns the reserved strip), then the floating departure banner (only live
+      // during a pick), then the HUD — each must intercept before the scene pick behind it.
+      hudHandleClick: (x, y) => this.sidebar.handleClick(x, y) || this.departureBanner.handleClick(x, y) || this.hud.handleClick(x, y),
       hudHitTest: (x, y) => {
         const s = this.sidebar.hitTest(x, y);
-        return s !== 'transparent' ? s : this.hud.hitTest(x, y);
+        if (s !== 'transparent') return s;
+        const b = this.departureBanner.hitTest(x, y);
+        return b !== 'transparent' ? b : this.hud.hitTest(x, y);
       },
-      hudHandlePointerMove: (x, y) => { this.sidebar.handlePointerMove(x, y); this.hud.handlePointerMove(x, y); },
+      hudHandlePointerMove: (x, y) => { this.sidebar.handlePointerMove(x, y); this.departureBanner.handlePointerMove(x, y); this.hud.handlePointerMove(x, y); },
       hudHandleWheel: (x, y, d, m) => this.sidebar.handleWheel(x, y, d, m),
       applyOrbitDelta: (dx, dy) => this.applyOrbitDelta(dx, dy),
       applyTouchPan: (dx, dy) => this.applyTouchPan(dx, dy),
@@ -624,23 +644,43 @@ export class StarmapScene implements Screen {
   // Open a warp destination pick for a ready ship the player clicked in the sidebar fleet list — the
   // galaxy-only entry point for star-to-star navigation. Validates the ship is a commandable, in-cluster
   // player ship, bakes its reachable set into a DepartureRequest, and enters the pick in place (no view
-  // swap — we're already on the map). No-op if a pick is already up or the ship isn't warp-ready.
+  // swap — we're already on the map). Clicking a DIFFERENT ready ship while a pick is armed switches the
+  // pick to it; clicking the ship already being picked is a no-op.
   beginShipDeparture(shipId: string): void {
-    if (this.departure) return;
+    if (this.departure?.shipId === shipId) return;
     const ship = getGameState().ships.find(
       (s) => s.id === shipId && s.status === 'ready' && s.factionId === CONTROLLED_FACTION_ID,
     );
     if (!ship) return;
     const originClusterIdx = clusterIndexForSystemId(ship.systemId);
     if (originClusterIdx < 0) return;
+    // Switching ships mid-pick: tear the current pick's visuals down first (its origin/range may differ),
+    // then re-enter fresh for the new ship. Stays in the mode — no galaxy resume between the two.
+    if (this.departure) this.teardownDeparture();
     this.departure = buildDepartureRequest(ship, originClusterIdx);
     this.enterDepartureMode();
   }
 
-  // Enter the pick: install the departure sidebar, freeze the turn, suppress the selection grid + labels,
-  // raise the range ring + in-range lens, glide the camera home, and pre-lock the nearest reachable system
-  // (parked — no glide; the eye stays home until the player moves). Teardown lives in teardownDeparture,
-  // which every exit path routes through.
+  // DEV visual-test seam (the ?demo-route screenshot harness, tree-shaken from prod): select the first
+  // cluster holding a ready player ship, open its pick, and lock the nearest destination — so a screenshot
+  // reproducibly shows the gold banner + gold route line. Reached only from main.ts's ?demo-route branch.
+  devDemoRoute(): void {
+    const ship = getGameState().ships.find((s) => s.status === 'ready' && s.factionId === CONTROLLED_FACTION_ID);
+    if (!ship) return;
+    const c = clusterIndexForSystemId(ship.systemId);
+    if (c >= 0) this.selectAndFocusCluster(c);
+    // Lock the FARTHEST reachable (reachable is distance-sorted; last = farthest, and never the origin at
+    // distance 0) so the demo route is a long, unmistakable gold line.
+    this.beginShipDeparture(ship.id);
+    const reachable = this.departure?.reachable ?? [];
+    const dest = reachable[reachable.length - 1];
+    if (dest && dest.clusterIdx !== this.departure!.originClusterIdx) this.departureLock(dest.clusterIdx);
+  }
+
+  // Enter the pick: light the departing ship in the sidebar fleet list, freeze the turn, suppress the
+  // selection grid + labels, raise the range ring + in-range lens, glide the camera home, and float the
+  // on-map departure banner in its "Select a destination" state (NO pre-locked destination — the player
+  // picks one). Teardown lives in teardownDeparture, which every exit path routes through.
   private enterDepartureMode(): void {
     const req = this.departure;
     if (!req) return;
@@ -667,20 +707,18 @@ export class StarmapScene implements Screen {
     // selection chrome the mode suppresses).
     this.animateFocusTo(com.x, com.y, com.z);
 
-    // Sidebar: the departure context + a frozen Next Turn + an inert settings glyph.
-    this.departureContext.setInfo(req.shipName, clusterDisplayName(req.originClusterIdx), req.rangeMilliLy / MILLI_PER_LY);
-    this.departureContext.onConfirm = () => this.departureConfirm();
-    this.departureContext.onCancel = () => this.departureCancel();
-    this.sidebar.onSettings = () => {}; // inert — the popover's actions would bypass the mode teardown
-    this.sidebar.setContext(this.departureContext);
+    // Sidebar stays on the galaxy fleet list — light the departing ship, freeze Next Turn, and make the
+    // settings glyph inert (its popover's actions would bypass the mode teardown). Close the popover too
+    // if it's already open: a neutered glyph can't reopen it, but its live rows would otherwise persist.
+    this.galaxyContext.setSelectedShip(req.shipId);
+    this.hud.closeSettings();
+    this.sidebar.onSettings = () => {};
     this.sidebar.setNextTurnEnabled(false);
-
-    // Pre-lock the nearest reachable (req.reachable is distance-ordered) — WITHOUT a glide.
-    this.departureLockClusterIdx = -1;
-    const first = req.reachable[0];
-    if (first) this.departureLock(first.clusterIdx);
-    else this.departureContext.setLock(null);
     this.sidebar.refreshContent();
+
+    // No destination is pre-locked — float the banner's "Select a destination" prompt until the player picks.
+    this.departureLockClusterIdx = -1;
+    this.departureBanner.show();
   }
 
   // A click / right-click on a cluster during the pick: out of range (or the origin) ⇒ inert; the
@@ -691,19 +729,20 @@ export class StarmapScene implements Screen {
     this.departureLock(clusterIdx);
   }
 
-  // Lock a reachable destination: arm the selection brackets on it and push its name / distance / ETA into
-  // the sidebar. No camera glide — the lock parks; the player flies the camera themselves.
+  // Lock a reachable destination: arm the selection brackets on it and push its distance / ETA into the
+  // on-map banner (which grows its CONFIRM pill). No camera glide — the lock parks; the player flies the
+  // camera themselves.
   private departureLock(clusterIdx: number): void {
     const dest = this.departure?.reachable.find((d) => d.clusterIdx === clusterIdx);
-    if (!dest) return;
+    if (!dest || this.departure === null) return;
     this.departureLockClusterIdx = clusterIdx;
     this.selectionBrackets.setCluster(clusterIdx);
-    this.departureContext.setLock({
-      destName: clusterDisplayName(clusterIdx),
+    // Highlight the proposed route: a thick gold line from the origin cluster to the locked destination.
+    this.routeLine.setRoute(STAR_CLUSTERS[this.departure.originClusterIdx]!.com, STAR_CLUSTERS[clusterIdx]!.com);
+    this.departureBanner.setLock({
       distanceLy: dest.distanceMilli / MILLI_PER_LY,
       etaTurns: dest.etaTurns,
     });
-    this.sidebar.refreshContent();
   }
 
   // Confirm the locked destination: order the warp straight into the durable store (orderShipWarp re-checks
@@ -725,28 +764,31 @@ export class StarmapScene implements Screen {
     this.resumeGalaxyAfterDeparture();
   }
 
-  // Restore the galaxy view when a pick ends (confirm or cancel): re-install the galaxy sidebar + its
-  // settings glyph (both swapped out for the departure context), re-raise the selection chrome for the
-  // still-selected origin cluster (a near-noop camera-wise — the pick already glided there), and rebuild
-  // the transit overlay so a just-ordered warp shows immediately.
+  // Restore the galaxy view when a pick ends (confirm or cancel): re-enable the settings glyph (made inert
+  // during the pick), re-raise the selection chrome for the still-selected origin cluster (a near-noop
+  // camera-wise — the pick already glided there), and rebuild the transit overlay so a just-ordered warp
+  // shows immediately. The sidebar never swapped context, so there's nothing to re-install there.
   private resumeGalaxyAfterDeparture(): void {
-    this.sidebar.setContext(this.galaxyContext);
     this.sidebar.onSettings = () => this.hud.toggleSettings();
     if (this.selectedClusterIdx >= 0) this.selectAndFocusCluster(this.selectedClusterIdx);
     this.refreshTransitLines();
   }
 
-  // The SINGLE teardown every exit path (confirm / cancel) routes through — clears the mode's visuals +
-  // state and lowers the turn freeze. The galaxy sidebar context + selection chrome are re-raised by the
-  // caller's resumeGalaxyAfterDeparture (this only tears the mode down).
+  // The SINGLE teardown every exit path (confirm / cancel / ship-switch) routes through — clears the
+  // mode's visuals + state, drops the on-map banner + the sidebar ship highlight, and lowers the turn
+  // freeze. The selection chrome is re-raised by the caller's resumeGalaxyAfterDeparture (this only tears
+  // the mode down; a ship-switch re-enters straight after without resuming).
   private teardownDeparture(): void {
     this.departure = null;
     this.departureLockClusterIdx = -1;
     this.reachableClusterSet = new Set();
     this.selectionBrackets.setCluster(-1);
     this.rangeRing.clear();
+    this.routeLine.clear();
     this.starPoints.setInRangeMode(false);
     this.starPoints.setInRangeClusters(null);
+    this.departureBanner.hide();
+    this.galaxyContext.setSelectedShip(null);
     this.sidebar.setNextTurnEnabled(true);
   }
 
@@ -835,6 +877,8 @@ export class StarmapScene implements Screen {
     this.selectionBrackets.resize(contentBufferW, bufferH);
     this.candidateBrackets.resize(contentBufferW, bufferH);
     this.sidebar.resize(bufferW, bufferH);
+    // The banner floats centered in the CONTENT rect (left of the sidebar), so it needs both dims.
+    this.departureBanner.resize(bufferW, bufferH, contentBufferW);
   }
 
   // -- main loop ---------------------------------------------------------
@@ -939,10 +983,12 @@ export class StarmapScene implements Screen {
     // label (projectWorldToBuffer only depth-culls, not x) doesn't appear there.
     this.renderer.setViewport(0, 0, cssW, cssH);
     this.renderer.render(this.labels.scene, this.labels.camera);
-    // HUD then the persistent sidebar, both at full buffer. The sidebar draws
+    // HUD, then the floating departure banner (only visible during a pick — it renders over the
+    // stars, depthTest off), then the persistent sidebar, all at full buffer. The sidebar draws
     // last so it owns the reserved strip on the right.
     this.renderer.setScissorTest(false);
     this.renderer.render(this.hud.scene, this.hud.camera);
+    this.renderer.render(this.departureBanner.scene, this.departureBanner.camera);
     this.renderer.render(this.sidebar.scene, this.sidebar.camera);
     this.renderer.autoClear = true;
     this.rafId = requestAnimationFrame(this.tick);

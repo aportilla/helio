@@ -8,6 +8,11 @@
 //     Read fresh each paint, so a ship that just warped out (now 'transiting') drops
 //     off the list on the next repaint.
 //
+// While a warp destination is being picked, the departing ship's tile stays HIGHLIGHTED
+// in this list (setSelectedShip) — the pick is a galaxy modality painted in place, not a
+// sidebar swap — and the nav footer is suppressed (the on-map DepartureBanner owns
+// confirm/cancel; View System / Deselect would break the mode).
+//
 // The footer (owned + drawn by the Sidebar) carries the contextual nav actions this
 // context declares via footerActions(): pan/zoom when nothing is selected, View System
 // / Deselect when a system is selected. StarmapScene owns one of these, drives it via
@@ -53,6 +58,10 @@ export class GalaxyContext implements SidebarContext {
   // into this space).
   private shipRects: Array<{ shipId: string; rect: Rect }> = [];
   private hoveredShipId: string | null = null;
+  // The ship whose warp destination is currently being picked, or null. Its tile paints in a
+  // persistent SELECTED style, and its presence suppresses the nav footer. The scene drives it
+  // via setSelectedShip on departure enter / teardown.
+  private selectedShipId: string | null = null;
 
   // Fired when a fleet row is clicked → open the warp destination pick for that ship.
   onSelectShip: (shipId: string) => void = () => {};
@@ -68,6 +77,11 @@ export class GalaxyContext implements SidebarContext {
     if (this.clusterIdx === idx) return;
     this.clusterIdx = idx;
     this.hoveredShipId = null;
+  }
+
+  // Mark the ship being warp-picked (null = none). Highlights its tile + suppresses the footer.
+  setSelectedShip(shipId: string | null): void {
+    this.selectedShipId = shipId;
   }
 
   paint(g: CanvasRenderingContext2D, region: Region): number {
@@ -102,11 +116,13 @@ export class GalaxyContext implements SidebarContext {
       const nameX = x0 + SHIP_SPRITE_PAD_X + SHIP_SPRITE_D + SHIP_NAME_GAP;
       const nameW = region.w - (nameX - x0) - SHIP_TILE_PAD_R;
       for (const s of ships) {
-        const hov = this.hoveredShipId === s.id;
-        // Full-width selectable tile: solid plate, hover-brightened frame + surfaceOn fill.
+        // Selected (being warp-picked) is a persistent highlight that outranks transient hover.
+        const sel = this.selectedShipId === s.id;
+        const lit = sel || this.hoveredShipId === s.id;
+        // Full-width selectable tile: solid plate, lit frame + surfaceOn fill when selected/hovered.
         paintSurface(g, x0, y, region.w, SHIP_TILE_H, {
-          bg: hov ? colors.surfaceOn : colors.surface,
-          border: hov ? colors.borderAccent : colors.borderDim,
+          bg: lit ? colors.surfaceOn : colors.surface,
+          border: lit ? colors.borderAccent : colors.borderDim,
         });
         // The ship's module hull as its icon, facing right like the player's field formation.
         paintShipHull(g, x0 + SHIP_SPRITE_PAD_X + SHIP_SPRITE_D / 2, y + SHIP_TILE_H / 2,
@@ -117,7 +133,7 @@ export class GalaxyContext implements SidebarContext {
         g.rect(nameX, y, nameW, SHIP_TILE_H);
         g.clip();
         drawPixelText(g, s.name, nameX, y + Math.floor((SHIP_TILE_H - bodyH) / 2),
-          hov ? colors.starName : colors.textBody, fonts.body);
+          lit ? colors.starName : colors.textBody, fonts.body);
         g.restore();
         this.shipRects.push({ shipId: s.id, rect: { x: x0, y, w: region.w, h: SHIP_TILE_H } });
         y += SHIP_TILE_H + SHIP_TILE_GAP;
@@ -143,6 +159,9 @@ export class GalaxyContext implements SidebarContext {
   }
 
   footerActions(): FooterAction[] {
+    // Mid-pick (a ship selected for departure): no footer — the on-map DepartureBanner owns
+    // confirm/cancel, and View System / Deselect would orphan the armed pick.
+    if (this.selectedShipId !== null) return [];
     // Idle → camera pan/zoom (pan buttons pending real icons; zoom ships now). A
     // selected system → its nav actions.
     if (this.clusterIdx < 0) {

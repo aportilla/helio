@@ -176,6 +176,12 @@ export class MapHud {
     else this.openPanel();
   }
 
+  // Force the settings popover closed (no-op if already closed). The galaxy scene calls this when it
+  // enters the warp pick, so an open popover's live rows can't bypass the pick's teardown.
+  closeSettings(): void {
+    this.closePanel();
+  }
+
   // External notification: the auto render scale changed (DPR boundary
   // crossed). The Resolution radio's disable states depend on autoScale,
   // so rebuild the panel spec if it's currently visible. No-op when the
