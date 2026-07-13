@@ -40,7 +40,7 @@ import type { FactionType } from '../../../factions/types';
 import type { ShipComponentType } from '../../../ships/components/types';
 import { sizes } from '../../../ui/theme';
 import { paintToTexture } from '../../../ui/widget';
-import { paintShipHull } from '../../ship-hull';
+import { paintShipHull } from '../../../ui/ship-hull';
 import { disableCulling } from '../geom/cull';
 import { snapPxParity } from '../geom/snap';
 import { pickFleetShip, type FleetPickCandidate } from './fleet-pick';

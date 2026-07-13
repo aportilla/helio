@@ -3,9 +3,10 @@
 //     (Galaxy is the live one today; Ships / Planets / Research are dim placeholders
 //     for the screens that land later).
 //   - System selected → the SHIPS list: the ready player ships stationed in that
-//     system. Clicking a row opens its warp destination pick (the galaxy-only nav
-//     entry). Read fresh each paint, so a ship that just warped out (now 'transiting')
-//     drops off the list on the next repaint.
+//     system, each a full-width selectable TILE (its module-hull sprite + name).
+//     Clicking a tile opens its warp destination pick (the galaxy-only nav entry).
+//     Read fresh each paint, so a ship that just warped out (now 'transiting') drops
+//     off the list on the next repaint.
 //
 // The footer (owned + drawn by the Sidebar) carries the contextual nav actions this
 // context declares via footerActions(): pan/zoom when nothing is selected, View System
@@ -20,9 +21,21 @@ import { drawPixelText, getFont } from '../../data/pixel-font';
 import { clusterDisplayName, systemIdForCluster } from '../../data/stars';
 import { shipsInSystem } from '../../game-state';
 import { CONTROLLED_FACTION_ID } from '../../factions/registry';
+import { paintSurface } from '../painter';
+import { paintShipHull } from '../ship-hull';
 import { colors, fonts, sizes } from '../theme';
 import type { FooterAction, Region, SidebarContext } from './context';
 import { inRect, type Rect } from './shared';
+
+// Ship-tile geometry (env px). Each ready ship is a full-width, selectable TILE — its
+// module-hull sprite on the left (the same paintShipHull the field + warp use, so it
+// reads identically) + its name — stacked down the scroll body.
+const SHIP_TILE_H = 30;
+const SHIP_TILE_GAP = 4;
+const SHIP_SPRITE_D = 22;      // sprite diameter, drawn centered in the tile's left region
+const SHIP_SPRITE_PAD_X = 5;   // left inset of the sprite box
+const SHIP_NAME_GAP = 5;       // gap between the sprite box and the name
+const SHIP_TILE_PAD_R = 5;     // right inset of the name column
 
 // The top-level game screens listed in the idle menu. Only 'galaxy' is live today; the
 // rest are placeholders (dim, non-interactive) marking where future screens will hang.
@@ -86,11 +99,28 @@ export class GalaxyContext implements SidebarContext {
       drawPixelText(g, 'None stationed', x0, y, colors.titleDim, fonts.body);
       y += bodyH;
     } else {
+      const nameX = x0 + SHIP_SPRITE_PAD_X + SHIP_SPRITE_D + SHIP_NAME_GAP;
+      const nameW = region.w - (nameX - x0) - SHIP_TILE_PAD_R;
       for (const s of ships) {
         const hov = this.hoveredShipId === s.id;
-        drawPixelText(g, s.name, x0, y, hov ? colors.starName : colors.textBody, fonts.body);
-        this.shipRects.push({ shipId: s.id, rect: { x: x0, y, w: region.w, h: bodyH } });
-        y += bodyH;
+        // Full-width selectable tile: solid plate, hover-brightened frame + surfaceOn fill.
+        paintSurface(g, x0, y, region.w, SHIP_TILE_H, {
+          bg: hov ? colors.surfaceOn : colors.surface,
+          border: hov ? colors.borderAccent : colors.borderDim,
+        });
+        // The ship's module hull as its icon, facing right like the player's field formation.
+        paintShipHull(g, x0 + SHIP_SPRITE_PAD_X + SHIP_SPRITE_D / 2, y + SHIP_TILE_H / 2,
+          SHIP_SPRITE_D, s.components, s.factionId, 1);
+        // Name, vertically centered + clipped to its column so a long name can't spill past the tile.
+        g.save();
+        g.beginPath();
+        g.rect(nameX, y, nameW, SHIP_TILE_H);
+        g.clip();
+        drawPixelText(g, s.name, nameX, y + Math.floor((SHIP_TILE_H - bodyH) / 2),
+          hov ? colors.starName : colors.textBody, fonts.body);
+        g.restore();
+        this.shipRects.push({ shipId: s.id, rect: { x: x0, y, w: region.w, h: SHIP_TILE_H } });
+        y += SHIP_TILE_H + SHIP_TILE_GAP;
       }
     }
     return y - region.y;

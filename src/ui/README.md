@@ -10,6 +10,7 @@ base-panel.ts           Repaint-on-state-change canvas-texture panel base
 panel.ts                Tabbed popover; toggle / action / keybinding / radio rows
 icon-button.ts          Texture-pool button (off / hover / on / onHover / disabled)
 painter.ts              Shared 2D primitives: surfaces, glyphs, pill + segmented-pill buttons
+ship-hull.ts            paintShipHull: draws a ship as its ordered module list (kind-colored rects framed in the faction color) into any 2D context. The single source of truth for a ship sprite — the field fleet, the warp animation, and the sidebar ship tiles all call it, so a ship reads identically everywhere
 theme.ts                Colors, sizes, fonts shared across widgets
 hit-test.ts             'interactive' | 'opaque' | 'transparent' pointer-routing contract
 scroll-view.ts          ScrollView: a generic vertical scroll region for a single-canvas panel — clip + integer translate on the host's own 2D context (no nested widget), plus the offset clamp, wheel step, 1-px scrollbar, and the content-coord point-mapping a hit-test needs. Palette-free (bar color injected). First consumer: the sidebar body
@@ -29,7 +30,7 @@ encounter-hud/
 sidebar/
   sidebar.ts            Sidebar: persistent full-height right-edge panel — AppController-owned, rendered by the active scene. THREE bands: a fixed turn HEADER (count + Next Turn + settings), a scrolling BODY (the swappable context, wrapped in a ScrollView + wheel-scrolled via handleWheel), and a fixed FOOTER of the context's declared nav actions (collapses when empty)
   context.ts            SidebarContext: the interface for the scrolling body — paint (returns content height for the ScrollView clamp) + hit-test against absolute canvas coords + footerActions() (the state's footer buttons; the Sidebar lays them out + hit-tests them)
-  galaxy-context.ts     GalaxyContext: the galaxy body — the game-VIEWS menu when nothing is selected (Galaxy live; Ships/Planets/Research dim placeholders) OR the selected system's SHIPS list (ready player ships; click one → its warp destination pick, the galaxy-only nav entry). Footer: pan/zoom when idle, View System / Deselect when a system is selected. (Civ summary, body detail, and economy were removed from the sidebar in the scroll-frame rework.)
+  galaxy-context.ts     GalaxyContext: the galaxy body — the game-VIEWS menu when nothing is selected (Galaxy live; Ships/Planets/Research dim placeholders) OR the selected system's SHIPS list, each ship a full-width selectable TILE (its `paintShipHull` module-sprite + name); click one → its warp destination pick, the galaxy-only nav entry. Footer: pan/zoom when idle, View System / Deselect when a system is selected. (Civ summary, body detail, and economy were removed from the sidebar in the scroll-frame rework.)
   system-context.ts     SystemContext: the system view's region — system name + EITHER the selected body's facilities list + economy rows (next-turn inbound cue) + Add pills (owns SelectedBodyInfo) OR a selected fleet ship's read-only card: name / class / status (owns SelectedShipInfo); the two are mutually exclusive
   shared.ts             Cross-painter helpers shared by the sidebar + both contexts: Rect, inRect, fmtMilli (rect hit-test + milli-unit formatting)
 ```

@@ -1,7 +1,8 @@
 // paintShipHull — the single source of truth for drawing a ship as its ORDERED MODULE LIST: a segmented
 // hull of kind-colored rects framed + divided in the faction color, drawn rear→nose along the facing axis.
 // FleetLayer paints it into each ship's muster sprite; WarpVisuals paints the SAME hull moving off/onto the
-// slot during a warp, so a warping ship is pixel-identical to a mustered one (one function, no drift).
+// slot during a warp; the galaxy sidebar's ship tiles paint it as each ship's icon — one function, no drift,
+// so a ship reads identically wherever it appears.
 //
 // Draws in the target 2D context's own coords (canvas Y-down), centred at (cx, cy), spanning `diam` px,
 // facing `dir` (+1 rear-at-left / −1 mirrored). The hull band is vertically symmetric about cy, so a caller
