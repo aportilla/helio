@@ -243,7 +243,10 @@ function parseCsvCatalog(text, label, drops) {
     }
     const pos = equatorialToGalactic(raDeg, decDeg, distLy);
     let mass;
-    if (Number.isFinite(massRaw)) {
+    // A non-POSITIVE catalog mass (a stray 0, a blank read as NaN, a negative typo) isn't a physical mass —
+    // treat it as missing and derive from magnitude, else a class-typical synthetic. A literal 0 slipping
+    // through here would zero a mass-weighted cluster barycenter (see COM below), so the guard is load-bearing.
+    if (Number.isFinite(massRaw) && massRaw > 0) {
       mass = massRaw;
     } else {
       const ml = massFromMagnitude(cls, appMagCell, distLy);
@@ -493,7 +496,18 @@ function buildClusters(stars) {
       sumY += s.mass * s.y;
       sumZ += s.mass * s.z;
     }
-    const com = { x: sumX / sumM, y: sumY / sumM, z: sumZ / sumM };
+    // Mass-weighted barycenter, but fall back to the unweighted centroid when the members carry no usable
+    // mass (a zero/degenerate total divides to NaN → a `null` COM that serializes and reads as the ORIGIN
+    // downstream: false warp range/0.0-ly distance and a galaxy-spanning selection bracket). The upstream
+    // mass guard makes this unreachable today; it's the structural guarantee that a valid COM is emitted
+    // for every cluster regardless of source-data quality.
+    const com = sumM > 0
+      ? { x: sumX / sumM, y: sumY / sumM, z: sumZ / sumM }
+      : {
+          x: ordered.reduce((a, m) => a + stars[m].x, 0) / ordered.length,
+          y: ordered.reduce((a, m) => a + stars[m].y, 0) / ordered.length,
+          z: ordered.reduce((a, m) => a + stars[m].z, 0) / ordered.length,
+        };
     return { primary, members: ordered, com };
   });
 }
