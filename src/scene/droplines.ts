@@ -102,14 +102,6 @@ export class Droplines {
   // frame" rather than the rings fading while pins pop.
   private globalFade = 0;
 
-  // Warp-pick in-range restriction (mirrors StarPoints' range lens + Labels). When inRangeMode is on, ONLY
-  // clusters in inRangeClusters draw a pin, and ALWAYS — the master toggle and the distance fade ramps are
-  // bypassed, so the full depth spread of exactly the reachable set is visible. The plane is the origin
-  // cluster's COM.z (pushed via setSelectedCluster + setFade(1)), so every reachable pin drops to home
-  // altitude; the origin's own pin is degenerate and hides naturally. Off in the normal galaxy view.
-  private inRangeMode = false;
-  private inRangeClusters: ReadonlySet<number> | null = null;
-
   // Last selection-plane Z we baked geometry against. NaN sentinel so the
   // first update() call after a selection always regenerates (the constructor
   // pre-seeds bottom = 0 and dots = empty; sentinel forces the first pass
@@ -199,16 +191,6 @@ export class Droplines {
     this.globalFade = t;
   }
 
-  // Turn the warp-pick in-range restriction on/off. See the inRangeMode field.
-  setInRangeMode(on: boolean): void {
-    this.inRangeMode = on;
-  }
-
-  // The in-range cluster set for the armed ship (reachable destinations + origin), or null to clear.
-  setInRangeClusters(clusterIdxs: ReadonlySet<number> | null): void {
-    this.inRangeClusters = clusterIdxs;
-  }
-
   // Rewrite a pin's geometry to terminate at z = planeZ. Cheap: 1 vertex
   // for the solid line, up to MAX_DOTS_PER_PIN for the dots. Called only
   // when the selection plane actually shifts — most frames are no-ops.
@@ -264,31 +246,12 @@ export class Droplines {
       this.lastPlaneZ = planeZ;
     }
 
-    // In the warp pick, pins are restricted to exactly the in-range set and shown ALWAYS (master toggle +
-    // fade ramps bypassed). Off in the normal galaxy view.
-    const inRange = this.inRangeMode && this.inRangeClusters !== null;
     const camAbove = camera.position.z >= planeZ;
     for (const d of this.drops) {
       const dz = d.com.z - planeZ;
       if (Math.abs(dz) < DROPLINE_DEGENERATE_DIST) {
         d.solid.visible = false;
         d.dots.visible = false;
-        continue;
-      }
-
-      // Warp pick: draw a pin ONLY for in-range clusters (everything else hidden outright), at full
-      // opacity — the master toggle and per-drop fade ramps don't apply. Solid/dots still splits by side.
-      if (inRange) {
-        if (!this.inRangeClusters!.has(d.clusterIdx)) {
-          d.solid.visible = false;
-          d.dots.visible = false;
-          continue;
-        }
-        const sameSide = (dz >= 0) === camAbove;
-        d.solid.visible = sameSide;
-        d.dots.visible = !sameSide;
-        d.solidMat.uniforms.uOpacity!.value = this.globalFade;
-        d.dotsMat.uniforms.uOpacity!.value = this.globalFade;
         continue;
       }
 

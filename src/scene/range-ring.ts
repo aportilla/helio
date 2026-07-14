@@ -1,7 +1,8 @@
 // A single data-driven RANGE RING — the reach boundary drawn around a ship's origin while picking a warp
-// destination. Spoken in the selection grid's visual language (the same blue, segment count, and
-// camera-distance zoom-fade) but a SIBLING to Grid, not one of its A/B choreographed frames, so the
-// pick's "one ring means one thing" reads cleanly against the suppressed selection grid.
+// destination. Drawn in a distinct DARK ORANGE, layered ON TOP of the still-visible selection grid (a
+// SIBLING to Grid, not one of its A/B choreographed frames): entering the pick just ADDS this reach boundary
+// rather than swapping the grid out, so it reads as new UI against the grid's blue rings. Shares the grid's
+// segment count + camera-distance zoom-fade so the two ring families move together.
 
 import { BufferGeometry, Group, Line, ShaderMaterial, Vector3 } from 'three';
 import { snappedLineMat } from './materials';
@@ -9,9 +10,9 @@ import { ringPoints } from './grid';
 import { GRID_FADE_NEAR, GRID_FADE_FAR, clampRamp } from './cluster-fade';
 
 const RING_SEGMENTS = 128;
-// A touch brighter than the grid's own rings so the reach reads as a deliberate boundary, not chrome.
-const RING_OPACITY = 0.42;
-const RING_COLOR = 0x1e6fc4; // the grid blue
+// A touch stronger than the grid's own rings so the reach reads as a deliberate boundary over them, not chrome.
+const RING_OPACITY = 0.5;
+const RING_COLOR = 0xd2691e; // dark orange — a deliberate boundary distinct from the grid's blue rings
 
 export class RangeRing {
   readonly group = new Group();

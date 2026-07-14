@@ -1,12 +1,13 @@
-// RouteLine — the PROPOSED warp route highlighted during a destination pick: a thick GOLD line from the
-// origin cluster's COM to the locked destination's. Distinct from TransitLines (dim blue, dotted, an
-// ORDERED in-flight leg) — this is the bright "here's where I'm about to send it" affordance, shown only
-// while a destination is locked in the pick and cleared on unlock/teardown.
+// RouteLine — a warp route drawn during a destination pick, from the origin cluster's COM to a target's:
+// a screen-space GOLD quad ribbon. Two instances serve the pick — a SOLID one for the locked/active
+// destination ("here's where I'm about to send it") and a FAINT one for the hover PREVIEW (the route a
+// click on a nearby target would commit). Distinct from TransitLines (dim blue, dotted, an ORDERED in-flight
+// leg). Shown only during the pick, cleared on unlock/teardown.
 //
 // Drawn as a single screen-space quad ribbon (snappedThickLineMat): 4 corners riding ±half-width off the
-// origin→destination centerline, pixel-snapped, solid gold, AA-off → a crisp constant-pixel-width band at
-// any zoom or angle. Floated over the field (depthTest off) like the rest of the pick chrome. The quad is
-// static; only the material's uO/uD endpoints change per lock, so re-locking never rebuilds geometry.
+// origin→destination centerline, pixel-snapped, AA-off → a crisp constant-pixel-width band at any zoom or
+// angle. Floated over the field (depthTest off) like the rest of the pick chrome. The quad is static; only
+// the material's uO/uD endpoints change per lock, so re-locking never rebuilds geometry.
 
 import { BufferAttribute, BufferGeometry, Group, Mesh, type ShaderMaterial } from 'three';
 import { snappedThickLineMat } from './materials';
@@ -15,6 +16,13 @@ import { snappedThickLineMat } from './materials';
 const ROUTE_COLOR = 0xf2c14e;
 const ROUTE_WIDTH_PX = 3;       // band thickness in buffer px — "thick" but crisp
 
+// Per-instance style so the locked route (solid, thick) and the hover preview (faint, thin) share one class.
+export interface RouteLineStyle {
+  readonly color?: number;
+  readonly opacity?: number;
+  readonly widthPx?: number;
+}
+
 interface Vector3Like { readonly x: number; readonly y: number; readonly z: number }
 
 export class RouteLine {
@@ -22,8 +30,9 @@ export class RouteLine {
   private readonly geom = new BufferGeometry();
   private readonly mat: ShaderMaterial;
 
-  constructor() {
-    this.mat = snappedThickLineMat({ color: ROUTE_COLOR, halfWidthPx: ROUTE_WIDTH_PX / 2 });
+  constructor(style?: RouteLineStyle) {
+    const widthPx = style?.widthPx ?? ROUTE_WIDTH_PX;
+    this.mat = snappedThickLineMat({ color: style?.color ?? ROUTE_COLOR, opacity: style?.opacity ?? 1.0, halfWidthPx: widthPx / 2 });
     this.mat.depthTest = false;
     // A static unit quad: two triangles over 4 corners. The shader reads the real endpoints from uO/uD;
     // `position` only exists so three knows the vertex count. aEnd picks the endpoint, aSide the offset.

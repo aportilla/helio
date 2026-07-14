@@ -63,8 +63,8 @@ if (import.meta.env.DEV && new URLSearchParams(location.search).has('demo-fleet'
 }
 
 // ?demo-convoy stays in the GALAXY view: seed ready ships at Sol, check TWO into a convoy, and arm the nav
-// destination pick — so the multi-ship "travel together" mode (range ring + in-range lens + the sidebar ship
-// list in nav-target mode, two tiles checked) is reproducibly screenshot-able (scripts/screenshot.mjs
+// destination pick — so the multi-ship "travel together" mode (range ring + dotted target brackets + the
+// sidebar ship list in nav-target mode, two tiles checked) is reproducibly screenshot-able (scripts/screenshot.mjs
 // --query=demo-convoy). Tree-shaken from prod.
 if (import.meta.env.DEV && new URLSearchParams(location.search).has('demo-convoy')) {
   const sunIdx = STARS.findIndex((s) => s.id === 'sol');

@@ -9,6 +9,7 @@ import {
 } from 'three';
 
 import { ClusterBrackets } from './cluster-brackets';
+import { TargetBrackets } from './target-brackets';
 import { Grid } from './grid';
 import { RangeRing } from './range-ring';
 import { RouteLine } from './route-line';
@@ -66,6 +67,11 @@ const AUTOSPIN_RAD_PER_TICK = 0.0015;
 // camera across the scene on the next frame.
 const MAX_TICK_DT_MS = 100;
 
+// Warp-pick target proximity: in nav mode the cursor targets the nearest REACHABLE star within this many CSS
+// px — an expanded, forgiving hit zone (vs the precise raycast) so a distant reachable dot is easy to hover
+// and click. Drives both the hover route-preview and the click-to-lock.
+const NAV_PICK_RADIUS_PX = 50;
+
 interface ViewState {
   target: Vector3;
   distance: number;  // orbit radius (camera-to-target ly)
@@ -91,6 +97,9 @@ export class StarmapScene implements Screen {
   // spacebar switches selection to the candidate).
   private readonly selectionBrackets: ClusterBrackets;
   private readonly candidateBrackets: ClusterBrackets;
+  // Dotted brackets on EVERY reachable star during a warp pick — the "potential target" indicator. Its own
+  // pooled overlay in the labels scene; populated on pick enter, cleared on teardown.
+  private readonly targetBrackets = new TargetBrackets();
   private readonly starPoints: StarPoints;
   private readonly hud: MapHud;
   // Persistent right sidebar, owned by AppController and shared with the system
@@ -101,8 +110,8 @@ export class StarmapScene implements Screen {
   // idle / the selected system's ship list). Set as the sidebar's context on start();
   // fed the selection via setCluster.
   private readonly galaxyContext = new GalaxyContext();
-  // The data-driven range ring drawn around a ship's origin while picking a warp destination — a sibling
-  // of the (suppressed) selection grid, so the pick shows exactly one ring.
+  // The data-driven range ring drawn around a ship's origin while picking a warp destination — a dark-orange
+  // sibling of the selection grid, layered on top of it at the drive's reach (the grid stays up during the pick).
   private readonly rangeRing = new RangeRing();
   // The galaxy-view overlay for ships in warp — a dotted origin→destination line per transit. Rebuilt on
   // galaxy resume + each turn.
@@ -114,6 +123,9 @@ export class StarmapScene implements Screen {
   // The thick GOLD "proposed route" line drawn from origin to the locked destination during a warp pick.
   // Shown/updated as the pick locks a destination, cleared on unlock/teardown.
   private readonly routeLine = new RouteLine();
+  // A FAINT sibling of routeLine — the hover PREVIEW route to the reachable target the cursor is near, before
+  // it's locked. Same gold channel, lower opacity + thinner, so "hover previews, a click commits".
+  private readonly routeLinePreview = new RouteLine({ opacity: 0.4, widthPx: 2 });
   // The floating on-map overlay shown while the departure pick is armed: "Select a destination" until a
   // system is locked, then its distance + ETA, with CONFIRM / CANCEL pills. A HUD layer that floats over
   // the stars (no layout reserve) — the sidebar keeps showing the fleet list with the departing ship lit.
@@ -127,8 +139,8 @@ export class StarmapScene implements Screen {
   private departure: DepartureRequest | null = null;
   // The locked destination cluster in the pick, or -1 while browsing. Rides the selection brackets.
   private departureLockClusterIdx = -1;
-  // The reachable-destination cluster set (+ origin) for the picking ship — gates the click-to-lock and the
-  // in-range shader lens. Empty in the normal view.
+  // The reachable-destination cluster set (+ origin) for the picking ship — gates the click-to-lock and drives
+  // the proximity target pick (pickReachableTargetStar) + the hover route preview. Empty in the normal view.
   private reachableClusterSet = new Set<number>();
 
   // Hover-pointer state, written by the input controller via the
@@ -195,6 +207,8 @@ export class StarmapScene implements Screen {
   // Used to hand a Vector3-shaped COM to subsystems (Grid.setSelection)
   // whose APIs expect a Vector3 — STAR_CLUSTERS[i].com is a plain {x,y,z}.
   private readonly _comScratch = new Vector3();
+  // Scratch for projecting a candidate target star to screen in the nav-mode proximity pick (no per-call alloc).
+  private readonly _pickProj = new Vector3();
   // Reused raycast result target — pickStar runs every tick the pointer is
   // over the canvas, so the hits array is cleared and refilled in place
   // rather than letting intersectObject allocate a fresh array per call.
@@ -244,6 +258,7 @@ export class StarmapScene implements Screen {
     this.scene.add(this.transitLines.group);
     // The proposed-route gold line shares the scene as well (only visible mid-pick, depthTest off).
     this.scene.add(this.routeLine.group);
+    this.scene.add(this.routeLinePreview.group);
 
     this.starPoints = new StarPoints(window.innerHeight / 2);
     this.scene.add(this.starPoints.points);
@@ -263,6 +278,7 @@ export class StarmapScene implements Screen {
     this.candidateBrackets = new ClusterBrackets('dots');
     this.labels.scene.add(this.selectionBrackets.mesh);
     this.labels.scene.add(this.candidateBrackets.mesh);
+    this.labels.scene.add(this.targetBrackets.group);
 
     this.hud = new MapHud(this.viewport.scale);
     this.hud.onToggle = (id, on) => {
@@ -382,10 +398,12 @@ export class StarmapScene implements Screen {
     this.hud.dispose();
     this.selectionBrackets.dispose();
     this.candidateBrackets.dispose();
+    this.targetBrackets.dispose();
     this.rangeRing.dispose();
     this.transitLines.dispose();
     this.shipMarkers.dispose();
     this.routeLine.dispose();
+    this.routeLinePreview.dispose();
     this.departureBanner.dispose();
     this.viewport.dispose();
   }
@@ -796,7 +814,8 @@ export class StarmapScene implements Screen {
 
   // DEV visual-test seam (the ?demo-convoy screenshot harness, tree-shaken from prod): select a cluster, check
   // two ready ships into a CONVOY, and arm the nav destination pick — so a screenshot shows the range ring +
-  // in-range lens with the sidebar ship list in nav-target mode (two tiles checked, footer suppressed).
+  // dotted target brackets + a faint hover route preview, with the sidebar ship list in nav-target mode (two
+  // tiles checked, footer suppressed).
   // Reached only from main.ts's ?demo-convoy branch.
   devDemoConvoy(clusterIdx: number): void {
     if (clusterIdx < 0) return;
@@ -806,11 +825,25 @@ export class StarmapScene implements Screen {
       .slice(0, 2)
       .map((s) => s.id);
     this.galaxyContext.checkShips(ids); // sidebar reflects the checked convoy...
-    this.beginGroupDeparture(ids);      // ...and arm the pick (ring + lens + banner), matching a real toggle
+    this.beginGroupDeparture(ids);      // ...and arm the pick (ring + target brackets + banner), matching a real toggle
+    // Snap home (cancel the glide) + point the cursor at the nearest reachable target, so the faint route
+    // PREVIEW shows in the shot (a headless screenshot has no live cursor to drive the hover).
+    const com = STAR_CLUSTERS[clusterIdx]!.com;
+    this.view.target.set(com.x, com.y, com.z);
+    this.focusAnimating = false;
+    this.updateCamera();
+    const target = [...this.reachableClusterSet].find((i) => i !== clusterIdx);
+    if (target !== undefined) {
+      const c = STAR_CLUSTERS[target]!.com; // aim at the COM — the pick's anchor (matches pickReachableTargetStar)
+      this._pickProj.set(c.x, c.y, c.z).project(this.camera);
+      this.pointer.x = (this._pickProj.x * 0.5 + 0.5) * this.viewport.contentCssW;
+      this.pointer.y = (1 - (this._pickProj.y * 0.5 + 0.5)) * this.viewport.cssH;
+      this.pointer.has = true;
+    }
   }
 
-  // Enter (or re-enter) the pick: freeze the turn, suppress the selection grid, raise the range ring +
-  // in-range lens (with labels + droplines restricted to the reachable set, always lit), glide the camera
+  // Enter (or re-enter) the pick: freeze the turn, keep the selection grid up, layer the dark-orange range
+  // ring + dotted target brackets (on every reachable star) on top, glide the camera
   // home, and float the on-map departure banner in its "Select a destination" state (NO pre-locked
   // destination — the player picks one). The convoy's checked tiles in the sidebar ARE the highlight (owned
   // by GalaxyContext). `reArm` is true when a convoy edit re-armed the mode: skip the camera glide so
@@ -819,29 +852,27 @@ export class StarmapScene implements Screen {
   private enterDepartureMode(reArm: boolean): void {
     const req = this.departure;
     if (!req) return;
-    // Reachable set (+ origin so home stays lit) drives the click-to-lock gate, the shader lens, and the
-    // in-range label + dropline restriction below.
+    // Reachable set (+ origin) drives the click-to-lock gate + the proximity target pick / route preview.
     this.reachableClusterSet = new Set(req.reachable.map((d) => d.clusterIdx));
     this.reachableClusterSet.add(req.originClusterIdx);
-    this.starPoints.setInRangeClusters(this.reachableClusterSet);
-    this.starPoints.setInRangeMode(true);
+    // Dotted brackets on every reachable TARGET (req.reachable already excludes the origin) mark targetability.
+    this.targetBrackets.setTargets(req.reachable.map((d) => d.clusterIdx));
     this.starPoints.setSelectedCluster(-1);
     this.starPoints.setCandidateCluster(-1);
 
-    // The single range ring at the origin, radius = the drive's reach in world light-years. The pick shows
-    // labels + droplines for EXACTLY the in-range clusters — always lit, out-of-range hidden — with the
-    // droplines dropping to the origin's altitude so their depth spread reads relative to home. Suppress the
-    // standard selection grid + focus marker + candidate: one ring, one reachable set.
+    // The dark-orange range ring at the origin, radius = the drive's reach — layered ON TOP of the STANDARD
+    // galaxy view. The pick ADDS chrome (ring + route preview + banner) but does NOT override the star fade or
+    // label display: those keep the standard zoom/camera heuristic (nothing selected → pure camera fade), so
+    // the whole field stays readable. The grid STAYS on the origin (already set by selection; re-setting it
+    // would re-trigger its expand choreography on every re-arm). The origin's dropline is always lit as a home
+    // reference; the rest of the dropline field follows the normal camera/pivot fade + the master toggle,
+    // unchanged. Clear the hover candidate + focus marker (the tick freezes the candidate during the pick —
+    // hover drives the route preview instead).
     const com = STAR_CLUSTERS[req.originClusterIdx]!.com;
     this.rangeRing.setRing(com.x, com.y, com.z, req.rangeMilliLy / MILLI_PER_LY);
-    this.grid.setSelection(null);
-    this.labels.setInRangeClusters(this.reachableClusterSet);
-    this.labels.setInRangeMode(true);
     this.labels.setSelectedCluster(-1);
     this.labels.setCandidateCluster(-1);
     this.candidateBrackets.setCluster(-1);
-    this.droplines.setInRangeClusters(this.reachableClusterSet);
-    this.droplines.setInRangeMode(true);
     this.droplines.setSelectedCluster(req.originClusterIdx);
     this.droplines.setFade(1);
     this.focusMarker.setSelectedCluster(-1);
@@ -930,12 +961,8 @@ export class StarmapScene implements Screen {
     this.selectionBrackets.setCluster(-1);
     this.rangeRing.clear();
     this.routeLine.clear();
-    this.starPoints.setInRangeMode(false);
-    this.starPoints.setInRangeClusters(null);
-    this.labels.setInRangeMode(false);
-    this.labels.setInRangeClusters(null);
-    this.droplines.setInRangeMode(false);
-    this.droplines.setInRangeClusters(null);
+    this.routeLinePreview.clear();
+    this.targetBrackets.setTargets([]);
     this.departureBanner.hide();
     this.sidebar.setNextTurnEnabled(true);
   }
@@ -947,6 +974,9 @@ export class StarmapScene implements Screen {
   }
 
   private pickStar(clientX: number, clientY: number): number {
+    // In the warp pick, target by PROXIMITY to a reachable star (expanded radius), not a precise raycast — so
+    // both the hover route-preview and the click-to-lock get the forgiving hit for free through this one path.
+    if (this.departure) return this.pickReachableTargetStar(clientX, clientY);
     this._ndc.set(
       // X over the content width — the 3D viewport is inset left of the sidebar,
       // so a cursor at content's right edge is NDC x = 1.
@@ -965,6 +995,32 @@ export class StarmapScene implements Screen {
       }
     }
     return bestIdx;
+  }
+
+  // Nav-mode target pick: the nearest REACHABLE cluster whose COM projects within NAV_PICK_RADIUS_PX of the
+  // cursor, returned as that cluster's primary star index (so the shared star→cluster→lock path works) or -1.
+  // Measures against the COM — the same anchor the dotted target bracket + the route line ride — so the
+  // forgiving hit matches what the player aims at (for a multi-star cluster the primary sits off the COM).
+  // Screen-space + generous so a distant reachable dot is easy to hover/click; the origin is excluded (can't
+  // warp home). Reads reachableClusterSet, so it's only meaningful while a pick is armed.
+  private pickReachableTargetStar(clientX: number, clientY: number): number {
+    const { contentCssW, cssH } = this.viewport;
+    let best = -1;
+    let bestD = NAV_PICK_RADIUS_PX; // only accept hits inside the expanded radius
+    for (const clusterIdx of this.reachableClusterSet) {
+      if (clusterIdx === this.departure?.originClusterIdx) continue; // can't target home
+      const cluster = STAR_CLUSTERS[clusterIdx]!;
+      this._pickProj.set(cluster.com.x, cluster.com.y, cluster.com.z).project(this.camera);
+      // Skip anything projecting outside the NDC box — behind/beyond the frustum (z) OR off the content rect
+      // (x/y), which the labels scissor clips out of view, so a hit never lands on an unseen off-edge bracket.
+      if (this._pickProj.z < -1 || this._pickProj.z > 1) continue;
+      if (this._pickProj.x < -1 || this._pickProj.x > 1 || this._pickProj.y < -1 || this._pickProj.y > 1) continue;
+      const sx = (this._pickProj.x * 0.5 + 0.5) * contentCssW;
+      const sy = (1 - (this._pickProj.y * 0.5 + 0.5)) * cssH;
+      const d = Math.hypot(sx - clientX, sy - clientY);
+      if (d < bestD) { bestD = d; best = cluster.primary; }
+    }
+    return best;
   }
 
   private animateFocusTo(x: number, y: number, z: number): void {
@@ -1018,6 +1074,7 @@ export class StarmapScene implements Screen {
     this.starPoints.setPxScale(bufferH / 2);
     this.selectionBrackets.setPxScale(bufferH / 2);
     this.candidateBrackets.setPxScale(bufferH / 2);
+    this.targetBrackets.setPxScale(bufferH / 2);
     // HUD spans the full buffer; the overlay projectors place anchors in the
     // content rect so labels/brackets track their stars left of the sidebar.
     this.hud.resize(bufferW, bufferH);
@@ -1025,6 +1082,7 @@ export class StarmapScene implements Screen {
     this.shipMarkers.resize(bufferW, bufferH, contentBufferW);
     this.selectionBrackets.resize(contentBufferW, bufferH);
     this.candidateBrackets.resize(contentBufferW, bufferH);
+    this.targetBrackets.resize(contentBufferW, bufferH);
     this.sidebar.resize(bufferW, bufferH);
     // The banner floats centered in the CONTENT rect (left of the sidebar), so it needs both dims.
     this.departureBanner.resize(bufferW, bufferH, contentBufferW);
@@ -1093,10 +1151,19 @@ export class StarmapScene implements Screen {
     // Snap visibility, no fade ramp — candidate is a discrete state. The
     // unified index is pushed to brackets, labels (yellow promotion +
     // fade-bypass), and stashed for the spacebar handler. SUPPRESSED during the
-    // warp pick: the in-range lens + the locked-destination brackets own the
-    // highlight there, so the ordinary candidate has no meaning.
+    // warp pick: the target brackets + the route preview own the target read
+    // there, so the ordinary candidate has no meaning.
     if (this.departure) {
       this.candidateClusterIdx = -1;
+      // Nav mode: hovering NEAR a reachable target (hoveredCluster is the expanded, mode-aware pickStar
+      // result) previews its route as a faint gold line. Skip the origin (can't target home) and the
+      // already-locked target (its solid gold route already shows). Cleared when the cursor isn't near one.
+      const preview = hoveredCluster;
+      if (preview >= 0 && preview !== this.departure.originClusterIdx && preview !== this.departureLockClusterIdx) {
+        this.routeLinePreview.setRoute(STAR_CLUSTERS[this.departure.originClusterIdx]!.com, STAR_CLUSTERS[preview]!.com);
+      } else {
+        this.routeLinePreview.clear();
+      }
     } else {
       const candidate = resolveCandidateCluster(
         hoveredCluster, nearestClusterIdx,
@@ -1113,6 +1180,7 @@ export class StarmapScene implements Screen {
     this.shipMarkers.update(this.camera, this.view.target);
     this.selectionBrackets.update(this.camera, this.view.target);
     this.candidateBrackets.update(this.camera, this.view.target);
+    this.targetBrackets.update(this.camera, this.view.target);
 
     // One full-buffer clear; the reserved sidebar strip on the right stays
     // clear-color until the sidebar paints into it. autoClear stays off so the

@@ -37,7 +37,7 @@ const BRACKET_GAP_PX  = 4;   // pixels between outermost disc edge and bracket c
 const BRACKET_MIN_SIZE = 12; // floor (per axis) so tiny stars still get a visible bracket
 const BRACKET_COLOR   = '#ffe98a';
 
-function buildBracketTexture(size: number, style: BracketStyle): CanvasTexture {
+export function buildBracketTexture(size: number, style: BracketStyle): CanvasTexture {
   const c = document.createElement('canvas');
   c.width = size; c.height = size;
   const g = c.getContext('2d')!;
@@ -72,6 +72,44 @@ function buildBracketTexture(size: number, style: BracketStyle): CanvasTexture {
   return t;
 }
 
+// Shared per-frame scratch for bracketGeomForCluster — module-level: it's called sequentially from each
+// bracket overlay's update() within a tick, never re-entrantly.
+const _bgWorld = new Vector3();
+const _bgView = new Vector3();
+const _bgScreen = new Vector3();
+
+// Project a cluster to its on-screen bracket geometry: the anchor (its COM in buffer px) + the square bracket
+// SIZE that encloses every member's rendered disc (+ a gap), sized to what the camera actually shows. Anchors
+// on the COM (not the per-member bbox midpoint) so projectWorldToBuffer's NDC-(0,0) short-circuit pins a
+// focused cluster to exact buffer center — otherwise FP noise twitches the bracket 1px per orbit frame.
+// Returns null when the COM projects off-screen. Shared by the single-cluster ClusterBrackets and the
+// multi-cluster TargetBrackets so both size brackets identically. pxScale mirrors the stars shader's uPxScale.
+export function bracketGeomForCluster(
+  clusterIdx: number, camera: Camera, viewTarget: Vector3 | null,
+  projW: number, bufferH: number, pxScale: number,
+): { cx: number; cy: number; size: number } | null {
+  const cluster = STAR_CLUSTERS[clusterIdx]!;
+  _bgWorld.set(cluster.com.x, cluster.com.y, cluster.com.z);
+  if (!projectWorldToBuffer(_bgWorld, camera, viewTarget, projW, bufferH, _bgScreen)) return null;
+  const cx = _bgScreen.x, cy = _bgScreen.y;
+  // Bracket size = max offset of any member's rendered disc from the anchor, so it grows symmetrically around
+  // the stable COM (binaries/triples cover both members; a single member collapses to a tight square). A
+  // member behind the camera is skipped rather than hiding the whole bracket.
+  let radius = 0;
+  for (const memIdx of cluster.members) {
+    const s = STARS[memIdx]!;
+    _bgWorld.set(s.x, s.y, s.z);
+    if (!projectWorldToBuffer(_bgWorld, camera, viewTarget, projW, bufferH, _bgScreen)) continue;
+    _bgView.set(s.x, s.y, s.z).applyMatrix4(camera.matrixWorldInverse);
+    const r = renderedStarPxSize(s.pxSize, _bgView.z, pxScale) * 0.5;
+    const dx = Math.abs(_bgScreen.x - cx) + r;
+    const dy = Math.abs(_bgScreen.y - cy) + r;
+    if (dx > radius) radius = dx;
+    if (dy > radius) radius = dy;
+  }
+  return { cx, cy, size: Math.max(BRACKET_MIN_SIZE, Math.ceil(2 * (radius + BRACKET_GAP_PX))) };
+}
+
 export class ClusterBrackets {
   readonly mesh: Mesh;
   private readonly style: BracketStyle;
@@ -86,17 +124,6 @@ export class ClusterBrackets {
   private pxScale = 1;
   private clusterIdx = -1;
   private currentSize = -1;
-
-  // Reusable per-frame scratch.
-  private readonly _world = new Vector3();
-  private readonly _view = new Vector3();
-  // Doubles as projectWorldToBuffer's projection scratch + screen-coord out
-  // vector (.x/.y are the buffer-pixel result; .z is throwaway NDC depth).
-  private readonly _screen = new Vector3();
-
-  // Set per-frame from scene.ts so projectWorldToBuffer can short-circuit the
-  // orbit-target equality case (see project-buffer.ts).
-  private viewTarget: Vector3 | null = null;
 
   constructor(style: BracketStyle) {
     this.style = style;
@@ -123,17 +150,6 @@ export class ClusterBrackets {
   // members and sizes the bracket to enclose them.
   setCluster(idx: number): void {
     this.clusterIdx = idx;
-  }
-
-  // On-screen disc diameter (buffer px) for a star under the current camera,
-  // so the brackets track what the user actually sees rather than sitting at a
-  // fixed size around tiny dwarfs and close-up giants alike. Delegates to
-  // renderedStarPxSize (materials/galaxy.ts), the canonical mirror of the
-  // stars shader's size math — both read the same shader constants.
-  private computeRenderedStarSize(starIdx: number, camera: Camera): number {
-    const s = STARS[starIdx]!;
-    this._view.set(s.x, s.y, s.z).applyMatrix4(camera.matrixWorldInverse);
-    return renderedStarPxSize(s.pxSize, this._view.z, this.pxScale);
   }
 
   // Rebuild the texture + quad when the bracket size changes. Cached by
@@ -174,54 +190,17 @@ export class ClusterBrackets {
   }
 
   update(camera: Camera, viewTarget: Vector3): void {
-    this.viewTarget = viewTarget;
     if (this.clusterIdx < 0) {
       this.mesh.visible = false;
       return;
     }
-    const cluster = STAR_CLUSTERS[this.clusterIdx]!;
-
-    // Anchor the bracket on the cluster COM rather than the bbox midpoint
-    // of projected members. When view.target sits on this COM (i.e. the
-    // camera is orbiting the selected cluster), projectWorldToBuffer's
-    // NDC-(0,0) short-circuit pins the anchor to exact buffer center —
-    // otherwise the bbox midpoint inherits the matrix's ~1e-7 NDC FP noise
-    // and the bracket twitches 1px laterally every orbit frame as placeAt()'s
-    // Math.round crosses pixel boundaries. Routing the anchor through
-    // projectWorldToBuffer (rather than through the per-member bbox midpoint)
-    // is what lets the trick apply: view.target only ever equals the COM,
-    // never an arbitrary member.
-    this._world.set(cluster.com.x, cluster.com.y, cluster.com.z);
-    if (!projectWorldToBuffer(this._world, camera, this.viewTarget, this.projW, this.bufferH, this._screen)) {
+    const geom = bracketGeomForCluster(this.clusterIdx, camera, viewTarget, this.projW, this.bufferH, this.pxScale);
+    if (!geom) {
       this.mesh.visible = false;
       return;
     }
-    const cx = this._screen.x;
-    const cy = this._screen.y;
-
-    // Bracket size: max offset of any member's rendered disc from the
-    // anchor, so the bracket grows symmetrically around the stable COM.
-    // Tilted binaries / triples expand the radius to cover both members;
-    // single-member clusters collapse to a tight square around the disc.
-    // Per-member FP noise now only nudges this radius (one Math.ceil hop),
-    // never the position. If a member is behind the camera
-    // (projectWorldToBuffer false) we still draw brackets around the visible
-    // ones rather than hiding the whole bracket.
-    let radius = 0;
-    for (const memIdx of cluster.members) {
-      const s = STARS[memIdx]!;
-      this._world.set(s.x, s.y, s.z);
-      if (!projectWorldToBuffer(this._world, camera, this.viewTarget, this.projW, this.bufferH, this._screen)) continue;
-      const r = this.computeRenderedStarSize(memIdx, camera) * 0.5;
-      const dx = Math.abs(this._screen.x - cx) + r;
-      const dy = Math.abs(this._screen.y - cy) + r;
-      if (dx > radius) radius = dx;
-      if (dy > radius) radius = dy;
-    }
-
-    const size = Math.max(BRACKET_MIN_SIZE, Math.ceil(2 * (radius + BRACKET_GAP_PX)));
-    this.ensureSize(size);
+    this.ensureSize(geom.size);
     this.mesh.visible = true;
-    this.placeAt(cx, cy, size);
+    this.placeAt(geom.cx, geom.cy, geom.size);
   }
 }
